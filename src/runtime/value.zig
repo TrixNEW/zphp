@@ -787,18 +787,12 @@ pub const Value = union(enum) {
             while (e > 0 and !overflowed) : (e >>= 1) {
                 if ((e & 1) == 1) {
                     const r = @mulWithOverflow(result, base);
-                    if (r[1] != 0) {
-                        overflowed = true;
-                        break;
-                    }
+                    if (r[1] != 0) { overflowed = true; break; }
                     result = r[0];
                 }
                 if (e > 1) {
                     const r = @mulWithOverflow(base, base);
-                    if (r[1] != 0) {
-                        overflowed = true;
-                        break;
-                    }
+                    if (r[1] != 0) { overflowed = true; break; }
                     base = r[0];
                 }
             }
@@ -894,16 +888,10 @@ pub const Value = union(enum) {
         if (s[i] == '-' or s[i] == '+') i += 1;
         if (i >= s.len) return false;
         var has_digit = false;
-        while (i < s.len and s[i] >= '0' and s[i] <= '9') {
-            i += 1;
-            has_digit = true;
-        }
+        while (i < s.len and s[i] >= '0' and s[i] <= '9') { i += 1; has_digit = true; }
         if (i < s.len and s[i] == '.') {
             i += 1;
-            while (i < s.len and s[i] >= '0' and s[i] <= '9') {
-                i += 1;
-                has_digit = true;
-            }
+            while (i < s.len and s[i] >= '0' and s[i] <= '9') { i += 1; has_digit = true; }
         }
         if (i < s.len and (s[i] == 'e' or s[i] == 'E')) {
             i += 1;
@@ -972,37 +960,27 @@ pub const Value = union(enum) {
         // (the number is stringified). Number vs numeric string still numeric.
         if ((a == .int or a == .float) and b == .string and !isNumericString(b.string)) {
             var buf: [64]u8 = undefined;
-            const as: []const u8 = if (a == .int) (std.fmt.bufPrint(&buf, "{d}", .{a.int}) catch "") else (std.fmt.bufPrint(&buf, "{d}", .{a.float}) catch "");
+            const as: []const u8 = if (a == .int) (std.fmt.bufPrint(&buf, "{d}", .{a.int}) catch "")
+                                   else (std.fmt.bufPrint(&buf, "{d}", .{a.float}) catch "");
             return switch (std.mem.order(u8, as, b.string)) {
-                .lt => -1,
-                .eq => 0,
-                .gt => 1,
+                .lt => -1, .eq => 0, .gt => 1,
             };
         }
         if ((b == .int or b == .float) and a == .string and !isNumericString(a.string)) {
             var buf: [64]u8 = undefined;
-            const bs: []const u8 = if (b == .int) (std.fmt.bufPrint(&buf, "{d}", .{b.int}) catch "") else (std.fmt.bufPrint(&buf, "{d}", .{b.float}) catch "");
+            const bs: []const u8 = if (b == .int) (std.fmt.bufPrint(&buf, "{d}", .{b.int}) catch "")
+                                   else (std.fmt.bufPrint(&buf, "{d}", .{b.float}) catch "");
             return switch (std.mem.order(u8, a.string, bs)) {
-                .lt => -1,
-                .eq => 0,
-                .gt => 1,
+                .lt => -1, .eq => 0, .gt => 1,
             };
         }
         // PHP: null vs string compares as "" vs string, so `null < 'abc'` is
         // true and `null == ''` is true
         if (a == .null and b == .string) {
-            return switch (std.mem.order(u8, "", b.string)) {
-                .lt => -1,
-                .eq => 0,
-                .gt => 1,
-            };
+            return switch (std.mem.order(u8, "", b.string)) { .lt => -1, .eq => 0, .gt => 1 };
         }
         if (a == .string and b == .null) {
-            return switch (std.mem.order(u8, a.string, "")) {
-                .lt => -1,
-                .eq => 0,
-                .gt => 1,
-            };
+            return switch (std.mem.order(u8, a.string, "")) { .lt => -1, .eq => 0, .gt => 1 };
         }
         // PHP: when either operand is bool or null (and it isn't the
         // null-vs-string case handled above), convert both to bool and
@@ -1107,10 +1085,7 @@ pub const Value = union(enum) {
         if (i >= s.len) return 0;
         const start = i;
         var neg = false;
-        if (s[i] == '-') {
-            neg = true;
-            i += 1;
-        } else if (s[i] == '+') i += 1;
+        if (s[i] == '-') { neg = true; i += 1; } else if (s[i] == '+') i += 1;
         if (i >= s.len or s[i] < '0' or s[i] > '9') return 0;
         const digits_start = i;
         while (i < s.len and s[i] >= '0' and s[i] <= '9') i += 1;
@@ -1136,15 +1111,9 @@ pub const Value = union(enum) {
         while (k < s.len and s[k] >= '0' and s[k] <= '9') : (k += 1) {
             const d: i64 = s[k] - '0';
             const m = @mulWithOverflow(result, 10);
-            if (m[1] != 0) {
-                overflow = true;
-                break;
-            }
+            if (m[1] != 0) { overflow = true; break; }
             const a = @addWithOverflow(m[0], d);
-            if (a[1] != 0) {
-                overflow = true;
-                break;
-            }
+            if (a[1] != 0) { overflow = true; break; }
             result = a[0];
         }
         if (overflow) return if (neg) std.math.minInt(i64) else std.math.maxInt(i64);
@@ -1163,16 +1132,10 @@ pub const Value = union(enum) {
         var end = start;
         if (s[end] == '-' or s[end] == '+') end += 1;
         var has_digit = false;
-        while (end < s.len and s[end] >= '0' and s[end] <= '9') {
-            end += 1;
-            has_digit = true;
-        }
+        while (end < s.len and s[end] >= '0' and s[end] <= '9') { end += 1; has_digit = true; }
         if (end < s.len and s[end] == '.') {
             end += 1;
-            while (end < s.len and s[end] >= '0' and s[end] <= '9') {
-                end += 1;
-                has_digit = true;
-            }
+            while (end < s.len and s[end] >= '0' and s[end] <= '9') { end += 1; has_digit = true; }
         }
         if (end < s.len and (s[end] == 'e' or s[end] == 'E')) {
             // only consume the exponent when at least one exponent digit
@@ -1379,26 +1342,11 @@ pub const Value = union(enum) {
             i -= 1;
             const c = buf[i];
             if (c >= 'a' and c <= 'z') {
-                if (c == 'z') {
-                    buf[i] = 'a';
-                } else {
-                    buf[i] = c + 1;
-                    carry = false;
-                }
+                if (c == 'z') { buf[i] = 'a'; } else { buf[i] = c + 1; carry = false; }
             } else if (c >= 'A' and c <= 'Z') {
-                if (c == 'Z') {
-                    buf[i] = 'A';
-                } else {
-                    buf[i] = c + 1;
-                    carry = false;
-                }
+                if (c == 'Z') { buf[i] = 'A'; } else { buf[i] = c + 1; carry = false; }
             } else if (c >= '0' and c <= '9') {
-                if (c == '9') {
-                    buf[i] = '0';
-                } else {
-                    buf[i] = c + 1;
-                    carry = false;
-                }
+                if (c == '9') { buf[i] = '0'; } else { buf[i] = c + 1; carry = false; }
             } else {
                 // non-alnum stops the carry without modification (PHP returns
                 // the original string)
@@ -1407,7 +1355,9 @@ pub const Value = union(enum) {
         }
         if (carry) {
             const first = s[0];
-            const prefix: u8 = if (first >= 'a' and first <= 'z') 'a' else if (first >= 'A' and first <= 'Z') 'A' else '1';
+            const prefix: u8 = if (first >= 'a' and first <= 'z') 'a'
+                else if (first >= 'A' and first <= 'Z') 'A'
+                else '1';
             const grown = try allocator.alloc(u8, s.len + 1);
             grown[0] = prefix;
             @memcpy(grown[1..], buf);
@@ -1489,10 +1439,7 @@ pub const Value = union(enum) {
         while (i < s.len) : (i += 1) {
             const c = s[i];
             if (c >= '0' and c <= '9') continue;
-            if (c == '.' and !has_dot and !has_exp) {
-                has_dot = true;
-                continue;
-            }
+            if (c == '.' and !has_dot and !has_exp) { has_dot = true; continue; }
             if ((c == 'e' or c == 'E') and !has_exp and i > start) {
                 has_exp = true;
                 if (i + 1 < s.len and (s[i + 1] == '+' or s[i + 1] == '-')) i += 1;

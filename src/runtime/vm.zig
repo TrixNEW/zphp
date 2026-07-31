@@ -2378,8 +2378,7 @@ pub const VM = struct {
             .script_path = heap_result.file_path,
         };
         self.frames[self.frame_count].entry_sp = self.sp;
-        self.frame_count += 1;
-        self.retainFrameObjects(self.frame_count - 1);
+        self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
 
         const sp_before_eval = self.sp;
@@ -2671,7 +2670,8 @@ pub const VM = struct {
                     // phpInc allocates a new buffer only for the alpha-increment
                     // path (existing non-empty non-numeric string). track those
                     // for cleanup; other paths return scalars or string literals
-                    if (incremented == .string and v == .string and v.string.len > 0 and !Value.isNumericString(v.string)) {
+                    if (incremented == .string and v == .string and v.string.len > 0
+                        and !Value.isNumericString(v.string)) {
                         try self.strings.append(self.allocator, @constCast(incremented.string));
                     }
                     self.push(incremented);
@@ -2807,9 +2807,7 @@ pub const VM = struct {
                         if (try self.throwBuiltinException("ArithmeticError", "Bit shift by negative number")) continue;
                         return error.RuntimeError;
                     }
-                    if (sh >= 64) {
-                        self.push(.{ .int = 0 });
-                    } else {
+                    if (sh >= 64) { self.push(.{ .int = 0 }); } else {
                         const shift: u6 = @intCast(sh);
                         self.push(.{ .int = Value.toInt(a) << shift });
                     }
@@ -2993,10 +2991,7 @@ pub const VM = struct {
                     // check if any args are named (string keys)
                     var has_named = false;
                     for (arr.entries.items) |entry| {
-                        if (entry.key == .string) {
-                            has_named = true;
-                            break;
-                        }
+                        if (entry.key == .string) { has_named = true; break; }
                     }
                     if (has_named) {
                         if (self.functions.get(name)) |func| {
@@ -3018,10 +3013,7 @@ pub const VM = struct {
                                             if (assigned[pi]) {
                                                 const msg = try std.fmt.allocPrint(self.allocator, "Named parameter ${s} overwrites previous argument", .{entry.key.string});
                                                 try self.strings.append(self.allocator, msg);
-                                                if (try self.throwBuiltinException("Error", msg)) {
-                                                    ok = false;
-                                                    break;
-                                                }
+                                                if (try self.throwBuiltinException("Error", msg)) { ok = false; break; }
                                                 return error.RuntimeError;
                                             }
                                             resolved[pi] = entry.value;
@@ -3058,10 +3050,7 @@ pub const VM = struct {
                                                 if (!coerced) {
                                                     const msg = try std.fmt.allocPrint(self.allocator, "{s}(): Argument ${s} must be of type {s}, {s} given", .{ name, entry.key.string, vtype, valueTypeName(ev) });
                                                     try self.strings.append(self.allocator, msg);
-                                                    if (try self.throwBuiltinException("TypeError", msg)) {
-                                                        ok = false;
-                                                        break;
-                                                    }
+                                                    if (try self.throwBuiltinException("TypeError", msg)) { ok = false; break; }
                                                     return error.RuntimeError;
                                                 }
                                             }
@@ -3076,10 +3065,7 @@ pub const VM = struct {
                                         }
                                         const msg = try std.fmt.allocPrint(self.allocator, "Unknown named parameter ${s}", .{entry.key.string});
                                         try self.strings.append(self.allocator, msg);
-                                        if (try self.throwBuiltinException("Error", msg)) {
-                                            ok = false;
-                                            break;
-                                        }
+                                        if (try self.throwBuiltinException("Error", msg)) { ok = false; break; }
                                         return error.RuntimeError;
                                     }
                                 } else {
@@ -3144,10 +3130,7 @@ pub const VM = struct {
                     if (name_val == .string) {
                         var has_named_args = false;
                         for (arr.entries.items) |entry| {
-                            if (entry.key == .string) {
-                                has_named_args = true;
-                                break;
-                            }
+                            if (entry.key == .string) { has_named_args = true; break; }
                         }
                         if (has_named_args) {
                             if (self.functions.get(name_val.string)) |func| {
@@ -3560,10 +3543,7 @@ pub const VM = struct {
                             },
                         };
                         if (idx < 0) idx = @as(i64, @intCast(s.len)) + idx;
-                        if (idx < 0) {
-                            self.push(v);
-                            continue;
-                        }
+                        if (idx < 0) { self.push(v); continue; }
                         var write_byte: u8 = 0;
                         if (v == .string) {
                             if (v.string.len > 0) write_byte = v.string[0];
@@ -3676,10 +3656,7 @@ pub const VM = struct {
                             },
                         };
                         if (idx < 0) idx = @as(i64, @intCast(s.len)) + idx;
-                        if (idx < 0) {
-                            self.push(v);
-                            continue;
-                        }
+                        if (idx < 0) { self.push(v); continue; }
                         var write_byte: u8 = 0;
                         if (v == .string) {
                             if (v.string.len > 0) write_byte = v.string[0];
@@ -4297,7 +4274,8 @@ pub const VM = struct {
                         const new_val: Value = blk: {
                             if (op == .array_elem_inc) {
                                 const v = try Value.phpInc(old, self.allocator);
-                                if (v == .string and old == .string and old.string.len > 0 and !Value.isNumericString(old.string)) {
+                                if (v == .string and old == .string and old.string.len > 0
+                                    and !Value.isNumericString(old.string)) {
                                     try self.strings.append(self.allocator, @constCast(v.string));
                                 }
                                 break :blk v;
@@ -4726,8 +4704,7 @@ pub const VM = struct {
                         const fp = if (f_dbg.func) |fn_| fn_.file_path else "";
                         const ln: i64 = if (f_dbg.ip > 0)
                             if (f_dbg.chunk.getSourceLocation(f_dbg.ip - 1, self.source)) |l| @intCast(l.line) else 0
-                        else
-                            0;
+                        else 0;
                         const m = std.fmt.allocPrint(self.allocator, "[MVAER] dst={s} at {s}::{s} {s}:{d}\n", .{ dst_name, cls, fname, fp, ln }) catch return error.RuntimeError;
                         _ = sfe.write(m) catch {};
                         self.allocator.free(m);
@@ -5306,7 +5283,8 @@ pub const VM = struct {
                             frame_il.locals[slot] = .{ .float = v.float + 1.0 };
                         } else {
                             const incremented = try Value.phpInc(v, self.allocator);
-                            if (incremented == .string and v == .string and v.string.len > 0 and !Value.isNumericString(v.string)) {
+                            if (incremented == .string and v == .string and v.string.len > 0
+                                and !Value.isNumericString(v.string)) {
                                 try self.strings.append(self.allocator, @constCast(incremented.string));
                             }
                             frame_il.locals[slot] = incremented;
@@ -5991,9 +5969,8 @@ pub const VM = struct {
                                     .slot_names = r.slot_names,
                                 };
                                 self.frames[self.frame_count].entry_sp = self.sp;
-                                self.frame_count += 1;
-                                self.retainFrameObjects(self.frame_count - 1);
-                                if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                                self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                 const saved_merge_depth = self.require_merge_depth;
                                 self.require_merge_depth = self.frame_count;
                                 self.runUntilFrame(return_frame) catch {
@@ -6003,7 +5980,7 @@ pub const VM = struct {
                                         self.deinitFrameSlot(self.frame_count);
                                     }
                                     self.global_slot_names = saved_slot_names;
-                                    self.script_strict_types = saved_strict;
+                                self.script_strict_types = saved_strict;
 
                                     if (self.pending_exception) |exc| {
                                         if (self.handler_count > self.handler_floor) {
@@ -6064,10 +6041,7 @@ pub const VM = struct {
                                     // find a matching slot in the caller
                                     var caller_slot: ?usize = null;
                                     for (caller_sn, 0..) |csn, ci| {
-                                        if (std.mem.eql(u8, csn, name)) {
-                                            caller_slot = ci;
-                                            break;
-                                        }
+                                        if (std.mem.eql(u8, csn, name)) { caller_slot = ci; break; }
                                     }
                                     if (caller_slot) |cs| {
                                         if (cs < caller.locals.len) {
@@ -6092,19 +6066,13 @@ pub const VM = struct {
                                     if (name.len >= 3 and name[0] == '$' and name[1] == '_' and name[2] == '_') continue;
                                     var is_slot_backed = false;
                                     for (include_slot_names) |isn| {
-                                        if (isn.len > 0 and std.mem.eql(u8, isn, name)) {
-                                            is_slot_backed = true;
-                                            break;
-                                        }
+                                        if (isn.len > 0 and std.mem.eql(u8, isn, name)) { is_slot_backed = true; break; }
                                     }
                                     if (is_slot_backed) continue;
                                     const v = entry.value_ptr.*;
                                     var caller_slot: ?usize = null;
                                     for (caller_sn, 0..) |csn, ci| {
-                                        if (std.mem.eql(u8, csn, name)) {
-                                            caller_slot = ci;
-                                            break;
-                                        }
+                                        if (std.mem.eql(u8, csn, name)) { caller_slot = ci; break; }
                                     }
                                     if (caller_slot) |cs| {
                                         if (cs < caller.locals.len) {
@@ -6422,23 +6390,14 @@ pub const VM = struct {
                             const entries = arr_val.array.entries.items;
                             var has_named = false;
                             for (entries) |entry| {
-                                if (entry.key == .string) {
-                                    has_named = true;
-                                    break;
-                                }
+                                if (entry.key == .string) { has_named = true; break; }
                             }
                             if (has_named) {
                                 // resolve class name early to look up constructor params
                                 var cn = self.currentChunk().constants.items[name_idx].string;
-                                if (std.mem.eql(u8, cn, "static")) cn = self.resolveStaticClassName(cn) else if (std.mem.eql(u8, cn, "self")) {
-                                    if (self.currentDefiningClass()) |dc| cn = dc;
-                                } else if (std.mem.eql(u8, cn, "parent")) {
-                                    if (self.parentResolvingClass()) |dc| {
-                                        if (self.classes.get(dc)) |cls| {
-                                            if (cls.parent) |p| cn = p;
-                                        }
-                                    }
-                                }
+                                if (std.mem.eql(u8, cn, "static")) cn = self.resolveStaticClassName(cn)
+                                else if (std.mem.eql(u8, cn, "self")) { if (self.currentDefiningClass()) |dc| cn = dc; }
+                                else if (std.mem.eql(u8, cn, "parent")) { if (self.parentResolvingClass()) |dc| { if (self.classes.get(dc)) |cls| { if (cls.parent) |p| cn = p; } } }
                                 const ctor_name = self.resolveMethod(cn, "__construct") catch null;
                                 if (ctor_name) |ctn| {
                                     if (self.functions.get(ctn)) |func| {
@@ -6576,9 +6535,8 @@ pub const VM = struct {
                             try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
                             self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                             self.frames[self.frame_count].entry_sp = self.sp;
-                            self.frame_count += 1;
-                            self.retainFrameObjects(self.frame_count - 1);
-                            if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
 
                             const saved_fc = self.frame_count;
                             var ctx = self.makeContext(null);
@@ -6625,7 +6583,7 @@ pub const VM = struct {
                                 const ctor_lc: usize = func.local_count;
                                 const ctor_lbase = ctor_ic.locals_sp;
                                 const ctor_locals = if (ctor_lbase + ctor_lc <= ctor_ic.locals_cap) blk: {
-                                    const s = ctor_ic.locals_buf[ctor_lbase .. ctor_lbase + ctor_lc];
+                                    const s = ctor_ic.locals_buf[ctor_lbase..ctor_lbase + ctor_lc];
                                     @memset(s, .null);
                                     ctor_ic.locals_sp = ctor_lbase + ctor_lc;
                                     break :blk s;
@@ -6663,9 +6621,8 @@ pub const VM = struct {
                                 self.dropN(ac);
                                 self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = ctor_locals, .func = func, .called_class = class_name };
                                 self.frames[self.frame_count].entry_sp = self.sp;
-                                self.frame_count += 1;
-                                self.retainFrameObjects(self.frame_count - 1);
-                                if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                 self.exception_dispatched = false;
                                 try self.fastLoop();
                                 const ctor_frame = &self.frames[self.frame_count - 1];
@@ -6711,9 +6668,8 @@ pub const VM = struct {
                                 };
                                 self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = class_name };
                                 self.frames[self.frame_count].entry_sp = self.sp;
-                                self.frame_count += 1;
-                                self.retainFrameObjects(self.frame_count - 1);
-                                if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                 self.exception_dispatched = false;
                                 const ctor_base = self.frame_count - 1;
                                 try self.runUntilFrame(ctor_base);
@@ -6793,9 +6749,8 @@ pub const VM = struct {
                             try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
                             self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                             self.frames[self.frame_count].entry_sp = self.sp;
-                            self.frame_count += 1;
-                            self.retainFrameObjects(self.frame_count - 1);
-                            if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                             var ctx = self.makeContext(null);
                             _ = self.invokeNative(native, &ctx, args_buf[0..ac]) catch {
                                 self.frame_count -= 1;
@@ -6836,9 +6791,8 @@ pub const VM = struct {
                             }
                             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = class_name };
                             self.frames[self.frame_count].entry_sp = self.sp;
-                            self.frame_count += 1;
-                            self.retainFrameObjects(self.frame_count - 1);
-                            if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                             self.exception_dispatched = false;
                             const ctor_base = self.frame_count - 1;
                             try self.runUntilFrame(ctor_base);
@@ -7003,7 +6957,7 @@ pub const VM = struct {
                         const val = obj.get(prop_name);
                         const is_present = !obj.isUnset(prop_name) and
                             (val != .null or obj.properties.contains(prop_name) or
-                                (obj.slots != null and obj.getSlotIndex(prop_name) != null));
+                             (obj.slots != null and obj.getSlotIndex(prop_name) != null));
                         if (is_present) {
                             // an inaccessible property reads via `??` as
                             // "not set" - route to __get or null, never the
@@ -7549,7 +7503,7 @@ pub const VM = struct {
                                     const lc: usize = func.local_count;
                                     const lbase = ic.locals_sp;
                                     const mc_locals = if (lbase + lc <= ic.locals_cap) blk: {
-                                        const s = ic.locals_buf[lbase .. lbase + lc];
+                                        const s = ic.locals_buf[lbase..lbase + lc];
                                         @memset(s, .null);
                                         ic.locals_sp = lbase + lc;
                                         break :blk s;
@@ -7570,9 +7524,8 @@ pub const VM = struct {
                                     self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = mc_locals, .func = func };
                                     self.setFrameArgCount(arg_count);
                                     self.frames[self.frame_count].entry_sp = self.sp;
-                                    self.frame_count += 1;
-                                    self.retainFrameObjects(self.frame_count - 1);
-                                    if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                     try self.fastLoop();
                                     continue;
                                 }
@@ -7586,9 +7539,8 @@ pub const VM = struct {
                                 self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                                 self.setFrameArgCount(arg_count);
                                 self.frames[self.frame_count].entry_sp = self.sp;
-                                self.frame_count += 1;
-                                self.retainFrameObjects(self.frame_count - 1);
-                                if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                 const saved_fc = self.frame_count;
                                 var ctx = self.makeContext(null);
                                 // a native that calls throwBuiltinException
@@ -7700,9 +7652,8 @@ pub const VM = struct {
                         self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                         self.setFrameArgCount(arg_count);
                         self.frames[self.frame_count].entry_sp = self.sp;
-                        self.frame_count += 1;
-                        self.retainFrameObjects(self.frame_count - 1);
-                        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                         const saved_fc = self.frame_count;
 
                         var ctx = self.makeContext(full_name);
@@ -7812,17 +7763,15 @@ pub const VM = struct {
                             method_array_bindings.deinit(self.allocator);
                             method_object_bindings.deinit(self.allocator);
                             const gen = try self.allocator.create(Generator);
-                            gen.* = .{ .func = func, .vars = new_vars };
-                            retainVarsObjects(&gen.vars);
+                            gen.* = .{ .func = func, .vars = new_vars }; retainVarsObjects(&gen.vars);
                             try self.generators.append(self.allocator, gen);
                             self.push(.{ .generator = gen });
                         } else {
                             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = method_refs, .ref_array_bindings = method_array_bindings, .ref_object_bindings = method_object_bindings };
                             self.setFrameArgCount(arg_count);
                             self.frames[self.frame_count].entry_sp = self.sp;
-                            self.frame_count += 1;
-                            self.retainFrameObjects(self.frame_count - 1);
-                            if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                         }
                     } else {
                         self.dropN(ac + 1);
@@ -7847,10 +7796,7 @@ pub const VM = struct {
                     // check for named args
                     var has_named = false;
                     for (arr.entries.items) |entry| {
-                        if (entry.key == .string) {
-                            has_named = true;
-                            break;
-                        }
+                        if (entry.key == .string) { has_named = true; break; }
                     }
 
                     var resolved_buf: [16]Value = .{.null} ** 16;
@@ -7927,9 +7873,8 @@ pub const VM = struct {
                         self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                         self.setFrameArgCount(mcs_ac_u8);
                         self.frames[self.frame_count].entry_sp = self.sp;
-                        self.frame_count += 1;
-                        self.retainFrameObjects(self.frame_count - 1);
-                        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                         const saved_fc = self.frame_count;
                         var ctx = self.makeContext(full_name);
                         const result = self.invokeNative(native, &ctx, args_buf[0..ac]) catch {
@@ -8000,9 +7945,8 @@ pub const VM = struct {
                         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func };
                         self.setFrameArgCount(mcs_ac_u8);
                         self.frames[self.frame_count].entry_sp = self.sp;
-                        self.frame_count += 1;
-                        self.retainFrameObjects(self.frame_count - 1);
-                        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                     } else {
                         self.dropN(ac + 1);
                         const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
@@ -8074,9 +8018,8 @@ pub const VM = struct {
                         self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                         self.setFrameArgCount(arg_count);
                         self.frames[self.frame_count].entry_sp = self.sp;
-                        self.frame_count += 1;
-                        self.retainFrameObjects(self.frame_count - 1);
-                        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                         const saved_fc = self.frame_count;
                         var ctx = self.makeContext(full_name);
                         const result = self.invokeNative(native, &ctx, args_buf[0..ac]) catch {
@@ -8149,9 +8092,8 @@ pub const VM = struct {
                         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func };
                         self.setFrameArgCount(arg_count);
                         self.frames[self.frame_count].entry_sp = self.sp;
-                        self.frame_count += 1;
-                        self.retainFrameObjects(self.frame_count - 1);
-                        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                     } else {
                         self.dropN(ac + 1);
                         const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
@@ -8240,9 +8182,8 @@ pub const VM = struct {
                         self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                         self.setFrameArgCount(mcds_ac_u8);
                         self.frames[self.frame_count].entry_sp = self.sp;
-                        self.frame_count += 1;
-                        self.retainFrameObjects(self.frame_count - 1);
-                        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                         const saved_fc = self.frame_count;
                         var ctx = self.makeContext(full_name);
                         const result = self.invokeNative(native, &ctx, args_buf[0..ac]) catch {
@@ -8315,9 +8256,8 @@ pub const VM = struct {
                         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func };
                         self.setFrameArgCount(mcds_ac_u8);
                         self.frames[self.frame_count].entry_sp = self.sp;
-                        self.frame_count += 1;
-                        self.retainFrameObjects(self.frame_count - 1);
-                        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                     } else {
                         self.dropN(ac + 1);
                         const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
@@ -8434,50 +8374,49 @@ pub const VM = struct {
                                 if (func.is_generator) {
                                     try self.callStaticFunction(full_name, arg_count, effective_called);
                                 } else {
-                                    const ac: usize = arg_count;
-                                    var new_vars = self.acquireFrameVars();
-                                    try new_vars.put(self.allocator, "$this", tv);
-                                    if (func.is_variadic) {
-                                        const fixed: usize = func.arity - 1;
-                                        for (0..@min(ac, fixed)) |i| {
-                                            const is_ref = i < func.ref_params.len and func.ref_params[i];
-                                            const sv = self.stack[self.sp - ac + i];
-                                            try new_vars.put(self.allocator, func.params[i], if (is_ref) sv else try self.copyValue(sv));
-                                        }
-                                        const rest_arr = try self.allocator.create(PhpArray);
-                                        rest_arr.* = .{};
-                                        if (ac > fixed) {
-                                            for (fixed..ac) |i| {
-                                                try rest_arr.append(self.allocator, try self.transferArg(self.stack[self.sp - ac + i]));
-                                            }
-                                        }
-                                        try self.arrays.append(self.allocator, rest_arr);
-                                        try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
-                                    } else {
-                                        for (0..@min(ac, func.arity)) |i| {
-                                            const is_ref = i < func.ref_params.len and func.ref_params[i];
-                                            const sv = self.stack[self.sp - ac + i];
-                                            try new_vars.put(self.allocator, func.params[i], if (is_ref) sv else try self.copyValue(sv));
+                                const ac: usize = arg_count;
+                                var new_vars = self.acquireFrameVars();
+                                try new_vars.put(self.allocator, "$this", tv);
+                                if (func.is_variadic) {
+                                    const fixed: usize = func.arity - 1;
+                                    for (0..@min(ac, fixed)) |i| {
+                                        const is_ref = i < func.ref_params.len and func.ref_params[i];
+                                        const sv = self.stack[self.sp - ac + i];
+                                        try new_vars.put(self.allocator, func.params[i], if (is_ref) sv else try self.copyValue(sv));
+                                    }
+                                    const rest_arr = try self.allocator.create(PhpArray);
+                                    rest_arr.* = .{};
+                                    if (ac > fixed) {
+                                        for (fixed..ac) |i| {
+                                            try rest_arr.append(self.allocator, try self.transferArg(self.stack[self.sp - ac + i]));
                                         }
                                     }
-                                    if (self.frame_count >= 2047) {
-                                        self.dropN(ac);
-                                        new_vars.deinit(self.allocator);
-                                        const msg = std.fmt.allocPrint(self.allocator, "Fatal error: maximum call stack depth exceeded in {s}::{s}()", .{ class_name, method_name }) catch "Fatal error: maximum call stack depth exceeded";
-                                        try self.strings.append(self.allocator, msg);
-                                        if (try self.throwBuiltinException("Error", msg)) continue;
-                                        self.error_msg = msg;
-                                        return error.RuntimeError;
+                                    try self.arrays.append(self.allocator, rest_arr);
+                                    try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
+                                } else {
+                                    for (0..@min(ac, func.arity)) |i| {
+                                        const is_ref = i < func.ref_params.len and func.ref_params[i];
+                                        const sv = self.stack[self.sp - ac + i];
+                                        try new_vars.put(self.allocator, func.params[i], if (is_ref) sv else try self.copyValue(sv));
                                     }
-                                    self.saveFrameArgs(arg_count);
+                                }
+                                if (self.frame_count >= 2047) {
                                     self.dropN(ac);
-                                    try self.fillDefaults(&new_vars, func, ac);
-                                    self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = effective_called };
-                                    self.setFrameArgCount(arg_count);
-                                    self.frames[self.frame_count].entry_sp = self.sp;
-                                    self.frame_count += 1;
-                                    self.retainFrameObjects(self.frame_count - 1);
-                                    if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                                    new_vars.deinit(self.allocator);
+                                    const msg = std.fmt.allocPrint(self.allocator, "Fatal error: maximum call stack depth exceeded in {s}::{s}()", .{ class_name, method_name }) catch "Fatal error: maximum call stack depth exceeded";
+                                    try self.strings.append(self.allocator, msg);
+                                    if (try self.throwBuiltinException("Error", msg)) continue;
+                                    self.error_msg = msg;
+                                    return error.RuntimeError;
+                                }
+                                self.saveFrameArgs(arg_count);
+                                self.dropN(ac);
+                                try self.fillDefaults(&new_vars, func, ac);
+                                self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = effective_called };
+                                self.setFrameArgCount(arg_count);
+                                self.frames[self.frame_count].entry_sp = self.sp;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                 }
                             } else if (self.native_fns.get(full_name)) |native| {
                                 const ac: usize = arg_count;
@@ -8491,9 +8430,8 @@ pub const VM = struct {
                                 self.setFrameArgCount(arg_count);
                                 const sc_saved_fc = self.frame_count;
                                 self.frames[self.frame_count].entry_sp = self.sp;
-                                self.frame_count += 1;
-                                self.retainFrameObjects(self.frame_count - 1);
-                                if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                 var ctx = self.makeContext(full_name);
                                 const result = self.invokeNative(native, &ctx, args_buf[0..ac]) catch {
                                     if (self.frame_count > sc_saved_fc) {
@@ -8603,10 +8541,7 @@ pub const VM = struct {
                     // resolve named args to positional order
                     var has_named_sc = false;
                     for (arr.entries.items) |entry| {
-                        if (entry.key == .string) {
-                            has_named_sc = true;
-                            break;
-                        }
+                        if (entry.key == .string) { has_named_sc = true; break; }
                     }
                     var resolved_ac = ac;
                     if (has_named_sc) {
@@ -8643,35 +8578,34 @@ pub const VM = struct {
                                 if (func.is_generator) {
                                     try self.callStaticFunction(full_name, @intCast(resolved_ac), effective_called);
                                 } else {
-                                    var new_vars = self.acquireFrameVars();
-                                    try new_vars.put(self.allocator, "$this", tv);
-                                    if (func.is_variadic) {
-                                        const fixed: usize = func.arity - 1;
-                                        for (0..@min(resolved_ac, fixed)) |i| {
-                                            try new_vars.put(self.allocator, func.params[i], try self.transferArg(self.stack[self.sp - resolved_ac + i]));
-                                        }
-                                        const rest_arr = try self.allocator.create(PhpArray);
-                                        rest_arr.* = .{};
-                                        try self.arrays.append(self.allocator, rest_arr);
-                                        for (fixed..resolved_ac) |i| try rest_arr.append(self.allocator, self.stack[self.sp - resolved_ac + i]);
-                                        try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
-                                    } else {
-                                        for (0..@min(resolved_ac, func.arity)) |i| {
-                                            try new_vars.put(self.allocator, func.params[i], try self.transferArg(self.stack[self.sp - resolved_ac + i]));
-                                        }
-                                        for (resolved_ac..func.arity) |i| {
-                                            if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
-                                        }
+                                var new_vars = self.acquireFrameVars();
+                                try new_vars.put(self.allocator, "$this", tv);
+                                if (func.is_variadic) {
+                                    const fixed: usize = func.arity - 1;
+                                    for (0..@min(resolved_ac, fixed)) |i| {
+                                        try new_vars.put(self.allocator, func.params[i], try self.transferArg(self.stack[self.sp - resolved_ac + i]));
                                     }
-                                    const scs_ac: u8 = @intCast(@min(resolved_ac, 255));
-                                    self.saveFrameArgs(scs_ac);
-                                    self.dropN(resolved_ac);
-                                    self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = effective_called };
-                                    self.setFrameArgCount(scs_ac);
-                                    self.frames[self.frame_count].entry_sp = self.sp;
-                                    self.frame_count += 1;
-                                    self.retainFrameObjects(self.frame_count - 1);
-                                    if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                                    const rest_arr = try self.allocator.create(PhpArray);
+                                    rest_arr.* = .{};
+                                    try self.arrays.append(self.allocator, rest_arr);
+                                    for (fixed..resolved_ac) |i| try rest_arr.append(self.allocator, self.stack[self.sp - resolved_ac + i]);
+                                    try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
+                                } else {
+                                    for (0..@min(resolved_ac, func.arity)) |i| {
+                                        try new_vars.put(self.allocator, func.params[i], try self.transferArg(self.stack[self.sp - resolved_ac + i]));
+                                    }
+                                    for (resolved_ac..func.arity) |i| {
+                                        if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
+                                    }
+                                }
+                                const scs_ac: u8 = @intCast(@min(resolved_ac, 255));
+                                self.saveFrameArgs(scs_ac);
+                                self.dropN(resolved_ac);
+                                self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = effective_called };
+                                self.setFrameArgCount(scs_ac);
+                                self.frames[self.frame_count].entry_sp = self.sp;
+                    self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                 }
                             } else {
                                 const msg = try std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name });
@@ -9817,6 +9751,7 @@ pub const VM = struct {
         self.emitWarning(msg);
     }
 
+
     pub fn emitWarning(self: *VM, msg: []const u8) void {
         const ip = if (self.frame_count > 0) self.currentFrame().ip else 0;
         const line: i64 = if (self.frame_count > 0)
@@ -10023,8 +9958,7 @@ pub const VM = struct {
             .ref_slots = gen.ref_slots,
         };
         gen.ref_slots = .{};
-        self.frame_count += 1;
-        self.retainFrameObjects(self.frame_count - 1);
+        self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
 
         self.restoreGeneratorHandlers(gen);
@@ -10233,6 +10167,7 @@ pub const VM = struct {
         }
     }
 
+
     fn writebackGlobals(self: *VM) !void {
         var i: usize = 0;
         while (i < self.global_vars.items.len) {
@@ -10269,9 +10204,8 @@ pub const VM = struct {
             try new_vars.put(self.allocator, "$this", .{ .object = obj });
             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func };
             self.frames[self.frame_count].entry_sp = self.sp;
-            self.frame_count += 1;
-            self.retainFrameObjects(self.frame_count - 1);
-            if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+            self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
             try self.runLoop(self.frame_count - 1);
             const result = self.pop();
             if (result == .string) return result.string;
@@ -10486,6 +10420,7 @@ pub const VM = struct {
             }
         }
 
+
         const iface_count = self.readByte();
         for (0..iface_count) |_| {
             const iname_idx = self.readU16();
@@ -10651,10 +10586,7 @@ pub const VM = struct {
                     while (pp) |pn2| {
                         if (self.classes.get(pn2)) |pc| {
                             if (pc.methods.get(se.key_ptr.*)) |pm| {
-                                if (!pm.is_abstract) {
-                                    found_concrete = true;
-                                    break;
-                                }
+                                if (!pm.is_abstract) { found_concrete = true; break; }
                             }
                             pp = pc.parent;
                         } else break;
@@ -11072,10 +11004,7 @@ pub const VM = struct {
                 if (std.mem.eql(u8, rule.method, tm.name)) {
                     if (std.mem.eql(u8, rule.preferred, trait_name)) break;
                     for (rule.excluded[0..rule.excluded_count]) |ex| {
-                        if (std.mem.eql(u8, ex, trait_name)) {
-                            excluded = true;
-                            break;
-                        }
+                        if (std.mem.eql(u8, ex, trait_name)) { excluded = true; break; }
                     }
                     if (excluded) break;
                 }
@@ -11099,10 +11028,7 @@ pub const VM = struct {
             for (props) |prop| {
                 var exists = false;
                 for (def.properties.items) |existing| {
-                    if (std.mem.eql(u8, existing.name, prop.name)) {
-                        exists = true;
-                        break;
-                    }
+                    if (std.mem.eql(u8, existing.name, prop.name)) { exists = true; break; }
                 }
                 if (!exists) {
                     try def.properties.append(self.allocator, prop);
@@ -11385,9 +11311,8 @@ pub const VM = struct {
                 self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = closure_refs, .called_class = inherit_cc, .call_name = name };
                 self.frames[self.frame_count].entry_sp = self.sp;
                 self.setFrameArgCount(arg_count);
-                self.frame_count += 1;
-                self.retainFrameObjects(self.frame_count - 1);
-                if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                 return;
             }
         }
@@ -11396,7 +11321,7 @@ pub const VM = struct {
         const base = ic.locals_sp;
 
         const locals = if (base + lc <= ic.locals_cap) blk: {
-            const s = ic.locals_buf[base .. base + lc];
+            const s = ic.locals_buf[base..base + lc];
             @memset(s, .null);
             ic.locals_sp = base + lc;
             break :blk s;
@@ -11433,8 +11358,7 @@ pub const VM = struct {
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = locals, .func = func, .called_class = self.closureScopeByName(name) orelse self.currentFrame().called_class, .call_name = name };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.setFrameArgCount(arg_count);
-        self.frame_count += 1;
-        self.retainFrameObjects(self.frame_count - 1);
+        self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
         try self.fastLoop();
     }
@@ -11446,7 +11370,7 @@ pub const VM = struct {
         const base = ic.locals_sp;
 
         const locals = if (base + lc <= ic.locals_cap) blk: {
-            const s = ic.locals_buf[base .. base + lc];
+            const s = ic.locals_buf[base..base + lc];
             @memset(s, .null);
             ic.locals_sp = base + lc;
             break :blk s;
@@ -11468,8 +11392,7 @@ pub const VM = struct {
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = locals, .func = func, .called_class = self.currentFrame().called_class };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.setFrameArgCount(arg_count);
-        self.frame_count += 1;
-        self.retainFrameObjects(self.frame_count - 1);
+        self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
         try self.fastLoop();
     }
@@ -11496,7 +11419,7 @@ pub const VM = struct {
         const lbase = ic.locals_sp;
 
         const locals = if (lbase + lc <= ic.locals_cap) blk: {
-            const s = ic.locals_buf[lbase .. lbase + lc];
+            const s = ic.locals_buf[lbase..lbase + lc];
             @memset(s, .null);
             ic.locals_sp = lbase + lc;
             break :blk s;
@@ -11521,8 +11444,7 @@ pub const VM = struct {
         self.consumePendingArgCount();
         self.saveFrameArgsSlice(args);
         self.pending_call_name = null;
-        self.frame_count += 1;
-        self.retainFrameObjects(self.frame_count - 1);
+        self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
         self.runUntilFrame(base_frame) catch |err| {
             self.handler_count = base_handler;
@@ -12337,10 +12259,7 @@ pub const VM = struct {
         const ref_window = @min(ac, func.ref_params.len);
         var any_ref = false;
         for (0..ref_window) |ri| {
-            if (func.ref_params[ri]) {
-                any_ref = true;
-                break;
-            }
+            if (func.ref_params[ri]) { any_ref = true; break; }
         }
         if (!any_ref) return;
         const arg_sources = self.scanCallerArgSources(ac);
@@ -12627,8 +12546,8 @@ pub const VM = struct {
     fn builtinExceptionParent(class_name: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, class_name, "Exception") or std.mem.eql(u8, class_name, "Error")) return "Throwable";
         const date_exception_children = [_][]const u8{
-            "DateInvalidTimeZoneException",       "DateInvalidOperationException",
-            "DateMalformedStringException",       "DateMalformedIntervalStringException",
+            "DateInvalidTimeZoneException", "DateInvalidOperationException",
+            "DateMalformedStringException", "DateMalformedIntervalStringException",
             "DateMalformedPeriodStringException",
         };
         for (date_exception_children) |name| {
@@ -12644,19 +12563,19 @@ pub const VM = struct {
         if (std.mem.eql(u8, class_name, "DateError")) return "Error";
         if (std.mem.eql(u8, class_name, "SodiumException")) return "Exception";
         const exception_children = [_][]const u8{
-            "RuntimeException",       "LogicException",           "InvalidArgumentException",
+            "RuntimeException",     "LogicException",          "InvalidArgumentException",
             "BadMethodCallException", "BadFunctionCallException", "OutOfRangeException",
-            "OverflowException",      "UnderflowException",       "LengthException",
-            "DomainException",        "RangeException",           "UnexpectedValueException",
-            "JsonException",          "PDOException",
+            "OverflowException",    "UnderflowException",      "LengthException",
+            "DomainException",      "RangeException",          "UnexpectedValueException",
+            "JsonException",        "PDOException",
         };
         for (exception_children) |name| {
             if (std.mem.eql(u8, class_name, name)) return "Exception";
         }
         const error_children = [_][]const u8{
-            "TypeError",           "ValueError",          "ArithmeticError",
+            "TypeError",      "ValueError",          "ArithmeticError",
             "DivisionByZeroError", "UnhandledMatchError", "FiberError",
-            "ParseError",          "CompileError",
+            "ParseError",     "CompileError",
         };
         for (error_children) |name| {
             if (std.mem.eql(u8, class_name, name)) return "Error";
@@ -12786,10 +12705,7 @@ pub const VM = struct {
             // converted to push into 'parents' yet
             if (idef.parent) |p| {
                 var seen_in_parents = false;
-                for (idef.parents.items) |pp| if (std.mem.eql(u8, pp, p)) {
-                    seen_in_parents = true;
-                    break;
-                };
+                for (idef.parents.items) |pp| if (std.mem.eql(u8, pp, p)) { seen_in_parents = true; break; };
                 if (!seen_in_parents and self.implementsInterface(p, target)) return true;
             }
             return false;
@@ -12988,10 +12904,7 @@ pub const VM = struct {
     }
 
     pub fn propHookName(self: *VM, prop_name: []const u8, kind: enum { get, set }) ?[]const u8 {
-        const suffix = switch (kind) {
-            .get => "$hook_get",
-            .set => "$hook_set",
-        };
+        const suffix = switch (kind) { .get => "$hook_get", .set => "$hook_set" };
         const name = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prop_name, suffix }) catch return null;
         self.strings.append(self.allocator, name) catch {
             self.allocator.free(name);
@@ -13010,10 +12923,7 @@ pub const VM = struct {
 
     pub fn callPropHook(self: *VM, obj: *PhpObject, prop_name: []const u8, kind: enum { get, set }, value: Value) RuntimeError!?Value {
         if (self.inPropHook(obj, prop_name)) return null;
-        const suffix = switch (kind) {
-            .get => "$hook_get",
-            .set => "$hook_set",
-        };
+        const suffix = switch (kind) { .get => "$hook_get", .set => "$hook_set" };
         const hook_name = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prop_name, suffix });
         try self.strings.append(self.allocator, hook_name);
         if (!self.hasMethod(obj.class_name, hook_name)) return null;
@@ -13046,19 +12956,13 @@ pub const VM = struct {
             const has_any = while (true) {
                 if (self.classes.get(current)) |cls| {
                     if (cls.has_prop_hooks) break true;
-                    if (cls.parent) |p| {
-                        current = p;
-                        continue;
-                    }
+                    if (cls.parent) |p| { current = p; continue; }
                 }
                 break false;
             };
             if (!has_any) return false;
         }
-        const kind_bit: u2 = switch (kind) {
-            .get => 1,
-            .set => 2,
-        };
+        const kind_bit: u2 = switch (kind) { .get => 1, .set => 2 };
         const fn_count = self.functions.count() + self.native_fns.count();
         const cls_count = self.classes.count();
         if (self.has_hook_cache_fn_count == fn_count and
@@ -13071,10 +12975,7 @@ pub const VM = struct {
         {
             return self.has_hook_cache_result;
         }
-        const suffix = switch (kind) {
-            .get => "$hook_get",
-            .set => "$hook_set",
-        };
+        const suffix = switch (kind) { .get => "$hook_get", .set => "$hook_set" };
         var buf: [256]u8 = undefined;
         const hook_name = std.fmt.bufPrint(&buf, "{s}{s}", .{ prop_name, suffix }) catch return false;
         const result = self.hasMethod(class_name, hook_name);
@@ -13109,10 +13010,7 @@ pub const VM = struct {
             const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ current, method_name }) catch break false;
             if (self.functions.get(full) != null or self.native_fns.get(full) != null) break true;
             if (self.classes.get(current)) |cls| {
-                if (cls.parent) |p| {
-                    current = p;
-                    continue;
-                }
+                if (cls.parent) |p| { current = p; continue; }
             }
             break false;
         };
@@ -13396,10 +13294,7 @@ pub const VM = struct {
         // is an array, where cycles become possible.
         var has_nested = false;
         for (src.entries.items) |entry| {
-            if (entry.value == .array) {
-                has_nested = true;
-                break;
-            }
+            if (entry.value == .array) { has_nested = true; break; }
         }
         if (!has_nested) return try self.cloneArrayFlat(src);
         var visited: std.AutoHashMapUnmanaged(*PhpArray, *PhpArray) = .{};
@@ -13755,8 +13650,7 @@ pub const VM = struct {
         if (self.pending_invoke_args) |pia| self.saveFrameArgsSlice(pia);
         self.pending_call_name = null;
         self.pending_called_class = null;
-        self.frame_count += 1;
-        self.retainFrameObjects(self.frame_count - 1);
+        self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
         self.runUntilFrame(base_frame) catch |err| {
             self.handler_count = base_handler;
@@ -13783,8 +13677,7 @@ pub const VM = struct {
         if (self.pending_invoke_args) |pia| self.saveFrameArgsSlice(pia);
         self.pending_call_name = null;
         self.pending_called_class = null;
-        self.frame_count += 1;
-        self.retainFrameObjects(self.frame_count - 1);
+        self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
         self.runUntilFrame(base_frame) catch |err| {
             self.handler_count = base_handler;
@@ -14008,7 +13901,9 @@ pub const VM = struct {
         var depth: i32 = 0;
         var start: usize = 0;
         for (type_str, 0..) |c, i| {
-            if (c == '(') depth += 1 else if (c == ')') depth -= 1 else if (c == '|' and depth == 0) {
+            if (c == '(') depth += 1
+            else if (c == ')') depth -= 1
+            else if (c == '|' and depth == 0) {
                 if (self.checkIntersection(val, type_str[start..i])) return true;
                 start = i + 1;
             }
@@ -14023,7 +13918,9 @@ pub const VM = struct {
         var depth: i32 = 0;
         var start: usize = 0;
         for (s, 0..) |c, i| {
-            if (c == '(') depth += 1 else if (c == ')') depth -= 1 else if (c == '&' and depth == 0) {
+            if (c == '(') depth += 1
+            else if (c == ')') depth -= 1
+            else if (c == '&' and depth == 0) {
                 if (!self.checkSingleType(val, s[start..i])) return false;
                 start = i + 1;
             }
@@ -14072,9 +13969,8 @@ pub const VM = struct {
                 // the caller is the current top frame
                 if (self.frame_count >= 1) {
                     const caller = &self.frames[self.frame_count - 1];
-                    if (caller.script_path.len > 0) cs_file = caller.script_path else if (caller.func) |cf| if (cf.file_path.len > 0) {
-                        cs_file = cf.file_path;
-                    };
+                    if (caller.script_path.len > 0) cs_file = caller.script_path
+                    else if (caller.func) |cf| if (cf.file_path.len > 0) { cs_file = cf.file_path; };
                     const cip: usize = if (caller.ip > 0) caller.ip - 1 else 0;
                     // load the caller's own source if it differs from vm.source -
                     // the chunk's lines table maps to byte offsets in the file
@@ -14453,8 +14349,7 @@ pub const VM = struct {
                 callee_array_bindings.deinit(self.allocator);
                 callee_object_bindings.deinit(self.allocator);
                 const gen = try self.allocator.create(Generator);
-                gen.* = .{ .func = func, .vars = new_vars, .ref_slots = callee_refs };
-                retainVarsObjects(&gen.vars);
+                gen.* = .{ .func = func, .vars = new_vars, .ref_slots = callee_refs }; retainVarsObjects(&gen.vars);
                 try self.generators.append(self.allocator, gen);
                 self.push(.{ .generator = gen });
             } else {
@@ -14476,9 +14371,8 @@ pub const VM = struct {
                 self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = callee_refs, .ref_array_bindings = callee_array_bindings, .ref_object_bindings = callee_object_bindings, .called_class = inherit_cc, .call_name = name };
                 self.frames[self.frame_count].entry_sp = self.sp;
                 self.setFrameArgCount(arg_count);
-                self.frame_count += 1;
-                self.retainFrameObjects(self.frame_count - 1);
-                if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+                self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
             }
         } else {
             if (std.mem.lastIndexOfScalar(u8, name, '\\')) |pos| {
@@ -14502,9 +14396,7 @@ pub const VM = struct {
             list.append(self.allocator, .{ .name = e.key_ptr.*, .count = e.value_ptr.* }) catch return;
         }
         std.sort.heap(Entry, list.items, {}, struct {
-            fn lt(_: void, x: Entry, y: Entry) bool {
-                return x.count > y.count;
-            }
+            fn lt(_: void, x: Entry, y: Entry) bool { return x.count > y.count; }
         }.lt);
         const sfe = std.fs.File{ .handle = 2 };
         _ = sfe.write("[profile] top callees:\n") catch {};
@@ -14533,9 +14425,8 @@ pub const VM = struct {
             var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
             try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
             self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
-            self.frame_count += 1;
-            self.retainFrameObjects(self.frame_count - 1);
-            if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+            self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
             const saved_fc = self.frame_count;
             var ctx = self.makeContext(null);
             // throwBuiltinException can dispatch in-place and the native
@@ -14562,8 +14453,7 @@ pub const VM = struct {
             try self.bindArgs(&new_vars, func, trimmed);
             if (func.is_generator) {
                 const gen = try self.allocator.create(Generator);
-                gen.* = .{ .func = func, .vars = new_vars };
-                retainVarsObjects(&gen.vars);
+                gen.* = .{ .func = func, .vars = new_vars }; retainVarsObjects(&gen.vars);
                 try self.generators.append(self.allocator, gen);
                 return .{ .generator = gen };
             }
@@ -14617,12 +14507,13 @@ pub const VM = struct {
         // PHP runs shutdown callbacks in registration order, after the script
         // returns; errors in one don't prevent the others from firing.
         for (self.shutdown_callbacks.items) |cb| {
-            const result = if (cb == .string) self.callByName(cb.string, &.{}) catch null else if (cb == .object) blk: {
-                if (self.hasMethod(cb.object.class_name, "__invoke")) {
-                    break :blk self.callMethod(cb.object, "__invoke", &.{}) catch null;
-                }
-                break :blk null;
-            } else null;
+            const result = if (cb == .string) self.callByName(cb.string, &.{}) catch null
+                          else if (cb == .object) blk: {
+                              if (self.hasMethod(cb.object.class_name, "__invoke")) {
+                                  break :blk self.callMethod(cb.object, "__invoke", &.{}) catch null;
+                              }
+                              break :blk null;
+                          } else null;
             _ = result;
         }
         self.shutdown_callbacks.clearRetainingCapacity();
@@ -14636,9 +14527,8 @@ pub const VM = struct {
         var caller_line: u32 = 0;
         if (self.frame_count >= 1) {
             const caller = &self.frames[self.frame_count - 1];
-            if (caller.script_path.len > 0) caller_file = caller.script_path else if (caller.func) |cf| if (cf.file_path.len > 0) {
-                caller_file = cf.file_path;
-            };
+            if (caller.script_path.len > 0) caller_file = caller.script_path
+            else if (caller.func) |cf| if (cf.file_path.len > 0) { caller_file = cf.file_path; };
             const cip: usize = if (caller.ip > 0) caller.ip - 1 else 0;
             var caller_src: []const u8 = self.source;
             var loaded: []const u8 = "";
@@ -14725,7 +14615,7 @@ pub const VM = struct {
         const lbase = ic.locals_sp;
 
         const locals = if (lbase + lc <= ic.locals_cap) blk: {
-            const s = ic.locals_buf[lbase .. lbase + lc];
+            const s = ic.locals_buf[lbase..lbase + lc];
             @memset(s, .null);
             ic.locals_sp = lbase + lc;
             break :blk s;
@@ -14761,8 +14651,7 @@ pub const VM = struct {
         self.frames[self.frame_count].entry_sp = self.sp;
         self.consumePendingArgCount();
         self.saveFrameArgsSlice(args);
-        self.frame_count += 1;
-        self.retainFrameObjects(self.frame_count - 1);
+        self.frame_count += 1; self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
         self.fastLoop() catch |err| {
             self.handler_count = base_handler;
@@ -15108,7 +14997,7 @@ pub const VM = struct {
         const ac: usize = ac_raw;
         const offset: usize = ic.fga_offsets[fc];
         if (offset + ac > ic.fga_buf.len) return null;
-        return ic.fga_buf[offset .. offset + ac];
+        return ic.fga_buf[offset..offset + ac];
     }
 
     fn binaryOp(self: *VM, op: *const fn (Value, Value) Value) void {
@@ -15329,12 +15218,8 @@ pub const VM = struct {
         if (self.globals_array) |ga| {
             for (ga.entries.items) |entry| {
                 switch (entry.value) {
-                    .object => |o| if (visited_objs.contains(o)) {
-                        o.scratch_rc += 1;
-                    },
-                    .array => |a| if (visited_arrs.contains(a)) {
-                        a.scratch_rc += 1;
-                    },
+                    .object => |o| if (visited_objs.contains(o)) { o.scratch_rc += 1; },
+                    .array => |a| if (visited_arrs.contains(a)) { a.scratch_rc += 1; },
                     else => {},
                 }
             }
@@ -15430,12 +15315,8 @@ pub const VM = struct {
 
     fn cycleDecChild(_: *VM, v: Value, vo: anytype, va: anytype) void {
         switch (v) {
-            .object => |o| if (vo.contains(o)) {
-                o.scratch_rc -= 1;
-            },
-            .array => |a| if (va.contains(a)) {
-                a.scratch_rc -= 1;
-            },
+            .object => |o| if (vo.contains(o)) { o.scratch_rc -= 1; },
+            .array => |a| if (va.contains(a)) { a.scratch_rc -= 1; },
             else => {},
         }
     }
@@ -15443,22 +15324,16 @@ pub const VM = struct {
     fn cycleMarkAlive(self: *VM, obj: *PhpObject, vo: anytype, va: anytype) bool {
         var changed = false;
         if (obj.slots) |s| {
-            for (s) |v| if (self.cycleMarkAliveChild(v, vo, va)) {
-                changed = true;
-            };
+            for (s) |v| if (self.cycleMarkAliveChild(v, vo, va)) { changed = true; };
         }
         var pit = obj.properties.iterator();
-        while (pit.next()) |e| if (self.cycleMarkAliveChild(e.value_ptr.*, vo, va)) {
-            changed = true;
-        };
+        while (pit.next()) |e| if (self.cycleMarkAliveChild(e.value_ptr.*, vo, va)) { changed = true; };
         return changed;
     }
 
     fn cycleMarkAliveArr(self: *VM, arr: *PhpArray, vo: anytype, va: anytype) bool {
         var changed = false;
-        for (arr.entries.items) |e| if (self.cycleMarkAliveChild(e.value, vo, va)) {
-            changed = true;
-        };
+        for (arr.entries.items) |e| if (self.cycleMarkAliveChild(e.value, vo, va)) { changed = true; };
         return changed;
     }
 
@@ -15679,3 +15554,4 @@ pub const VM = struct {
         if (old) |kv| self.releaseValue(kv.value);
     }
 };
+
