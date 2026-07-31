@@ -25,6 +25,22 @@ foreach ($cases as [$zone, $when]) {
     echo str_pad($zone, 22), $d->format('P'), ' offset=', $d->getOffset(), "\n";
 }
 
+// TZif wall-time resolution handles missing and repeated local intervals at
+// the transition boundary, including midnight and non-hour transitions.
+$transitionCases = [
+    ['America/Havana',       '2025-03-09 00:30:00'], // midnight spring gap
+    ['America/Havana',       '2025-11-02 00:30:00'], // midnight fall overlap
+    ['Atlantic/Azores',      '2025-03-30 00:30:00'], // zero-offset spring gap
+    ['America/Santiago',     '2025-09-07 00:30:00'], // southern spring gap
+    ['Australia/Lord_Howe',  '2025-10-05 02:15:00'], // 30-minute spring gap
+    ['Australia/Lord_Howe',  '2025-04-06 01:45:00'], // 30-minute fall overlap
+    ['Pacific/Apia',         '2011-12-30 12:00:00'], // 24-hour date-line gap
+];
+foreach ($transitionCases as [$zone, $when]) {
+    $d = new DateTime($when, new DateTimeZone($zone));
+    echo "$zone $when => ", $d->format('Y-m-d H:i:s P T U'), "\n";
+}
+
 // modern-tzdb numeric abbreviations for zones that dropped DST (these were
 // "BRT" / "IRST" letter codes in the table; PHP/tzdb now use numeric)
 echo 'Sao_Paulo T: ', (new DateTime('2024-06-15', new DateTimeZone('America/Sao_Paulo')))->format('T'), "\n"; // -03
