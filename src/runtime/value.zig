@@ -324,8 +324,101 @@ const PropRefKeyContext = struct {
 // (the O(1) syncObjPropRefs/syncStaticPropRefs source). lives behind a pointer
 // on the VM so the hot interpreter struct stays a single nullable pointer wider
 pub const RefIndex = struct {
+    pub const OwnerId = u64;
+    pub const OwnedBinding = struct { cell: *Value, target: BindingTarget };
+
     fwd: std.AutoHashMapUnmanaged(*Value, std.ArrayListUnmanaged(BindingTarget)) = .{},
     prop_rev: std.HashMapUnmanaged(PropRefKey, std.ArrayListUnmanaged(*Value), PropRefKeyContext, 80) = .{},
+    by_owner: std.AutoHashMapUnmanaged(OwnerId, std.ArrayListUnmanaged(OwnedBinding)) = .{},
+    next_owner: OwnerId = 1,
+
+    pub fn createOwner(self: *RefIndex) OwnerId {
+        const owner = self.next_owner;
+        self.next_owner += 1;
+        return owner;
+    }
+
+    pub fn addOwned(self: *RefIndex, a: std.mem.Allocator, owner: OwnerId, cell: *Value, target: BindingTarget) !void {
+        std.debug.assert(owner != 0);
+        const gop = try self.by_owner.getOrPut(a, owner);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        for (gop.value_ptr.items) |existing| {
+            if (existing.cell == cell and targetEql(existing.target, target)) return;
+        }
+        try gop.value_ptr.append(a, .{ .cell = cell, .target = target });
+        try self.addForward(a, cell, target);
+        switch (target) {
+            .object => |o| try self.addPropRev(a, .{ .object = o.object, .class_name = "", .prop_name = o.prop_name }, cell),
+            .static => |s| try self.addPropRev(a, .{ .object = null, .class_name = s.class_name, .prop_name = s.prop_name }, cell),
+            .array => {},
+        }
+    }
+
+    pub fn releaseOwner(self: *RefIndex, a: std.mem.Allocator, owner: OwnerId) void {
+        const removed = self.by_owner.fetchRemove(owner) orelse return;
+        var bindings = removed.value;
+        for (bindings.items) |binding| {
+            if (!self.edgeHasOwner(binding.cell, binding.target)) self.removeTarget(a, binding.cell, binding.target);
+        }
+        bindings.deinit(a);
+    }
+
+    pub fn transferCell(self: *RefIndex, a: std.mem.Allocator, from: OwnerId, to: OwnerId, cell: *Value) !void {
+        const source = self.by_owner.getPtr(from) orelse return;
+        var moving: std.ArrayListUnmanaged(BindingTarget) = .{};
+        defer moving.deinit(a);
+        for (source.items) |binding| if (binding.cell == cell) try moving.append(a, binding.target);
+        for (moving.items) |target| try self.addOwned(a, to, cell, target);
+        const current = self.by_owner.getPtr(from) orelse return;
+        var i: usize = 0;
+        while (i < current.items.len) {
+            if (current.items[i].cell == cell) _ = current.swapRemove(i) else i += 1;
+        }
+        if (current.items.len == 0) {
+            current.deinit(a);
+            _ = self.by_owner.remove(from);
+        }
+    }
+
+    pub fn removeOwnedTarget(self: *RefIndex, a: std.mem.Allocator, owner: OwnerId, cell: *Value, target: BindingTarget) void {
+        if (self.by_owner.getPtr(owner)) |list| {
+            var i: usize = 0;
+            while (i < list.items.len) {
+                const binding = list.items[i];
+                if (binding.cell == cell and targetEql(binding.target, target)) _ = list.swapRemove(i) else i += 1;
+            }
+            if (list.items.len == 0) {
+                list.deinit(a);
+                _ = self.by_owner.remove(owner);
+            }
+        }
+        if (!self.edgeHasOwner(cell, target)) self.removeTarget(a, cell, target);
+    }
+
+    pub fn removeTargetAllOwners(self: *RefIndex, a: std.mem.Allocator, cell: *Value, target: BindingTarget) void {
+        var it = self.by_owner.valueIterator();
+        while (it.next()) |list| {
+            var i: usize = 0;
+            while (i < list.items.len) {
+                const binding = list.items[i];
+                if (binding.cell == cell and targetEql(binding.target, target)) _ = list.swapRemove(i) else i += 1;
+            }
+        }
+        self.removeTarget(a, cell, target);
+    }
+
+    pub fn ownerBindings(self: *RefIndex, owner: OwnerId) ?[]const OwnedBinding {
+        const list = self.by_owner.getPtr(owner) orelse return null;
+        return list.items;
+    }
+
+    fn edgeHasOwner(self: *RefIndex, cell: *Value, target: BindingTarget) bool {
+        var it = self.by_owner.valueIterator();
+        while (it.next()) |list| for (list.items) |binding| {
+            if (binding.cell == cell and targetEql(binding.target, target)) return true;
+        };
+        return false;
+    }
 
     pub fn addForward(self: *RefIndex, a: std.mem.Allocator, cell: *Value, target: BindingTarget) !void {
         const gop = try self.fwd.getOrPut(a, cell);
@@ -412,6 +505,9 @@ pub const RefIndex = struct {
     }
 
     pub fn clear(self: *RefIndex, a: std.mem.Allocator) void {
+        var owners = self.by_owner.valueIterator();
+        while (owners.next()) |list| list.deinit(a);
+        self.by_owner.clearRetainingCapacity();
         var it = self.fwd.valueIterator();
         while (it.next()) |list| list.deinit(a);
         self.fwd.clearRetainingCapacity();
@@ -424,6 +520,7 @@ pub const RefIndex = struct {
         self.clear(a);
         self.fwd.deinit(a);
         self.prop_rev.deinit(a);
+        self.by_owner.deinit(a);
     }
 };
 
@@ -500,9 +597,7 @@ pub const Fiber = struct {
         called_class: ?[]const u8 = null,
         generator: ?*Generator = null,
         ref_slots: std.StringHashMapUnmanaged(*Value),
-        ref_array_bindings: std.ArrayListUnmanaged(ArrayRefBinding) = .{},
-        ref_object_bindings: std.ArrayListUnmanaged(ObjectRefBinding) = .{},
-        ref_static_bindings: std.ArrayListUnmanaged(StaticPropRefBinding) = .{},
+        ref_owner: RefIndex.OwnerId = 0,
     };
 
     pub const SavedHandler = struct {
@@ -516,9 +611,6 @@ pub const Fiber = struct {
         for (self.saved_frames.items) |*f| {
             f.vars.deinit(allocator);
             f.ref_slots.deinit(allocator);
-            f.ref_array_bindings.deinit(allocator);
-            f.ref_object_bindings.deinit(allocator);
-            f.ref_static_bindings.deinit(allocator);
             if (f.locals.len > 0) allocator.free(f.locals);
         }
         self.saved_frames.deinit(allocator);
@@ -787,12 +879,18 @@ pub const Value = union(enum) {
             while (e > 0 and !overflowed) : (e >>= 1) {
                 if ((e & 1) == 1) {
                     const r = @mulWithOverflow(result, base);
-                    if (r[1] != 0) { overflowed = true; break; }
+                    if (r[1] != 0) {
+                        overflowed = true;
+                        break;
+                    }
                     result = r[0];
                 }
                 if (e > 1) {
                     const r = @mulWithOverflow(base, base);
-                    if (r[1] != 0) { overflowed = true; break; }
+                    if (r[1] != 0) {
+                        overflowed = true;
+                        break;
+                    }
                     base = r[0];
                 }
             }
@@ -888,10 +986,16 @@ pub const Value = union(enum) {
         if (s[i] == '-' or s[i] == '+') i += 1;
         if (i >= s.len) return false;
         var has_digit = false;
-        while (i < s.len and s[i] >= '0' and s[i] <= '9') { i += 1; has_digit = true; }
+        while (i < s.len and s[i] >= '0' and s[i] <= '9') {
+            i += 1;
+            has_digit = true;
+        }
         if (i < s.len and s[i] == '.') {
             i += 1;
-            while (i < s.len and s[i] >= '0' and s[i] <= '9') { i += 1; has_digit = true; }
+            while (i < s.len and s[i] >= '0' and s[i] <= '9') {
+                i += 1;
+                has_digit = true;
+            }
         }
         if (i < s.len and (s[i] == 'e' or s[i] == 'E')) {
             i += 1;
@@ -960,27 +1064,37 @@ pub const Value = union(enum) {
         // (the number is stringified). Number vs numeric string still numeric.
         if ((a == .int or a == .float) and b == .string and !isNumericString(b.string)) {
             var buf: [64]u8 = undefined;
-            const as: []const u8 = if (a == .int) (std.fmt.bufPrint(&buf, "{d}", .{a.int}) catch "")
-                                   else (std.fmt.bufPrint(&buf, "{d}", .{a.float}) catch "");
+            const as: []const u8 = if (a == .int) (std.fmt.bufPrint(&buf, "{d}", .{a.int}) catch "") else (std.fmt.bufPrint(&buf, "{d}", .{a.float}) catch "");
             return switch (std.mem.order(u8, as, b.string)) {
-                .lt => -1, .eq => 0, .gt => 1,
+                .lt => -1,
+                .eq => 0,
+                .gt => 1,
             };
         }
         if ((b == .int or b == .float) and a == .string and !isNumericString(a.string)) {
             var buf: [64]u8 = undefined;
-            const bs: []const u8 = if (b == .int) (std.fmt.bufPrint(&buf, "{d}", .{b.int}) catch "")
-                                   else (std.fmt.bufPrint(&buf, "{d}", .{b.float}) catch "");
+            const bs: []const u8 = if (b == .int) (std.fmt.bufPrint(&buf, "{d}", .{b.int}) catch "") else (std.fmt.bufPrint(&buf, "{d}", .{b.float}) catch "");
             return switch (std.mem.order(u8, a.string, bs)) {
-                .lt => -1, .eq => 0, .gt => 1,
+                .lt => -1,
+                .eq => 0,
+                .gt => 1,
             };
         }
         // PHP: null vs string compares as "" vs string, so `null < 'abc'` is
         // true and `null == ''` is true
         if (a == .null and b == .string) {
-            return switch (std.mem.order(u8, "", b.string)) { .lt => -1, .eq => 0, .gt => 1 };
+            return switch (std.mem.order(u8, "", b.string)) {
+                .lt => -1,
+                .eq => 0,
+                .gt => 1,
+            };
         }
         if (a == .string and b == .null) {
-            return switch (std.mem.order(u8, a.string, "")) { .lt => -1, .eq => 0, .gt => 1 };
+            return switch (std.mem.order(u8, a.string, "")) {
+                .lt => -1,
+                .eq => 0,
+                .gt => 1,
+            };
         }
         // PHP: when either operand is bool or null (and it isn't the
         // null-vs-string case handled above), convert both to bool and
@@ -1085,7 +1199,10 @@ pub const Value = union(enum) {
         if (i >= s.len) return 0;
         const start = i;
         var neg = false;
-        if (s[i] == '-') { neg = true; i += 1; } else if (s[i] == '+') i += 1;
+        if (s[i] == '-') {
+            neg = true;
+            i += 1;
+        } else if (s[i] == '+') i += 1;
         if (i >= s.len or s[i] < '0' or s[i] > '9') return 0;
         const digits_start = i;
         while (i < s.len and s[i] >= '0' and s[i] <= '9') i += 1;
@@ -1111,9 +1228,15 @@ pub const Value = union(enum) {
         while (k < s.len and s[k] >= '0' and s[k] <= '9') : (k += 1) {
             const d: i64 = s[k] - '0';
             const m = @mulWithOverflow(result, 10);
-            if (m[1] != 0) { overflow = true; break; }
+            if (m[1] != 0) {
+                overflow = true;
+                break;
+            }
             const a = @addWithOverflow(m[0], d);
-            if (a[1] != 0) { overflow = true; break; }
+            if (a[1] != 0) {
+                overflow = true;
+                break;
+            }
             result = a[0];
         }
         if (overflow) return if (neg) std.math.minInt(i64) else std.math.maxInt(i64);
@@ -1132,10 +1255,16 @@ pub const Value = union(enum) {
         var end = start;
         if (s[end] == '-' or s[end] == '+') end += 1;
         var has_digit = false;
-        while (end < s.len and s[end] >= '0' and s[end] <= '9') { end += 1; has_digit = true; }
+        while (end < s.len and s[end] >= '0' and s[end] <= '9') {
+            end += 1;
+            has_digit = true;
+        }
         if (end < s.len and s[end] == '.') {
             end += 1;
-            while (end < s.len and s[end] >= '0' and s[end] <= '9') { end += 1; has_digit = true; }
+            while (end < s.len and s[end] >= '0' and s[end] <= '9') {
+                end += 1;
+                has_digit = true;
+            }
         }
         if (end < s.len and (s[end] == 'e' or s[end] == 'E')) {
             // only consume the exponent when at least one exponent digit
@@ -1342,11 +1471,26 @@ pub const Value = union(enum) {
             i -= 1;
             const c = buf[i];
             if (c >= 'a' and c <= 'z') {
-                if (c == 'z') { buf[i] = 'a'; } else { buf[i] = c + 1; carry = false; }
+                if (c == 'z') {
+                    buf[i] = 'a';
+                } else {
+                    buf[i] = c + 1;
+                    carry = false;
+                }
             } else if (c >= 'A' and c <= 'Z') {
-                if (c == 'Z') { buf[i] = 'A'; } else { buf[i] = c + 1; carry = false; }
+                if (c == 'Z') {
+                    buf[i] = 'A';
+                } else {
+                    buf[i] = c + 1;
+                    carry = false;
+                }
             } else if (c >= '0' and c <= '9') {
-                if (c == '9') { buf[i] = '0'; } else { buf[i] = c + 1; carry = false; }
+                if (c == '9') {
+                    buf[i] = '0';
+                } else {
+                    buf[i] = c + 1;
+                    carry = false;
+                }
             } else {
                 // non-alnum stops the carry without modification (PHP returns
                 // the original string)
@@ -1355,9 +1499,7 @@ pub const Value = union(enum) {
         }
         if (carry) {
             const first = s[0];
-            const prefix: u8 = if (first >= 'a' and first <= 'z') 'a'
-                else if (first >= 'A' and first <= 'Z') 'A'
-                else '1';
+            const prefix: u8 = if (first >= 'a' and first <= 'z') 'a' else if (first >= 'A' and first <= 'Z') 'A' else '1';
             const grown = try allocator.alloc(u8, s.len + 1);
             grown[0] = prefix;
             @memcpy(grown[1..], buf);
@@ -1439,7 +1581,10 @@ pub const Value = union(enum) {
         while (i < s.len) : (i += 1) {
             const c = s[i];
             if (c >= '0' and c <= '9') continue;
-            if (c == '.' and !has_dot and !has_exp) { has_dot = true; continue; }
+            if (c == '.' and !has_dot and !has_exp) {
+                has_dot = true;
+                continue;
+            }
             if ((c == 'e' or c == 'E') and !has_exp and i > start) {
                 has_exp = true;
                 if (i + 1 < s.len and (s[i + 1] == '+' or s[i + 1] == '-')) i += 1;
