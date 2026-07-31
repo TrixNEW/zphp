@@ -1124,7 +1124,8 @@ fn classDeclEarlyBindable(self: *Compiler, node: Ast.Node) bool {
             (self.buildQualifiedString(self.ast.extraSlice(pnode.data.lhs)) catch return false)
         else
             self.resolveClassName(self.ast.tokenSlice(pnode.main_token));
-        if (!self.hoisted_names.contains(parent_name)) return false;
+        if (!self.hoisted_names.contains(parent_name) and
+            !@import("../stdlib/builtin_classes.zig").contains(parent_name)) return false;
     }
     for (self.ast.extraSlice(node.data.lhs)) |m_idx| {
         const m = self.ast.nodes[m_idx];
