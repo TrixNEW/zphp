@@ -4722,11 +4722,15 @@ pub const VM = struct {
                         });
                     } else {
                         const arr_ptr = arr_val.array;
-                        const key: PhpArray.Key = switch (key_val) {
+                        const append_ref = key_val == .null;
+                        const key: PhpArray.Key = if (append_ref)
+                            .{ .int = if (arr_ptr.has_int_keys) arr_ptr.next_int_key else 0 }
+                        else switch (key_val) {
                             .int => |i| .{ .int = i },
                             .string => |s| .{ .string = s },
                             else => .{ .int = Value.toInt(key_val) },
                         };
+                        if (append_ref) try arr_ptr.set(self.allocator, key, .null);
                         const cell = try self.allocator.create(Value);
                         var elem = arr_ptr.get(key);
                         // `$v = &$arr[$k]` makes $arr[$k] a reference - it can't

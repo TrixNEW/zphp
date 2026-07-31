@@ -16,5 +16,7 @@ fi
 
 cd "$APP_DIR"
 composer install --no-interaction --no-progress
+rm -rf "$APP_DIR/var/cache"
+php "$APP_DIR/bin/build-cache.php"
 
 echo "setup complete"

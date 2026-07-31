@@ -52,9 +52,13 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
                 try self.compileNode(rhs_node.data.lhs);
                 return;
             }
-            if (inner.tag == .array_access) {
+            if (inner.tag == .array_access or inner.tag == .array_push_target) {
                 try self.compileNode(inner.data.lhs); // push array (must read via current ref_slot)
-                try self.compileNode(inner.data.rhs); // push key
+                if (inner.tag == .array_push_target) {
+                    try self.emitOp(.op_null);
+                } else {
+                    try self.compileNode(inner.data.rhs); // push key
+                }
                 try self.emitOp(.make_var_array_elem_ref);
                 try self.emitU16(dst_idx);
                 try self.emitOp(.op_null);

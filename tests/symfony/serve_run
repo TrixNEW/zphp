@@ -1,0 +1,85 @@
+#!/bin/bash
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ZPHP="${ZPHP:-$SCRIPT_DIR/../../zig-out/bin/zphp}"
+APP_DIR="$SCRIPT_DIR/app"
+ZPHP_PORT=19900
+PHP_PORT=19901
+
+if ! command -v php &>/dev/null; then echo "php not in PATH"; exit 1; fi
+if [ ! -x "$ZPHP" ]; then echo "zphp not built (make build)"; exit 1; fi
+if [ ! -f "$APP_DIR/var/cache/AppContainer.php" ]; then echo "run tests/symfony/setup first"; exit 1; fi
+
+ROUTER="$APP_DIR/public/_serve_router.php"
+cat > "$ROUTER" <<'PHP'
+<?php
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+$full = __DIR__.$path;
+if ($path !== '/' && is_file($full)) return false;
+$_SERVER['SCRIPT_NAME'] = '/index.php';
+$_SERVER['SCRIPT_FILENAME'] = __DIR__.'/index.php';
+require __DIR__.'/index.php';
+PHP
+
+cleanup() {
+    [ -n "${ZPHP_PID:-}" ] && kill "$ZPHP_PID" 2>/dev/null || true
+    [ -n "${PHP_PID:-}" ] && kill "$PHP_PID" 2>/dev/null || true
+    rm -f "$ROUTER"
+    wait 2>/dev/null || true
+}
+trap cleanup EXIT
+
+"$ZPHP" serve "$APP_DIR/public/index.php" --port "$ZPHP_PORT" --workers 2 >/tmp/zphp_symfony_serve.log 2>&1 &
+ZPHP_PID=$!
+php -S "localhost:$PHP_PORT" -t "$APP_DIR/public" "$ROUTER" >/tmp/php_symfony_serve.log 2>&1 &
+PHP_PID=$!
+
+for _ in $(seq 1 60); do
+    z=$(curl -s -m 2 --connect-timeout 1 -o /dev/null -w '%{http_code}' "http://localhost:$ZPHP_PORT/" 2>/dev/null) || z=000
+    p=$(curl -s -m 2 --connect-timeout 1 -o /dev/null -w '%{http_code}' "http://localhost:$PHP_PORT/" 2>/dev/null) || p=000
+    if [ "$z" != "000" ] && [ "$p" != "000" ]; then break; fi
+    sleep 0.5
+done
+
+passed=0
+failed=0
+failures=""
+TMO=60
+
+request() {
+    local port="$1" method="$2" path="$3" data="${4:-}"
+    if [ "$method" = POST ]; then
+        curl -s -m "$TMO" -X POST -d "$data" -w '\n%{http_code}' "http://localhost:$port$path"
+    else
+        curl -s -m "$TMO" -w '\n%{http_code}' "http://localhost:$port$path"
+    fi
+}
+
+check() {
+    local name="$1" method="$2" path="$3" data="${4:-}" needle="${5:-}"
+    local z p
+    z=$(request "$ZPHP_PORT" "$method" "$path" "$data")
+    p=$(request "$PHP_PORT" "$method" "$path" "$data")
+    if [ "$z" = "$p" ] && { [ -z "$needle" ] || printf '%s' "$z" | grep -qF "$needle"; }; then
+        passed=$((passed + 1)); echo "  pass  $name"
+    else
+        failed=$((failed + 1)); echo "  FAIL  $name"
+        failures="$failures\n$name\nzphp: $z\nphp: $p"
+    fi
+}
+
+echo "=== Symfony HttpKernel serve parity ==="
+check "compiled-container" GET / "" "compiled Symfony"
+check "compiled-route" GET /hello/Ada "" '"route":"hello"'
+check "post-request" POST /submit "value=from-client" '"value":"from-client"'
+check "warm-request-1" GET /hello/Grace "" 'Grace'
+check "warm-request-2" GET /hello/Linus "" 'Linus'
+
+echo "$passed passed, $failed failed"
+if [ "$failed" -gt 0 ]; then
+    echo -e "$failures"
+    echo "--- zphp log ---"; tail -30 /tmp/zphp_symfony_serve.log 2>&1 || true
+    echo "--- php log ---"; tail -30 /tmp/php_symfony_serve.log 2>&1 || true
+    exit 1
+fi

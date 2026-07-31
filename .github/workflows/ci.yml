@@ -150,6 +150,7 @@ jobs:
       - run: zig build
       - run: ./tests/symfony/setup
       - run: ./tests/symfony/run
+      - run: ./tests/symfony/serve_run
 
   wordpress:
     runs-on: ubuntu-latest

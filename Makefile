@@ -39,6 +39,11 @@ bench-macro: ## Track real-app perf vs php (WordPress + Laravel harnesses, Relea
 laravel: build ## Run Laravel compatibility tests (requires PHP 8.4 + composer)
 	./tests/laravel/run
 
+.PHONY: symfony
+symfony: build ## Run Symfony component and serve compatibility tests (requires PHP 8.4 + composer)
+	./tests/symfony/run
+	./tests/symfony/serve_run
+
 .PHONY: all-tests
 all-tests: test compat examples laravel ## Run all tests
 

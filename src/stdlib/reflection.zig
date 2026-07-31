@@ -198,8 +198,11 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try ro_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try vm.classes.put(a, "ReflectionObject", ro_def);
 
+    const rfa_def = ClassDef{ .name = "ReflectionFunctionAbstract", .is_abstract = true };
+    try vm.classes.put(a, "ReflectionFunctionAbstract", rfa_def);
+
     // ReflectionMethod
-    var rm_def = ClassDef{ .name = "ReflectionMethod" };
+    var rm_def = ClassDef{ .name = "ReflectionMethod", .parent = "ReflectionFunctionAbstract" };
     try rm_def.static_props.put(a, "IS_STATIC", .{ .int = 16 });
     try rm_def.static_props.put(a, "IS_PUBLIC", .{ .int = 1 });
     try rm_def.static_props.put(a, "IS_PROTECTED", .{ .int = 2 });
@@ -419,7 +422,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnumBackedCase::getBackingValue", rebcGetBackingValue);
 
     // ReflectionFunction
-    var rf_def = ClassDef{ .name = "ReflectionFunction" };
+    var rf_def = ClassDef{ .name = "ReflectionFunction", .parent = "ReflectionFunctionAbstract" };
     try rf_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rf_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try rf_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -511,6 +514,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // PHP 8.4 added the lowercase 'isReadonly' alias
     try rprop_def.methods.put(a, "isReadonly", .{ .name = "isReadonly", .arity = 0 });
     try rprop_def.methods.put(a, "setValue", .{ .name = "setValue", .arity = 2 });
+    try rprop_def.methods.put(a, "getRawValue", .{ .name = "getRawValue", .arity = 1 });
+    try rprop_def.methods.put(a, "setRawValue", .{ .name = "setRawValue", .arity = 2 });
+    try rprop_def.methods.put(a, "setRawValueWithoutLazyInitialization", .{ .name = "setRawValueWithoutLazyInitialization", .arity = 2 });
     try rprop_def.methods.put(a, "isStatic", .{ .name = "isStatic", .arity = 0 });
     try rprop_def.methods.put(a, "isPromoted", .{ .name = "isPromoted", .arity = 0 });
     try rprop_def.methods.put(a, "hasType", .{ .name = "hasType", .arity = 0 });
@@ -550,7 +556,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionProperty::__construct", rpConstruct);
     try vm.native_fns.put(a, "ReflectionProperty::setAccessible", reflectionNoop);
     try vm.native_fns.put(a, "ReflectionProperty::getValue", rpGetValue);
+    try vm.native_fns.put(a, "ReflectionProperty::getRawValue", rpGetValue);
     try vm.native_fns.put(a, "ReflectionProperty::setValue", rpSetValue);
+    try vm.native_fns.put(a, "ReflectionProperty::setRawValue", rpSetValue);
+    try vm.native_fns.put(a, "ReflectionProperty::setRawValueWithoutLazyInitialization", rpSetValue);
     try vm.native_fns.put(a, "ReflectionProperty::getName", rpropGetName);
     try vm.native_fns.put(a, "ReflectionProperty::getType", rpropGetType);
     try vm.native_fns.put(a, "ReflectionProperty::isPublic", rpropIsPublic);
