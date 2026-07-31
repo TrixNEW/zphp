@@ -1361,14 +1361,13 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         const f = std.fs.cwd().createFile(tmp, .{ .read = true, .truncate = true }) catch return Value{ .bool = false };
         std.fs.cwd().deleteFile(tmp) catch {};
         break :blk f;
-    } else
-        openWithMode(path, mode) catch |err| {
-            const reason = openErrorReason(err);
-            const msg = std.fmt.allocPrint(ctx.allocator, "fopen({s}): Failed to open stream: {s}", .{ path, reason }) catch return Value{ .bool = false };
-            ctx.vm.strings.append(ctx.allocator, msg) catch {};
-            ctx.vm.emitWarning(msg);
-            return Value{ .bool = false };
-        };
+    } else openWithMode(path, mode) catch |err| {
+        const reason = openErrorReason(err);
+        const msg = std.fmt.allocPrint(ctx.allocator, "fopen({s}): Failed to open stream: {s}", .{ path, reason }) catch return Value{ .bool = false };
+        ctx.vm.strings.append(ctx.allocator, msg) catch {};
+        ctx.vm.emitWarning(msg);
+        return Value{ .bool = false };
+    };
 
     const obj = try ctx.allocator.create(PhpObject);
     obj.* = .{ .class_name = "FileHandle" };
@@ -1406,11 +1405,13 @@ fn openWithMode(path: []const u8, mode: []const u8) !std.fs.File {
             break :blk file;
         },
         'a' => blk: {
-            const file = std.fs.cwd().openFile(path, .{ .mode = if (has_plus) .read_write else .write_only }) catch
-                std.fs.cwd().createFile(path, .{ .read = has_plus }) catch |err| break :blk err;
-            // PHP keeps ftell at 0 after open with 'a' mode but writes always
-            // go to the end - the seek-to-end happens in fwrite when is_append is set
-            break :blk file;
+            const flags: std.posix.O = .{
+                .ACCMODE = if (has_plus) .RDWR else .WRONLY,
+                .APPEND = true,
+                .CREAT = true,
+            };
+            const fd = try std.posix.open(path, flags, 0o666);
+            break :blk .{ .handle = fd };
         },
         'x' => std.fs.cwd().createFile(path, .{ .exclusive = true, .read = has_plus }),
         'c' => blk: {
@@ -1448,10 +1449,12 @@ fn native_fclose(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const proc_role = obj.get("__proc_role");
     if (proc_ref == .object and proc_role == .int) {
         if (ctx.vm.lookupProcChild(proc_ref.object)) |pc| {
-            const r: usize = if (proc_role.int >= 0 and proc_role.int < 3) @intCast(proc_role.int) else 3;
-            if (r < 3 and pc.pipe_fds[r] != -1) {
-                std.posix.close(pc.pipe_fds[r]);
-                pc.pipe_fds[r] = -1;
+            for (pc.pipe_fds.items) |*pipe| {
+                if (pipe.role == proc_role.int and pipe.fd != -1) {
+                    std.posix.close(pipe.fd);
+                    pipe.fd = -1;
+                    break;
+                }
             }
         }
         obj.set(ctx.allocator, "__fd", .{ .int = -1 }) catch {};
@@ -1645,7 +1648,10 @@ fn native_fgets(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var hit_eof = false;
     while (buf.items.len < max_len) {
         const n = file.read(&byte) catch break;
-        if (n == 0) { hit_eof = true; break; }
+        if (n == 0) {
+            hit_eof = true;
+            break;
+        }
         try buf.append(ctx.allocator, byte[0]);
         if (byte[0] == '\n') break;
     }
@@ -2721,12 +2727,12 @@ fn buildStatArray(ctx: *NativeContext, st: *const std.c.Stat) !*PhpArray {
     const blksize: i64 = @intCast(st.blksize);
     const blocks: i64 = @intCast(st.blocks);
     const pairs = [_]struct { name: []const u8, val: i64 }{
-        .{ .name = "dev", .val = dev }, .{ .name = "ino", .val = ino },
-        .{ .name = "mode", .val = mode }, .{ .name = "nlink", .val = nlink },
-        .{ .name = "uid", .val = uid }, .{ .name = "gid", .val = gid },
-        .{ .name = "rdev", .val = 0 }, .{ .name = "size", .val = size },
-        .{ .name = "atime", .val = atime }, .{ .name = "mtime", .val = mtime },
-        .{ .name = "ctime", .val = ctime }, .{ .name = "blksize", .val = blksize },
+        .{ .name = "dev", .val = dev },       .{ .name = "ino", .val = ino },
+        .{ .name = "mode", .val = mode },     .{ .name = "nlink", .val = nlink },
+        .{ .name = "uid", .val = uid },       .{ .name = "gid", .val = gid },
+        .{ .name = "rdev", .val = 0 },        .{ .name = "size", .val = size },
+        .{ .name = "atime", .val = atime },   .{ .name = "mtime", .val = mtime },
+        .{ .name = "ctime", .val = ctime },   .{ .name = "blksize", .val = blksize },
         .{ .name = "blocks", .val = blocks },
     };
     for (pairs, 0..) |p, i| {
@@ -2787,7 +2793,6 @@ fn native_tempnam(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     }
     return .{ .bool = false };
 }
-
 
 const StdioBehavior = enum { capture, inherit };
 const ShellResult = struct { stdout: []u8, stderr: []u8, exit: i64 };
@@ -2915,33 +2920,36 @@ fn native_pclose(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .int = 0 };
 }
 
-// per-fd descriptor for child fds 0/1/2 (parsed from proc_open's spec arg)
 const FdDesc = union(enum) {
-    inherit, // leave the child fd inheriting the parent's (no dup)
-    pipe_r, // child reads this fd; parent keeps the write end
-    pipe_w, // child writes this fd; parent keeps the read end
-    file: struct { path: []const u8, mode: []const u8 }, // open + dup onto the child fd
-    redirect: std.posix.fd_t, // dup an already-open (script-owned) fd onto the child fd
+    inherit,
+    pipe_r,
+    pipe_w,
+    socket,
+    pty,
+    file: struct { path: []const u8, mode: []const u8 },
+    redirect: std.posix.fd_t,
 };
 
+const ProcDesc = struct { role: i64, action: FdDesc };
+const PreparedDesc = struct {
+    role: i64,
+    action: FdDesc,
+    parent_fd: std.posix.fd_t = -1,
+    child_fd: std.posix.fd_t = -1,
+    aux_fd: std.posix.fd_t = -1,
+};
 const ProcSpawn = struct {
     pid: std.posix.pid_t,
-    pipe_fds: [3]std.posix.fd_t, // parent-side end per fd; -1 if that fd is not a pipe
+    pipe_fds: std.ArrayListUnmanaged(@import("../runtime/vm.zig").ProcPipe),
 };
 
-fn closeFdArray(fds: *[3]std.posix.fd_t) void {
-    for (fds.*) |f| if (f != -1) std.posix.close(f);
-}
+extern fn openpty(master: *c_int, slave: *c_int, name: ?[*]u8, termp: ?*anyopaque, winp: ?*anyopaque) c_int;
 
-// set FD_CLOEXEC so an opened redirect file doesn't survive into the exec'd child
-// except via the explicit dup2 onto its target (dup2 clears CLOEXEC on the target)
 fn setCloexec(fd: std.posix.fd_t) void {
-    const flags = std.posix.fcntl(fd, 1, 0) catch return; // F_GETFD
-    _ = std.posix.fcntl(fd, 2, flags | 1) catch {}; // F_SETFD, FD_CLOEXEC
+    const flags = std.posix.fcntl(fd, 1, 0) catch return;
+    _ = std.posix.fcntl(fd, 2, flags | 1) catch {};
 }
 
-// in the forked child: dup a source fd onto a target std fd. dup2 clears CLOEXEC
-// on the target so it survives exec. on failure, report the errno + _exit
 fn procChildDup(src: std.posix.fd_t, target: std.posix.fd_t, err_fd: std.posix.fd_t) void {
     std.posix.dup2(src, target) catch |e| procChildFail(err_fd, e);
 }
@@ -2953,122 +2961,114 @@ fn procChildFail(err_fd: std.posix.fd_t, err: anyerror) noreturn {
     std.c._exit(1);
 }
 
-fn closePair(p: [2]std.posix.fd_t) void {
-    std.posix.close(p[0]);
-    std.posix.close(p[1]);
+fn closePrepared(descs: []PreparedDesc) void {
+    for (descs) |*d| {
+        if (d.parent_fd != -1) std.posix.close(d.parent_fd);
+        if (d.child_fd != -1) std.posix.close(d.child_fd);
+        if (d.aux_fd != -1) std.posix.close(d.aux_fd);
+        d.parent_fd = -1;
+        d.child_fd = -1;
+        d.aux_fd = -1;
+    }
 }
 
-// fork + exec `/bin/sh -c <cmd>`, wiring child fds 0/1/2 per `descs`. pipes are
-// created here CLOEXEC (so the parent-retained ends never leak into the exec'd
-// child) and redirect files are opened here; a dedicated err pipe carries any
-// pre-exec failure back so a bad spawn returns an error instead of a half-started
-// child. all allocation happens before fork (posix forbids malloc between fork and
-// execve). returns the pid + the parent-side pipe ends (per fd, -1 if not a pipe)
-fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, descs: [3]FdDesc) !ProcSpawn {
+fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, specs: []const ProcDesc) !ProcSpawn {
     const cloexec: std.posix.O = .{ .CLOEXEC = true };
-    var parent_ends: [3]std.posix.fd_t = .{ -1, -1, -1 };
-    var child_ends: [3]std.posix.fd_t = .{ -1, -1, -1 };
-    var file_fds: [3]std.posix.fd_t = .{ -1, -1, -1 };
+    const prepared = try allocator.alloc(PreparedDesc, specs.len);
+    defer allocator.free(prepared);
+    for (specs, 0..) |spec, i| prepared[i] = .{ .role = spec.role, .action = spec.action };
+    errdefer closePrepared(prepared);
 
-    for (descs, 0..) |d, i| {
-        switch (d) {
-            .pipe_r => {
-                const p = std.posix.pipe2(cloexec) catch {
-                    closeFdArray(&parent_ends);
-                    closeFdArray(&child_ends);
-                    closeFdArray(&file_fds);
-                    return error.ProcSpawnFailed;
-                };
-                child_ends[i] = p[0];
-                parent_ends[i] = p[1];
-            },
-            .pipe_w => {
-                const p = std.posix.pipe2(cloexec) catch {
-                    closeFdArray(&parent_ends);
-                    closeFdArray(&child_ends);
-                    closeFdArray(&file_fds);
-                    return error.ProcSpawnFailed;
-                };
-                child_ends[i] = p[1];
-                parent_ends[i] = p[0];
-            },
-            .file => |f| {
-                const file = openWithMode(f.path, f.mode) catch {
-                    closeFdArray(&parent_ends);
-                    closeFdArray(&child_ends);
-                    closeFdArray(&file_fds);
-                    return error.ProcSpawnFailed;
-                };
-                setCloexec(file.handle);
-                file_fds[i] = file.handle;
-            },
-            .inherit, .redirect => {},
-        }
+    for (prepared) |*d| switch (d.action) {
+        .pipe_r, .pipe_w => {
+            const pair = try std.posix.pipe2(cloexec);
+            if (d.action == .pipe_r) {
+                d.child_fd = pair[0];
+                d.parent_fd = pair[1];
+            } else {
+                d.child_fd = pair[1];
+                d.parent_fd = pair[0];
+            }
+        },
+        .socket => {
+            var pair: [2]std.posix.fd_t = undefined;
+            if (std.c.socketpair(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0, &pair) != 0) return error.ProcSpawnFailed;
+            setCloexec(pair[0]);
+            setCloexec(pair[1]);
+            d.parent_fd = pair[0];
+            d.child_fd = pair[1];
+        },
+        .pty => {
+            var master: c_int = -1;
+            var slave: c_int = -1;
+            if (openpty(&master, &slave, null, null, null) != 0) return error.ProcSpawnFailed;
+            setCloexec(master);
+            setCloexec(slave);
+            d.parent_fd = master;
+            d.child_fd = slave;
+        },
+        .file => |f| {
+            const file = try openWithMode(f.path, f.mode);
+            setCloexec(file.handle);
+            d.child_fd = file.handle;
+        },
+        .inherit, .redirect => {},
+    };
+
+    const xrep = try std.posix.pipe2(cloexec);
+    errdefer {
+        std.posix.close(xrep[0]);
+        std.posix.close(xrep[1]);
     }
-
-    const xrep = std.posix.pipe2(cloexec) catch {
-        closeFdArray(&parent_ends);
-        closeFdArray(&child_ends);
-        closeFdArray(&file_fds);
-        return error.ProcSpawnFailed;
-    };
-
-    const cmdz = allocator.dupeZ(u8, cmd) catch {
-        closeFdArray(&parent_ends);
-        closeFdArray(&child_ends);
-        closeFdArray(&file_fds);
-        closePair(xrep);
-        return error.OutOfMemory;
-    };
+    const cmdz = try allocator.dupeZ(u8, cmd);
     defer allocator.free(cmdz);
     var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", cmdz.ptr };
     const envp: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
 
-    const pid = std.posix.fork() catch {
-        closeFdArray(&parent_ends);
-        closeFdArray(&child_ends);
-        closeFdArray(&file_fds);
-        closePair(xrep);
-        return error.ProcSpawnFailed;
-    };
+    const pid = try std.posix.fork();
     if (pid == 0) {
-        for (descs, 0..) |d, i| {
-            const target: std.posix.fd_t = @intCast(i);
-            switch (d) {
+        for (prepared) |d| if (d.parent_fd != -1) std.posix.close(d.parent_fd);
+        for (prepared) |d| {
+            const target: std.posix.fd_t = @intCast(d.role);
+            switch (d.action) {
                 .inherit => {},
-                .pipe_r, .pipe_w => procChildDup(child_ends[i], target, xrep[1]),
-                .file => procChildDup(file_fds[i], target, xrep[1]),
-                .redirect => |src| {
-                    procChildDup(src, target, xrep[1]);
-                    if (src != target) std.posix.close(src);
-                },
+                .pipe_r, .pipe_w, .socket, .pty, .file => procChildDup(d.child_fd, target, xrep[1]),
+                .redirect => |src| procChildDup(src, target, xrep[1]),
             }
+        }
+        for (prepared) |d| {
+            if (d.child_fd == -1) continue;
+            var is_target = false;
+            for (prepared) |other| if (d.child_fd == other.role) {
+                is_target = true;
+                break;
+            };
+            if (!is_target) std.posix.close(d.child_fd);
         }
         const e = std.posix.execveZ("/bin/sh", &argv, envp);
         procChildFail(xrep[1], e);
     }
 
-    // parent: close the err-pipe write end, the child-side pipe ends, and the
-    // opened redirect files (the child holds its own dup of each)
     std.posix.close(xrep[1]);
-    closeFdArray(&child_ends);
-    closeFdArray(&file_fds);
-    // a non-empty err pipe means the child failed before/at exec (CLOEXEC closes
-    // the write end on a successful exec -> we read EOF)
-    var buf: [8]u8 = undefined;
-    var got: usize = 0;
-    while (got < buf.len) {
-        const n = std.posix.read(xrep[0], buf[got..]) catch break;
-        if (n == 0) break;
-        got += n;
+    for (prepared) |*d| {
+        if (d.child_fd != -1) std.posix.close(d.child_fd);
+        d.child_fd = -1;
     }
+    var buf: [8]u8 = undefined;
+    const got = std.posix.read(xrep[0], &buf) catch 0;
     std.posix.close(xrep[0]);
     if (got > 0) {
         _ = std.posix.waitpid(pid, 0);
-        closeFdArray(&parent_ends);
         return error.ProcSpawnFailed;
     }
-    return .{ .pid = pid, .pipe_fds = parent_ends };
+
+    var pipes: std.ArrayListUnmanaged(@import("../runtime/vm.zig").ProcPipe) = .{};
+    errdefer pipes.deinit(allocator);
+    for (prepared) |*d| if (d.parent_fd != -1) {
+        try pipes.append(allocator, .{ .role = d.role, .fd = d.parent_fd });
+        d.parent_fd = -1;
+    };
+    return .{ .pid = pid, .pipe_fds = pipes };
 }
 
 fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -3084,49 +3084,54 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     try proc.set(ctx.allocator, "__exit", .{ .int = 0 });
     try proc.set(ctx.allocator, "__running", .{ .bool = true });
 
-    // parse the descriptor spec (arg 1) into per-fd actions for child fds 0/1/2.
-    // absent/unknown -> inherit the parent's fd. only ['pipe',...] entries get a
-    // $pipes FileHandle; ['file',...] redirects and stream-resource entries dup
-    // straight onto the child fd with no $pipes entry (matches php). fds >= 3 and
-    // 'pty' are not yet supported (treated as inherit)
-    var descs: [3]FdDesc = .{ .inherit, .inherit, .inherit };
+    var descs: std.ArrayListUnmanaged(ProcDesc) = .{};
+    defer descs.deinit(ctx.allocator);
     if (args[1] == .array) {
         for (args[1].array.entries.items) |entry| {
-            if (entry.key != .int) continue;
-            const k = entry.key.int;
-            if (k < 0 or k > 2) continue;
-            const idx: usize = @intCast(k);
+            if (entry.key != .int or entry.key.int < 0) continue;
+            const role = entry.key.int;
             const v = entry.value;
+            var action: FdDesc = .inherit;
             if (v == .array) {
                 const tag = v.array.get(.{ .int = 0 });
                 if (tag != .string) continue;
                 if (std.mem.eql(u8, tag.string, "pipe")) {
                     const mode = v.array.get(.{ .int = 1 });
-                    const ms: []const u8 = if (mode == .string) mode.string else "r";
-                    descs[idx] = if (ms.len > 0 and ms[0] == 'r') .pipe_r else .pipe_w;
+                    action = if (mode == .string and mode.string.len > 0 and mode.string[0] == 'r') .pipe_r else .pipe_w;
                 } else if (std.mem.eql(u8, tag.string, "file")) {
                     const pathv = v.array.get(.{ .int = 1 });
                     const modev = v.array.get(.{ .int = 2 });
-                    if (pathv == .string and modev == .string) {
-                        descs[idx] = .{ .file = .{ .path = pathv.string, .mode = modev.string } };
-                    }
-                }
+                    if (pathv != .string or modev != .string) continue;
+                    action = .{ .file = .{ .path = pathv.string, .mode = modev.string } };
+                } else if (std.mem.eql(u8, tag.string, "socket")) {
+                    action = .socket;
+                } else if (std.mem.eql(u8, tag.string, "pty")) {
+                    action = .pty;
+                } else continue;
             } else if (v == .object) {
                 const fdv = v.object.get("__fd");
-                if (fdv == .int and fdv.int >= 0) descs[idx] = .{ .redirect = @intCast(fdv.int) };
-            }
+                if (fdv != .int or fdv.int < 0) continue;
+                action = .{ .redirect = @intCast(fdv.int) };
+            } else continue;
+            try descs.append(ctx.allocator, .{ .role = role, .action = action });
         }
     }
 
-    // a child inheriting our stdout/stderr writes straight to fd 1/2, bypassing
-    // vm.output - flush any buffered echo first so ordering matches php
-    const inherits_out = switch (descs[1]) {
-        .inherit => true,
-        else => false,
-    } or switch (descs[2]) {
-        .inherit => true,
-        else => false,
-    };
+    var stdout_specified = false;
+    var stderr_specified = false;
+    var stdout_inherit = true;
+    var stderr_inherit = true;
+    for (descs.items) |desc| {
+        if (desc.role == 1) {
+            stdout_specified = true;
+            stdout_inherit = desc.action == .inherit;
+        }
+        if (desc.role == 2) {
+            stderr_specified = true;
+            stderr_inherit = desc.action == .inherit;
+        }
+    }
+    const inherits_out = (!stdout_specified or stdout_inherit) or (!stderr_specified or stderr_inherit);
     if (inherits_out and ctx.vm.output.items.len > 0) {
         const stdout = std.fs.File{ .handle = 1 };
         _ = stdout.write(ctx.vm.output.items) catch {};
@@ -3138,7 +3143,7 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     // proc, so proc_close waitpid's the pid and reset/deinit reaps it. each pipe fd
     // becomes __fd on a FileHandle so fread/fwrite/stream_select use real live fds;
     // each is closed EXACTLY once: by fclose (clears pipe_fds[role]) or proc_close/reap
-    const spawned = forkExecDesc(ctx.vm.allocator, cmd_copy, descs) catch {
+    const spawned = forkExecDesc(ctx.vm.allocator, cmd_copy, descs.items) catch {
         try proc.set(ctx.allocator, "__pid", .{ .int = 0 });
         try proc.set(ctx.allocator, "__reaped", .{ .bool = true });
         try proc.set(ctx.allocator, "__running", .{ .bool = false });
@@ -3154,22 +3159,29 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     const pipes = try ctx.allocator.create(PhpArray);
     pipes.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, pipes);
-    for (descs, 0..) |d, i| {
-        const pmode: ?[]const u8 = switch (d) {
+    for (descs.items) |desc| {
+        const pmode: ?[]const u8 = switch (desc.action) {
             .pipe_r => "w",
             .pipe_w => "r",
+            .socket, .pty => "r+",
             else => null,
         };
         if (pmode) |m| {
+            var parent_fd: std.posix.fd_t = -1;
+            for (spawned.pipe_fds.items) |pipe| if (pipe.role == desc.role) {
+                parent_fd = pipe.fd;
+                break;
+            };
+            if (parent_fd == -1) continue;
             const fobj = try ctx.allocator.create(PhpObject);
             fobj.* = .{ .class_name = "FileHandle" };
             try ctx.vm.objects.append(ctx.allocator, fobj);
             try fobj.set(ctx.allocator, "__open", .{ .bool = true });
             try fobj.set(ctx.allocator, "__mode", .{ .string = m });
-            try fobj.set(ctx.allocator, "__fd", .{ .int = @intCast(spawned.pipe_fds[i]) });
+            try fobj.set(ctx.allocator, "__fd", .{ .int = @intCast(parent_fd) });
             try fobj.set(ctx.allocator, "__proc_ref", .{ .object = proc });
-            try fobj.set(ctx.allocator, "__proc_role", .{ .int = @intCast(i) });
-            try pipes.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .object = fobj });
+            try fobj.set(ctx.allocator, "__proc_role", .{ .int = desc.role });
+            try pipes.set(ctx.allocator, .{ .int = desc.role }, .{ .object = fobj });
         }
     }
 
@@ -3205,10 +3217,10 @@ fn native_proc_close(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
         return .{ .int = if (cached == .int) cached.int else 0 };
     };
     // close stdin first so the child sees EOF and can finish
-    if (pc.pipe_fds[0] != -1) {
-        std.posix.close(pc.pipe_fds[0]);
-        pc.pipe_fds[0] = -1;
-    }
+    for (pc.pipe_fds.items) |*pipe| if (pipe.role == 0 and pipe.fd != -1) {
+        std.posix.close(pipe.fd);
+        pipe.fd = -1;
+    };
     if (!pc.reaped) {
         // a prior proc_get_status may have already reaped via WNOHANG; if not, do a
         // blocking wait now (exactly one waitpid per pid - ECHILD is unreachable)
@@ -3216,14 +3228,11 @@ fn native_proc_close(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
         cacheProcTerm(ctx, obj, res.status);
     }
     // close any parent-side fds the script didn't fclose
-    if (pc.pipe_fds[1] != -1) {
-        std.posix.close(pc.pipe_fds[1]);
-        pc.pipe_fds[1] = -1;
-    }
-    if (pc.pipe_fds[2] != -1) {
-        std.posix.close(pc.pipe_fds[2]);
-        pc.pipe_fds[2] = -1;
-    }
+    for (pc.pipe_fds.items) |*pipe| if (pipe.fd != -1) {
+        std.posix.close(pipe.fd);
+        pipe.fd = -1;
+    };
+    pc.pipe_fds.deinit(ctx.allocator);
     ctx.vm.removeProcChild(obj);
     const exit = obj.get("__exit");
     return .{ .int = if (exit == .int) exit.int else 0 };
