@@ -64,7 +64,9 @@ echo "7 file: ", str_replace("\n", ',', trim(file_get_contents($append))), "\n";
 
 // 8. pty descriptors expose a terminal to the child
 $p8 = proc_open('printf tty; test -t 1 && printf yes', [1 => ['pty']], $pipes8);
-echo "8 out: ", trim(stream_get_contents($pipes8[1])), "\n";
+$ptyOut = '';
+while (($chunk = @fread($pipes8[1], 8192)) !== false && $chunk !== '') $ptyOut .= $chunk;
+echo "8 out: ", trim($ptyOut), "\n";
 fclose($pipes8[1]);
 proc_close($p8);
 
