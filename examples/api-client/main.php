@@ -193,7 +193,7 @@ function renderSummary(array $responses): string {
     echo "--- request summary ---\n";
     foreach ($responses as $name => $resp) {
         $status = $resp->ok() ? 'OK' : 'FAIL';
-        echo sprintf("  %-20s %s  %d  %.3fs\n", $name, $status, $resp->status, $resp->time);
+        echo sprintf("  %-20s %s  %d\n", $name, $status, $resp->status);
     }
     echo "---\n";
     return ob_get_clean();
