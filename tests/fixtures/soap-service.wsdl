@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/" xmlns:tns="urn:calc" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:calc">
+  <types><xsd:schema targetNamespace="urn:calc"><xsd:complexType name="Pair"><xsd:sequence><xsd:element name="a" type="xsd:int"/><xsd:element name="b" type="xsd:int"/></xsd:sequence></xsd:complexType></xsd:schema></types>
+  <message name="addRequest"/><message name="addResponse"/>
+  <portType name="CalcPortType"><operation name="add"><input message="tns:addRequest"/><output message="tns:addResponse"/></operation></portType>
+  <binding name="CalcBinding" type="tns:CalcPortType"><soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/><operation name="add"><soap:operation soapAction="urn:calc#add"/><input><soap:body use="encoded" namespace="urn:calc" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input><output><soap:body use="encoded" namespace="urn:calc" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></output></operation></binding>
+  <service name="CalcService"><port name="CalcPort" binding="tns:CalcBinding"><soap:address location="http://127.0.0.1:1/soap"/></port></service>
+</definitions>

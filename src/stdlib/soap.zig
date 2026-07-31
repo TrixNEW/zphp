@@ -11,6 +11,8 @@ const RuntimeError = error{ RuntimeError, OutOfMemory };
 
 const c = @cImport({
     @cInclude("curl/curl.h");
+    @cInclude("libxml/parser.h");
+    @cInclude("libxml/tree.h");
 });
 
 pub fn register(vm: *VM, a: Allocator) !void {
@@ -118,6 +120,130 @@ fn getOpt(opts: ?*PhpArray, key: []const u8) Value {
     return opts.?.get(.{ .string = key });
 }
 
+fn loadText(allocator: Allocator, source: []const u8) ![]u8 {
+    if (std.mem.startsWith(u8, source, "file://")) return std.fs.cwd().readFileAlloc(allocator, source[7..], 16 * 1024 * 1024);
+    return std.fs.cwd().readFileAlloc(allocator, source, 16 * 1024 * 1024);
+}
+
+fn localName(name: []const u8) []const u8 {
+    return if (std.mem.lastIndexOfScalar(u8, name, ':')) |i| name[i + 1 ..] else name;
+}
+
+fn nodeName(node: *c.xmlNode) []const u8 {
+    return std.mem.span(@as([*:0]const u8, @ptrCast(node.name)));
+}
+
+fn attrValue(allocator: Allocator, node: *c.xmlNode, name: [*:0]const u8) !?[]u8 {
+    const raw = c.xmlGetProp(node, @ptrCast(name)) orelse return null;
+    defer c.xmlFree.?(raw);
+    return try allocator.dupe(u8, std.mem.span(@as([*:0]const u8, @ptrCast(raw))));
+}
+
+fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeError!void {
+    const bytes = loadText(ctx.allocator, source) catch {
+        try ctx.vm.setPendingException("SoapFault", "SOAP-ERROR: Parsing WSDL: Couldn't load from source");
+        return;
+    };
+    defer ctx.allocator.free(bytes);
+    const doc = c.xmlReadMemory(bytes.ptr, @intCast(bytes.len), null, null, c.XML_PARSE_NONET | c.XML_PARSE_NOBLANKS) orelse {
+        try ctx.vm.setPendingException("SoapFault", "SOAP-ERROR: Parsing WSDL failed");
+        return;
+    };
+    defer c.xmlFreeDoc(doc);
+    const root: *c.xmlNode = @ptrCast(c.xmlDocGetRootElement(doc) orelse return);
+    const target_ns = try attrValue(ctx.allocator, root, "targetNamespace");
+    defer if (target_ns) |v| ctx.allocator.free(v);
+    if (target_ns) |v| {
+        const owned = try ctx.allocator.dupe(u8, v);
+        try ctx.strings.append(ctx.allocator, owned);
+        try obj.set(ctx.allocator, "__uri", .{ .string = owned });
+    }
+    const functions = try ctx.createArray();
+    const types = try ctx.createArray();
+    var child: ?*c.xmlNode = @ptrCast(root.children);
+    while (child) |n| : (child = @ptrCast(n.next)) {
+        if (n.type != c.XML_ELEMENT_NODE) continue;
+        const lname = localName(nodeName(n));
+        if (std.mem.eql(u8, lname, "service")) {
+            var port: ?*c.xmlNode = @ptrCast(n.children);
+            while (port) |pn| : (port = @ptrCast(pn.next)) {
+                var ext: ?*c.xmlNode = @ptrCast(pn.children);
+                while (ext) |en| : (ext = @ptrCast(en.next)) {
+                    if (std.mem.eql(u8, localName(nodeName(en)), "address")) {
+                        const loc = try attrValue(ctx.allocator, en, "location");
+                        defer if (loc) |v| ctx.allocator.free(v);
+                        if (loc) |v| {
+                            const owned = try ctx.allocator.dupe(u8, v);
+                            try ctx.strings.append(ctx.allocator, owned);
+                            try obj.set(ctx.allocator, "__location", .{ .string = owned });
+                        }
+                    }
+                }
+            }
+        } else if (std.mem.eql(u8, lname, "portType")) {
+            var op: ?*c.xmlNode = @ptrCast(n.children);
+            while (op) |on| : (op = @ptrCast(on.next)) {
+                if (!std.mem.eql(u8, localName(nodeName(on)), "operation")) continue;
+                const name = try attrValue(ctx.allocator, on, "name");
+                defer if (name) |v| ctx.allocator.free(v);
+                if (name) |v| {
+                    const sig = try std.fmt.allocPrint(ctx.allocator, "void {s}()", .{v});
+                    try ctx.strings.append(ctx.allocator, sig);
+                    try functions.set(ctx.allocator, .{ .int = functions.next_int_key }, .{ .string = sig });
+                }
+            }
+        } else if (std.mem.eql(u8, lname, "types")) {
+            var schema: ?*c.xmlNode = @ptrCast(n.children);
+            while (schema) |sn| : (schema = @ptrCast(sn.next)) {
+                var typ: ?*c.xmlNode = @ptrCast(sn.children);
+                while (typ) |tn| : (typ = @ptrCast(tn.next)) {
+                    if (!std.mem.eql(u8, localName(nodeName(tn)), "complexType")) continue;
+                    const name = try attrValue(ctx.allocator, tn, "name");
+                    defer if (name) |v| ctx.allocator.free(v);
+                    if (name) |v| {
+                        var decl = std.ArrayListUnmanaged(u8){};
+                        try decl.appendSlice(ctx.allocator, "struct ");
+                        try decl.appendSlice(ctx.allocator, v);
+                        try decl.appendSlice(ctx.allocator, " {\n");
+                        var seq: ?*c.xmlNode = @ptrCast(tn.children);
+                        while (seq) |qn| : (seq = @ptrCast(qn.next)) {
+                            var elem: ?*c.xmlNode = @ptrCast(qn.children);
+                            while (elem) |en| : (elem = @ptrCast(en.next)) {
+                                if (!std.mem.eql(u8, localName(nodeName(en)), "element")) continue;
+                                const field = try attrValue(ctx.allocator, en, "name");
+                                defer if (field) |fv| ctx.allocator.free(fv);
+                                const xtype = try attrValue(ctx.allocator, en, "type");
+                                defer if (xtype) |tv| ctx.allocator.free(tv);
+                                if (field) |fv| {
+                                    const php_type = if (xtype) |tv| blk: {
+                                        const t = localName(tv);
+                                        if (std.mem.eql(u8, t, "int") or std.mem.eql(u8, t, "integer")) break :blk "int";
+                                        if (std.mem.eql(u8, t, "string")) break :blk "string";
+                                        if (std.mem.eql(u8, t, "boolean")) break :blk "boolean";
+                                        if (std.mem.eql(u8, t, "float") or std.mem.eql(u8, t, "double")) break :blk "float";
+                                        break :blk t;
+                                    } else "mixed";
+                                    try decl.appendSlice(ctx.allocator, " ");
+                                    try decl.appendSlice(ctx.allocator, php_type);
+                                    try decl.appendSlice(ctx.allocator, " ");
+                                    try decl.appendSlice(ctx.allocator, fv);
+                                    try decl.appendSlice(ctx.allocator, ";\n");
+                                }
+                            }
+                        }
+                        try decl.appendSlice(ctx.allocator, "}");
+                        const owned = try decl.toOwnedSlice(ctx.allocator);
+                        try ctx.strings.append(ctx.allocator, owned);
+                        try types.set(ctx.allocator, .{ .int = types.next_int_key }, .{ .string = owned });
+                    }
+                }
+            }
+        }
+    }
+    try obj.set(ctx.allocator, "__functions", .{ .array = functions });
+    try obj.set(ctx.allocator, "__types", .{ .array = types });
+}
+
 fn soapClientConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
 
@@ -143,6 +269,9 @@ fn soapClientConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     try obj.set(ctx.allocator, "__last_response_headers", .{ .string = "" });
     try obj.set(ctx.allocator, "__headers", .{ .array = try ctx.createArray() });
     try obj.set(ctx.allocator, "__cookies", .{ .array = try ctx.createArray() });
+    try obj.set(ctx.allocator, "__functions", .{ .array = try ctx.createArray() });
+    try obj.set(ctx.allocator, "__types", .{ .array = try ctx.createArray() });
+    if (wsdl == .string) try parseWsdl(ctx, obj, wsdl.string);
 
     if (wsdl != .null and wsdl != .string) {
         // PHP throws SoapFault here. we accept null only for non-WSDL.
@@ -204,16 +333,52 @@ fn appendValue(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), tag: []con
                 try appendValue(ctx, out, child_tag, entry.value);
             }
         },
-        else => {
+        .object => |obj| {
             try out.appendSlice(ctx.allocator, ">");
+            var it = obj.properties.iterator();
+            while (it.next()) |entry| try appendValue(ctx, out, entry.key_ptr.*, entry.value_ptr.*);
         },
+        else => try out.appendSlice(ctx.allocator, ">"),
     }
     try out.appendSlice(ctx.allocator, "</");
     try out.appendSlice(ctx.allocator, tag);
     try out.appendSlice(ctx.allocator, ">");
 }
 
-fn buildEnvelope(ctx: *NativeContext, method: []const u8, uri: []const u8, args_array: *PhpArray) ![]u8 {
+fn appendSoapHeader(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), header: *PhpObject, index: usize) RuntimeError!void {
+    const ns = header.get("namespace");
+    const name = header.get("name");
+    if (ns != .string or name != .string) return;
+    const prefix = try std.fmt.allocPrint(ctx.allocator, "ns{d}", .{index + 2});
+    defer ctx.allocator.free(prefix);
+    try out.appendSlice(ctx.allocator, "<");
+    try out.appendSlice(ctx.allocator, prefix);
+    try out.appendSlice(ctx.allocator, ":");
+    try out.appendSlice(ctx.allocator, name.string);
+    try out.appendSlice(ctx.allocator, " xmlns:");
+    try out.appendSlice(ctx.allocator, prefix);
+    try out.appendSlice(ctx.allocator, "=\"");
+    const ns_esc = try xmlEscape(ctx.allocator, ns.string);
+    defer ctx.allocator.free(ns_esc);
+    try out.appendSlice(ctx.allocator, ns_esc);
+    try out.appendSlice(ctx.allocator, "\"");
+    const must = header.get("mustUnderstand");
+    if (must == .bool and must.bool) try out.appendSlice(ctx.allocator, " SOAP-ENV:mustUnderstand=\"1\"");
+    try out.appendSlice(ctx.allocator, ">");
+    const data = header.get("data");
+    if (data != .null) {
+        const esc = try xmlEscape(ctx.allocator, if (data == .string) data.string else "");
+        defer ctx.allocator.free(esc);
+        try out.appendSlice(ctx.allocator, esc);
+    }
+    try out.appendSlice(ctx.allocator, "</");
+    try out.appendSlice(ctx.allocator, prefix);
+    try out.appendSlice(ctx.allocator, ":");
+    try out.appendSlice(ctx.allocator, name.string);
+    try out.appendSlice(ctx.allocator, ">");
+}
+
+fn buildEnvelope(ctx: *NativeContext, client: *PhpObject, method: []const u8, uri: []const u8, args_array: *PhpArray) ![]u8 {
     var out = std.ArrayListUnmanaged(u8){};
     errdefer out.deinit(ctx.allocator);
     try out.appendSlice(ctx.allocator,
@@ -223,7 +388,18 @@ fn buildEnvelope(ctx: *NativeContext, method: []const u8, uri: []const u8, args_
     const uri_esc = try xmlEscape(ctx.allocator, uri);
     defer ctx.allocator.free(uri_esc);
     try out.appendSlice(ctx.allocator, uri_esc);
-    try out.appendSlice(ctx.allocator, "\"><SOAP-ENV:Body><ns1:");
+    try out.appendSlice(ctx.allocator, "\">");
+    const headers = client.get("__headers");
+    if (headers == .object or headers == .array) {
+        try out.appendSlice(ctx.allocator, "<SOAP-ENV:Header>");
+        if (headers == .object) {
+            try appendSoapHeader(ctx, &out, headers.object, 0);
+        } else {
+            for (headers.array.entries.items, 0..) |entry, i| if (entry.value == .object) try appendSoapHeader(ctx, &out, entry.value.object, i);
+        }
+        try out.appendSlice(ctx.allocator, "</SOAP-ENV:Header>");
+    }
+    try out.appendSlice(ctx.allocator, "<SOAP-ENV:Body><ns1:");
     try out.appendSlice(ctx.allocator, method);
     try out.appendSlice(ctx.allocator, ">");
     for (args_array.entries.items, 0..) |entry, i| {
@@ -414,7 +590,7 @@ fn soapClientCall(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const location = loc_v.string;
     const uri = uri_v.string;
 
-    const envelope = buildEnvelope(ctx, method, uri, args_arr) catch |e| switch (e) {
+    const envelope = buildEnvelope(ctx, obj, method, uri, args_arr) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .null,
     };
@@ -470,7 +646,7 @@ fn soapClientSetLocation(ctx: *NativeContext, args: []const Value) RuntimeError!
     if (args.len < 1) return .null;
     const prev = o.get("__location");
     try o.set(ctx.allocator, "__location", args[0]);
-    return prev;
+    return if (o.get("__wsdl") == .string) .null else prev;
 }
 fn soapClientSetSoapHeaders(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const o = getThis(ctx) orelse return .{ .bool = false };
@@ -479,10 +655,12 @@ fn soapClientSetSoapHeaders(ctx: *NativeContext, args: []const Value) RuntimeErr
     return .{ .bool = true };
 }
 fn soapClientGetFunctions(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .array = try ctx.createArray() };
+    const o = getThis(ctx) orelse return .null;
+    return o.get("__functions");
 }
 fn soapClientGetTypes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .array = try ctx.createArray() };
+    const o = getThis(ctx) orelse return .null;
+    return o.get("__types");
 }
 fn soapClientSetCookie(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const o = getThis(ctx) orelse return .null;
@@ -514,6 +692,7 @@ fn soapServerConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     try obj.set(ctx.allocator, "__functions", .{ .array = try ctx.createArray() });
     try obj.set(ctx.allocator, "__class", .null);
     try obj.set(ctx.allocator, "__object", .null);
+    try obj.set(ctx.allocator, "__response_headers", .{ .array = try ctx.createArray() });
     // the response namespace (ns1) comes from options['uri'] in non-WSDL mode
     var uri: Value = .null;
     if (args.len > 1 and args[1] == .array) {
@@ -586,6 +765,96 @@ fn xmlUnescape(allocator: Allocator, s: []const u8) ![]u8 {
 // encode a return value as PHP SoapServer does: a typed <return> element.
 // server-mode uses xsd:float (the client request path's appendValue uses
 // xsd:double - they genuinely differ, so this is separate)
+fn isList(arr: *PhpArray) bool {
+    for (arr.entries.items, 0..) |entry, i| if (entry.key != .int or entry.key.int != i) return false;
+    return true;
+}
+
+fn encodeTypedValue(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), tag: []const u8, val: Value) RuntimeError!void {
+    const a = ctx.allocator;
+    try out.appendSlice(a, "<");
+    try out.appendSlice(a, tag);
+    switch (val) {
+        .null => try out.appendSlice(a, " xsi:nil=\"true\"/>"),
+        .int => |i| {
+            const s = try std.fmt.allocPrint(a, "{d}", .{i});
+            defer a.free(s);
+            try out.appendSlice(a, " xsi:type=\"xsd:int\">");
+            try out.appendSlice(a, s);
+            try out.appendSlice(a, "</");
+            try out.appendSlice(a, tag);
+            try out.appendSlice(a, ">");
+        },
+        .float => |f| {
+            const s = try std.fmt.allocPrint(a, "{d}", .{f});
+            defer a.free(s);
+            try out.appendSlice(a, " xsi:type=\"xsd:float\">");
+            try out.appendSlice(a, s);
+            try out.appendSlice(a, "</");
+            try out.appendSlice(a, tag);
+            try out.appendSlice(a, ">");
+        },
+        .bool => |b| {
+            try out.appendSlice(a, " xsi:type=\"xsd:boolean\">");
+            try out.appendSlice(a, if (b) "true" else "false");
+            try out.appendSlice(a, "</");
+            try out.appendSlice(a, tag);
+            try out.appendSlice(a, ">");
+        },
+        .string => |s| {
+            const esc = try xmlEscape(a, s);
+            defer a.free(esc);
+            try out.appendSlice(a, " xsi:type=\"xsd:string\">");
+            try out.appendSlice(a, esc);
+            try out.appendSlice(a, "</");
+            try out.appendSlice(a, tag);
+            try out.appendSlice(a, ">");
+        },
+        .array => |arr| {
+            if (isList(arr)) {
+                var item_type: []const u8 = "anyType";
+                if (arr.entries.items.len > 0) item_type = switch (arr.entries.items[0].value) {
+                    .int => "int",
+                    .float => "float",
+                    .bool => "boolean",
+                    .string => "string",
+                    else => "anyType",
+                };
+                const count = try std.fmt.allocPrint(a, " SOAP-ENC:arrayType=\"xsd:{s}[{d}]\" xsi:type=\"SOAP-ENC:Array\">", .{ item_type, arr.entries.items.len });
+                defer a.free(count);
+                try out.appendSlice(a, count);
+                for (arr.entries.items) |entry| try encodeTypedValue(ctx, out, "item", entry.value);
+            } else {
+                try out.appendSlice(a, " xsi:type=\"ns2:Map\">");
+                for (arr.entries.items) |entry| {
+                    try out.appendSlice(a, "<item>");
+                    const key: Value = switch (entry.key) {
+                        .string => |s| .{ .string = s },
+                        .int => |i| .{ .int = i },
+                    };
+                    try encodeTypedValue(ctx, out, "key", key);
+                    try encodeTypedValue(ctx, out, "value", entry.value);
+                    try out.appendSlice(a, "</item>");
+                }
+            }
+            try out.appendSlice(a, "</");
+            try out.appendSlice(a, tag);
+            try out.appendSlice(a, ">");
+        },
+        .object => |obj| {
+            try out.appendSlice(a, " xsi:type=\"SOAP-ENC:Struct\">");
+            var it = obj.properties.iterator();
+            while (it.next()) |entry| try encodeTypedValue(ctx, out, entry.key_ptr.*, entry.value_ptr.*);
+            try out.appendSlice(a, "</");
+            try out.appendSlice(a, tag);
+            try out.appendSlice(a, ">");
+        },
+        else => {
+            try out.appendSlice(a, "/>");
+        },
+    }
+}
+
 fn encodeReturn(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), val: Value) RuntimeError!void {
     const a = ctx.allocator;
     switch (val) {
@@ -616,6 +885,7 @@ fn encodeReturn(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), val: Valu
             try out.appendSlice(a, esc);
             try out.appendSlice(a, "</return>");
         },
+        .array, .object => try encodeTypedValue(ctx, out, "return", val),
         else => try out.appendSlice(a, "<return/>"),
     }
 }
@@ -719,16 +989,29 @@ fn soapServerHandle(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     const xsd = "xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"";
     const xsi = "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"";
     try out.appendSlice(ctx.allocator, "\" ");
-    if (result == .null) {
+    if (result == .null or (result == .array and !isList(result.array))) {
         try out.appendSlice(ctx.allocator, xsi);
         try out.appendSlice(ctx.allocator, " ");
         try out.appendSlice(ctx.allocator, xsd);
     } else {
         try out.appendSlice(ctx.allocator, xsd);
+        if (result == .array and isList(result.array)) try out.appendSlice(ctx.allocator, " xmlns:SOAP-ENC=\"http://schemas.xmlsoap.org/soap/encoding/\"");
         try out.appendSlice(ctx.allocator, " ");
         try out.appendSlice(ctx.allocator, xsi);
     }
-    try out.appendSlice(ctx.allocator, " xmlns:SOAP-ENC=\"http://schemas.xmlsoap.org/soap/encoding/\" SOAP-ENV:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><SOAP-ENV:Body><ns1:");
+    if (result == .array and !isList(result.array)) try out.appendSlice(ctx.allocator, " xmlns:ns2=\"http://xml.apache.org/xml-soap\"");
+    if (!(result == .array and isList(result.array))) try out.appendSlice(ctx.allocator, " xmlns:SOAP-ENC=\"http://schemas.xmlsoap.org/soap/encoding/\"");
+    try out.appendSlice(ctx.allocator, " SOAP-ENV:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">");
+    const response_headers = obj.get("__response_headers");
+    if (response_headers == .array and response_headers.array.entries.items.len > 0) {
+        try out.appendSlice(ctx.allocator, "<SOAP-ENV:Header>");
+        for (response_headers.array.entries.items, 0..) |entry, i| if (entry.value == .object) try appendSoapHeader(ctx, &out, entry.value.object, i);
+        try out.appendSlice(ctx.allocator, "</SOAP-ENV:Header>");
+        response_headers.array.entries.clearRetainingCapacity();
+        response_headers.array.string_index.clearRetainingCapacity();
+        response_headers.array.next_int_key = 0;
+    }
+    try out.appendSlice(ctx.allocator, "<SOAP-ENV:Body><ns1:");
     try out.appendSlice(ctx.allocator, method);
     try out.appendSlice(ctx.allocator, "Response>");
     try encodeReturn(ctx, &out, result);
@@ -741,7 +1024,12 @@ fn soapServerHandle(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 fn soapServerFault(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
 }
-fn soapServerAddSoapHeader(_: *NativeContext, _: []const Value) RuntimeError!Value {
+fn soapServerAddSoapHeader(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    const obj = getThis(ctx) orelse return .{ .bool = false };
+    if (args.len == 0 or args[0] != .object) return .{ .bool = false };
+    const headers = obj.get("__response_headers");
+    if (headers != .array) return .{ .bool = false };
+    try headers.array.set(ctx.allocator, .{ .int = headers.array.next_int_key }, args[0]);
     return .{ .bool = true };
 }
 fn soapServerGetFunctions(ctx: *NativeContext, _: []const Value) RuntimeError!Value {

@@ -13,6 +13,9 @@ class Calc {
     public function ok() { return true; }
     public function no() { return false; }
     public function nothing() { return null; }
+    public function map() { return ['a' => 1, 'b' => 'x']; }
+    public function list() { return [1, 2]; }
+    public function object() { return (object) ['a' => 1, 'b' => 'x']; }
 }
 
 function envelope($uri, $method, $argsXml) {
@@ -44,6 +47,9 @@ $out .= call($s, 'urn:calc', 'ratio', '');
 $out .= call($s, 'urn:calc', 'ok', '');
 $out .= call($s, 'urn:calc', 'no', '');
 $out .= call($s, 'urn:calc', 'nothing', '');
+$out .= call($s, 'urn:calc', 'map', '');
+$out .= call($s, 'urn:calc', 'list', '');
+$out .= call($s, 'urn:calc', 'object', '');
 
 // setObject dispatch (instance state preserved across calls)
 $obj = new Calc();
@@ -54,11 +60,20 @@ $out .= call($s2, 'urn:c2', 'name', '');
 
 // string arg with entities (escaped in, unescaped for dispatch, re-escaped out)
 class Echoer {
+    public $server;
     public function repeat($s) { return $s . $s; }
+    public function headed($s) {
+        $this->server->addSoapHeader(new SoapHeader('urn:meta', 'Result', 'ok'));
+        return $s;
+    }
 }
 $s3 = new SoapServer(null, ['uri' => 'urn:echo']);
-$s3->setObject(new Echoer());
+$echoer = new Echoer();
+$echoer->server = $s3;
+$s3->setObject($echoer);
 $out .= call($s3, 'urn:echo', 'repeat', '<s>a &lt; b &amp; c</s>');
+$headed = call($s3, 'urn:echo', 'headed', '<s>body</s>');
+$out .= 'header: ' . (str_contains($headed, '<SOAP-ENV:Header>') && str_contains($headed, 'Result') && str_contains($headed, '>ok<') ? 'ok' : 'missing') . "\n";
 
 // addFunction dispatch
 function multiply($a, $b) { return $a * $b; }

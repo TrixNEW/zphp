@@ -46,4 +46,18 @@ assert($f->faultcode === 'Server');
 assert($f->faultstring === 'something bad');
 assert($f->getMessage() === 'something bad');
 
+// WSDL metadata drives endpoint, namespace, operation and type discovery.
+$wc = new SoapClient(__DIR__ . '/fixtures/soap-service.wsdl', ['trace' => true]);
+assert($wc->__setLocation('http://override/') === null);
+assert($wc->__getFunctions() === ['void add()']);
+assert($wc->__getTypes() === ["struct Pair {\n int a;\n int b;\n}"]);
+
+// Client headers are serialized into the SOAP Header block.
+$wc->__setSoapHeaders(new SoapHeader('urn:auth', 'Token', 'secret', true));
+try { $wc->__soapCall('add', [['a' => 1, 'b' => 2]]); } catch (SoapFault $e) {}
+$request = $wc->__getLastRequest();
+assert(str_contains($request, '<SOAP-ENV:Header>'));
+assert(str_contains($request, 'Token'));
+assert(str_contains($request, 'secret'));
+
 echo "ok\n";
