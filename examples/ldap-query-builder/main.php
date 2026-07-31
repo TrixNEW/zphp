@@ -96,5 +96,7 @@ foreach ($dns as $dn) {
         if (strtolower($a) === 'dc') $org[] = $v;
     }
     echo "  domain: " . implode('.', $org) . "\n";
-    echo "  cn-only values: " . implode(' / ', array_slice(iterator_to_array(new ArrayIterator($values)), 0, $values['count'])) . "\n";
+    $dnValues = [];
+    for ($i = 0; $i < $values['count']; $i++) $dnValues[] = $values[$i];
+    echo "  cn-only values: " . implode(' / ', $dnValues) . "\n";
 }
