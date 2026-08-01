@@ -22,18 +22,18 @@ Requires PHP installed locally. zphp must be built with ReleaseFast - debug buil
 
 | benchmark | php | zphp | ratio |
 |---|---|---|---|
-| string_ops | 97 ms | 31 ms | 0.32x |
-| array_ops | 95 ms | 31 ms | 0.33x |
-| objects | 99 ms | 41 ms | 0.41x |
-| closures | 99 ms | 93 ms | 0.94x |
-| fibonacci | 163 ms | 164 ms | 1.01x |
-| loops | 130 ms | 130 ms | 1.00x |
+| string_ops | 88 ms | 58 ms | 0.66x |
+| array_ops | 86 ms | 64 ms | 0.74x |
+| objects | 87 ms | 79 ms | 0.91x |
+| closures | 96 ms | 114 ms | 1.19x |
+| fibonacci | 162 ms | 240 ms | 1.48x |
+| loops | 130 ms | 203 ms | 1.56x |
 
-zphp beats PHP on the compute-heavy benchmarks that exercise stdlib and object dispatch. Array operations are 3.1x faster thanks to O(1) integer key lookups on sequential arrays. String operations are 3.1x faster with concat (string+string, string+int, int+string) in fastLoop - the concat loop stays in the fast tier instead of bailing to runLoop on every iteration, and the growable concat_assign buffer avoids O(n) reallocation per append. Objects are 2.4x faster with property slot indices and IC-cached slot access. Closures are a small win via indexed capture lookup (HashMap by closure name instead of linear scan) and fastLoop handling of call_indirect for closures.
+zphp remains faster on the array, string, and object benchmarks. Sequential-array key lookup, fastLoop concat handling, the growable concat-assignment buffer, property slot indices, and inline-cached property access are the main advantages in those workloads.
 
-Fibonacci and loops are neck-and-neck with PHP - both runtimes are limited by call overhead and tight integer arithmetic, where PHP's JIT-less interpreter is already well-tuned. fastLoop is compiled as a separate object file (src/fast_loop.zig) so LLVM can optimize it independently of runLoop; without this the two functions compete for inlining decisions and regress unpredictably.
+Closures, Fibonacci, and loops are slower than PHP in the current ownership-correct runtime. Object, array, generator, and fiber lifetime tracking adds tag checks to general operand-stack operations. A conservative compile-time proof for scalar-only function stacks was implemented and fully tested, but it made Fibonacci and loops slower through VM code-generation perturbation, so it was not shipped. The table reports the measured implementation rather than retaining earlier results from before the ownership model changed.
 
-Note: under the copy-on-write array model, the recursive-call benchmark (fibonacci) runs about 10-13% slower than under the old eager-clone model - the COW changes to the value-handling functions perturb the LLVM codegen of runLoop's call path, even though fibonacci itself touches no arrays. Loops, objects, arrays, and strings are unaffected or faster. This is an accepted tradeoff: eager cloning made array assignment O(n) and cost 84x on real applications (WordPress bootstrap 8.4s vs PHP 99ms, more than half of it in array clone); copy-on-write closes that to roughly 3x while costing one recursive-call microbenchmark a small constant factor.
+These six microbenchmarks are code-generation canaries, not the primary performance target. Real WordPress and Laravel harnesses are measured separately with `benchmarks/macro/run`; request and application throughput take priority over an isolated recursive call or arithmetic loop.
 
 ### Optimization targets
 
