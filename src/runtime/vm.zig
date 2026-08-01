@@ -948,6 +948,9 @@ pub const VM = struct {
         generator: ?*Generator = null,
         ref_slots: std.StringHashMapUnmanaged(*Value) = .{},
         ref_owner: RefIndex.OwnerId = 0,
+        // Parameter slots whose vars entries already own an array edge. Fixed
+        // storage avoids lifecycle coupling to fast-pop frame-slot reuse.
+        owned_array_args: [4]u64 = @splat(0),
         called_class: ?[]const u8 = null,
         // name the function was looked up by - distinguishes closure instances
         // (which all share the same ObjFunction) for per-instance static state.
@@ -11504,11 +11507,23 @@ pub const VM = struct {
     pub fn retainFrameObjects(self: *VM, idx: usize) void {
         const frame = &self.frames[idx];
         if (frame.generator != null) return;
+        self.markOwnedArrayArgs(idx, frame) catch {};
         const snames = if (frame.func) |f| f.slot_names else frame.slot_names;
         const vars_populated = frame.vars.count() > 0;
         if (vars_populated) {
-            var it = frame.vars.valueIterator();
-            while (it.next()) |v| retainValue(v.*);
+            var it = frame.vars.iterator();
+            while (it.next()) |entry| {
+                var owned = false;
+                if (entry.value_ptr.* == .array) if (frame.func) |func| {
+                    for (func.params, 0..) |param, i| {
+                        if (std.mem.eql(u8, entry.key_ptr.*, param)) {
+                            owned = (frame.owned_array_args[i / 64] & (@as(u64, 1) << @intCast(i % 64))) != 0;
+                            break;
+                        }
+                    }
+                };
+                if (!owned) retainValue(entry.value_ptr.*);
+            }
         }
         for (frame.locals, 0..) |lv, i| {
             if (vars_populated and i < snames.len and snames[i].len > 0) continue;
@@ -13375,8 +13390,22 @@ pub const VM = struct {
         return .{ .array = try self.cloneArray(val.array) };
     }
 
-    pub fn bindFrameArg(self: *VM, val: Value) RuntimeError!Value {
-        return self.cloneArrayValue(val);
+    pub fn bindFrameArg(_: *VM, val: Value) RuntimeError!Value {
+        return val;
+    }
+
+    fn markOwnedArrayArgs(self: *VM, frame_idx: usize, frame: *CallFrame) RuntimeError!void {
+        const func = frame.func orelse return;
+        const count = if (self.ic) |ic| blk: {
+            const raw = ic.arg_counts[frame_idx];
+            break :blk if (raw == 0xFF) func.arity else @min(@as(usize, raw), func.arity);
+        } else func.arity;
+        for (func.params[0..@min(count, func.params.len)], 0..) |param, i| {
+            const val = frame.vars.get(param) orelse continue;
+            if (val != .array) continue;
+            arrayRetain(val.array);
+            frame.owned_array_args[i / 64] |= @as(u64, 1) << @intCast(i % 64);
+        }
     }
 
     fn copyCapturedValue(self: *VM, val: Value) RuntimeError!Value {

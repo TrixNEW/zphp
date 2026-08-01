@@ -2,7 +2,9 @@ const std = @import("std");
 const Value = @import("../runtime/value.zig").Value;
 const phpTypeName = @import("types.zig").phpTypeName;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
-const NativeContext = @import("../runtime/vm.zig").NativeContext;
+const vm_mod = @import("../runtime/vm.zig");
+const NativeContext = vm_mod.NativeContext;
+const VM = vm_mod.VM;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
 pub const entries = .{
@@ -903,6 +905,7 @@ fn array_splice(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             const replacement = args[3].array;
             var insert_idx = uoffset;
             for (replacement.entries.items) |entry| {
+                VM.retainValue(entry.value);
                 try arr.entries.insert(ctx.allocator, insert_idx, .{ .key = .{ .int = 0 }, .value = entry.value });
                 insert_idx += 1;
             }
