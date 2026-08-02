@@ -2314,10 +2314,49 @@ pub const VM = struct {
             return error.RuntimeError;
         }
         const return_frame = self.frame_count;
+        const caller_idx = self.frame_count - 1;
+        const caller = self.currentFrame();
+        const caller_slot_names = if (caller.func) |func| func.slot_names else caller.slot_names;
         var eval_locals: []Value = &.{};
         if (heap_result.local_count > 0) {
             eval_locals = try self.allocator.alloc(Value, heap_result.local_count);
             @memset(eval_locals, .null);
+        }
+        var inherited_vars: @TypeOf(self.frames[0].vars) = .{};
+        var inherited_refs: @TypeOf(self.frames[0].ref_slots) = .{};
+        for (heap_result.slot_names, 0..) |name, eval_slot| {
+            if (name.len == 0 or eval_slot >= eval_locals.len) continue;
+            if (caller.ref_slots.get(name)) |cell| {
+                eval_locals[eval_slot] = cell.*;
+                continue;
+            }
+            var found = false;
+            for (caller_slot_names, 0..) |caller_name, caller_slot| {
+                if (std.mem.eql(u8, caller_name, name) and caller_slot < caller.locals.len) {
+                    eval_locals[eval_slot] = caller.locals[caller_slot];
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                if (caller.vars.get(name)) |value| eval_locals[eval_slot] = value;
+            }
+        }
+        if (caller.vars.count() > 0) {
+            var vars_iter = caller.vars.iterator();
+            while (vars_iter.next()) |entry| {
+                try inherited_vars.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+        if (caller.ref_slots.count() > 0) {
+            var refs_iter = caller.ref_slots.iterator();
+            while (refs_iter.next()) |entry| {
+                try inherited_refs.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+        for (caller_slot_names, 0..) |name, caller_slot| {
+            if (name.len == 0 or caller_slot >= caller.locals.len or inherited_vars.contains(name)) continue;
+            try inherited_vars.put(self.allocator, name, caller.locals[caller_slot]);
         }
         const saved_slot_names = self.global_slot_names;
         self.global_slot_names = heap_result.slot_names;
@@ -2326,9 +2365,12 @@ pub const VM = struct {
         self.frames[self.frame_count] = .{
             .chunk = &heap_result.chunk,
             .ip = 0,
-            .vars = .{},
+            .vars = inherited_vars,
             .locals = eval_locals,
+            .ref_slots = inherited_refs,
             .script_path = heap_result.file_path,
+            .slot_names = heap_result.slot_names,
+            .include_parent = caller_idx,
         };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.frame_count += 1;
@@ -2337,6 +2379,7 @@ pub const VM = struct {
 
         const sp_before_eval = self.sp;
         self.runUntilFrame(return_frame) catch {
+            try self.mergeIncludeScope(return_frame, caller_idx, heap_result.slot_names);
             while (self.frame_count > return_frame) {
                 self.frame_count -= 1;
                 self.deinitFrameSlot(self.frame_count);
@@ -2346,6 +2389,7 @@ pub const VM = struct {
             self.sp = sp_before_eval;
             return error.RuntimeError;
         };
+        try self.mergeIncludeScope(return_frame, caller_idx, heap_result.slot_names);
         while (self.frame_count > return_frame) {
             self.frame_count -= 1;
             self.deinitFrameSlot(self.frame_count);
@@ -4659,6 +4703,13 @@ pub const VM = struct {
                         try frame.ref_slots.put(self.allocator, src_name, cell);
                     }
                     try frame.ref_slots.put(self.allocator, dst_name, cell);
+                    if (frame.include_parent) |parent_idx| {
+                        const parent = &self.frames[parent_idx];
+                        try parent.ref_slots.put(self.allocator, src_name, cell);
+                        try parent.ref_slots.put(self.allocator, dst_name, cell);
+                        try parent.vars.put(self.allocator, src_name, cell.*);
+                        try parent.vars.put(self.allocator, dst_name, cell.*);
+                    }
                 },
 
                 .make_var_array_elem_ref => {
@@ -4864,23 +4915,7 @@ pub const VM = struct {
                     // array (a separate refcounted holder) and the global cell
                     // by setLocalGlobal - mirror the removal so the object's
                     // last reference is dropped now, not at the shutdown sweep
-                    if (uframe.include_parent) |parent_idx| {
-                        const parent = &self.frames[parent_idx];
-                        if (parent.vars.get(name)) |existing| self.releaseValue(existing);
-                        _ = parent.vars.remove(name);
-                        if (parent.ref_slots.get(name)) |cell| {
-                            _ = parent.ref_slots.remove(name);
-                            self.revertUncapturedCell(cell);
-                        }
-                        const parent_sn = if (parent.func) |f| f.slot_names else parent.slot_names;
-                        for (parent_sn, 0..) |slot_name, si| {
-                            if (std.mem.eql(u8, slot_name, name) and si < parent.locals.len) {
-                                self.releaseValue(parent.locals[si]);
-                                parent.locals[si] = .null;
-                                break;
-                            }
-                        }
-                    }
+                    if (uframe.include_parent) |parent_idx| self.unsetIncludeVar(parent_idx, name);
                     if (!u_is_ref and uframe.func == null and uframe.include_parent == null and name.len > 1 and name[0] == '$') {
                         if (self.globals_array) |ga| {
                             const gkey = PhpArray.Key{ .string = name[1..] };
@@ -5007,7 +5042,7 @@ pub const VM = struct {
                     const is_ref = self.currentFrame().ref_slots.get(name);
 
                     // find the local slot for this variable
-                    const ca_sn = if (self.currentFrame().func) |func| func.slot_names else self.global_slot_names;
+                    const ca_sn = if (self.currentFrame().func) |func| func.slot_names else self.currentFrame().slot_names;
                     var ca_slot: u16 = 0xFFFF;
                     for (ca_sn, 0..) |sn, si| {
                         if (std.mem.eql(u8, sn, name)) {
@@ -5017,7 +5052,7 @@ pub const VM = struct {
                     }
 
                     // try growable buffer path for local variables (no refs)
-                    if (ca_slot != 0xFFFF and is_ref == null and self.ic != null) {
+                    if (ca_slot != 0xFFFF and is_ref == null and self.ic != null and self.currentFrame().include_parent == null) {
                         const ic = self.ic.?;
                         const current = if (ca_slot < self.currentFrame().locals.len) self.currentFrame().locals[ca_slot] else Value.null;
 
@@ -5118,6 +5153,7 @@ pub const VM = struct {
                     if (ca_slot != 0xFFFF and ca_slot < self.currentFrame().locals.len) {
                         self.currentFrame().locals[ca_slot] = result_val;
                     }
+                    try self.syncIncludeVar(self.currentFrame(), name, result_val);
                     self.push(result_val);
                 },
                 .get_local => {
@@ -10014,6 +10050,7 @@ pub const VM = struct {
             if (slot < frame.locals.len) frame.locals[slot] = val;
             try self.setLocalGlobal(slot, val, frame);
         }
+        try self.syncIncludeLocal(frame, slot, val);
     }
 
     fn setLocalGlobal(self: *VM, slot: u16, val: Value, frame: *CallFrame) !void {
@@ -11556,10 +11593,32 @@ pub const VM = struct {
         return locals;
     }
 
+    fn unsetIncludeVar(self: *VM, frame_idx: usize, name: []const u8) void {
+        const frame = &self.frames[frame_idx];
+        if (frame.vars.get(name)) |existing| self.releaseValue(existing);
+        _ = frame.vars.remove(name);
+        if (frame.ref_slots.get(name)) |cell| {
+            _ = frame.ref_slots.remove(name);
+            self.revertUncapturedCell(cell);
+        }
+        const slot_names = if (frame.func) |func| func.slot_names else frame.slot_names;
+        for (slot_names, 0..) |slot_name, slot| {
+            if (std.mem.eql(u8, slot_name, name) and slot < frame.locals.len) {
+                self.releaseValue(frame.locals[slot]);
+                frame.locals[slot] = .null;
+                break;
+            }
+        }
+        if (frame.include_parent) |parent_idx| self.unsetIncludeVar(parent_idx, name);
+    }
+
     fn syncIncludeLocal(self: *VM, frame: *CallFrame, slot: u16, value: Value) RuntimeError!void {
-        const parent_idx = frame.include_parent orelse return;
         if (slot >= frame.slot_names.len) return;
-        const name = frame.slot_names[slot];
+        try self.syncIncludeVar(frame, frame.slot_names[slot], value);
+    }
+
+    fn syncIncludeVar(self: *VM, frame: *CallFrame, name: []const u8, value: Value) RuntimeError!void {
+        const parent_idx = frame.include_parent orelse return;
         if (name.len == 0) return;
         const parent = &self.frames[parent_idx];
         if (parent.ref_slots.get(name)) |cell| {
@@ -11582,6 +11641,7 @@ pub const VM = struct {
             if (matching_slot) |parent_slot| self.releaseValue(parent.locals[parent_slot]);
         }
         if (matching_slot) |parent_slot| parent.locals[parent_slot] = value;
+        if (parent.include_parent != null) try self.syncIncludeVar(parent, name, value);
     }
 
     fn mergeIncludeScope(self: *VM, include_frame_idx: usize, caller_idx: usize, include_slot_names: []const []const u8) RuntimeError!void {

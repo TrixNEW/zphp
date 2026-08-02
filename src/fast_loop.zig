@@ -60,7 +60,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     // bail to runLoop when the frame has ref bindings — those need
                     // propagation through ref_slots / array bindings which fast_loop
                     // doesn't implement
-                    if (frame.ref_owner != 0 or frame.ref_slots.count() > 0) {
+                    if (frame.ref_owner != 0 or frame.ref_slots.count() > 0 or frame.include_parent != null) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
