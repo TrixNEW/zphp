@@ -2,7 +2,7 @@
 header("Content-Type: application/json");
 
 $method = $_SERVER["REQUEST_METHOD"];
-$path = $_SERVER["SCRIPT_NAME"];
+$path = parse_url($_SERVER["REQUEST_URI"], PHP_URL_PATH);
 
 if ($path === "/health") {
     echo json_encode(["status" => "ok"]);
