@@ -3817,20 +3817,20 @@ fn tzifLookupWall(bytes: []const u8, wall_ts: i64) ?TzifRes {
 // table-first, TZif-fallback. these replace the bare `lookupTimezone(name) ->
 // tzOffsetAt(tz, ts)` pattern at the call sites so non-table zones work too.
 pub fn tzOffsetForName(allocator: Allocator, name: []const u8, utc_ts: i64) i32 {
-    if (lookupTimezone(name)) |tz| return tzOffsetAt(tz, utc_ts);
     if (resolveTzif(allocator, name)) |h| {
         defer h.deinit(allocator);
         if (tzifLookupUtc(h.bytes, utc_ts)) |r| return r.offset;
     }
+    if (lookupTimezone(name)) |tz| return tzOffsetAt(tz, utc_ts);
     return 0;
 }
 
 pub fn tzOffsetForWallByName(allocator: Allocator, name: []const u8, wall_ts: i64) i32 {
-    if (lookupTimezone(name)) |tz| return tzOffsetForWall(tz, wall_ts);
     if (resolveTzif(allocator, name)) |h| {
         defer h.deinit(allocator);
         if (tzifLookupWall(h.bytes, wall_ts)) |r| return r.offset;
     }
+    if (lookupTimezone(name)) |tz| return tzOffsetForWall(tz, wall_ts);
     return 0;
 }
 
@@ -3839,13 +3839,13 @@ pub fn tzOffsetForWallByName(allocator: Allocator, name: []const u8, wall_ts: i6
 // returns a freshly-allocated abbrev (caller frees) so table + TZif cases are
 // uniform, or null if unknown
 pub fn tzAbbrevForName(allocator: Allocator, name: []const u8, utc_ts: i64) ?[]const u8 {
-    if (lookupTimezone(name)) |tz| return allocator.dupe(u8, tzAbbrevAt(tz, utc_ts)) catch null;
     if (resolveTzif(allocator, name)) |h| {
         defer h.deinit(allocator);
         if (tzifLookupUtc(h.bytes, utc_ts)) |r| {
             return allocator.dupe(u8, r.abbrev_buf[0..r.abbrev_len]) catch null;
         }
     }
+    if (lookupTimezone(name)) |tz| return allocator.dupe(u8, tzAbbrevAt(tz, utc_ts)) catch null;
     return null;
 }
 
