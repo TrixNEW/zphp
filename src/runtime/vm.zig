@@ -144,6 +144,12 @@ pub const NativeContext = struct {
             .chained_prop => |cp| {
                 cp.object.set(vm.allocator, cp.prop_name, value) catch return;
             },
+            .resolved_array_elem => |ae| {
+                const ak = Value.toArrayKey(ae.key);
+                const old = ae.array.get(ak);
+                ae.array.set(vm.allocator, ak, value) catch return;
+                if (old == .object or old == .array) vm.releaseValue(old);
+            },
             .prop_array_elem => |pae| {
                 const obj_val = vm.resolveCallerVar(pae.var_name, pae.is_local, pae.slot);
                 if (obj_val == .object) {
@@ -250,6 +256,10 @@ const RefSource = union(enum) {
     chained_prop: struct {
         object: *PhpObject,
         prop_name: []const u8,
+    },
+    resolved_array_elem: struct {
+        array: *PhpArray,
+        key: Value,
     },
     prop_array_elem: struct {
         var_name: []const u8,
@@ -12045,6 +12055,66 @@ pub const VM = struct {
         };
     }
 
+    fn resolveMixedLvalue(self: *VM, chunk: *const Chunk, caller: *CallFrame, code: []const u8, instrs: []const usize) RefSource {
+        if (instrs.len < 2) return .none;
+        var values: [128]Value = undefined;
+        var value_count: usize = 0;
+        for (instrs, 0..) |pos, index| {
+            const op = std.meta.intToEnum(OpCode, code[pos]) catch return .none;
+            const final = index + 1 == instrs.len;
+            switch (op) {
+                .get_var => {
+                    const ci = (@as(u16, code[pos + 1]) << 8) | code[pos + 2];
+                    if (ci >= chunk.constants.items.len or chunk.constants.items[ci] != .string or value_count >= values.len) return .none;
+                    values[value_count] = self.resolveCallerVar(chunk.constants.items[ci].string, false, 0);
+                    value_count += 1;
+                },
+                .get_local => {
+                    const slot = (@as(u16, code[pos + 1]) << 8) | code[pos + 2];
+                    if (slot >= caller.locals.len or value_count >= values.len) return .none;
+                    values[value_count] = caller.locals[slot];
+                    value_count += 1;
+                },
+                .constant => {
+                    const ci = (@as(u16, code[pos + 1]) << 8) | code[pos + 2];
+                    if (ci >= chunk.constants.items.len or value_count >= values.len) return .none;
+                    values[value_count] = chunk.constants.items[ci];
+                    value_count += 1;
+                },
+                .get_prop => {
+                    if (value_count < 1) return .none;
+                    const ci = (@as(u16, code[pos + 1]) << 8) | code[pos + 2];
+                    if (ci >= chunk.constants.items.len or chunk.constants.items[ci] != .string) return .none;
+                    const object = values[value_count - 1];
+                    if (object != .object) return .none;
+                    const prop_name = chunk.constants.items[ci].string;
+                    if (final) return .{ .chained_prop = .{ .object = object.object, .prop_name = prop_name } };
+                    values[value_count - 1] = object.object.get(prop_name);
+                },
+                .get_prop_dynamic => {
+                    if (value_count < 2) return .none;
+                    const prop = values[value_count - 1];
+                    const object = values[value_count - 2];
+                    if (object != .object or prop != .string) return .none;
+                    value_count -= 1;
+                    if (final) return .{ .chained_prop = .{ .object = object.object, .prop_name = prop.string } };
+                    values[value_count - 1] = object.object.get(prop.string);
+                },
+                .array_get => {
+                    if (value_count < 2) return .none;
+                    const key = values[value_count - 1];
+                    const array = values[value_count - 2];
+                    if (array != .array) return .none;
+                    value_count -= 1;
+                    if (final) return .{ .resolved_array_elem = .{ .array = array.array, .key = key } };
+                    values[value_count - 1] = array.array.get(Value.toArrayKey(key));
+                },
+                else => return .none,
+            }
+        }
+        return .none;
+    }
+
     fn scanCallerArgSources(self: *VM, ac: usize) [16]RefSource {
         var sources: [16]RefSource = .{.none} ** 16;
         if (ac == 0) return sources;
@@ -12141,6 +12211,13 @@ pub const VM = struct {
             if (bad_op or depth < 1) break;
 
             const arg_instr_count = arg_end - i;
+            if (arg_instr_count >= 5) {
+                const resolved_mixed = self.resolveMixedLvalue(chunk, caller, code, instrs[i..arg_end]);
+                if (resolved_mixed != .none) {
+                    sources[scan_idx] = resolved_mixed;
+                    continue;
+                }
+            }
 
             if (arg_instr_count == 1) {
                 const aip = instrs[i];
@@ -12474,6 +12551,15 @@ pub const VM = struct {
                     try refs.put(self.allocator, func.params[ri], cell);
                     try self.regRefObject(owner, cell, cp.object, cp.prop_name);
                     self.obj_ref_active = true;
+                },
+                .resolved_array_elem => |ae| {
+                    const cell = try self.allocator.create(Value);
+                    cell.* = new_vars.get(func.params[ri]) orelse .null;
+                    if (cell.* == .array) arrayRetain(cell.*.array);
+                    try self.ref_cells.append(self.allocator, cell);
+                    try refs.put(self.allocator, func.params[ri], cell);
+                    try self.regRefArray(owner, cell, ae.array, Value.toArrayKey(ae.key));
+                    self.array_ref_active = true;
                 },
                 .prop_array_elem => |pae| {
                     const obj_val = self.resolveCallerVar(pae.var_name, pae.is_local, pae.slot);
