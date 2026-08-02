@@ -388,10 +388,22 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     continue :dispatch @as(OpCode, @enumFromInt(_next));
                 },
                 .array_get => {
+                    if (self.globals_cells.count() > 0) {
+                        frame.ip = ip - 1;
+                        self.sp = sp;
+                        return;
+                    }
                     const ag_key = self.stack[sp - 1];
                     const ag_arr = self.stack[sp - 2];
                     sp -= 2;
                     if (ag_arr == .array) {
+                        if (self.globals_array) |ga| {
+                            if (ag_arr.array == ga) {
+                                frame.ip = ip - 1;
+                                self.sp = sp + 2;
+                                return;
+                            }
+                        }
                         const ag_elem = ag_arr.array.get(Value.toArrayKey(ag_key));
                         // an object element pushed onto the operand stack takes a
                         // reference (Stage 1); arrays are not stack-owned

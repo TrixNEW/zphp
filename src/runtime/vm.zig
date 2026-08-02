@@ -2487,6 +2487,13 @@ pub const VM = struct {
                     // single shared array on the VM, regardless of frame scope
                     if (std.mem.eql(u8, name, "$GLOBALS")) {
                         if (self.globals_array) |ga| {
+                            var cells = self.globals_cells.iterator();
+                            while (cells.next()) |entry| {
+                                const global_name = entry.key_ptr.*;
+                                if (global_name.len > 1 and global_name[0] == '$') {
+                                    try ga.set(self.allocator, .{ .string = global_name[1..] }, entry.value_ptr.*.*);
+                                }
+                            }
                             self.push(.{ .array = ga });
                             continue;
                         }
@@ -3367,6 +3374,16 @@ pub const VM = struct {
                     const key = self.pop();
                     const arr_val = self.pop();
                     if (arr_val == .array) {
+                        if (self.globals_array) |ga| {
+                            if (arr_val.array == ga and key == .string) {
+                                const dollar_name = try std.fmt.allocPrint(self.allocator, "${s}", .{key.string});
+                                try self.strings.append(self.allocator, dollar_name);
+                                if (self.globals_cells.get(dollar_name)) |cell| {
+                                    self.push(cell.*);
+                                    continue;
+                                }
+                            }
+                        }
                         if (key == .array or key == .object) {
                             if (try self.throwOffsetKeyType(key, .access)) continue;
                             return error.RuntimeError;
@@ -5817,6 +5834,21 @@ pub const VM = struct {
                     // set there
                     var cell = self.globals_cells.get(name);
                     if (cell == null) {
+                        if (self.frames[0].ref_slots.get(name)) |top_cell| {
+                            var cell_idx: usize = 0;
+                            while (cell_idx < self.ref_cells.items.len) : (cell_idx += 1) {
+                                if (self.ref_cells.items[cell_idx] == top_cell) {
+                                    _ = self.ref_cells.swapRemove(cell_idx);
+                                    break;
+                                }
+                            }
+                            const owned = try self.allocator.dupe(u8, name);
+                            try self.strings.append(self.allocator, owned);
+                            try self.globals_cells.put(self.allocator, owned, top_cell);
+                            cell = top_cell;
+                        }
+                    }
+                    if (cell == null) {
                         const initial: Value = blk: {
                             // a file required at global scope IS the global
                             // scope, so scan every global-scope frame on the
@@ -5861,12 +5893,6 @@ pub const VM = struct {
                     try self.currentFrame().vars.put(self.allocator, name, cell.?.*);
                     if (self.frame_count > 1) {
                         try self.frames[0].ref_slots.put(self.allocator, name, cell.?);
-                    }
-                    if (self.frame_count > 1) {
-                        try self.global_vars.append(self.allocator, .{
-                            .var_name = name,
-                            .frame_depth = self.frame_count,
-                        });
                     }
                 },
 
@@ -11731,7 +11757,6 @@ pub const VM = struct {
 
     fn popFrame(self: *VM) !void {
         try self.writebackStatics();
-        try self.writebackGlobals();
         try self.writebackRefs();
         self.frame_count -= 1;
         self.restoreFrameArgsSp();
