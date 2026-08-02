@@ -1,0 +1,15 @@
+{
+    "name": "zphp/doctrine-harness",
+    "description": "Doctrine ORM compatibility harness for zphp",
+    "type": "project",
+    "require": {
+        "php": ">=8.4",
+        "doctrine/orm": "3.5.3",
+        "symfony/cache": "^7.4"
+    },
+    "config": {
+        "preferred-install": "dist",
+        "sort-packages": true,
+        "optimize-autoloader": true
+    }
+}
