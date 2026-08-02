@@ -797,8 +797,9 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
     if (param_types.len > 0 or return_type.len > 0) {
         try self.type_hints.append(self.allocator, .{ .name = name, .param_types = param_types, .return_type = return_type });
     }
-    if (return_type.len > 0 and self.functions.items.len > 0) {
-        self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
+    if (self.functions.items.len > 0) {
+        self.functions.items[self.functions.items.len - 1].has_param_types = param_types.len > 0;
+        if (return_type.len > 0) self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
     }
 
     // function-level attributes
@@ -2785,8 +2786,9 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
     if (param_types.len > 0 or return_type.len > 0) {
         try self.type_hints.append(self.allocator, .{ .name = full_name, .param_types = param_types, .return_type = return_type });
     }
-    if (return_type.len > 0 and self.functions.items.len > 0) {
-        self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
+    if (self.functions.items.len > 0) {
+        self.functions.items[self.functions.items.len - 1].has_param_types = param_types.len > 0;
+        if (return_type.len > 0) self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
     }
 
     for (sub.functions.items) |f| try self.functions.append(self.allocator, f);
@@ -2971,8 +2973,9 @@ fn compileInterfaceMethodStub(self: *Compiler, owner_name: []const u8, member: A
     if (param_types.len > 0 or return_type.len > 0) {
         try self.type_hints.append(self.allocator, .{ .name = full_name, .param_types = param_types, .return_type = return_type });
     }
-    if (return_type.len > 0 and self.functions.items.len > 0) {
-        self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
+    if (self.functions.items.len > 0) {
+        self.functions.items[self.functions.items.len - 1].has_param_types = param_types.len > 0;
+        if (return_type.len > 0) self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
     }
 }
 

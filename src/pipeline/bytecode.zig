@@ -525,6 +525,7 @@ pub const ObjFunction = struct {
     // already match (so a `: int` function returning an int stays fast);
     // `other` (nullable/union/class) always bails; `none` never bails
     return_type_kind: ReturnTypeKind = .none,
+    has_param_types: bool = false,
     file_path: []const u8 = "",
     start_line: u32 = 0,
     end_line: u32 = 0,

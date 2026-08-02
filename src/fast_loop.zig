@@ -611,7 +611,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         self.sp = sp;
                         return;
                     };
-                    if (!ci_func.locals_only) {
+                    if (!ci_func.locals_only or ci_func.has_param_types) {
                         frame.ip = ip - 2;
                         self.sp = sp;
                         return;
@@ -784,7 +784,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const mc_entry = &ic.method[mc_idx];
                     if (mc_entry.key == mc_ip and mc_entry.chunk_key == mc_chunk_key and mc_entry.class_ptr == @intFromPtr(mc_obj.class_name.ptr)) {
                         if (mc_entry.func) |mc_func| {
-                            if (mc_func.locals_only and self.captures.items.len == 0) {
+                            if (mc_func.locals_only and !mc_func.has_param_types and self.captures.items.len == 0) {
                                 const mc_lc: usize = mc_func.local_count;
                                 const mc_lbase = ic.locals_sp;
                                 if (mc_lbase + mc_lc > ic.locals_cap) {
@@ -858,7 +858,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         return;
                     };
 
-                    if (!func.locals_only or self.captures.items.len > 0) {
+                    if (!func.locals_only or func.has_param_types or self.captures.items.len > 0) {
                         frame.ip = ip - 4;
                         self.sp = sp;
                         return;
