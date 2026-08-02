@@ -1,0 +1,78 @@
+<?php
+
+enum ManyCases: int
+{
+    case C0 = 0;
+    case C1 = 1;
+    case C2 = 2;
+    case C3 = 3;
+    case C4 = 4;
+    case C5 = 5;
+    case C6 = 6;
+    case C7 = 7;
+    case C8 = 8;
+    case C9 = 9;
+    case C10 = 10;
+    case C11 = 11;
+    case C12 = 12;
+    case C13 = 13;
+    case C14 = 14;
+    case C15 = 15;
+    case C16 = 16;
+    case C17 = 17;
+    case C18 = 18;
+    case C19 = 19;
+    case C20 = 20;
+    case C21 = 21;
+    case C22 = 22;
+    case C23 = 23;
+    case C24 = 24;
+    case C25 = 25;
+    case C26 = 26;
+    case C27 = 27;
+    case C28 = 28;
+    case C29 = 29;
+    case C30 = 30;
+    case C31 = 31;
+    case C32 = 32;
+    case C33 = 33;
+    case C34 = 34;
+    case C35 = 35;
+    case C36 = 36;
+    case C37 = 37;
+    case C38 = 38;
+    case C39 = 39;
+    case C40 = 40;
+    case C41 = 41;
+    case C42 = 42;
+    case C43 = 43;
+    case C44 = 44;
+    case C45 = 45;
+    case C46 = 46;
+    case C47 = 47;
+    case C48 = 48;
+    case C49 = 49;
+    case C50 = 50;
+    case C51 = 51;
+    case C52 = 52;
+    case C53 = 53;
+    case C54 = 54;
+    case C55 = 55;
+    case C56 = 56;
+    case C57 = 57;
+    case C58 = 58;
+    case C59 = 59;
+    case C60 = 60;
+    case C61 = 61;
+    case C62 = 62;
+    case C63 = 63;
+    case C64 = 64;
+    case C65 = 65;
+    case C66 = 66;
+    case C67 = 67;
+    case C68 = 68;
+    case C69 = 69;
+}
+
+echo count(ManyCases::cases()), "\n";
+echo ManyCases::from(69)->name, "\n";

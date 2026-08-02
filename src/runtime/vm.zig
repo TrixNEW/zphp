@@ -10684,14 +10684,26 @@ pub const VM = struct {
         var def = ClassDef{ .name = enum_name, .is_enum = true };
         def.backed_type = @enumFromInt(backed_type_byte);
 
-        var case_names: [64][]const u8 = undefined;
-        var case_has_value: [64]u8 = undefined;
+        const case_names = try self.allocator.alloc([]const u8, case_count);
+        defer self.allocator.free(case_names);
+        const case_has_value = try self.allocator.alloc(u8, case_count);
+        defer self.allocator.free(case_has_value);
         for (0..case_count) |ci| {
             case_names[ci] = self.currentChunk().constants.items[self.readU16()].string;
             case_has_value[ci] = self.readByte();
         }
 
-        const case_values = self.popDefaults(64, case_has_value[0..case_count]);
+        var case_values = try self.allocator.alloc(Value, case_count);
+        defer self.allocator.free(case_values);
+        var value_count: usize = 0;
+        for (case_has_value) |has_value| if (has_value == 1) {
+            value_count += 1;
+        };
+        var value_idx = value_count;
+        while (value_idx > 0) {
+            value_idx -= 1;
+            case_values[value_idx] = self.pop();
+        }
 
         var vj: usize = 0;
         for (0..case_count) |ci| {
