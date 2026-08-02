@@ -1139,6 +1139,7 @@ pub fn compileCallableRef(self: *Compiler, node: Ast.Node) Error!void {
     } else {
         try self.compileNode(node.data.lhs);
     }
+    try self.emitOp(.callable_closure);
 }
 
 pub fn compileArrayAccess(self: *Compiler, node: Ast.Node) Error!void {

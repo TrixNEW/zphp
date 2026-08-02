@@ -938,6 +938,7 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Val
         return .{ .bool = false };
     }
     if (val == .object) {
+        if (std.mem.eql(u8, val.object.class_name, "Closure")) return .{ .bool = true };
         var buf: [256]u8 = undefined;
         const full = std.fmt.bufPrint(&buf, "{s}::__invoke", .{val.object.class_name}) catch "";
         fillName(ctx, args, full);

@@ -160,6 +160,9 @@ pub const NativeContext = struct {
     pub fn invokeCallable(self: *NativeContext, callable: Value, args: []const Value) RuntimeError!Value {
         if (callable == .string) return self.vm.callByName(callable.string, args);
         if (callable == .object) {
+            if (std.mem.eql(u8, callable.object.class_name, "Closure")) {
+                return self.vm.callValueCallable(callable.object.get("__callable"), args);
+            }
             if (self.vm.hasMethod(callable.object.class_name, "__invoke")) {
                 return self.vm.callMethod(callable.object, "__invoke", args);
             }
@@ -192,6 +195,9 @@ pub const NativeContext = struct {
         if (callable == .string) return self.vm.callByNameRef(callable.string, args);
         // __invoke on an object instance
         if (callable == .object) {
+            if (std.mem.eql(u8, callable.object.class_name, "Closure")) {
+                return self.vm.callValueCallable(callable.object.get("__callable"), args);
+            }
             if (self.vm.hasMethod(callable.object.class_name, "__invoke")) {
                 return self.vm.callMethodRef(callable.object, "__invoke", args);
             }
@@ -2929,7 +2935,10 @@ pub const VM = struct {
                         var args_buf: [16]Value = undefined;
                         for (0..ac) |i| args_buf[i] = self.stack[self.sp - ac + i];
                         self.dropN(ac + 1);
-                        const result = try self.callMethod(name_val.object, "__invoke", args_buf[0..ac]);
+                        const result = if (std.mem.eql(u8, name_val.object.class_name, "Closure")) blk: {
+                            const callable = name_val.object.get("__callable");
+                            break :blk try self.callValueCallable(callable, args_buf[0..ac]);
+                        } else try self.callMethod(name_val.object, "__invoke", args_buf[0..ac]);
                         self.push(result);
                     } else if (name_val == .array) {
                         const arr = name_val.array;
@@ -5663,6 +5672,16 @@ pub const VM = struct {
                         try self.indexFunctionByChunk(func.name, &func.chunk);
                         break;
                     }
+                },
+
+                .callable_closure => {
+                    const callable = self.pop();
+                    const obj = try self.allocator.create(PhpObject);
+                    self.next_object_id += 1;
+                    obj.* = .{ .class_name = "Closure", .id = self.next_object_id };
+                    try self.objects.append(self.allocator, obj);
+                    try obj.set(self.allocator, "__callable", callable);
+                    self.push(.{ .object = obj });
                 },
 
                 .closure_bind => {
@@ -13946,6 +13965,7 @@ pub const VM = struct {
             return false;
         }
         if (val == .object) {
+            if (std.mem.eql(u8, val.object.class_name, "Closure")) return true;
             return self.hasMethod(val.object.class_name, "__invoke");
         }
         if (val == .array) {
@@ -14008,7 +14028,10 @@ pub const VM = struct {
         }
         if (std.mem.eql(u8, type_name, "Generator")) return val == .generator;
         if (std.mem.eql(u8, type_name, "Fiber")) return val == .fiber;
-        if (std.mem.eql(u8, type_name, "Closure")) return val == .string and if (val.string.len > 10) std.mem.startsWith(u8, val.string, "__closure_") else false;
+        if (std.mem.eql(u8, type_name, "Closure")) {
+            return (val == .object and std.mem.eql(u8, val.object.class_name, "Closure")) or
+                (val == .string and val.string.len > 10 and std.mem.startsWith(u8, val.string, "__closure_"));
+        }
         if (val == .object) {
             // a leading backslash in a type name (e.g. `\DOMNode`) is a fully-qualified
             // marker carried over from the source; class names in the registry never
@@ -14673,6 +14696,23 @@ pub const VM = struct {
         const msg = try std.fmt.allocPrint(self.allocator, "Too few arguments to function {s}(), {d} passed in {s} on line {d} and {s} {d} expected", .{ name, ac, caller_file, caller_line, modifier, func.required_params });
         try self.strings.append(self.allocator, msg);
         return msg;
+    }
+
+    fn callValueCallable(self: *VM, callable: Value, args: []const Value) RuntimeError!Value {
+        if (callable == .string) return self.callByName(callable.string, args);
+        if (callable == .object) return self.callMethod(callable.object, "__invoke", args);
+        if (callable == .array and callable.array.entries.items.len == 2) {
+            const target = callable.array.entries.items[0].value;
+            const method = callable.array.entries.items[1].value;
+            if (method != .string) return error.RuntimeError;
+            if (target == .object) return self.callMethod(target.object, method.string, args);
+            if (target == .string) {
+                const full = try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ target.string, method.string });
+                defer self.allocator.free(full);
+                return self.callByName(full, args);
+            }
+        }
+        return error.RuntimeError;
     }
 
     pub fn callByName(self: *VM, raw_name: []const u8, args: []const Value) RuntimeError!Value {

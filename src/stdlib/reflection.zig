@@ -2566,7 +2566,21 @@ fn rfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionFunction::__construct() expects a function name");
     const this = getThis(ctx) orelse return .null;
 
-    if (args[0] == .string) {
+    if (args[0] == .object and std.mem.eql(u8, args[0].object.class_name, "Closure")) {
+        const callable = args[0].object.get("__callable");
+        if (callable == .string) {
+            try this.set(ctx.allocator, "name", callable);
+        } else if (callable == .array and callable.array.entries.items.len == 2 and callable.array.entries.items[1].value == .string) {
+            const target = callable.array.entries.items[0].value;
+            const method = callable.array.entries.items[1].value.string;
+            const class_name = if (target == .object) target.object.class_name else if (target == .string) target.string else "";
+            const full = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ class_name, method }) catch return .null;
+            try ctx.strings.append(ctx.allocator, full);
+            try this.set(ctx.allocator, "name", .{ .string = full });
+            try this.set(ctx.allocator, "__is_method_ref", .{ .bool = true });
+            if (target == .object) try this.set(ctx.allocator, "__scope_class", .{ .string = class_name });
+        } else return throwReflection(ctx, "ReflectionFunction::__construct() expects a function name");
+    } else if (args[0] == .string) {
         const raw_name = args[0].string;
         const func_name = if (raw_name.len > 0 and raw_name[0] == '\\') raw_name[1..] else raw_name;
         if (ctx.vm.functions.get(func_name) == null and ctx.vm.native_fns.get(func_name) == null)
@@ -3053,9 +3067,16 @@ fn resolveScope(args: []const Value) VM.ClosureScope {
     return .preserve;
 }
 
+fn wrapCallableClosure(ctx: *NativeContext, callable: Value) RuntimeError!Value {
+    const obj = try ctx.createObject("Closure");
+    try obj.set(ctx.allocator, "__callable", callable);
+    return .{ .object = obj };
+}
+
 fn closureFromCallable(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return .null;
     const callable = args[0];
+    if (callable == .object and std.mem.eql(u8, callable.object.class_name, "Closure")) return callable;
     // if already a closure, return as-is
     if (callable == .string and std.mem.startsWith(u8, callable.string, "__closure_")) return callable;
     if (callable == .string) {
@@ -3067,15 +3088,15 @@ fn closureFromCallable(ctx: *NativeContext, args: []const Value) RuntimeError!Va
             if (name.len != raw.len) {
                 const owned = try ctx.allocator.dupe(u8, name);
                 try ctx.strings.append(ctx.allocator, owned);
-                return .{ .string = owned };
+                return wrapCallableClosure(ctx, .{ .string = owned });
             }
-            return callable;
+            return wrapCallableClosure(ctx, callable);
         }
         try ctx.vm.setPendingException("TypeError", "Failed to create closure from callable: function does not exist");
         return error.RuntimeError;
     }
     if (callable == .object) {
-        if (ctx.vm.hasMethod(callable.object.class_name, "__invoke")) return callable;
+        if (ctx.vm.hasMethod(callable.object.class_name, "__invoke")) return wrapCallableClosure(ctx, callable);
         try ctx.vm.setPendingException("TypeError", "Failed to create closure from callable");
         return error.RuntimeError;
     }
@@ -3087,10 +3108,10 @@ fn closureFromCallable(ctx: *NativeContext, args: []const Value) RuntimeError!Va
                 if (ctx.vm.hasMethod(entries[0].value.string, method)) {
                     const full = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ entries[0].value.string, method }) catch return .null;
                     try ctx.strings.append(ctx.allocator, full);
-                    return .{ .string = full };
+                    return wrapCallableClosure(ctx, .{ .string = full });
                 }
             } else if (entries[0].value == .object) {
-                if (ctx.vm.hasMethod(entries[0].value.object.class_name, method)) return callable;
+                if (ctx.vm.hasMethod(entries[0].value.object.class_name, method)) return wrapCallableClosure(ctx, callable);
             }
         }
         try ctx.vm.setPendingException("TypeError", "Failed to create closure from callable");
