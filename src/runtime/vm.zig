@@ -15124,11 +15124,14 @@ pub const VM = struct {
     pub fn drainPendingDestruct(self: *VM) void {
         if (self.draining_destructors) return;
         self.draining_destructors = true;
+        var deferred_stack_arrays: std.ArrayListUnmanaged(*PhpArray) = .{};
+        defer deferred_stack_arrays.deinit(self.allocator);
         defer {
             self.draining_destructors = false;
             self.pending_destruct.clearRetainingCapacity();
             self.destruct_cursor = 0;
             self.pending_array_release.clearRetainingCapacity();
+            self.pending_array_release.appendSlice(self.allocator, deferred_stack_arrays.items) catch {};
             self.array_release_cursor = 0;
             self.pending_gen_release.clearRetainingCapacity();
             self.gen_release_cursor = 0;
@@ -15184,6 +15187,21 @@ pub const VM = struct {
                 // see (raw cell.* write, no retain) - never free an array
                 // reachable from one
                 if (self.valueInGlobalsCell(.{ .array = arr })) continue;
+                // Operand-stack array slots are non-counted roots. A returned
+                // array can reach refcount zero while it waits for later call
+                // arguments to be evaluated, so keep its elements alive until
+                // the slot is consumed or a durable holder retains it.
+                var stack_root = false;
+                for (self.stack[0..self.sp]) |value| {
+                    if (value == .array and value.array == arr) {
+                        stack_root = true;
+                        break;
+                    }
+                }
+                if (stack_root) {
+                    deferred_stack_arrays.append(self.allocator, arr) catch {};
+                    continue;
+                }
                 // mark before walking so a cyclic array (a self-reference
                 // reachable through unserialize R:N) is not re-queued
                 arr.elements_released = true;
