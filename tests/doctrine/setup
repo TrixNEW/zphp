@@ -4,4 +4,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 command -v php >/dev/null || { echo "php not found in PATH"; exit 1; }
 command -v composer >/dev/null || { echo "composer not found in PATH"; exit 1; }
 cd "$SCRIPT_DIR/app"
-composer install --no-interaction --no-progress
+composer install --no-interaction --no-progress --prefer-dist &
+composer_pid=$!
+(
+    sleep 300
+    kill -TERM "$composer_pid" 2>/dev/null || true
+) &
+watchdog_pid=$!
+set +e
+wait "$composer_pid"
+status=$?
+set -e
+kill "$watchdog_pid" 2>/dev/null || true
+wait "$watchdog_pid" 2>/dev/null || true
+exit "$status"
