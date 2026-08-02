@@ -968,6 +968,10 @@ pub const VM = struct {
         // at top level must be visible to `global` even before the require
         // returns. function frames leave this empty (they use func.slot_names)
         slot_names: []const []const u8 = &.{},
+        // Includes execute in their caller's variable scope. The execution
+        // frame remains separate for bytecode and return handling, while this
+        // index identifies the scope whose bindings receive include changes.
+        include_parent: ?usize = null,
     };
 
     pub fn init(allocator: Allocator) RuntimeError!VM {
@@ -4860,7 +4864,24 @@ pub const VM = struct {
                     // array (a separate refcounted holder) and the global cell
                     // by setLocalGlobal - mirror the removal so the object's
                     // last reference is dropped now, not at the shutdown sweep
-                    if (!u_is_ref and uframe.func == null and name.len > 1 and name[0] == '$') {
+                    if (uframe.include_parent) |parent_idx| {
+                        const parent = &self.frames[parent_idx];
+                        if (parent.vars.get(name)) |existing| self.releaseValue(existing);
+                        _ = parent.vars.remove(name);
+                        if (parent.ref_slots.get(name)) |cell| {
+                            _ = parent.ref_slots.remove(name);
+                            self.revertUncapturedCell(cell);
+                        }
+                        const parent_sn = if (parent.func) |f| f.slot_names else parent.slot_names;
+                        for (parent_sn, 0..) |slot_name, si| {
+                            if (std.mem.eql(u8, slot_name, name) and si < parent.locals.len) {
+                                self.releaseValue(parent.locals[si]);
+                                parent.locals[si] = .null;
+                                break;
+                            }
+                        }
+                    }
+                    if (!u_is_ref and uframe.func == null and uframe.include_parent == null and name.len > 1 and name[0] == '$') {
                         if (self.globals_array) |ga| {
                             const gkey = PhpArray.Key{ .string = name[1..] };
                             // the $GLOBALS mirror is non-owning (setLocalGlobal
@@ -5175,6 +5196,7 @@ pub const VM = struct {
                     } else {
                         try self.setLocalGlobal(slot, val, frame);
                     }
+                    try self.syncIncludeLocal(frame, slot, val);
                 },
                 .set_local => {
                     const slot = self.readU16();
@@ -5217,6 +5239,7 @@ pub const VM = struct {
                     } else {
                         try self.setLocalGlobal(slot, val, frame);
                     }
+                    try self.syncIncludeLocal(frame, slot, val);
                 },
                 .inc_local => {
                     const slot = self.readU16();
@@ -5885,21 +5908,43 @@ pub const VM = struct {
                                     @memset(req_locals, .null);
                                 }
                                 var inherited_vars: @TypeOf(self.frames[0].vars) = .{};
+                                var inherited_refs: @TypeOf(self.frames[0].ref_slots) = .{};
+                                const caller_idx = self.frame_count - 1;
                                 const caller = self.currentFrame();
+                                const caller_sn = if (caller.func) |func| func.slot_names else caller.slot_names;
+                                for (r.slot_names, 0..) |name, ri| {
+                                    if (name.len == 0 or ri >= req_locals.len) continue;
+                                    if (caller.ref_slots.get(name)) |cell| {
+                                        req_locals[ri] = cell.*;
+                                        continue;
+                                    }
+                                    var found = false;
+                                    for (caller_sn, 0..) |caller_name, ci| {
+                                        if (std.mem.eql(u8, caller_name, name) and ci < caller.locals.len) {
+                                            req_locals[ri] = caller.locals[ci];
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!found) {
+                                        if (caller.vars.get(name)) |value| req_locals[ri] = value;
+                                    }
+                                }
                                 if (caller.vars.count() > 0) {
                                     var vit = caller.vars.iterator();
                                     while (vit.next()) |entry| {
                                         try inherited_vars.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
                                     }
                                 }
-                                const caller_sn = if (caller.func) |func| func.slot_names else self.global_slot_names;
-                                for (caller_sn, 0..) |csn, ci| {
-                                    if (ci < caller.locals.len and csn.len > 0) {
-                                        const cval = caller.locals[ci];
-                                        if (cval != .null and !inherited_vars.contains(csn)) {
-                                            try inherited_vars.put(self.allocator, csn, cval);
-                                        }
+                                if (caller.ref_slots.count() > 0) {
+                                    var rit = caller.ref_slots.iterator();
+                                    while (rit.next()) |entry| {
+                                        try inherited_refs.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
                                     }
+                                }
+                                for (caller_sn, 0..) |name, ci| {
+                                    if (name.len == 0 or ci >= caller.locals.len or inherited_vars.contains(name)) continue;
+                                    try inherited_vars.put(self.allocator, name, caller.locals[ci]);
                                 }
                                 const saved_slot_names = self.global_slot_names;
                                 self.global_slot_names = r.slot_names;
@@ -5910,8 +5955,10 @@ pub const VM = struct {
                                     .ip = 0,
                                     .vars = inherited_vars,
                                     .locals = req_locals,
+                                    .ref_slots = inherited_refs,
                                     .script_path = r.file_path,
                                     .slot_names = r.slot_names,
+                                    .include_parent = caller_idx,
                                 };
                                 self.frames[self.frame_count].entry_sp = self.sp;
                                 self.frame_count += 1;
@@ -5921,6 +5968,7 @@ pub const VM = struct {
                                 self.require_merge_depth = self.frame_count;
                                 self.runUntilFrame(return_frame) catch {
                                     self.require_merge_depth = saved_merge_depth;
+                                    try self.mergeIncludeScope(return_frame, caller_idx, r.slot_names);
                                     while (self.frame_count > return_frame) {
                                         self.frame_count -= 1;
                                         self.deinitFrameSlot(self.frame_count);
@@ -5955,93 +6003,7 @@ pub const VM = struct {
                                     self.push(.{ .bool = false });
                                     continue;
                                 };
-                                // merge top-level variable assignments from the
-                                // included file back into the caller's scope.
-                                // PHP semantics: vars defined at the top level
-                                // of an included script become locals/globals
-                                // in the requiring scope. without this, files
-                                // that rely on `$x = ...; require 'helper.php';`
-                                // patterns (WordPress, legacy frameworks) fail
-                                // to pick up state set by the include
-                                // the include frame lives at return_frame (its slot
-                                // when pushed). popFrame leaves it intact when popping
-                                // back to require_merge_depth, so we can read its
-                                // vars/locals here even after an explicit `return`
-                                const include_frame_idx = return_frame;
-                                const include_frame = &self.frames[include_frame_idx];
-                                const include_slot_names = r.slot_names;
-                                // the merge transfers each top-level var from the
-                                // include frame to the caller. ownership moves: the
-                                // caller retains its new copy, and the deinitFrameSlot
-                                // below releases the include frame's hold. without the
-                                // retain the caller would hold an uncounted object
-                                // reference and a later drain would destruct it
-                                // (WordPress's $wpdb dies the instant boot's require
-                                // unwinds back to the top-level script)
-                                // 1) merge slot-backed locals
-                                for (include_slot_names, 0..) |name, si| {
-                                    if (name.len == 0) continue;
-                                    if (si >= include_frame.locals.len) continue;
-                                    const v = include_frame.locals[si];
-                                    if (v == .null) continue;
-                                    // find a matching slot in the caller
-                                    var caller_slot: ?usize = null;
-                                    for (caller_sn, 0..) |csn, ci| {
-                                        if (std.mem.eql(u8, csn, name)) {
-                                            caller_slot = ci;
-                                            break;
-                                        }
-                                    }
-                                    if (caller_slot) |cs| {
-                                        if (cs < caller.locals.len) {
-                                            retainValue(v);
-                                            self.releaseValue(caller.locals[cs]);
-                                            caller.locals[cs] = v;
-                                        }
-                                    } else {
-                                        retainValue(v);
-                                        if (try caller.vars.fetchPut(self.allocator, name, v)) |old| {
-                                            self.releaseValue(old.value);
-                                        }
-                                    }
-                                }
-                                // 2) merge dynamically-stored vars (skip names already
-                                // handled by the slot-backed pass above)
-                                var iter_vars = include_frame.vars.iterator();
-                                while (iter_vars.next()) |entry| {
-                                    const name = entry.key_ptr.*;
-                                    if (name.len == 0) continue;
-                                    // skip framework-internal keys (start with __)
-                                    if (name.len >= 3 and name[0] == '$' and name[1] == '_' and name[2] == '_') continue;
-                                    var is_slot_backed = false;
-                                    for (include_slot_names) |isn| {
-                                        if (isn.len > 0 and std.mem.eql(u8, isn, name)) {
-                                            is_slot_backed = true;
-                                            break;
-                                        }
-                                    }
-                                    if (is_slot_backed) continue;
-                                    const v = entry.value_ptr.*;
-                                    var caller_slot: ?usize = null;
-                                    for (caller_sn, 0..) |csn, ci| {
-                                        if (std.mem.eql(u8, csn, name)) {
-                                            caller_slot = ci;
-                                            break;
-                                        }
-                                    }
-                                    if (caller_slot) |cs| {
-                                        if (cs < caller.locals.len) {
-                                            retainValue(v);
-                                            self.releaseValue(caller.locals[cs]);
-                                            caller.locals[cs] = v;
-                                        }
-                                    } else {
-                                        retainValue(v);
-                                        if (try caller.vars.fetchPut(self.allocator, name, v)) |old| {
-                                            self.releaseValue(old.value);
-                                        }
-                                    }
-                                }
+                                try self.mergeIncludeScope(return_frame, caller_idx, r.slot_names);
                                 while (self.frame_count > return_frame) {
                                     self.frame_count -= 1;
                                     self.deinitFrameSlot(self.frame_count);
@@ -11592,6 +11554,119 @@ pub const VM = struct {
             }
         }
         return locals;
+    }
+
+    fn syncIncludeLocal(self: *VM, frame: *CallFrame, slot: u16, value: Value) RuntimeError!void {
+        const parent_idx = frame.include_parent orelse return;
+        if (slot >= frame.slot_names.len) return;
+        const name = frame.slot_names[slot];
+        if (name.len == 0) return;
+        const parent = &self.frames[parent_idx];
+        if (parent.ref_slots.get(name)) |cell| {
+            cell.* = value;
+            try self.propagateCellWrite(cell, value);
+        }
+        const parent_sn = if (parent.func) |func| func.slot_names else parent.slot_names;
+        var matching_slot: ?usize = null;
+        for (parent_sn, 0..) |parent_name, parent_slot| {
+            if (std.mem.eql(u8, parent_name, name) and parent_slot < parent.locals.len) {
+                matching_slot = parent_slot;
+                break;
+            }
+        }
+        const vars_owned_values = parent.vars.count() > 0;
+        retainValue(value);
+        if (try parent.vars.fetchPut(self.allocator, name, value)) |old| {
+            self.releaseValue(old.value);
+        } else if (!vars_owned_values) {
+            if (matching_slot) |parent_slot| self.releaseValue(parent.locals[parent_slot]);
+        }
+        if (matching_slot) |parent_slot| parent.locals[parent_slot] = value;
+    }
+
+    fn mergeIncludeScope(self: *VM, include_frame_idx: usize, caller_idx: usize, include_slot_names: []const []const u8) RuntimeError!void {
+        const include_frame = &self.frames[include_frame_idx];
+        const caller = &self.frames[caller_idx];
+        const caller_sn = if (caller.func) |func| func.slot_names else caller.slot_names;
+        for (include_slot_names, 0..) |name, si| {
+            if (name.len == 0 or si >= include_frame.locals.len) continue;
+            const include_cell = include_frame.ref_slots.get(name);
+            const stored = include_frame.vars.get(name);
+            if (include_cell == null and stored == null) {
+                if (caller.ref_slots.get(name)) |cell| {
+                    _ = caller.ref_slots.remove(name);
+                    self.revertUncapturedCell(cell);
+                }
+                if (caller.vars.fetchRemove(name)) |old| self.releaseValue(old.value);
+                for (caller_sn, 0..) |caller_name, ci| {
+                    if (std.mem.eql(u8, caller_name, name) and ci < caller.locals.len) {
+                        self.releaseValue(caller.locals[ci]);
+                        caller.locals[ci] = .null;
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            const value = if (include_cell) |cell| cell.* else stored.?;
+            if (include_cell) |cell| {
+                try caller.ref_slots.put(self.allocator, name, cell);
+                if (include_frame.ref_owner != 0) {
+                    const owner = try self.ensureRefOwner(caller);
+                    try (try self.refIndex()).transferCell(self.allocator, include_frame.ref_owner, owner, cell);
+                }
+            } else if (caller.ref_slots.get(name)) |cell| {
+                cell.* = value;
+                try self.propagateCellWrite(cell, value);
+            }
+
+            var caller_slot: ?usize = null;
+            for (caller_sn, 0..) |caller_name, ci| {
+                if (std.mem.eql(u8, caller_name, name)) {
+                    caller_slot = ci;
+                    break;
+                }
+            }
+            retainValue(value);
+            if (caller_slot) |ci| {
+                if (ci < caller.locals.len) {
+                    self.releaseValue(caller.locals[ci]);
+                    caller.locals[ci] = value;
+                }
+            }
+            if (try caller.vars.fetchPut(self.allocator, name, value)) |old| {
+                self.releaseValue(old.value);
+            }
+        }
+
+        var iter_vars = include_frame.vars.iterator();
+        while (iter_vars.next()) |entry| {
+            const name = entry.key_ptr.*;
+            if (name.len == 0) continue;
+            var is_slot_backed = false;
+            for (include_slot_names) |slot_name| {
+                if (std.mem.eql(u8, slot_name, name)) {
+                    is_slot_backed = true;
+                    break;
+                }
+            }
+            if (is_slot_backed) continue;
+            const value = if (include_frame.ref_slots.get(name)) |cell| cell.* else entry.value_ptr.*;
+            if (include_frame.ref_slots.get(name)) |cell| {
+                try caller.ref_slots.put(self.allocator, name, cell);
+                if (include_frame.ref_owner != 0) {
+                    const owner = try self.ensureRefOwner(caller);
+                    try (try self.refIndex()).transferCell(self.allocator, include_frame.ref_owner, owner, cell);
+                }
+            } else if (caller.ref_slots.get(name)) |cell| {
+                cell.* = value;
+                try self.propagateCellWrite(cell, value);
+            }
+            retainValue(value);
+            if (try caller.vars.fetchPut(self.allocator, name, value)) |old| {
+                self.releaseValue(old.value);
+            }
+        }
     }
 
     fn popFrame(self: *VM) !void {
