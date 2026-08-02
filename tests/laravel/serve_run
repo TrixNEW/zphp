@@ -47,6 +47,10 @@ rm -f "$SEED"
 
 cd "$SCRIPT_DIR"
 
+# Serve mode needs persistence across worker processes for the CSRF round trip;
+# keep CLI and standalone harnesses on the deterministic array session driver.
+export SESSION_DRIVER=file
+
 # router for php -S so it dispatches like Laravel behind a front controller:
 # existing files in public/ served directly, everything else -> public/index.php
 ROUTER="$APP_DIR/public/_serve_router.php"
