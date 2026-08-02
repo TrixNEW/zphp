@@ -137,7 +137,7 @@ jobs:
 
   doctrine:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: mlugg/setup-zig@v2
