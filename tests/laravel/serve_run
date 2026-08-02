@@ -70,14 +70,14 @@ trap cleanup EXIT
 
 "$ZPHP" serve "$APP_DIR/public/index.php" --port "$ZPHP_PORT" --workers 2 >/tmp/zphp_laravel_serve.log 2>&1 &
 ZPHP_PID=$!
-php -S "localhost:$PHP_PORT" -t "$APP_DIR/public" "$ROUTER" >/tmp/php_laravel_serve.log 2>&1 &
+php -S "127.0.0.1:$PHP_PORT" -t "$APP_DIR/public" "$ROUTER" >/tmp/php_laravel_serve.log 2>&1 &
 PHP_PID=$!
 
 # wait for both servers to accept
 for i in $(seq 1 60); do
-    z=$(curl -s -m 2 --connect-timeout 1 -o /dev/null -w '%{http_code}' "http://localhost:$ZPHP_PORT/" 2>/dev/null || echo 000)
-    p=$(curl -s -m 2 --connect-timeout 1 -o /dev/null -w '%{http_code}' "http://localhost:$PHP_PORT/" 2>/dev/null || echo 000)
-    if [ "$z" != "000" ] && [ "$p" != "000" ]; then break; fi
+    z=$(curl -s -m 2 --connect-timeout 1 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$ZPHP_PORT/" 2>/dev/null || true)
+    p=$(curl -s -m 2 --connect-timeout 1 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PHP_PORT/" 2>/dev/null || true)
+    if echo "$z" | grep -Eq '^[0-9]{3}$' && [ "$z" != "000" ] && echo "$p" | grep -Eq '^[0-9]{3}$' && [ "$p" != "000" ]; then break; fi
     sleep 0.5
 done
 
@@ -92,9 +92,9 @@ TMO=60
 check_status() {
     local name="$1" path="$2"
     local zc pc
-    zc=$(curl -s -m "$TMO" -o /dev/null -w '%{http_code}' "http://localhost:$ZPHP_PORT$path" 2>&1 || echo ERR)
-    pc=$(curl -s -m "$TMO" -o /dev/null -w '%{http_code}' "http://localhost:$PHP_PORT$path" 2>&1 || echo ERR)
-    if [ "$zc" = "$pc" ]; then
+    zc=$(curl -s -m "$TMO" -o /dev/null -w '%{http_code}' "http://127.0.0.1:$ZPHP_PORT$path" 2>&1 || echo ERR)
+    pc=$(curl -s -m "$TMO" -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PHP_PORT$path" 2>&1 || echo ERR)
+    if [ "$zc" = "$pc" ] && echo "$zc" | grep -Eq '^[0-9]{3}$'; then
         passed=$((passed + 1)); echo "  pass  $name (status=$zc)"
     else
         failed=$((failed + 1)); echo "  FAIL  $name (zphp=$zc php=$pc)"
@@ -105,7 +105,7 @@ check_status() {
 check_body_contains() {
     local name="$1" path="$2" needle="$3"
     local zb
-    zb=$(curl -s -m "$TMO" "http://localhost:$ZPHP_PORT$path" 2>&1)
+    zb=$(curl -s -m "$TMO" "http://127.0.0.1:$ZPHP_PORT$path" 2>&1)
     if echo "$zb" | grep -qF "$needle"; then
         passed=$((passed + 1)); echo "  pass  $name (contains '$needle')"
     else
@@ -131,10 +131,29 @@ check_body_contains "posts-row-2"     "/posts"     "Second Post"
 check_body_contains "post-show-body"  "/posts/1"   "Hello from the database"
 check_body_contains "middleware-text" "/middleware-test" "middleware works"
 
-# TODO (tracked in CLAUDE.md roadmap), not yet asserted here:
-#  - POST /validate, /posts: php returns 419 (CSRF) without a token; a proper
-#    test must GET a token from the session first. session driver is `array`
-#    so CSRF can't round-trip across requests anyway - needs a token-fetch step.
+echo
+echo "=== persistent-session CSRF POST round trip ==="
+TMP_CSRF=$(mktemp -d "${TMPDIR:-/tmp}/zphp-csrf.XXXXXX")
+csrf_roundtrip() {
+    local name="$1" base="$2" jar="$3"
+    local token_file="$TMP_CSRF/$name.token" post_file="$TMP_CSRF/$name.post"
+    local get_code post_code token body
+    get_code=$(curl -sS -m "$TMO" -c "$jar" -o "$token_file" -w '%{http_code}' "$base/csrf-roundtrip") || return 1
+    token=$(cat "$token_file")
+    [ "$get_code" = "200" ] && [ -n "$token" ] || return 1
+    post_code=$(curl -sS -m "$TMO" -b "$jar" -c "$jar" -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode "_token=$token" -o "$post_file" -w '%{http_code}' "$base/csrf-roundtrip") || return 1
+    body=$(cat "$post_file")
+    printf '%s|%s|%s\n' "$get_code" "$post_code" "$body"
+}
+zcsrf=$(csrf_roundtrip zphp "http://127.0.0.1:$ZPHP_PORT" "$TMP_CSRF/zphp.cookies" || echo ERR)
+pcsrf=$(csrf_roundtrip php "http://127.0.0.1:$PHP_PORT" "$TMP_CSRF/php.cookies" || echo ERR)
+rm -rf "$TMP_CSRF"
+if [ "$zcsrf" = "200|200|csrf-ok" ] && [ "$zcsrf" = "$pcsrf" ]; then
+    passed=$((passed + 1)); echo "  pass  csrf-roundtrip ($zcsrf)"
+else
+    failed=$((failed + 1)); echo "  FAIL  csrf-roundtrip (zphp=$zcsrf php=$pcsrf)"
+    failures="$failures\ncsrf-roundtrip: zphp=$zcsrf php=$pcsrf"
+fi
 
 echo
 echo "$passed passed, $failed failed"

@@ -20,6 +20,9 @@ Route::get('/middleware-test', function () {
     return 'middleware works';
 })->middleware(AddTestHeader::class);
 
+Route::get('/csrf-roundtrip', fn () => csrf_token());
+Route::post('/csrf-roundtrip', fn () => 'csrf-ok');
+
 Route::get('/error-test', function () {
     throw new \RuntimeException('intentional error');
 });
