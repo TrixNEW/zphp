@@ -25,10 +25,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 for _ in $(seq 1 100); do
-    curl -sk --http2 "https://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break
+    curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break
     sleep 0.1
 done
-curl -sk --http2 "https://127.0.0.1:$PORT/health" >/dev/null
+curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null
 
 rss_kb() {
     ps -o rss= -p "$PID" | awk '{print $1 + 0}'
@@ -49,6 +49,7 @@ ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
 s = ctx.wrap_socket(raw, server_hostname="localhost")
+s.settimeout(5)
 key = base64.b64encode(os.urandom(16)).decode()
 s.sendall((f"GET / HTTP/1.1\r\nHost: localhost:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
 headers = b""
@@ -80,7 +81,7 @@ while [ "$round" -le "$ROUNDS" ]; do
     i=0
     request_pids=""
     while [ "$i" -lt "$REQUESTS" ]; do
-        curl -sk --http2 "https://127.0.0.1:$PORT/health" >/dev/null &
+        curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null &
         request_pids="$request_pids $!"
         i=$((i + 1))
     done
@@ -94,7 +95,7 @@ now = time.time() + 2
 os.utime(path, (now, now))
 PY
         sleep 2
-        curl -sk --http2 "https://127.0.0.1:$PORT/health" >/dev/null
+        curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null
     fi
     stop=$(python3 -c 'import time; print(time.monotonic_ns())')
     elapsed=$(( (stop - start) / 1000000 ))

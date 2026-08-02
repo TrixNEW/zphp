@@ -48,7 +48,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - run: zig build
       - run: ./tests/serve_test
-      - run: ./tests/serve_stress
+      - run: timeout 120 ./tests/serve_stress
 
   test-runner:
     runs-on: ubuntu-latest
