@@ -216,6 +216,8 @@ pub const OpCode = enum(u8) {
     // assignments to $dst propagate to obj->{prop_name_string}, installs the
     // cell in ref_slots[dst]
     make_var_prop_ref_dyn, // u16: dst name const
+    prop_bind_ref, // u16: property name, u16: source variable name
+    prop_bind_ref_dyn, // u16: source variable name; pop property name and object
 
     // `return $r;` inside a `&function`-declared function: reads the cell
     // ref_slots[name] (set up by a preceding make_var_*_ref), stashes it in
@@ -308,13 +310,14 @@ pub const OpCode = enum(u8) {
             .get_static_prop_dynamic,
             .ensure_array_local, .ensure_array_var, .ensure_array_prop, .cow_separate_local,
             .make_var_array_elem_ref, .break_var_ref,
-            .make_var_prop_ref_dyn,
+            .make_var_prop_ref_dyn, .prop_bind_ref, .prop_bind_ref_dyn,
             .return_ref, .bind_ref_from_return,
             .array_set_local, .array_set_local_ref,
             .array_bind_ref, .array_push_bind_ref, .foreach_ref_bind,
             .declare_fn,
             => 3,
-            .call, .call_spread, .new_obj, .method_call, .method_call_spread, .static_call_dyn_method, .make_var_ref, .make_var_prop_ref => 4,
+            .call, .call_spread, .new_obj, .method_call, .method_call_spread, .static_call_dyn_method => 4,
+            .make_var_ref, .make_var_prop_ref => 5,
             .get_static_prop, .get_class_const, .set_prop_default, .set_static_prop, .get_static, .set_static,
             .static_call_spread, .add_local_to_local, .sub_local_to_local, .mul_local_to_local,
             .ensure_array_static_prop,

@@ -246,6 +246,24 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
     }
 
     if (target.tag == .property_access) {
+        if (op_tag == .equal and self.ast.nodes[node.data.rhs].tag == .ref_target) {
+            const ref_inner = self.ast.nodes[self.ast.nodes[node.data.rhs].data.lhs];
+            if (ref_inner.tag == .variable or ref_inner.tag == .identifier) {
+                const source_idx = try self.addConstant(.{ .string = self.ast.tokenSlice(ref_inner.main_token) });
+                try self.compileNode(target.data.lhs);
+                if (self.isDynamicProp(target)) {
+                    try self.compileNode(target.data.rhs);
+                    try self.emitOp(.prop_bind_ref_dyn);
+                } else {
+                    const prop_idx = try self.addConstant(.{ .string = self.propName(target) });
+                    try self.emitOp(.prop_bind_ref);
+                    try self.emitU16(prop_idx);
+                }
+                try self.emitU16(source_idx);
+                try self.compileNode(self.ast.nodes[node.data.rhs].data.lhs);
+                return;
+            }
+        }
         if (self.isDynamicProp(target)) {
             try self.compileNode(target.data.lhs);
             if (op_tag != .equal) {

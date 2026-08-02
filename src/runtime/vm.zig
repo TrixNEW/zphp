@@ -4803,6 +4803,26 @@ pub const VM = struct {
                     }
                 },
 
+                .prop_bind_ref, .prop_bind_ref_dyn => |bind_op| {
+                    const prop_name = if (bind_op == .prop_bind_ref) blk: {
+                        const prop_idx = self.readU16();
+                        break :blk self.currentChunk().constants.items[prop_idx].string;
+                    } else blk: {
+                        const name = self.pop();
+                        break :blk (try self.coerceToStringValue(name)).string;
+                    };
+                    const source_idx = self.readU16();
+                    const source_name = self.currentChunk().constants.items[source_idx].string;
+                    const obj_val = self.pop();
+                    if (obj_val == .object) {
+                        const frame = self.currentFrame();
+                        const cell = try self.getOrCreateVarCell(frame, source_name);
+                        try obj_val.object.set(self.allocator, prop_name, cell.*);
+                        try self.regRefObject(try self.persistentRefOwner(), cell, obj_val.object, prop_name);
+                        self.obj_ref_active = true;
+                    }
+                },
+
                 .make_var_prop_ref => {
                     const dst_idx = self.readU16();
                     const prop_idx = self.readU16();
@@ -11868,6 +11888,7 @@ pub const VM = struct {
             retainValue(val);
             cell.* = val;
             self.releaseValue(old);
+            self.propagateCellWrite(cell, val) catch {};
         }
     }
 
