@@ -14216,7 +14216,7 @@ pub const VM = struct {
         return self.checkSingleType(val, s[start..]);
     }
 
-    noinline fn checkParamTypes(self: *VM, name: []const u8, arg_count: u8) RuntimeError!bool {
+    pub noinline fn checkParamTypes(self: *VM, name: []const u8, arg_count: u8) RuntimeError!bool {
         if (g_type_info.count() == 0) return false;
         const ti = g_type_info.get(name) orelse return false;
         if (ti.param_types.len == 0) return false;
