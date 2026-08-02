@@ -821,7 +821,7 @@ pub fn compileCall(self: *Compiler, node: Ast.Node) Error!void {
                         try self.compileNode(arg.data.rhs);
                         try self.emitOp(.isset_prop_dynamic);
                     } else {
-                        try self.compileNode(arg.data.lhs);
+                        try compileCoalesceFetch(self, arg.data.lhs);
                         const prop_name = self.propName(arg);
                         const prop_idx = try self.addConstant(.{ .string = prop_name });
                         try self.emitOp(.isset_prop);
