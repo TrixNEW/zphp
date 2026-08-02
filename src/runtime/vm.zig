@@ -142,10 +142,7 @@ pub const NativeContext = struct {
                 }
             },
             .chained_prop => |cp| {
-                const target = vm.resolveChainedProp(cp);
-                if (target) |t| {
-                    t.obj.set(vm.allocator, t.prop, value) catch return;
-                }
+                cp.object.set(vm.allocator, cp.prop_name, value) catch return;
             },
             .prop_array_elem => |pae| {
                 const obj_val = vm.resolveCallerVar(pae.var_name, pae.is_local, pae.slot);
@@ -245,14 +242,8 @@ const RefSource = union(enum) {
         prop_name: []const u8,
     },
     chained_prop: struct {
-        var_name: []const u8,
-        is_local: bool,
-        slot: u16,
-        // chains deeper than this length silently skip the writeback. real
-        // code (linked lists, trees, AST walkers) easily exceeds 4 so the
-        // bound is set high enough to cover practical cases without making
-        // the RefSource union enormous
-        props: [16]?[]const u8,
+        object: *PhpObject,
+        prop_name: []const u8,
     },
     prop_array_elem: struct {
         var_name: []const u8,
@@ -12294,94 +12285,53 @@ pub const VM = struct {
                         }
                     }
                 } else if (code[last_ip] == @intFromEnum(OpCode.get_prop) or code[last_ip] == @intFromEnum(OpCode.get_prop_dynamic)) {
-                    var var_name: ?[]const u8 = null;
-                    var is_local = false;
-                    var slot: u16 = 0;
+                    var current: Value = .null;
                     if (code[first_ip] == @intFromEnum(OpCode.get_var)) {
                         const ci = (@as(u16, code[first_ip + 1]) << 8) | code[first_ip + 2];
-                        if (ci < chunk.constants.items.len) var_name = chunk.constants.items[ci].string;
+                        if (ci < chunk.constants.items.len and chunk.constants.items[ci] == .string) {
+                            current = self.resolveCallerVar(chunk.constants.items[ci].string, false, 0);
+                        }
                     } else if (code[first_ip] == @intFromEnum(OpCode.get_local)) {
-                        slot = (@as(u16, code[first_ip + 1]) << 8) | code[first_ip + 2];
-                        const sn = if (caller.func) |func| func.slot_names else self.global_slot_names;
-                        if (slot < sn.len) {
-                            var_name = sn[slot];
-                            is_local = true;
-                        }
+                        const root_slot = (@as(u16, code[first_ip + 1]) << 8) | code[first_ip + 2];
+                        if (root_slot < caller.locals.len) current = caller.locals[root_slot];
                     }
-                    if (var_name) |vn| {
-                        var props: [16]?[]const u8 = @splat(null);
-                        var valid = true;
-                        var prop_count: usize = 0;
-                        const is_dynamic = code[last_ip] == @intFromEnum(OpCode.get_prop_dynamic);
-                        const chain_end = if (is_dynamic) arg_instr_count - 2 else arg_instr_count - 1;
-                        for (1..chain_end) |pi| {
-                            const pip = instrs[i + pi];
-                            if (code[pip] == @intFromEnum(OpCode.get_prop)) {
-                                const pci = (@as(u16, code[pip + 1]) << 8) | code[pip + 2];
-                                if (pci < chunk.constants.items.len and chunk.constants.items[pci] == .string) {
-                                    if (prop_count < props.len) {
-                                        props[prop_count] = chunk.constants.items[pci].string;
-                                        prop_count += 1;
-                                    }
-                                } else {
-                                    valid = false;
-                                    break;
-                                }
-                            } else {
-                                valid = false;
-                                break;
+
+                    const dynamic_final = code[last_ip] == @intFromEnum(OpCode.get_prop_dynamic);
+                    const intermediate_end = if (dynamic_final) arg_instr_count - 2 else arg_instr_count - 1;
+                    var prop_index: usize = 1;
+                    while (current == .object and prop_index < intermediate_end) : (prop_index += 1) {
+                        const prop_ip = instrs[i + prop_index];
+                        if (code[prop_ip] != @intFromEnum(OpCode.get_prop)) break;
+                        const prop_ci = (@as(u16, code[prop_ip + 1]) << 8) | code[prop_ip + 2];
+                        if (prop_ci >= chunk.constants.items.len or chunk.constants.items[prop_ci] != .string) break;
+                        current = current.object.get(chunk.constants.items[prop_ci].string);
+                    }
+                    if (current == .object and prop_index == intermediate_end) {
+                        var final_name: ?[]const u8 = null;
+                        if (!dynamic_final) {
+                            const prop_ci = (@as(u16, code[last_ip + 1]) << 8) | code[last_ip + 2];
+                            if (prop_ci < chunk.constants.items.len and chunk.constants.items[prop_ci] == .string) {
+                                final_name = chunk.constants.items[prop_ci].string;
                             }
-                        }
-                        if (valid and is_dynamic) {
+                        } else {
                             const name_ip = instrs[i + arg_instr_count - 2];
-                            var dyn_name: ?[]const u8 = null;
                             if (code[name_ip] == @intFromEnum(OpCode.get_var)) {
-                                const nci = (@as(u16, code[name_ip + 1]) << 8) | code[name_ip + 2];
-                                if (nci < chunk.constants.items.len and chunk.constants.items[nci] == .string) {
-                                    const kname = chunk.constants.items[nci].string;
-                                    const resolved = caller.vars.get(kname) orelse blk: {
-                                        if (caller.locals.len > 0) {
-                                            const sn = if (caller.func) |func| func.slot_names else self.global_slot_names;
-                                            for (sn, 0..) |sn_name, si| {
-                                                if (std.mem.eql(u8, sn_name, kname)) {
-                                                    if (si < caller.locals.len) break :blk caller.locals[si];
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        break :blk null;
-                                    };
-                                    if (resolved) |rv| {
-                                        if (rv == .string) dyn_name = rv.string;
-                                    }
+                                const name_ci = (@as(u16, code[name_ip + 1]) << 8) | code[name_ip + 2];
+                                if (name_ci < chunk.constants.items.len and chunk.constants.items[name_ci] == .string) {
+                                    const name_value = self.resolveCallerVar(chunk.constants.items[name_ci].string, false, 0);
+                                    if (name_value == .string) final_name = name_value.string;
                                 }
                             } else if (code[name_ip] == @intFromEnum(OpCode.get_local)) {
-                                const ns = (@as(u16, code[name_ip + 1]) << 8) | code[name_ip + 2];
-                                if (ns < caller.locals.len) {
-                                    if (caller.locals[ns] == .string) dyn_name = caller.locals[ns].string;
+                                const name_slot = (@as(u16, code[name_ip + 1]) << 8) | code[name_ip + 2];
+                                if (name_slot < caller.locals.len and caller.locals[name_slot] == .string) {
+                                    final_name = caller.locals[name_slot].string;
                                 }
                             }
-                            if (dyn_name) |dn| {
-                                if (prop_count < props.len) {
-                                    props[prop_count] = dn;
-                                    prop_count += 1;
-                                }
-                            } else valid = false;
-                        } else if (valid) {
-                            const pci = (@as(u16, code[last_ip + 1]) << 8) | code[last_ip + 2];
-                            if (pci < chunk.constants.items.len and chunk.constants.items[pci] == .string) {
-                                if (prop_count < props.len) {
-                                    props[prop_count] = chunk.constants.items[pci].string;
-                                    prop_count += 1;
-                                }
-                            } else valid = false;
                         }
-                        if (valid and prop_count > 0) {
+                        if (final_name) |prop_name| {
                             sources[scan_idx] = .{ .chained_prop = .{
-                                .var_name = vn,
-                                .is_local = is_local,
-                                .slot = slot,
-                                .props = props,
+                                .object = current.object,
+                                .prop_name = prop_name,
                             } };
                         }
                     }
@@ -12389,26 +12339,6 @@ pub const VM = struct {
             }
         }
         return sources;
-    }
-
-    const ChainedPropTarget = struct { obj: *PhpObject, prop: []const u8 };
-
-    fn resolveChainedProp(self: *VM, cp: std.meta.TagPayload(RefSource, .chained_prop)) ?ChainedPropTarget {
-        var cur = self.resolveCallerVar(cp.var_name, cp.is_local, cp.slot);
-        var last_prop: ?[]const u8 = null;
-        for (cp.props) |mp| {
-            const pn = mp orelse break;
-            if (last_prop) |lp| {
-                if (cur == .object) {
-                    cur = cur.object.get(lp);
-                } else return null;
-            }
-            last_prop = pn;
-        }
-        if (last_prop) |lp| {
-            if (cur == .object) return .{ .obj = cur.object, .prop = lp };
-        }
-        return null;
     }
 
     fn bindRefParams(
@@ -12518,18 +12448,13 @@ pub const VM = struct {
                     }
                 },
                 .chained_prop => |cp| {
-                    if (self.resolveChainedProp(cp)) |target| {
-                        const cell = try self.allocator.create(Value);
-                        cell.* = new_vars.get(func.params[ri]) orelse .null;
-                        // the ref cell is a durable holder - retain its array value, or the
-                        // callee param slot's release at frame teardown frees the array the
-                        // cell (and the caller's ref binding) still points at (Stage 2)
-                        if (cell.* == .array) arrayRetain(cell.*.array);
-                        try self.ref_cells.append(self.allocator, cell);
-                        try refs.put(self.allocator, func.params[ri], cell);
-                        try self.regRefObject(owner, cell, target.obj, target.prop);
-                        self.obj_ref_active = true;
-                    }
+                    const cell = try self.allocator.create(Value);
+                    cell.* = new_vars.get(func.params[ri]) orelse .null;
+                    if (cell.* == .array) arrayRetain(cell.*.array);
+                    try self.ref_cells.append(self.allocator, cell);
+                    try refs.put(self.allocator, func.params[ri], cell);
+                    try self.regRefObject(owner, cell, cp.object, cp.prop_name);
+                    self.obj_ref_active = true;
                 },
                 .prop_array_elem => |pae| {
                     const obj_val = self.resolveCallerVar(pae.var_name, pae.is_local, pae.slot);
