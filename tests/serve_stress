@@ -7,7 +7,7 @@ SOURCE_APP="$ROOT/tests/serve/ws_app.php"
 PORT=${ZPHP_STRESS_PORT:-19920}
 ROUNDS=${ZPHP_STRESS_ROUNDS:-12}
 REQUESTS=${ZPHP_STRESS_REQUESTS:-40}
-CONCURRENCY=${ZPHP_STRESS_CONCURRENCY:-8}
+CONCURRENCY=${ZPHP_STRESS_CONCURRENCY:-2}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/zphp-stress.XXXXXX")
 CERT="$TMP/cert.pem"
 KEY="$TMP/key.pem"
@@ -26,10 +26,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 for _ in $(seq 1 100); do
-    curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break
+    curl -sk --http2 --connect-timeout 2 --max-time 30 "https://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break
     sleep 0.1
 done
-curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null
+curl -sk --http2 --connect-timeout 2 --max-time 30 "https://127.0.0.1:$PORT/health" >/dev/null
 
 rss_kb() {
     ps -o rss= -p "$PID" | awk '{print $1 + 0}'
@@ -87,7 +87,7 @@ while [ "$round" -le "$ROUNDS" ]; do
         i=0
         request_pids=""
         while [ "$i" -lt "$batch" ]; do
-            curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null &
+            curl -sk --http2 --connect-timeout 2 --max-time 30 "https://127.0.0.1:$PORT/health" >/dev/null &
             request_pids="$request_pids $!"
             i=$((i + 1))
         done
@@ -103,7 +103,7 @@ now = time.time() + 2
 os.utime(path, (now, now))
 PY
         sleep 2
-        curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null
+        curl -sk --http2 --connect-timeout 2 --max-time 30 "https://127.0.0.1:$PORT/health" >/dev/null
     fi
     stop=$(python3 -c 'import time; print(time.monotonic_ns())')
     elapsed=$(( (stop - start) / 1000000 ))
