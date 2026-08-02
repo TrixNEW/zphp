@@ -799,7 +799,7 @@ fn method_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) {
         const m = args[1].string;
         const closure_methods = [_][]const u8{ "__invoke", "bindTo", "bind", "call", "fromCallable", "getClosureScopeClass", "getClosureThis", "getClosureCalledClass", "getClosureUsedVariables" };
-        for (closure_methods) |cm| if (std.mem.eql(u8, cm, m)) return .{ .bool = true };
+        for (closure_methods) |cm| if (std.ascii.eqlIgnoreCase(cm, m)) return .{ .bool = true };
         return .{ .bool = false };
     }
     var current: ?[]const u8 = if (args[0] == .object)
@@ -819,33 +819,37 @@ fn method_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // method tables so method_exists works on tagged values and "Generator"/"Fiber" strings.
     if (std.mem.eql(u8, current.?, "Generator")) {
         const gen_methods = [_][]const u8{ "current", "key", "next", "rewind", "send", "throw", "getReturn", "valid" };
-        for (gen_methods) |m| if (std.mem.eql(u8, m, method_name)) return .{ .bool = true };
+        for (gen_methods) |m| if (std.ascii.eqlIgnoreCase(m, method_name)) return .{ .bool = true };
         return .{ .bool = false };
     }
     if (std.mem.eql(u8, current.?, "Fiber")) {
         const fiber_methods = [_][]const u8{ "start", "resume", "throw", "getReturn", "isStarted", "isSuspended", "isRunning", "isTerminated", "suspend", "getCurrent" };
-        for (fiber_methods) |m| if (std.mem.eql(u8, m, method_name)) return .{ .bool = true };
+        for (fiber_methods) |m| if (std.ascii.eqlIgnoreCase(m, method_name)) return .{ .bool = true };
         return .{ .bool = false };
     }
     var buf: [256]u8 = undefined;
     var depth: usize = 0;
     while (current) |cn| {
+        var canonical_method = method_name;
         var private_at_this_class = false;
         if (ctx.vm.classes.get(cn)) |cls| {
-            if (cls.methods.get(method_name)) |info| {
-                if (info.visibility == .private) private_at_this_class = true;
+            var methods = cls.methods.iterator();
+            while (methods.next()) |entry| {
+                if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, method_name)) {
+                    canonical_method = entry.key_ptr.*;
+                    if (entry.value_ptr.visibility == .private) private_at_this_class = true;
+                    break;
+                }
             }
         }
         // ancestor private methods are not visible from a subclass
         if (depth > 0 and private_at_this_class) {
             // skip this class's match; continue up
         } else {
-            const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ cn, method_name }) catch return Value{ .bool = false };
+            const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ cn, canonical_method }) catch return Value{ .bool = false };
             if (ctx.vm.native_fns.contains(full)) return .{ .bool = true };
             if (ctx.vm.functions.contains(full)) return .{ .bool = true };
-            if (ctx.vm.classes.get(cn)) |cls| {
-                if (cls.methods.contains(method_name)) return .{ .bool = true };
-            }
+            if (!std.mem.eql(u8, canonical_method, method_name)) return .{ .bool = true };
         }
         if (ctx.vm.classes.get(cn)) |cls| {
             current = cls.parent;
@@ -1353,9 +1357,12 @@ fn native_is_subclass_of(ctx: *NativeContext, args: []const Value) RuntimeError!
         args[0].string
     else
         return Value{ .bool = false };
+    const target_name = args[1].string;
+    ctx.vm.tryAutoload(class_name) catch {};
+    ctx.vm.tryAutoload(target_name) catch {};
     // is_subclass_of returns false if same class, only true for actual subclasses
-    if (std.mem.eql(u8, class_name, args[1].string)) return .{ .bool = false };
-    return .{ .bool = ctx.vm.isInstanceOf(class_name, args[1].string) };
+    if (std.mem.eql(u8, class_name, target_name)) return .{ .bool = false };
+    return .{ .bool = ctx.vm.isInstanceOf(class_name, target_name) };
 }
 
 fn native_spl_object_id(ctx: *NativeContext, args: []const Value) RuntimeError!Value {

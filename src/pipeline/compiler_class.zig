@@ -157,13 +157,16 @@ fn parseAttrArgAtom(self: *Compiler, tokens: []const Token, source: []const u8, 
                 pos.* += 1;
                 return .null;
             }
-            // check for Class::CONST or Enum::Case pattern
-            if (pos.* + 2 < tokens.len and tokens[pos.* + 1].tag == .colon_colon and tokens[pos.* + 2].tag == .identifier) {
-                // use source range: "ClassName::CONST_NAME" is contiguous in source
-                const start = tokens[pos.*].start;
-                const end = tokens[pos.* + 2].end;
+            // check for Class::CONST, Class::class, or Enum::Case pattern
+            if (pos.* + 2 < tokens.len and tokens[pos.* + 1].tag == .colon_colon and
+                (tokens[pos.* + 2].tag == .identifier or tokens[pos.* + 2].tag == .kw_class))
+            {
+                const member = tokens[pos.* + 2].lexeme(source);
                 pos.* += 3;
-                return .{ .string = source[start..end] };
+                if (std.mem.eql(u8, member, "class")) return .{ .string = self.resolveClassName(text) };
+                const sentinel = std.fmt.allocPrint(allocator, "\x00CC\x00{s}\x00{s}", .{ self.resolveClassName(text), member }) catch return .null;
+                self.string_allocs.append(allocator, sentinel) catch return .null;
+                return .{ .string = sentinel };
             }
             pos.* += 1;
             // bare identifier: a user-defined constant. emit a deferred class

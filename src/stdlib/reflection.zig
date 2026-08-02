@@ -29,6 +29,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     // Attribute class with target constants
     var attr_def = ClassDef{ .name = "Attribute" };
+    try attr_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try attr_def.static_props.put(a, "TARGET_CLASS", .{ .int = 1 });
     try attr_def.static_props.put(a, "TARGET_FUNCTION", .{ .int = 2 });
     try attr_def.static_props.put(a, "TARGET_METHOD", .{ .int = 4 });
@@ -38,6 +39,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try attr_def.static_props.put(a, "TARGET_ALL", .{ .int = 127 });
     try attr_def.static_props.put(a, "IS_REPEATABLE", .{ .int = 128 });
     try vm.classes.put(a, "Attribute", attr_def);
+    try vm.native_fns.put(a, "Attribute::__construct", attributeConstruct);
 
     // PHP 8.3 #[Override] marker. enforcement happens elsewhere - here we
     // register the class so attribute reflection and class_exists pick it up
@@ -3350,9 +3352,8 @@ fn rpropIsPromoted(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn rpropHasType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const this = getThis(ctx) orelse return .{ .bool = false };
-    const t = this.get("_type");
-    return .{ .bool = t != .null };
+    const type_value = try rpropGetType(ctx, &.{});
+    return .{ .bool = type_value != .null };
 }
 
 fn rpropGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -3578,6 +3579,13 @@ fn rpGetClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 // --- ReflectionAttribute ---
 
+fn attributeConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .null;
+    const flags = if (args.len > 0 and args[0] == .int) args[0] else Value{ .int = 127 };
+    try this.set(ctx.allocator, "flags", flags);
+    return .null;
+}
+
 fn raGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     return this.get("name");
@@ -3719,20 +3727,24 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
                         pos += 1;
                     }
                 }
-                if (pos > 0) {
-                    _ = ctx.callMethod(obj, "__construct", resolved[0..pos]) catch {};
+                const count = @max(pos, func.required_params);
+                for (0..count) |i| {
+                    if (resolved[i] == .null and i < func.defaults.len) {
+                        resolved[i] = try ctx.vm.resolveDefault(func.defaults[i]);
+                    }
                 }
+                if (count > 0) _ = try ctx.callMethod(obj, "__construct", resolved[0..count]);
             } else {
                 var call_args: [16]Value = undefined;
                 const count = @min(arr.entries.items.len, 16);
                 for (0..count) |i| call_args[i] = arr.entries.items[i].value;
-                _ = ctx.callMethod(obj, "__construct", call_args[0..count]) catch {};
+                _ = try ctx.callMethod(obj, "__construct", call_args[0..count]);
             }
         } else {
             var call_args: [16]Value = undefined;
             const count = @min(arr.entries.items.len, 16);
             for (0..count) |i| call_args[i] = arr.entries.items[i].value;
-            if (count > 0) _ = ctx.callMethod(obj, "__construct", call_args[0..count]) catch {};
+            if (count > 0) _ = try ctx.callMethod(obj, "__construct", call_args[0..count]);
         }
     }
     return .{ .object = obj };

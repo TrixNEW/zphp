@@ -13058,6 +13058,13 @@ pub const VM = struct {
             if (self.functions.getEntry(full)) |entry| return entry.key_ptr.*;
             if (self.native_fns.getEntry(full)) |entry| return entry.key_ptr.*;
             if (self.classes.get(current)) |cls| {
+                var methods = cls.methods.keyIterator();
+                while (methods.next()) |declared| {
+                    if (!std.ascii.eqlIgnoreCase(declared.*, method_name)) continue;
+                    const canonical = std.fmt.bufPrint(&buf, "{s}::{s}", .{ current, declared.* }) catch return error.RuntimeError;
+                    if (self.functions.getEntry(canonical)) |entry| return entry.key_ptr.*;
+                    if (self.native_fns.getEntry(canonical)) |entry| return entry.key_ptr.*;
+                }
                 if (cls.parent) |p| {
                     current = p;
                     continue;
