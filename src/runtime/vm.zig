@@ -4838,6 +4838,23 @@ pub const VM = struct {
                         try frame.ref_slots.put(self.allocator, dst_name, c);
                     } else {
                         const obj_ptr = obj_val.object;
+                        const has_prop = obj_ptr.properties.contains(prop_name) or (obj_ptr.slots != null and obj_ptr.getSlotIndex(prop_name) != null);
+                        if (!has_prop and self.hasMethod(obj_ptr.class_name, "__get")) {
+                            self.last_return_ref = null;
+                            _ = try self.callMagicGet(obj_ptr, prop_name);
+                            if (self.last_return_ref) |cell| {
+                                try frame.ref_slots.put(self.allocator, dst_name, cell);
+                                const owner = try self.ensureRefOwner(frame);
+                                if (self.last_return_ref_owner != 0) {
+                                    const ri = try self.refIndex();
+                                    try ri.transferCell(self.allocator, self.last_return_ref_owner, owner, cell);
+                                    ri.releaseOwner(self.allocator, self.last_return_ref_owner);
+                                    self.last_return_ref_owner = 0;
+                                }
+                                self.last_return_ref = null;
+                                continue;
+                            }
+                        }
                         const cell = try self.allocator.create(Value);
                         cell.* = obj_ptr.get(prop_name);
                         try self.ref_cells.append(self.allocator, cell);
@@ -4865,6 +4882,23 @@ pub const VM = struct {
                         // dupe so the binding's prop_name outlives the temporary
                         const prop_owned = try self.allocator.dupe(u8, prop_str);
                         try self.strings.append(self.allocator, prop_owned);
+                        const has_prop = obj_ptr.properties.contains(prop_owned) or (obj_ptr.slots != null and obj_ptr.getSlotIndex(prop_owned) != null);
+                        if (!has_prop and self.hasMethod(obj_ptr.class_name, "__get")) {
+                            self.last_return_ref = null;
+                            _ = try self.callMagicGet(obj_ptr, prop_owned);
+                            if (self.last_return_ref) |cell| {
+                                try frame.ref_slots.put(self.allocator, dst_name, cell);
+                                const owner = try self.ensureRefOwner(frame);
+                                if (self.last_return_ref_owner != 0) {
+                                    const ri = try self.refIndex();
+                                    try ri.transferCell(self.allocator, self.last_return_ref_owner, owner, cell);
+                                    ri.releaseOwner(self.allocator, self.last_return_ref_owner);
+                                    self.last_return_ref_owner = 0;
+                                }
+                                self.last_return_ref = null;
+                                continue;
+                            }
+                        }
                         const cell = try self.allocator.create(Value);
                         cell.* = obj_ptr.get(prop_owned);
                         try self.ref_cells.append(self.allocator, cell);

@@ -1370,12 +1370,18 @@ pub const Compiler = struct {
             try self.emitU16(ret_name_idx);
             return true;
         }
-        if (expr.tag == .property_access and !self.isDynamicProp(expr)) {
+        if (expr.tag == .property_access) {
             try self.compileNode(expr.data.lhs); // object
-            const prop_idx = try self.addConstant(.{ .string = self.propName(expr) });
-            try self.emitOp(.make_var_prop_ref);
-            try self.emitU16(ret_name_idx);
-            try self.emitU16(prop_idx);
+            if (self.isDynamicProp(expr)) {
+                try self.compileNode(expr.data.rhs);
+                try self.emitOp(.make_var_prop_ref_dyn);
+                try self.emitU16(ret_name_idx);
+            } else {
+                const prop_idx = try self.addConstant(.{ .string = self.propName(expr) });
+                try self.emitOp(.make_var_prop_ref);
+                try self.emitU16(ret_name_idx);
+                try self.emitU16(prop_idx);
+            }
             try self.emitOp(.return_ref);
             try self.emitU16(ret_name_idx);
             return true;
