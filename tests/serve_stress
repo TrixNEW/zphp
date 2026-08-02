@@ -7,6 +7,7 @@ SOURCE_APP="$ROOT/tests/serve/ws_app.php"
 PORT=${ZPHP_STRESS_PORT:-19920}
 ROUNDS=${ZPHP_STRESS_ROUNDS:-12}
 REQUESTS=${ZPHP_STRESS_REQUESTS:-40}
+CONCURRENCY=${ZPHP_STRESS_CONCURRENCY:-8}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/zphp-stress.XXXXXX")
 CERT="$TMP/cert.pem"
 KEY="$TMP/key.pem"
@@ -78,14 +79,21 @@ LAST_MS=0
 round=1
 while [ "$round" -le "$ROUNDS" ]; do
     start=$(python3 -c 'import time; print(time.monotonic_ns())')
-    i=0
-    request_pids=""
-    while [ "$i" -lt "$REQUESTS" ]; do
-        curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null &
-        request_pids="$request_pids $!"
-        i=$((i + 1))
+    completed=0
+    while [ "$completed" -lt "$REQUESTS" ]; do
+        batch=$CONCURRENCY
+        remaining=$((REQUESTS - completed))
+        [ "$batch" -le "$remaining" ] || batch=$remaining
+        i=0
+        request_pids=""
+        while [ "$i" -lt "$batch" ]; do
+            curl -sk --http2 --connect-timeout 2 --max-time 10 "https://127.0.0.1:$PORT/health" >/dev/null &
+            request_pids="$request_pids $!"
+            i=$((i + 1))
+        done
+        for request_pid in $request_pids; do wait "$request_pid"; done
+        completed=$((completed + batch))
     done
-    for request_pid in $request_pids; do wait "$request_pid"; done
     ws_round
     if [ "$round" -eq $((ROUNDS / 2)) ]; then
         python3 - "$APP" <<'PY'
