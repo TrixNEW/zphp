@@ -524,13 +524,15 @@ fn is_object(_: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn is_scalar(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = false };
-    return .{ .bool = switch (args[0]) {
-        .int, .float, .bool => true,
-        // closures are stored as a Value.string with a "__closure_" prefix;
-        // PHP treats Closure as an object, not a scalar
-        .string => |s| !std.mem.startsWith(u8, s, "__closure_"),
-        else => false,
-    } };
+    return .{
+        .bool = switch (args[0]) {
+            .int, .float, .bool => true,
+            // closures are stored as a Value.string with a "__closure_" prefix;
+            // PHP treats Closure as an object, not a scalar
+            .string => |s| !std.mem.startsWith(u8, s, "__closure_"),
+            else => false,
+        },
+    };
 }
 
 fn is_iterable(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -1462,30 +1464,66 @@ fn native_version_compare(ctx: *NativeContext, args: []const Value) RuntimeError
         if (!has_a and !has_b) break;
 
         if (has_a and !has_b) {
-            if (toks1[j].is_num) { cmp = 1; break; } else {
+            if (toks1[j].is_num) {
+                cmp = 1;
+                break;
+            } else {
                 // tag vs implicit release: tag < release
-                if (toks1[j].tag_weight < 0) { cmp = -1; break; }
-                if (toks1[j].tag_weight > 0) { cmp = 1; break; }
+                if (toks1[j].tag_weight < 0) {
+                    cmp = -1;
+                    break;
+                }
+                if (toks1[j].tag_weight > 0) {
+                    cmp = 1;
+                    break;
+                }
             }
         }
         if (!has_a and has_b) {
-            if (toks2[j].is_num) { cmp = -1; break; } else {
-                if (toks2[j].tag_weight < 0) { cmp = 1; break; }
-                if (toks2[j].tag_weight > 0) { cmp = -1; break; }
+            if (toks2[j].is_num) {
+                cmp = -1;
+                break;
+            } else {
+                if (toks2[j].tag_weight < 0) {
+                    cmp = 1;
+                    break;
+                }
+                if (toks2[j].tag_weight > 0) {
+                    cmp = -1;
+                    break;
+                }
             }
         }
         if (has_a and has_b) {
             const a = toks1[j];
             const b = toks2[j];
             if (a.is_num and b.is_num) {
-                if (a.num < b.num) { cmp = -1; break; }
-                if (a.num > b.num) { cmp = 1; break; }
+                if (a.num < b.num) {
+                    cmp = -1;
+                    break;
+                }
+                if (a.num > b.num) {
+                    cmp = 1;
+                    break;
+                }
             } else if (!a.is_num and !b.is_num) {
-                if (a.tag_weight < b.tag_weight) { cmp = -1; break; }
-                if (a.tag_weight > b.tag_weight) { cmp = 1; break; }
+                if (a.tag_weight < b.tag_weight) {
+                    cmp = -1;
+                    break;
+                }
+                if (a.tag_weight > b.tag_weight) {
+                    cmp = 1;
+                    break;
+                }
             } else {
                 // num vs tag: in PHP context, a number part > a tag part
-                if (a.is_num) { cmp = 1; break; } else { cmp = -1; break; }
+                if (a.is_num) {
+                    cmp = 1;
+                    break;
+                } else {
+                    cmp = -1;
+                    break;
+                }
             }
         }
     }
@@ -1641,15 +1679,14 @@ fn native_ini_set(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 const SUPPORTED_EXTENSIONS = [_][]const u8{
-    "Core",       "standard",   "spl",        "json",       "pcre",
-    "PDO",        "pdo_sqlite", "pdo_mysql",  "pdo_pgsql",
-    "session",    "mbstring",   "ctype",      "filter",     "hash",
-    "iconv",      "tokenizer",  "Reflection", "date",
-    "openssl",    "curl",       "sodium",     "ldap",       "ftp",
-    "gd",         "gmp",        "bcmath",     "libxml",     "dom",
-    "SimpleXML",  "xml",        "xmlreader",  "xmlwriter",  "intl",
-    "fileinfo",   "Phar",       "soap",       "zlib",       "posix",
-    "pcntl",      "random",
+    "Core",      "standard",   "spl",       "json",      "pcre",
+    "PDO",       "pdo_sqlite", "pdo_mysql", "pdo_pgsql", "session",
+    "mbstring",  "ctype",      "filter",    "hash",      "iconv",
+    "tokenizer", "Reflection", "date",      "openssl",   "curl",
+    "sodium",    "ldap",       "ftp",       "gd",        "gmp",
+    "bcmath",    "libxml",     "dom",       "SimpleXML", "xml",
+    "xmlreader", "xmlwriter",  "intl",      "fileinfo",  "Phar",
+    "soap",      "zlib",       "posix",     "pcntl",     "random",
 };
 
 fn native_extension_loaded(_: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -1947,10 +1984,28 @@ fn native_strftime(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
         }
         i += 1;
         const mapped: []const u8 = switch (fmt[i]) {
-            'Y' => "Y", 'y' => "y", 'm' => "m", 'd' => "d", 'H' => "H", 'M' => "i",
-            'S' => "s", 'p' => "A", 'P' => "a", 'A' => "l", 'a' => "D", 'B' => "F",
-            'b', 'h' => "M", 'e' => "j", 'j' => "z", 'n' => "\n", 't' => "\t",
-            's' => "U", 'u' => "N", 'w' => "w", 'z' => "O", 'Z' => "T",
+            'Y' => "Y",
+            'y' => "y",
+            'm' => "m",
+            'd' => "d",
+            'H' => "H",
+            'M' => "i",
+            'S' => "s",
+            'p' => "A",
+            'P' => "a",
+            'A' => "l",
+            'a' => "D",
+            'B' => "F",
+            'b', 'h' => "M",
+            'e' => "j",
+            'j' => "z",
+            'n' => "\n",
+            't' => "\t",
+            's' => "U",
+            'u' => "N",
+            'w' => "w",
+            'z' => "O",
+            'Z' => "T",
             '%' => "%%",
             else => continue,
         };
@@ -1988,20 +2043,19 @@ fn native_spl_autoload_call(ctx: *NativeContext, args: []const Value) RuntimeErr
 fn native_spl_classes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
     const names = [_][]const u8{
-        "AppendIterator", "ArrayIterator", "ArrayObject", "BadFunctionCallException",
-        "BadMethodCallException", "CachingIterator", "CallbackFilterIterator",
-        "DirectoryIterator", "DomainException", "EmptyIterator", "FilesystemIterator",
-        "FilterIterator", "GlobIterator", "InfiniteIterator", "InvalidArgumentException",
-        "IteratorIterator", "LengthException", "LimitIterator", "LogicException",
-        "MultipleIterator", "NoRewindIterator", "OuterIterator", "OutOfBoundsException",
-        "OutOfRangeException", "OverflowException", "ParentIterator", "RangeException",
-        "RecursiveArrayIterator", "RecursiveCallbackFilterIterator",
-        "RecursiveDirectoryIterator", "RecursiveFilterIterator", "RecursiveIterator",
-        "RecursiveIteratorIterator", "RecursiveRegexIterator", "RecursiveTreeIterator",
-        "RegexIterator", "RuntimeException", "SeekableIterator", "SplDoublyLinkedList",
-        "SplFileInfo", "SplFileObject", "SplFixedArray", "SplHeap", "SplMinHeap",
-        "SplMaxHeap", "SplObjectStorage", "SplPriorityQueue", "SplQueue", "SplStack",
-        "SplTempFileObject", "UnderflowException", "UnexpectedValueException",
+        "AppendIterator",                  "ArrayIterator",              "ArrayObject",              "BadFunctionCallException",
+        "BadMethodCallException",          "CachingIterator",            "CallbackFilterIterator",   "DirectoryIterator",
+        "DomainException",                 "EmptyIterator",              "FilesystemIterator",       "FilterIterator",
+        "GlobIterator",                    "InfiniteIterator",           "InvalidArgumentException", "IteratorIterator",
+        "LengthException",                 "LimitIterator",              "LogicException",           "MultipleIterator",
+        "NoRewindIterator",                "OuterIterator",              "OutOfBoundsException",     "OutOfRangeException",
+        "OverflowException",               "ParentIterator",             "RangeException",           "RecursiveArrayIterator",
+        "RecursiveCallbackFilterIterator", "RecursiveDirectoryIterator", "RecursiveFilterIterator",  "RecursiveIterator",
+        "RecursiveIteratorIterator",       "RecursiveRegexIterator",     "RecursiveTreeIterator",    "RegexIterator",
+        "RuntimeException",                "SeekableIterator",           "SplDoublyLinkedList",      "SplFileInfo",
+        "SplFileObject",                   "SplFixedArray",              "SplHeap",                  "SplMinHeap",
+        "SplMaxHeap",                      "SplObjectStorage",           "SplPriorityQueue",         "SplQueue",
+        "SplStack",                        "SplTempFileObject",          "UnderflowException",       "UnexpectedValueException",
     };
     for (names) |n| try arr.set(ctx.allocator, .{ .string = n }, .{ .string = n });
     return .{ .array = arr };
@@ -2468,7 +2522,7 @@ fn native_class_parents(ctx: *NativeContext, args: []const Value) RuntimeError!V
     const cls = ctx.vm.classes.get(class_name) orelse {
         try ctx.vm.tryAutoload(class_name);
         if (ctx.vm.classes.get(class_name) == null) return Value{ .bool = false };
-        const normalized = [_]Value{ .{ .string = class_name } };
+        const normalized = [_]Value{.{ .string = class_name }};
         return native_class_parents(ctx, &normalized);
     };
 
@@ -2543,7 +2597,10 @@ fn native_iterator_to_array(ctx: *NativeContext, args: []const Value) RuntimeErr
             var inner_args: [2]Value = undefined;
             inner_args[0] = inner_v;
             var n: usize = 1;
-            if (args.len > 1) { inner_args[1] = args[1]; n = 2; }
+            if (args.len > 1) {
+                inner_args[1] = args[1];
+                n = 2;
+            }
             return native_iterator_to_array(ctx, inner_args[0..n]);
         }
         const has_traversal = ctx.vm.hasMethod(obj.class_name, "rewind") and ctx.vm.hasMethod(obj.class_name, "valid") and ctx.vm.hasMethod(obj.class_name, "current");
@@ -2667,11 +2724,11 @@ fn native_iterator_apply(ctx: *NativeContext, args: []const Value) RuntimeError!
                 const inner_args = [_]Value{args[1]} ++ .{};
                 _ = inner_args;
                 const new_args: [3]Value = .{ inner, args[1], if (args.len >= 3) args[2] else Value.null };
-                return native_iterator_apply(ctx, new_args[0 .. if (args.len >= 3) 3 else 2]);
+                return native_iterator_apply(ctx, new_args[0..if (args.len >= 3) 3 else 2]);
             }
             if (inner == .generator) {
                 const new_args: [3]Value = .{ inner, args[1], if (args.len >= 3) args[2] else Value.null };
-                return native_iterator_apply(ctx, new_args[0 .. if (args.len >= 3) 3 else 2]);
+                return native_iterator_apply(ctx, new_args[0..if (args.len >= 3) 3 else 2]);
             }
         }
         // Iterator protocol
@@ -2709,7 +2766,7 @@ fn native_filter_id(_: *NativeContext, args: []const Value) RuntimeError!Value {
         .{ .name = "validate_email", .id = 274 },
         .{ .name = "validate_ip", .id = 275 },
         .{ .name = "validate_mac", .id = 276 },
-        .{ .name = "string", .id = 513 },
+        .{ .name = "string", .id = 262 },
         .{ .name = "stripped", .id = 513 },
         .{ .name = "encoded", .id = 514 },
         .{ .name = "special_chars", .id = 515 },
@@ -2730,11 +2787,11 @@ fn native_filter_id(_: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_filter_list(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
     const names = [_][]const u8{
-        "int", "boolean", "float", "validate_regexp", "validate_domain",
-        "validate_url", "validate_email", "validate_ip", "validate_mac",
-        "string", "stripped", "encoded", "special_chars", "full_special_chars",
-        "unsafe_raw", "email", "url", "number_int", "number_float",
-        "add_slashes", "callback",
+        "int",          "boolean",        "float",         "validate_regexp",    "validate_domain",
+        "validate_url", "validate_email", "validate_ip",   "validate_mac",       "string",
+        "stripped",     "encoded",        "special_chars", "full_special_chars", "unsafe_raw",
+        "email",        "url",            "number_int",    "number_float",       "add_slashes",
+        "callback",
     };
     var i: usize = 0;
     while (i < names.len) : (i += 1) {
@@ -2910,7 +2967,12 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
                 // optional sign
                 var rest = trimmed;
                 var sign: i64 = 1;
-                if (rest[0] == '+') { rest = rest[1..]; } else if (rest[0] == '-') { sign = -1; rest = rest[1..]; }
+                if (rest[0] == '+') {
+                    rest = rest[1..];
+                } else if (rest[0] == '-') {
+                    sign = -1;
+                    rest = rest[1..];
+                }
                 if (rest.len == 0) return fail_default;
                 // hex with ALLOW_HEX
                 if (allow_hex and rest.len > 2 and rest[0] == '0' and (rest[1] == 'x' or rest[1] == 'X')) {
@@ -3000,7 +3062,9 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             const s = if (value == .string) value.string else return fail_default;
             // colon: 6 hex pairs separated by ":" or "-", or 3 quads of 4 hex separated by "."
             const HexHelpers = struct {
-                fn isHex(c: u8) bool { return std.ascii.isHex(c); }
+                fn isHex(c: u8) bool {
+                    return std.ascii.isHex(c);
+                }
             };
             const parts_colon: usize = std.mem.count(u8, s, ":") + 1;
             const parts_dash: usize = std.mem.count(u8, s, "-") + 1;
@@ -3091,9 +3155,7 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
                     continue;
                 }
                 switch (c) {
-                    '$', '-', '_', '.', '+', '!', '*', '\'', '(', ')', ',', '{', '}', '|',
-                    '\\', '^', '~', '[', ']', '`', '<', '>', '#', '%', '"', ';', '/', '?',
-                    ':', '@', '&', '=' => try buf.append(_ctx.allocator, c),
+                    '$', '-', '_', '.', '+', '!', '*', '\'', '(', ')', ',', '{', '}', '|', '\\', '^', '~', '[', ']', '`', '<', '>', '#', '%', '"', ';', '/', '?', ':', '@', '&', '=' => try buf.append(_ctx.allocator, c),
                     else => {},
                 }
             }
@@ -3108,7 +3170,8 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
                 if (std.ascii.isAlphanumeric(c) or c == '@' or c == '.' or c == '!' or c == '#' or
                     c == '$' or c == '%' or c == '&' or c == '\'' or c == '*' or c == '+' or
                     c == '-' or c == '/' or c == '=' or c == '?' or c == '^' or c == '_' or
-                    c == '`' or c == '{' or c == '|' or c == '}' or c == '~' or c == '[' or c == ']') {
+                    c == '`' or c == '{' or c == '|' or c == '}' or c == '~' or c == '[' or c == ']')
+                {
                     try buf.append(_ctx.allocator, c);
                 }
             }
@@ -3281,71 +3344,71 @@ fn native_spl_object_hash(ctx: *NativeContext, args: []const Value) RuntimeError
     return .{ .string = hash };
 }
 
-const T_INLINE_HTML: i64 = 312;
-const T_OPEN_TAG: i64 = 379;
-const T_OPEN_TAG_WITH_ECHO: i64 = 380;
-const T_CLOSE_TAG: i64 = 381;
-const T_WHITESPACE: i64 = 382;
-const T_VARIABLE: i64 = 309;
-const T_STRING: i64 = 310;
-const T_LNUMBER: i64 = 311;
-const T_DNUMBER: i64 = 313;
-const T_CONSTANT_ENCAPSED_STRING: i64 = 314;
-const T_COMMENT: i64 = 393;
-const T_DOC_COMMENT: i64 = 394;
+const T_INLINE_HTML: i64 = 267;
+const T_OPEN_TAG: i64 = 394;
+const T_OPEN_TAG_WITH_ECHO: i64 = 395;
+const T_CLOSE_TAG: i64 = 396;
+const T_WHITESPACE: i64 = 397;
+const T_VARIABLE: i64 = 266;
+const T_STRING: i64 = 262;
+const T_LNUMBER: i64 = 260;
+const T_DNUMBER: i64 = 261;
+const T_CONSTANT_ENCAPSED_STRING: i64 = 269;
+const T_COMMENT: i64 = 392;
+const T_DOC_COMMENT: i64 = 393;
 
 const Keyword = struct { name: []const u8, id: i64 };
 const PHP_KEYWORDS = [_]Keyword{
-    .{ .name = "echo", .id = 400 },
-    .{ .name = "function", .id = 401 },
-    .{ .name = "class", .id = 402 },
-    .{ .name = "return", .id = 403 },
-    .{ .name = "if", .id = 404 },
-    .{ .name = "else", .id = 405 },
-    .{ .name = "elseif", .id = 406 },
-    .{ .name = "while", .id = 407 },
-    .{ .name = "for", .id = 408 },
-    .{ .name = "foreach", .id = 409 },
-    .{ .name = "do", .id = 410 },
-    .{ .name = "switch", .id = 411 },
-    .{ .name = "case", .id = 412 },
-    .{ .name = "break", .id = 413 },
-    .{ .name = "continue", .id = 414 },
-    .{ .name = "default", .id = 415 },
-    .{ .name = "public", .id = 416 },
-    .{ .name = "protected", .id = 417 },
-    .{ .name = "private", .id = 418 },
-    .{ .name = "static", .id = 419 },
-    .{ .name = "abstract", .id = 420 },
-    .{ .name = "final", .id = 421 },
-    .{ .name = "namespace", .id = 422 },
-    .{ .name = "use", .id = 423 },
-    .{ .name = "extends", .id = 424 },
-    .{ .name = "implements", .id = 425 },
-    .{ .name = "new", .id = 426 },
-    .{ .name = "throw", .id = 427 },
-    .{ .name = "try", .id = 428 },
-    .{ .name = "catch", .id = 429 },
-    .{ .name = "finally", .id = 430 },
+    .{ .name = "echo", .id = 291 },
+    .{ .name = "function", .id = 310 },
+    .{ .name = "class", .id = 336 },
+    .{ .name = "return", .id = 313 },
+    .{ .name = "if", .id = 287 },
+    .{ .name = "else", .id = 289 },
+    .{ .name = "elseif", .id = 288 },
+    .{ .name = "while", .id = 293 },
+    .{ .name = "for", .id = 295 },
+    .{ .name = "foreach", .id = 297 },
+    .{ .name = "do", .id = 292 },
+    .{ .name = "switch", .id = 302 },
+    .{ .name = "case", .id = 304 },
+    .{ .name = "break", .id = 307 },
+    .{ .name = "continue", .id = 308 },
+    .{ .name = "default", .id = 305 },
+    .{ .name = "public", .id = 326 },
+    .{ .name = "protected", .id = 325 },
+    .{ .name = "private", .id = 324 },
+    .{ .name = "static", .id = 321 },
+    .{ .name = "abstract", .id = 322 },
+    .{ .name = "final", .id = 323 },
+    .{ .name = "namespace", .id = 342 },
+    .{ .name = "use", .id = 318 },
+    .{ .name = "extends", .id = 340 },
+    .{ .name = "implements", .id = 341 },
+    .{ .name = "new", .id = 284 },
+    .{ .name = "throw", .id = 317 },
+    .{ .name = "try", .id = 314 },
+    .{ .name = "catch", .id = 315 },
+    .{ .name = "finally", .id = 316 },
     .{ .name = "null", .id = 431 },
     .{ .name = "true", .id = 432 },
     .{ .name = "false", .id = 433 },
-    .{ .name = "const", .id = 434 },
-    .{ .name = "interface", .id = 435 },
-    .{ .name = "trait", .id = 436 },
-    .{ .name = "enum", .id = 437 },
-    .{ .name = "global", .id = 438 },
-    .{ .name = "require", .id = 439 },
-    .{ .name = "require_once", .id = 440 },
-    .{ .name = "include", .id = 441 },
-    .{ .name = "include_once", .id = 442 },
-    .{ .name = "print", .id = 443 },
-    .{ .name = "readonly", .id = 444 },
-    .{ .name = "yield", .id = 445 },
-    .{ .name = "fn", .id = 446 },
-    .{ .name = "match", .id = 447 },
-    .{ .name = "as", .id = 448 },
-    .{ .name = "instanceof", .id = 449 },
+    .{ .name = "const", .id = 312 },
+    .{ .name = "interface", .id = 338 },
+    .{ .name = "trait", .id = 337 },
+    .{ .name = "enum", .id = 339 },
+    .{ .name = "global", .id = 320 },
+    .{ .name = "require", .id = 275 },
+    .{ .name = "require_once", .id = 276 },
+    .{ .name = "include", .id = 272 },
+    .{ .name = "include_once", .id = 273 },
+    .{ .name = "print", .id = 280 },
+    .{ .name = "readonly", .id = 330 },
+    .{ .name = "yield", .id = 281 },
+    .{ .name = "fn", .id = 311 },
+    .{ .name = "match", .id = 306 },
+    .{ .name = "as", .id = 301 },
+    .{ .name = "instanceof", .id = 283 },
 };
 
 fn keywordTokenId(ident: []const u8) ?i64 {
@@ -3385,7 +3448,10 @@ fn native_token_get_all(ctx: *NativeContext, args: []const Value) RuntimeError!V
                         var s: usize = 0;
                         var found_start = false;
                         for (0..pos) |i| {
-                            if (!found_start) { s = i; found_start = true; }
+                            if (!found_start) {
+                                s = i;
+                                found_start = true;
+                            }
                         }
                         break :blk if (found_start) s else 0;
                     };
@@ -3447,7 +3513,10 @@ fn native_token_get_all(ctx: *NativeContext, args: []const Value) RuntimeError!V
                         continue;
                     }
                     if (input[pos] == '\n') line += 1;
-                    if (input[pos] == quote) { pos += 1; break; }
+                    if (input[pos] == quote) {
+                        pos += 1;
+                        break;
+                    }
                     pos += 1;
                 }
                 try result.append(ctx.allocator, try makeToken(ctx, T_CONSTANT_ENCAPSED_STRING, input[start..pos], line));
@@ -3461,7 +3530,10 @@ fn native_token_get_all(ctx: *NativeContext, args: []const Value) RuntimeError!V
                 pos += 2;
                 while (pos + 1 < input.len) {
                     if (input[pos] == '\n') line += 1;
-                    if (input[pos] == '*' and input[pos + 1] == '/') { pos += 2; break; }
+                    if (input[pos] == '*' and input[pos + 1] == '/') {
+                        pos += 2;
+                        break;
+                    }
                     pos += 1;
                 }
                 try result.append(ctx.allocator, try makeToken(ctx, if (is_doc) T_DOC_COMMENT else T_COMMENT, input[start..pos], line));
@@ -3491,69 +3563,158 @@ fn native_token_get_all(ctx: *NativeContext, args: []const Value) RuntimeError!V
 fn native_token_name(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .int) return .{ .string = "UNKNOWN" };
     return .{ .string = switch (args[0].int) {
-        312 => "T_INLINE_HTML",
-        379 => "T_OPEN_TAG",
-        380 => "T_OPEN_TAG_WITH_ECHO",
-        381 => "T_CLOSE_TAG",
-        382 => "T_WHITESPACE",
-        309 => "T_VARIABLE",
-        310 => "T_STRING",
-        311 => "T_LNUMBER",
-        313 => "T_DNUMBER",
-        314 => "T_CONSTANT_ENCAPSED_STRING",
-        315 => "T_ENCAPSED_AND_WHITESPACE",
-        393 => "T_COMMENT",
-        394 => "T_DOC_COMMENT",
-        400 => "T_ECHO",
-        401 => "T_FUNCTION",
-        402 => "T_CLASS",
-        403 => "T_RETURN",
-        404 => "T_IF",
-        405 => "T_ELSE",
-        406 => "T_ELSEIF",
-        407 => "T_WHILE",
-        408 => "T_FOR",
-        409 => "T_FOREACH",
-        410 => "T_DO",
-        411 => "T_SWITCH",
-        412 => "T_CASE",
-        413 => "T_BREAK",
-        414 => "T_CONTINUE",
-        415 => "T_DEFAULT",
-        416 => "T_PUBLIC",
-        417 => "T_PROTECTED",
-        418 => "T_PRIVATE",
-        419 => "T_STATIC",
-        420 => "T_ABSTRACT",
-        421 => "T_FINAL",
-        422 => "T_NAMESPACE",
-        423 => "T_USE",
-        424 => "T_EXTENDS",
-        425 => "T_IMPLEMENTS",
-        426 => "T_NEW",
-        427 => "T_THROW",
-        428 => "T_TRY",
-        429 => "T_CATCH",
-        430 => "T_FINALLY",
-        431 => "T_NULL",
-        432 => "T_TRUE",
-        433 => "T_FALSE",
-        434 => "T_CONST",
-        435 => "T_INTERFACE",
-        436 => "T_TRAIT",
-        437 => "T_ENUM",
-        438 => "T_GLOBAL",
-        439 => "T_REQUIRE",
-        440 => "T_REQUIRE_ONCE",
-        441 => "T_INCLUDE",
-        442 => "T_INCLUDE_ONCE",
-        443 => "T_PRINT",
-        444 => "T_READONLY",
-        445 => "T_YIELD",
-        446 => "T_FN",
-        447 => "T_MATCH",
-        448 => "T_AS",
-        449 => "T_INSTANCEOF",
+        322 => "T_ABSTRACT",
+        409 => "T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG",
+        410 => "T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG",
+        362 => "T_AND_EQUAL",
+        344 => "T_ARRAY",
+        384 => "T_ARRAY_CAST",
+        301 => "T_AS",
+        355 => "T_ATTRIBUTE",
+        411 => "T_BAD_CHARACTER",
+        369 => "T_BOOLEAN_AND",
+        368 => "T_BOOLEAN_OR",
+        386 => "T_BOOL_CAST",
+        307 => "T_BREAK",
+        345 => "T_CALLABLE",
+        304 => "T_CASE",
+        315 => "T_CATCH",
+        336 => "T_CLASS",
+        349 => "T_CLASS_C",
+        285 => "T_CLONE",
+        396 => "T_CLOSE_TAG",
+        405 => "T_COALESCE",
+        367 => "T_COALESCE_EQUAL",
+        392 => "T_COMMENT",
+        360 => "T_CONCAT_EQUAL",
+        312 => "T_CONST",
+        269 => "T_CONSTANT_ENCAPSED_STRING",
+        308 => "T_CONTINUE",
+        401 => "T_CURLY_OPEN",
+        380 => "T_DEC",
+        299 => "T_DECLARE",
+        305 => "T_DEFAULT",
+        348 => "T_DIR",
+        359 => "T_DIV_EQUAL",
+        261 => "T_DNUMBER",
+        292 => "T_DO",
+        393 => "T_DOC_COMMENT",
+        400 => "T_DOLLAR_OPEN_CURLY_BRACES",
+        391 => "T_DOUBLE_ARROW",
+        382 => "T_DOUBLE_CAST",
+        402 => "T_DOUBLE_COLON",
+        291 => "T_ECHO",
+        404 => "T_ELLIPSIS",
+        289 => "T_ELSE",
+        288 => "T_ELSEIF",
+        334 => "T_EMPTY",
+        268 => "T_ENCAPSED_AND_WHITESPACE",
+        300 => "T_ENDDECLARE",
+        296 => "T_ENDFOR",
+        298 => "T_ENDFOREACH",
+        290 => "T_ENDIF",
+        303 => "T_ENDSWITCH",
+        294 => "T_ENDWHILE",
+        399 => "T_END_HEREDOC",
+        339 => "T_ENUM",
+        274 => "T_EVAL",
+        286 => "T_EXIT",
+        340 => "T_EXTENDS",
+        347 => "T_FILE",
+        323 => "T_FINAL",
+        316 => "T_FINALLY",
+        311 => "T_FN",
+        295 => "T_FOR",
+        297 => "T_FOREACH",
+        310 => "T_FUNCTION",
+        352 => "T_FUNC_C",
+        320 => "T_GLOBAL",
+        309 => "T_GOTO",
+        335 => "T_HALT_COMPILER",
+        287 => "T_IF",
+        341 => "T_IMPLEMENTS",
+        379 => "T_INC",
+        272 => "T_INCLUDE",
+        273 => "T_INCLUDE_ONCE",
+        267 => "T_INLINE_HTML",
+        283 => "T_INSTANCEOF",
+        319 => "T_INSTEADOF",
+        338 => "T_INTERFACE",
+        381 => "T_INT_CAST",
+        333 => "T_ISSET",
+        370 => "T_IS_EQUAL",
+        375 => "T_IS_GREATER_OR_EQUAL",
+        372 => "T_IS_IDENTICAL",
+        371 => "T_IS_NOT_EQUAL",
+        373 => "T_IS_NOT_IDENTICAL",
+        374 => "T_IS_SMALLER_OR_EQUAL",
+        346 => "T_LINE",
+        343 => "T_LIST",
+        260 => "T_LNUMBER",
+        279 => "T_LOGICAL_AND",
+        277 => "T_LOGICAL_OR",
+        278 => "T_LOGICAL_XOR",
+        306 => "T_MATCH",
+        351 => "T_METHOD_C",
+        357 => "T_MINUS_EQUAL",
+        361 => "T_MOD_EQUAL",
+        358 => "T_MUL_EQUAL",
+        342 => "T_NAMESPACE",
+        263 => "T_NAME_FULLY_QUALIFIED",
+        265 => "T_NAME_QUALIFIED",
+        264 => "T_NAME_RELATIVE",
+        284 => "T_NEW",
+        354 => "T_NS_C",
+        403 => "T_NS_SEPARATOR",
+        390 => "T_NULLSAFE_OBJECT_OPERATOR",
+        271 => "T_NUM_STRING",
+        385 => "T_OBJECT_CAST",
+        389 => "T_OBJECT_OPERATOR",
+        394 => "T_OPEN_TAG",
+        395 => "T_OPEN_TAG_WITH_ECHO",
+        363 => "T_OR_EQUAL",
+        408 => "T_PIPE",
+        356 => "T_PLUS_EQUAL",
+        406 => "T_POW",
+        407 => "T_POW_EQUAL",
+        280 => "T_PRINT",
+        324 => "T_PRIVATE",
+        327 => "T_PRIVATE_SET",
+        353 => "T_PROPERTY_C",
+        325 => "T_PROTECTED",
+        328 => "T_PROTECTED_SET",
+        326 => "T_PUBLIC",
+        329 => "T_PUBLIC_SET",
+        330 => "T_READONLY",
+        275 => "T_REQUIRE",
+        276 => "T_REQUIRE_ONCE",
+        313 => "T_RETURN",
+        377 => "T_SL",
+        365 => "T_SL_EQUAL",
+        376 => "T_SPACESHIP",
+        378 => "T_SR",
+        366 => "T_SR_EQUAL",
+        398 => "T_START_HEREDOC",
+        321 => "T_STATIC",
+        262 => "T_STRING",
+        383 => "T_STRING_CAST",
+        270 => "T_STRING_VARNAME",
+        302 => "T_SWITCH",
+        317 => "T_THROW",
+        337 => "T_TRAIT",
+        350 => "T_TRAIT_C",
+        314 => "T_TRY",
+        332 => "T_UNSET",
+        387 => "T_UNSET_CAST",
+        318 => "T_USE",
+        331 => "T_VAR",
+        266 => "T_VARIABLE",
+        388 => "T_VOID_CAST",
+        293 => "T_WHILE",
+        397 => "T_WHITESPACE",
+        364 => "T_XOR_EQUAL",
+        281 => "T_YIELD",
+        282 => "T_YIELD_FROM",
         else => "UNKNOWN",
     } };
 }

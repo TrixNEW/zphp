@@ -418,7 +418,10 @@ fn native_getopt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         const v = argv.entries.items[idx].value;
         if (v != .string) continue;
         const arg = v.string;
-        if (std.mem.eql(u8, arg, "--")) { idx += 1; break; }
+        if (std.mem.eql(u8, arg, "--")) {
+            idx += 1;
+            break;
+        }
         if (arg.len < 2 or arg[0] != '-') break;
         if (arg[1] == '-') {
             // long
@@ -471,6 +474,7 @@ fn native_getopt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             }
         }
     }
+    if (args.len >= 3) ctx.setCallerVar(2, args.len, .{ .int = @intCast(idx) });
     return .{ .array = out };
 }
 

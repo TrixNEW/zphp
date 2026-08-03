@@ -18,6 +18,7 @@ const c = @cImport({
     @cInclude("libxml/HTMLparser.h");
     @cInclude("libxml/HTMLtree.h");
     @cInclude("libxml/xmlerror.h");
+    @cInclude("libxml/xmlschemas.h");
 });
 
 // libxml2 init is one-shot per process; safe to call multiple times
@@ -244,6 +245,20 @@ fn domDocLoadXML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (doc == null) return .{ .bool = false };
     try setNodePtr(obj, ctx.allocator, @ptrCast(doc));
     return .{ .bool = true };
+}
+
+fn domDocSchemaValidateSource(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    if (args.len < 1 or args[0] != .string) return .{ .bool = false };
+    const obj = getThis(ctx) orelse return .{ .bool = false };
+    const doc = getDocPtr(obj) orelse return .{ .bool = false };
+    const source = args[0].string;
+    const parser_ctx = c.xmlSchemaNewMemParserCtxt(source.ptr, @intCast(source.len)) orelse return .{ .bool = false };
+    defer c.xmlSchemaFreeParserCtxt(parser_ctx);
+    const schema = c.xmlSchemaParse(parser_ctx) orelse return .{ .bool = false };
+    defer c.xmlSchemaFree(schema);
+    const valid_ctx = c.xmlSchemaNewValidCtxt(schema) orelse return .{ .bool = false };
+    defer c.xmlSchemaFreeValidCtxt(valid_ctx);
+    return .{ .bool = c.xmlSchemaValidateDoc(valid_ctx, doc) == 0 };
 }
 
 fn domDocLoad(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -1495,6 +1510,7 @@ fn registerDocClass(vm: *VM, a: Allocator) !void {
 
     try vm.native_fns.put(a, "DOMDocument::__construct", domDocConstruct);
     try vm.native_fns.put(a, "DOMDocument::loadXML", domDocLoadXML);
+    try vm.native_fns.put(a, "DOMDocument::schemaValidateSource", domDocSchemaValidateSource);
     try vm.native_fns.put(a, "DOMDocument::load", domDocLoad);
     try vm.native_fns.put(a, "DOMDocument::loadHTML", domDocLoadHTML);
     try vm.native_fns.put(a, "DOMDocument::loadHTMLFile", domDocLoadHTMLFile);

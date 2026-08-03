@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+D=$(CDPATH= cd -- "$(dirname "$0")" && pwd); P="$D/phpunit.phar"; S=9d58674e826904add392d08c5ba3e9173ff36b242683cd8f368a476d2513b3bd
+if [ -f "$P" ] && printf '%s  %s\n' "$S" "$P" | shasum -a 256 -c - >/dev/null 2>&1; then exit 0; fi
+T="$P.tmp.$$"; trap 'rm -f "$T"' EXIT HUP INT TERM
+curl --fail --location --silent --show-error --connect-timeout 10 --max-time 120 https://phar.phpunit.de/phpunit-11.5.55.phar -o "$T"
+printf '%s  %s\n' "$S" "$T" | shasum -a 256 -c - >/dev/null
+mv "$T" "$P"; chmod +x "$P"; trap - EXIT HUP INT TERM

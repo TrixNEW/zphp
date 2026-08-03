@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="suite/bootstrap.php" cacheDirectory=".cache"><testsuites><testsuite name="zphp"><file>suite/RuntimeTest.php</file></testsuite></testsuites></phpunit>
