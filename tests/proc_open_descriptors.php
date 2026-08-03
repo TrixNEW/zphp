@@ -62,11 +62,18 @@ proc_close($p7);
 echo "7 file: ", str_replace("\n", ',', trim(file_get_contents($append))), "\n";
 @unlink($append);
 
-// 8. pty descriptors expose a terminal to the child
+// 8. the optional working directory is applied before the child starts
+$cwd = sys_get_temp_dir();
+$pCwd = proc_open('pwd', [1 => ['pipe', 'w']], $pipesCwd, $cwd);
+echo "8 cwd: ", (trim(stream_get_contents($pipesCwd[1])) === realpath($cwd) ? 'yes' : 'no'), "\n";
+fclose($pipesCwd[1]);
+proc_close($pCwd);
+
+// 9. pty descriptors expose a terminal to the child
 $p8 = proc_open('printf tty; test -t 1 && printf yes', [1 => ['pty']], $pipes8);
 $ptyOut = '';
 while (($chunk = @fread($pipes8[1], 8192)) !== false && $chunk !== '') $ptyOut .= $chunk;
-echo "8 out: ", trim($ptyOut), "\n";
+echo "9 out: ", trim($ptyOut), "\n";
 fclose($pipes8[1]);
 proc_close($p8);
 

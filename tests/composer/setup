@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+D=$(CDPATH= cd -- "$(dirname "$0")" && pwd); P="$D/composer.phar"; S=c86ce603fe836bf0861a38c93ac566c8f1e69ac44b2445d9b7a6a17ea2e9972a
+if [ -f "$P" ] && printf '%s  %s\n' "$S" "$P" | shasum -a 256 -c - >/dev/null 2>&1; then exit 0; fi
+T="$P.tmp.$$"; trap 'rm -f "$T"' EXIT HUP INT TERM
+curl --fail --location --silent --show-error --connect-timeout 10 --max-time 120 https://getcomposer.org/download/2.9.5/composer.phar -o "$T"
+printf '%s  %s\n' "$S" "$T" | shasum -a 256 -c - >/dev/null
+mv "$T" "$P"; chmod +x "$P"; trap - EXIT HUP INT TERM

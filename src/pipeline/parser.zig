@@ -1071,12 +1071,29 @@ const Parser = struct {
         // dynamic class name: new $var(...) or new $var['key'](...)
         if (self.peek() == .dollar or self.peek() == .variable) {
             var class_expr = try self.parsePrimaryExpr();
-            // handle subscript access: $var['key'], $var['a']['b'], etc.
-            while (self.peek() == .l_bracket) {
-                _ = self.advance();
-                const idx = try self.parseExpression();
-                _ = try self.expect(.r_bracket);
-                class_expr = try self.addNode(.{ .tag = .array_access, .main_token = 0, .data = .{ .lhs = class_expr, .rhs = idx } });
+            // Class-name expressions support the same dereference chain as
+            // ordinary expressions, including `$object->classes[$name]`.
+            while (true) {
+                if (self.peek() == .l_bracket) {
+                    _ = self.advance();
+                    const idx = try self.parseExpression();
+                    _ = try self.expect(.r_bracket);
+                    class_expr = try self.addNode(.{ .tag = .array_access, .main_token = 0, .data = .{ .lhs = class_expr, .rhs = idx } });
+                    continue;
+                }
+                if (self.peek() == .arrow) {
+                    _ = self.advance();
+                    const prop = if (self.peek() == .variable) blk: {
+                        const tok = self.advance();
+                        break :blk try self.addNode(.{ .tag = .variable, .main_token = tok, .data = .{} });
+                    } else blk: {
+                        const tok = try self.expect(.identifier);
+                        break :blk try self.addNode(.{ .tag = .identifier, .main_token = tok, .data = .{} });
+                    };
+                    class_expr = try self.addNode(.{ .tag = .property_access, .main_token = new_tok, .data = .{ .lhs = class_expr, .rhs = prop } });
+                    continue;
+                }
+                break;
             }
 
             var args = std.ArrayListUnmanaged(u32){};
@@ -1360,7 +1377,7 @@ const Parser = struct {
             _ = self.advance();
         }
         _ = self.advance(); // class
-        const name_tok = try self.expect(.identifier);
+        const name_tok = if (self.peek() == .kw_enum) self.advance() else try self.expect(.identifier);
 
         var parent: u32 = 0;
         if (self.peek() == .kw_extends) {

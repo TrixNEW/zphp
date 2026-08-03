@@ -8,7 +8,7 @@ file_put_contents($pharFile, base64_decode($pharB64));
 
 echo file_get_contents("phar://$pharFile/readme.md");
 echo file_get_contents("phar://$pharFile/lib/util.php");
-echo file_get_contents("phar://$pharFile/data/config.json") . "\n";
+echo file_get_contents("phar://$pharFile/lib/../data/config.json") . "\n";
 echo file_get_contents("phar://$pharFile/a/b/c/deep.txt");
 
 echo "exists readme: " . (file_exists("phar://$pharFile/readme.md") ? "y" : "n") . "\n";

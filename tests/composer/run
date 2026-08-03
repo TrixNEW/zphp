@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+D=$(CDPATH= cd -- "$(dirname "$0")" && pwd); Z=${ZPHP:-"$D/../../zig-out/bin/zphp"}; P="$D/composer.phar"; A="$D/fixture/app"
+[ -x "$Z" ] || { echo "zphp not found at $Z"; exit 1; }; [ -f "$P" ] || { echo "run tests/composer/setup first"; exit 1; }; command -v php >/dev/null
+bounded() { if command -v timeout >/dev/null 2>&1; then timeout 120 "$@"; elif command -v gtimeout >/dev/null 2>&1; then gtimeout 120 "$@"; else "$@"; fi; }
+cd "$A"
+php_version=$(bounded php "$P" --version 2>/dev/null | sed 's/ PHP version.*//')
+zphp_version=$(bounded "$Z" run "$P" --version 2>/dev/null | sed 's/ PHP version.*//')
+[ "$php_version" = "$zphp_version" ] || { printf 'version mismatch\nphp: %s\nzphp: %s\n' "$php_version" "$zphp_version"; exit 1; }
+php_locked=$(bounded php "$P" show --locked --format=json --no-interaction 2>/dev/null | php -r '$v=json_decode(stream_get_contents(STDIN),true); echo json_encode($v, JSON_UNESCAPED_SLASHES);')
+zphp_locked=$(bounded "$Z" run "$P" show --locked --format=json --no-interaction 2>/dev/null | php -r '$v=json_decode(stream_get_contents(STDIN),true); echo json_encode($v, JSON_UNESCAPED_SLASHES);')
+[ "$php_locked" = "$zphp_locked" ] || { printf 'locked-package mismatch\nphp: %s\nzphp: %s\n' "$php_locked" "$zphp_locked"; exit 1; }
+bounded php "$P" validate --no-check-publish --no-check-version --no-interaction >/dev/null 2>&1
+bounded "$Z" run "$P" validate --no-check-publish --no-check-version --no-interaction >/dev/null 2>&1
+printf 'composer compatibility suite passed under php and zphp\n'

@@ -1027,6 +1027,16 @@ pub fn register(vm: *VM, a: std.mem.Allocator) !void {
     try vm.native_fns.put(a, "CURLFile::setMimeType", curlFileSetMimeType);
     try vm.native_fns.put(a, "CURLFile::setPostFilename", curlFileSetPostFilename);
 
+    try vm.php_constants.put(a, "CURLMOPT_PIPELINING", .{ .int = 3 });
+    try vm.php_constants.put(a, "CURLPIPE_NOTHING", .{ .int = 0 });
+    try vm.php_constants.put(a, "CURLPIPE_HTTP1", .{ .int = 1 });
+    try vm.php_constants.put(a, "CURLPIPE_MULTIPLEX", .{ .int = 2 });
+    try vm.php_constants.put(a, "CURLMOPT_MAX_HOST_CONNECTIONS", .{ .int = 7 });
+    try vm.php_constants.put(a, "CURLSHOPT_SHARE", .{ .int = 1 });
+    try vm.php_constants.put(a, "CURL_LOCK_DATA_COOKIE", .{ .int = 2 });
+    try vm.php_constants.put(a, "CURL_LOCK_DATA_DNS", .{ .int = 3 });
+    try vm.php_constants.put(a, "CURL_LOCK_DATA_SSL_SESSION", .{ .int = 4 });
+
     // CURLOPT constants
     try vm.php_constants.put(a, "CURLOPT_URL", .{ .int = c.CURLOPT_URL });
     try vm.php_constants.put(a, "CURLOPT_PORT", .{ .int = c.CURLOPT_PORT });

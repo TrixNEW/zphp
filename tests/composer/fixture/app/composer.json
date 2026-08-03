@@ -1,0 +1,10 @@
+{
+  "name": "zphp/composer-fixture",
+  "description": "Offline Composer compatibility fixture",
+  "authors": [{"name": "zphp"}],
+  "require": {"acme/greeter": "1.0.0"},
+  "repositories": [{"packagist.org": false}, {"type": "path", "url": "../packages/acme-greeter", "options": {"symlink": false}}],
+  "autoload": {"psr-4": {"App\\": "src/"}},
+  "config": {"allow-plugins": false, "disable-tls": true, "secure-http": false},
+  "scripts": {"fixture-check": "@php check.php"}
+}

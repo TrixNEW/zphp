@@ -443,8 +443,10 @@ fn phMapPhar(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const alias = args[0].string;
     const fp = ctx.vm.file_path;
     if (fp.len == 0) return .{ .bool = true };
+    const resolved_fp = std.fs.cwd().realpathAlloc(ctx.allocator, fp) catch try ctx.allocator.dupe(u8, fp);
+    defer ctx.allocator.free(resolved_fp);
     const alias_dup = try ctx.allocator.dupe(u8, alias);
-    const fp_dup = try ctx.allocator.dupe(u8, fp);
+    const fp_dup = try ctx.allocator.dupe(u8, resolved_fp);
     try ctx.vm.strings.append(ctx.allocator, alias_dup);
     try ctx.vm.strings.append(ctx.allocator, fp_dup);
     try ctx.vm.phar_aliases.put(ctx.allocator, alias_dup, fp_dup);

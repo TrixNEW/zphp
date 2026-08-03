@@ -1,0 +1,38 @@
+{
+    "_readme": [
+        "This file locks the dependencies of your project to a known state",
+        "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
+        "This file is @generated automatically"
+    ],
+    "content-hash": "59bec9d8b1cceaa17dd4ec4cb439444e",
+    "packages": [
+        {
+            "name": "acme/greeter",
+            "version": "1.0.0",
+            "dist": {
+                "type": "path",
+                "url": "../packages/acme-greeter",
+                "reference": "defd2c397cbe97a792be70ff2b5b597178fd0e31"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Acme\\Greeter\\": "src/"
+                }
+            },
+            "transport-options": {
+                "symlink": false,
+                "relative": true
+            }
+        }
+    ],
+    "packages-dev": [],
+    "aliases": [],
+    "minimum-stability": "stable",
+    "stability-flags": {},
+    "prefer-stable": false,
+    "prefer-lowest": false,
+    "platform": {},
+    "platform-dev": {},
+    "plugin-api-version": "2.9.0"
+}

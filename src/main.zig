@@ -271,7 +271,9 @@ fn loadFile(path: []const u8, allocator: std.mem.Allocator, vm: *@import("runtim
             };
             cache_entry = e;
         }
-        const entry = cache_entry.parsed.lookup(internal) orelse return null;
+        const normalized_internal = std.fs.path.resolve(allocator, &.{ "/", internal }) catch return null;
+        defer allocator.free(normalized_internal);
+        const entry = cache_entry.parsed.lookup(std.mem.trimLeft(u8, normalized_internal, "/")) orelse return null;
         const payload = phar_mod.extract(allocator, &cache_entry.parsed, entry) catch return null;
         source = payload;
         // synthesize a display path so error messages identify the entry inside the phar

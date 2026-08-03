@@ -1,0 +1,6 @@
+{
+  "name": "acme/greeter",
+  "version": "1.0.0",
+  "type": "library",
+  "autoload": {"psr-4": {"Acme\\Greeter\\": "src/"}}
+}

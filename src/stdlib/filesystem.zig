@@ -332,10 +332,22 @@ fn freePhar(a: Allocator, loaded: *PharLoaded) void {
 }
 
 // returns the raw decoded contents of the file at internal_path, or null if missing
+fn normalizePharInternalPath(a: Allocator, internal_path: []const u8) ![]u8 {
+    const resolved = try std.fs.path.resolve(a, &.{ "/", internal_path });
+    if (resolved.len > 0 and resolved[0] == '/') {
+        const normalized = try a.dupe(u8, resolved[1..]);
+        a.free(resolved);
+        return normalized;
+    }
+    return resolved;
+}
+
 fn readPharEntry(a: Allocator, archive_path: []const u8, internal_path: []const u8) !?[]u8 {
     var loaded = loadPhar(a, archive_path) catch return null;
     defer freePhar(a, &loaded);
-    const entry = loaded.parsed.lookup(internal_path) orelse return null;
+    const normalized = try normalizePharInternalPath(a, internal_path);
+    defer a.free(normalized);
+    const entry = loaded.parsed.lookup(normalized) orelse return null;
     return try phar.extract(a, &loaded.parsed, entry);
 }
 
@@ -439,7 +451,8 @@ fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!Value {
 
 fn native_file_get_contents(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const path = args[0].string;
+    var path = args[0].string;
+    if (std.mem.startsWith(u8, path, "file://")) path = path[7..];
     if (userWrapperFor(ctx.vm, path)) |class_name| {
         const opened = (try dispatchUserOpen(ctx, class_name, path, "rb")) orelse return Value{ .bool = false };
         const fh = opened.object;
@@ -598,8 +611,10 @@ fn native_file_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Val
         if (r.internal_path.len == 0) return .{ .bool = true }; // archive itself
         var loaded = loadPhar(ctx.allocator, r.archive_path) catch return Value{ .bool = false };
         defer freePhar(ctx.allocator, &loaded);
-        if (loaded.parsed.lookup(r.internal_path) != null) return .{ .bool = true };
-        return .{ .bool = loaded.parsed.isDir(r.internal_path) };
+        const normalized = normalizePharInternalPath(ctx.allocator, r.internal_path) catch return .{ .bool = false };
+        defer ctx.allocator.free(normalized);
+        if (loaded.parsed.lookup(normalized) != null) return .{ .bool = true };
+        return .{ .bool = loaded.parsed.isDir(normalized) };
     }
     if (std.mem.startsWith(u8, path, ZLIB_PREFIX)) {
         std.fs.cwd().access(path[ZLIB_PREFIX.len..], .{}) catch return Value{ .bool = false };
@@ -2972,7 +2987,7 @@ fn closePrepared(descs: []PreparedDesc) void {
     }
 }
 
-fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, specs: []const ProcDesc) !ProcSpawn {
+fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, specs: []const ProcDesc, cwd: ?[]const u8) !ProcSpawn {
     const cloexec: std.posix.O = .{ .CLOEXEC = true };
     const prepared = try allocator.alloc(PreparedDesc, specs.len);
     defer allocator.free(prepared);
@@ -3027,6 +3042,10 @@ fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, specs: []const Pr
 
     const pid = try std.posix.fork();
     if (pid == 0) {
+        if (cwd) |dir| {
+            const dirz = allocator.dupeZ(u8, dir) catch procChildFail(xrep[1], error.OutOfMemory);
+            if (std.c.chdir(dirz.ptr) != 0) procChildFail(xrep[1], error.ProcSpawnFailed);
+        }
         for (prepared) |d| if (d.parent_fd != -1) std.posix.close(d.parent_fd);
         for (prepared) |d| {
             const target: std.posix.fd_t = @intCast(d.role);
@@ -3143,7 +3162,8 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     // proc, so proc_close waitpid's the pid and reset/deinit reaps it. each pipe fd
     // becomes __fd on a FileHandle so fread/fwrite/stream_select use real live fds;
     // each is closed EXACTLY once: by fclose (clears pipe_fds[role]) or proc_close/reap
-    const spawned = forkExecDesc(ctx.vm.allocator, cmd_copy, descs.items) catch {
+    const child_cwd: ?[]const u8 = if (args.len >= 4 and args[3] == .string) args[3].string else null;
+    const spawned = forkExecDesc(ctx.vm.allocator, cmd_copy, descs.items, child_cwd) catch {
         try proc.set(ctx.allocator, "__pid", .{ .int = 0 });
         try proc.set(ctx.allocator, "__reaped", .{ .bool = true });
         try proc.set(ctx.allocator, "__running", .{ .bool = false });

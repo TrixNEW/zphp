@@ -1127,6 +1127,18 @@ pub const VM = struct {
         try c.put(a, "PHP_VERSION", .{ .string = "8.4.1" });
         try c.put(a, "PHP_VERSION_ID", .{ .int = 80401 });
         try c.put(a, "PHP_EXTRA_VERSION", .{ .string = "" });
+        try c.put(a, "PHP_DEBUG", .{ .bool = false });
+        try c.put(a, "PHP_ZTS", .{ .bool = false });
+        try c.put(a, "PHP_MAXPATHLEN", .{ .int = 1024 });
+        try c.put(a, "ICONV_VERSION", .{ .string = "1.11" });
+        try c.put(a, "OPENSSL_VERSION_TEXT", .{ .string = "OpenSSL 3" });
+        try c.put(a, "OPENSSL_VERSION_NUMBER", .{ .int = 0x30000000 });
+        try c.put(a, "GD_VERSION", .{ .string = "2.3.3" });
+        try c.put(a, "GMP_VERSION", .{ .string = "6.3.0" });
+        try c.put(a, "INTL_ICU_VERSION", .{ .string = "77.1" });
+        try c.put(a, "LIBXML_DOTTED_VERSION", .{ .string = "2.9.13" });
+        try c.put(a, "SODIUM_LIBRARY_VERSION", .{ .string = "1.0.21" });
+        try c.put(a, "ZLIB_VERSION", .{ .string = "1.2.12" });
         {
             // PCRE_VERSION / _MAJOR / _MINOR from the linked libpcre2. vendor
             // polyfills (symfony/polyfill-intl-grapheme) reference PCRE_VERSION
@@ -4747,6 +4759,12 @@ pub const VM = struct {
                             ep.ref = cell;
                             self.array_ref_active = true;
                         }
+                    } else if (src_val == .object and key_val == .string) {
+                        const cell = try self.allocator.create(Value);
+                        cell.* = src_val.object.get(key_val.string);
+                        try self.ref_cells.append(self.allocator, cell);
+                        try self.currentFrame().ref_slots.put(self.allocator, name, cell);
+                        try self.regRefObject(try self.ensureRefOwner(self.currentFrame()), cell, src_val.object, key_val.string);
                     }
                 },
 
@@ -13350,7 +13368,19 @@ pub const VM = struct {
         return result;
     }
 
+    fn ensureClassHierarchyLoaded(self: *VM, class_name: []const u8) void {
+        var current = class_name;
+        var depth: usize = 0;
+        while (depth < 64) : (depth += 1) {
+            const cls = self.classes.get(current) orelse return;
+            const parent = cls.parent orelse return;
+            if (!self.classes.contains(parent)) self.tryAutoload(parent) catch return;
+            current = parent;
+        }
+    }
+
     pub fn hasMethod(self: *VM, class_name: []const u8, method_name: []const u8) bool {
+        self.ensureClassHierarchyLoaded(class_name);
         // single-entry cache. verify content (callers pass stack-local slices
         // whose pointer address gets reused). bufPrint into a 256-byte stack
         // buffer was a noticeable fraction of release-mode samples on
@@ -13388,6 +13418,7 @@ pub const VM = struct {
     }
 
     pub fn resolveMethod(self: *VM, class_name: []const u8, method_name: []const u8) RuntimeError![]const u8 {
+        self.ensureClassHierarchyLoaded(class_name);
         // single-entry cache: skip string format + hashmap lookup on repeat
         // calls. content-equal on both sides; callers pass stack-local
         // bufPrint slices whose pointer address gets reused across calls.
