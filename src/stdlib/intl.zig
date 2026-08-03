@@ -1837,6 +1837,7 @@ fn registerIntlCharStub(vm: *VM, a: Allocator) !void {
     inline for (.{ "ord", "chr", "isalpha", "isdigit", "isalnum", "isupper", "islower", "isspace", "iscntrl", "ispunct", "isgraph", "isprint", "isxdigit", "isblank", "tolower", "toupper" }) |m| {
         try def.methods.put(a, m, .{ .name = m, .arity = 1, .is_static = true });
     }
+    try def.methods.put(a, "getUnicodeVersion", .{ .name = "getUnicodeVersion", .arity = 0, .is_static = true });
     try vm.classes.put(a, "IntlChar", def);
     try vm.native_fns.put(a, "IntlChar::ord", intlCharOrd);
     try vm.native_fns.put(a, "IntlChar::chr", intlCharChr);
@@ -1854,6 +1855,13 @@ fn registerIntlCharStub(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "IntlChar::isblank", intlCharIsblank);
     try vm.native_fns.put(a, "IntlChar::tolower", intlCharTolower);
     try vm.native_fns.put(a, "IntlChar::toupper", intlCharToupper);
+    try vm.native_fns.put(a, "IntlChar::getUnicodeVersion", intlCharGetUnicodeVersion);
+}
+
+fn intlCharGetUnicodeVersion(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const arr = try ctx.createArray();
+    for ([_]i64{ 17, 0, 0, 0 }) |part| try arr.append(ctx.allocator, .{ .int = part });
+    return .{ .array = arr };
 }
 
 // decode the first UTF-8 codepoint of a string, or accept an int directly.
@@ -2453,7 +2461,6 @@ fn intlTimeZoneGetRawOffset(ctx: *NativeContext, _: []const Value) RuntimeError!
 fn registerConstants(vm: *VM, a: Allocator) !void {
     const cs = .{
         .{ "INTL_MAX_LOCALE_LEN", 80 },
-        .{ "INTL_ICU_VERSION", 0 },
         // grapheme_extract() $type modes. zphp reports intl loaded, so the
         // symfony grapheme polyfill returns early expecting these to exist
         .{ "GRAPHEME_EXTR_COUNT", 0 },

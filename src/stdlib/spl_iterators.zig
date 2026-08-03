@@ -149,6 +149,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try filter_def.interfaces.append(a, "Iterator");
     for ([_][]const u8{
         "__construct", "rewind", "current", "key", "next", "valid", "getInnerIterator",
+        "getFilename", "isDir",
     }) |m| {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 1 else 0;
         try filter_def.methods.put(a, m, .{ .name = m, .arity = arity });
@@ -162,6 +163,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "FilterIterator::next", filterNext);
     try vm.native_fns.put(a, "FilterIterator::valid", filterValid);
     try vm.native_fns.put(a, "FilterIterator::getInnerIterator", filterGetInner);
+    try vm.native_fns.put(a, "FilterIterator::getFilename", filterGetFilename);
+    try vm.native_fns.put(a, "FilterIterator::isDir", filterIsDir);
 
     // RecursiveIteratorIterator
     var rii_def = ClassDef{ .name = "RecursiveIteratorIterator" };
@@ -500,6 +503,7 @@ fn dirname(path: []const u8) []const u8 {
 }
 
 fn statPath(path: []const u8) ?std.fs.File.Stat {
+    if (!std.fs.path.isAbsolute(path)) return std.fs.cwd().statFile(path) catch null;
     const file = std.fs.openFileAbsolute(path, .{}) catch {
         var dir = std.fs.openDirAbsolute(path, .{}) catch return null;
         defer dir.close();
@@ -797,6 +801,7 @@ fn rdiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     try obj.set(ctx.allocator, "__di_flags", .{ .int = flags });
     try obj.set(ctx.allocator, "__di_idx", .{ .int = 0 });
     try obj.set(ctx.allocator, "__pathname", .{ .string = try createString(ctx, path) });
+    try obj.set(ctx.allocator, "__rdi_root", .{ .string = try createString(ctx, path) });
 
     const entries = try loadDirectoryEntries(ctx, path, flags);
     try obj.set(ctx.allocator, "__di_entries", .{ .array = entries });
@@ -827,18 +832,20 @@ fn rdiGetChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (path_val != .string) return .null;
     const flags = objGetInt(obj, "__di_flags");
 
-    const child = try ctx.allocator.create(PhpObject);
-    child.* = .{ .class_name = obj.class_name };
-    try ctx.vm.objects.append(ctx.allocator, child);
+    const child = try ctx.createObject(obj.class_name);
     try child.set(ctx.allocator, "__di_path", .{ .string = path_val.string });
     try child.set(ctx.allocator, "__di_flags", .{ .int = flags });
     try child.set(ctx.allocator, "__di_idx", .{ .int = 0 });
     try child.set(ctx.allocator, "__pathname", .{ .string = path_val.string });
+    const root = obj.get("rootPath");
+    if (root != .null) try child.set(ctx.allocator, "rootPath", root);
+    const rdi_root = obj.get("__rdi_root");
+    if (rdi_root != .null) try child.set(ctx.allocator, "__rdi_root", rdi_root);
+    try child.set(ctx.allocator, "subPath", .null);
 
     const entries = try loadDirectoryEntries(ctx, path_val.string, flags);
     try child.set(ctx.allocator, "__di_entries", .{ .array = entries });
-
-    ctx.vm.initObjectProperties(child, child.class_name) catch {};
+    try syncCurrentEntry(ctx, child);
 
     return .{ .object = child };
 }
@@ -1025,6 +1032,22 @@ fn filterGetInner(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const inner = filterGetInnerIterator(obj) orelse return .null;
     return .{ .object = inner };
+}
+
+fn filterGetFilename(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const obj = getThis(ctx) orelse return .null;
+    const inner = filterGetInnerIterator(obj) orelse return .null;
+    if (ctx.vm.hasMethod(inner.class_name, "getFilename")) return ctx.vm.callMethod(inner, "getFilename", &.{});
+    const current = try ctx.vm.callMethod(inner, "current", &.{});
+    return if (current == .object) ctx.vm.callMethod(current.object, "getFilename", &.{}) else .null;
+}
+
+fn filterIsDir(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const obj = getThis(ctx) orelse return .{ .bool = false };
+    const inner = filterGetInnerIterator(obj) orelse return .{ .bool = false };
+    if (ctx.vm.hasMethod(inner.class_name, "isDir")) return ctx.vm.callMethod(inner, "isDir", &.{});
+    const current = try ctx.vm.callMethod(inner, "current", &.{});
+    return if (current == .object) ctx.vm.callMethod(current.object, "isDir", &.{}) else .{ .bool = false };
 }
 
 // ==========================================

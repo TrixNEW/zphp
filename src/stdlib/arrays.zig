@@ -1353,6 +1353,7 @@ fn array_unshift(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     var insert_idx: usize = 0;
     for (args[1..]) |val| {
+        VM.retainValue(val);
         try arr.entries.insert(ctx.allocator, insert_idx, .{ .key = .{ .int = 0 }, .value = val });
         insert_idx += 1;
     }

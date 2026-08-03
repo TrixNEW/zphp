@@ -135,6 +135,7 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         option == c.CURLOPT_CAPATH or
         option == c.CURLOPT_SSLCERT or
         option == c.CURLOPT_SSLKEY or
+        option == c.CURLOPT_KEYPASSWD or
         option == c.CURLOPT_RANGE or
         option == c.CURLOPT_INTERFACE or
         option == c.CURLOPT_UNIX_SOCKET_PATH)
@@ -1027,6 +1028,12 @@ pub fn register(vm: *VM, a: std.mem.Allocator) !void {
     try vm.native_fns.put(a, "CURLFile::setMimeType", curlFileSetMimeType);
     try vm.native_fns.put(a, "CURLFile::setPostFilename", curlFileSetPostFilename);
 
+    try vm.php_constants.put(a, "CURLM_OK", .{ .int = 0 });
+    try vm.php_constants.put(a, "CURLM_BAD_HANDLE", .{ .int = 1 });
+    try vm.php_constants.put(a, "CURLM_BAD_EASY_HANDLE", .{ .int = 2 });
+    try vm.php_constants.put(a, "CURLM_OUT_OF_MEMORY", .{ .int = 3 });
+    try vm.php_constants.put(a, "CURLM_INTERNAL_ERROR", .{ .int = 4 });
+    try vm.php_constants.put(a, "CURLM_CALL_MULTI_PERFORM", .{ .int = -1 });
     try vm.php_constants.put(a, "CURLMOPT_PIPELINING", .{ .int = 3 });
     try vm.php_constants.put(a, "CURLPIPE_NOTHING", .{ .int = 0 });
     try vm.php_constants.put(a, "CURLPIPE_HTTP1", .{ .int = 1 });
@@ -1080,6 +1087,7 @@ pub fn register(vm: *VM, a: std.mem.Allocator) !void {
     try vm.php_constants.put(a, "CURLOPT_CAPATH", .{ .int = c.CURLOPT_CAPATH });
     try vm.php_constants.put(a, "CURLOPT_SSLCERT", .{ .int = c.CURLOPT_SSLCERT });
     try vm.php_constants.put(a, "CURLOPT_SSLKEY", .{ .int = c.CURLOPT_SSLKEY });
+    try vm.php_constants.put(a, "CURLOPT_SSLKEYPASSWD", .{ .int = c.CURLOPT_KEYPASSWD });
     try vm.php_constants.put(a, "CURLOPT_RANGE", .{ .int = c.CURLOPT_RANGE });
     try vm.php_constants.put(a, "CURLOPT_INTERFACE", .{ .int = c.CURLOPT_INTERFACE });
     try vm.php_constants.put(a, "CURLOPT_UNIX_SOCKET_PATH", .{ .int = c.CURLOPT_UNIX_SOCKET_PATH });

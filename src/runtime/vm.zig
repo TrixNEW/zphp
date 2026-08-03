@@ -6759,6 +6759,7 @@ pub const VM = struct {
                             self.frame_count -= 1;
                             self.deinitFrameSlot(self.frame_count);
                         } else if (self.functions.get(cn)) |func| {
+                            if (try self.checkParamTypes(cn, arg_count)) continue;
                             if (ac < func.required_params) {
                                 self.dropN(ac);
                                 const msg = try self.formatTooFewArgs(cn, ac, func);
@@ -6970,6 +6971,7 @@ pub const VM = struct {
                             self.frame_count -= 1;
                             self.deinitFrameSlot(self.frame_count);
                         } else if (self.functions.get(cn)) |func| {
+                            if (try self.checkParamTypes(cn, arg_count)) continue;
                             var new_vars = self.acquireFrameVars();
                             try new_vars.put(self.allocator, "$this", .{ .object = obj });
                             for (0..@min(ac, func.arity)) |i| {
@@ -10398,7 +10400,7 @@ pub const VM = struct {
         }
     }
 
-    fn objectToString(self: *VM, obj: *PhpObject) RuntimeError![]const u8 {
+    pub fn objectToString(self: *VM, obj: *PhpObject) RuntimeError![]const u8 {
         const method_name = self.resolveMethod(obj.class_name, "__toString") catch {
             // PHP: 'Object of class X could not be converted to string'.
             // throw a catchable Error so user code wrapping the access in
@@ -14372,8 +14374,8 @@ pub const VM = struct {
                 // mode - a strict_types=1 file calling a non-strict function
                 // still gets strict argument checking
                 const caller_strict = blk: {
-                    if (self.frame_count >= 2) {
-                        const caller = &self.frames[self.frame_count - 2];
+                    if (self.frame_count >= 1) {
+                        const caller = &self.frames[self.frame_count - 1];
                         if (caller.func) |cf| break :blk cf.strict_types;
                     }
                     break :blk self.script_strict_types;
@@ -14841,7 +14843,19 @@ pub const VM = struct {
             self.error_msg = "Fatal error: maximum call stack depth exceeded";
             return error.RuntimeError;
         }
-        const full_name = self.resolveMethod(obj.class_name, method_name) catch return error.RuntimeError;
+        const full_name = self.resolveMethod(obj.class_name, method_name) catch {
+            // Internal IteratorIterator-derived classes forward missing methods
+            // to the current object exposed by their wrapped iterator.
+            const wrapped = if (obj.get("__ii_inner") != .null) obj.get("__ii_inner") else obj.get("__fi_inner");
+            if (wrapped == .object) {
+                if (self.hasMethod(wrapped.object.class_name, method_name))
+                    return self.callMethod(wrapped.object, method_name, args);
+                const current = try self.callMethod(wrapped.object, "current", &.{});
+                if (current == .object and self.hasMethod(current.object.class_name, method_name))
+                    return self.callMethod(current.object, method_name, args);
+            }
+            return error.RuntimeError;
+        };
         if (self.dbg_profile_enabled) {
             const e = self.profile_calls.getOrPut(self.allocator, full_name) catch null;
             if (e) |ee| {

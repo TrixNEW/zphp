@@ -107,6 +107,7 @@ pub const entries = .{
     .{ "stat", native_stat },
     .{ "chdir", native_chdir },
     .{ "stream_resolve_include_path", native_stream_resolve_include_path },
+    .{ "stream_is_local", native_stream_is_local },
     .{ "stream_isatty", native_stream_isatty },
     .{ "stream_supports_lock", native_stream_supports_lock },
     .{ "stream_set_chunk_size", native_stream_set_chunk_size },
@@ -625,8 +626,8 @@ fn native_file_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 }
 
 fn native_is_file(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const path = args[0].string;
+    if (args.len == 0) return .{ .bool = false };
+    const path = if (args[0] == .string) args[0].string else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return .{ .bool = false };
     if (userWrapperFor(ctx.vm, path)) |class_name| {
         const arr = (try dispatchUserStat(ctx, class_name, path, 0)) orelse return .{ .bool = false };
         const mode_v = arr.get(.{ .string = "mode" });
@@ -652,8 +653,8 @@ fn native_is_file(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn native_is_dir(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const path = args[0].string;
+    if (args.len == 0) return .{ .bool = false };
+    const path = if (args[0] == .string) args[0].string else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return .{ .bool = false };
     if (userWrapperFor(ctx.vm, path)) |class_name| {
         const arr = (try dispatchUserStat(ctx, class_name, path, 0)) orelse return .{ .bool = false };
         const mode_v = arr.get(.{ .string = "mode" });
@@ -797,9 +798,10 @@ fn native_unlink(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .bool = true };
 }
 
-fn native_copy(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    std.fs.cwd().copyFile(args[0].string, std.fs.cwd(), args[1].string, .{}) catch return Value{ .bool = false };
+fn native_copy(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    if (args.len < 2 or args[1] != .string) return .{ .bool = false };
+    const source = if (args[0] == .string) args[0].string else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return .{ .bool = false };
+    std.fs.cwd().copyFile(source, std.fs.cwd(), args[1].string, .{}) catch return Value{ .bool = false };
     return .{ .bool = true };
 }
 
@@ -1270,8 +1272,8 @@ fn native_gzfile(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const path = args[0].string;
+    if (args.len < 2 or args[1] != .string) return .{ .bool = false };
+    const path = if (args[0] == .string) args[0].string else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return .{ .bool = false };
     const mode = args[1].string;
 
     if (userWrapperFor(ctx.vm, path)) |class_name| {
@@ -2594,6 +2596,12 @@ fn native_chdir(_: *NativeContext, args: []const Value) RuntimeError!Value {
     defer dir.close();
     std.posix.fchdir(dir.fd) catch return Value{ .bool = false };
     return .{ .bool = true };
+}
+
+fn native_stream_is_local(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    if (args.len == 0 or args[0] != .string) return .{ .bool = false };
+    const scheme = extractScheme(args[0].string) orelse return .{ .bool = true };
+    return .{ .bool = std.mem.eql(u8, scheme, "file") or std.mem.eql(u8, scheme, "phar") };
 }
 
 fn native_stream_resolve_include_path(_: *NativeContext, args: []const Value) RuntimeError!Value {

@@ -16,4 +16,13 @@ zphp_locked=$(bounded "$Z" run "$P" show --locked --format=json --no-interaction
 [ "$php_locked" = "$zphp_locked" ] || { printf 'locked-package mismatch\nphp: %s\nzphp: %s\n' "$php_locked" "$zphp_locked"; exit 1; }
 php_validate=$(bounded php "$P" validate --no-check-publish --no-check-version --no-interaction 2>&1) || { printf 'php validate failed:\n%s\n' "$php_validate"; exit 1; }
 zphp_validate=$(bounded "$Z" run "$P" validate --no-check-publish --no-check-version --no-interaction 2>&1) || { printf 'zphp validate failed:\n%s\n' "$zphp_validate"; exit 1; }
+rm -rf vendor
+php_install=$(bounded php "$P" install --no-interaction --no-progress 2>&1) || { printf 'php install failed:\n%s\n' "$php_install"; exit 1; }
+php_app=$(bounded php check.php 2>&1) || { printf 'php installed application failed:\n%s\n' "$php_app"; exit 1; }
+rm -rf vendor
+zphp_install=$(bounded "$Z" run "$P" install --no-interaction --no-progress 2>&1) || { printf 'zphp install failed:\n%s\n' "$zphp_install"; exit 1; }
+zphp_app=$(bounded "$Z" run check.php 2>&1) || { printf 'zphp installed application failed:\n%s\n' "$zphp_app"; exit 1; }
+[ "$php_app" = "$zphp_app" ] || { printf 'installed application mismatch\nphp: %s\nzphp: %s\n' "$php_app" "$zphp_app"; exit 1; }
+[ -f vendor/acme/greeter/src/Greeter.php ] || { echo 'zphp install omitted package files'; exit 1; }
+rm -rf vendor
 printf 'composer compatibility suite passed under php and zphp\n'

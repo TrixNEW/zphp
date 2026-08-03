@@ -651,6 +651,28 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "Closure::bind", closureBind);
     try vm.native_fns.put(a, "Closure::fromCallable", closureFromCallable);
 
+    var rext_def = ClassDef{ .name = "ReflectionExtension" };
+    try rext_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
+    for ([_][]const u8{
+        "__construct", "getName", "getVersion", "getFunctions", "getConstants",
+        "getINIEntries", "getClasses", "getClassNames", "getDependencies",
+        "info", "isPersistent", "isTemporary", "__toString",
+    }) |method| try rext_def.methods.put(a, method, .{ .name = method, .arity = if (std.mem.eql(u8, method, "__construct")) 1 else 0 });
+    try vm.classes.put(a, "ReflectionExtension", rext_def);
+    try vm.native_fns.put(a, "ReflectionExtension::__construct", rextConstruct);
+    try vm.native_fns.put(a, "ReflectionExtension::getName", rextGetName);
+    try vm.native_fns.put(a, "ReflectionExtension::getVersion", rextGetVersion);
+    try vm.native_fns.put(a, "ReflectionExtension::getFunctions", reflectionEmptyArray);
+    try vm.native_fns.put(a, "ReflectionExtension::getConstants", reflectionEmptyArray);
+    try vm.native_fns.put(a, "ReflectionExtension::getINIEntries", reflectionEmptyArray);
+    try vm.native_fns.put(a, "ReflectionExtension::getClasses", reflectionEmptyArray);
+    try vm.native_fns.put(a, "ReflectionExtension::getClassNames", reflectionEmptyArray);
+    try vm.native_fns.put(a, "ReflectionExtension::getDependencies", reflectionEmptyArray);
+    try vm.native_fns.put(a, "ReflectionExtension::info", rextInfo);
+    try vm.native_fns.put(a, "ReflectionExtension::isPersistent", reflectionTrue);
+    try vm.native_fns.put(a, "ReflectionExtension::isTemporary", reflectionFalse);
+    try vm.native_fns.put(a, "ReflectionExtension::__toString", rextToString);
+
     // virtual ClassDefs for builtin tagged-value types so ReflectionClass(name) succeeds.
     // Generator and Fiber are runtime concepts, not stored as PhpObject, but PHP exposes
     // them via Reflection. Empty methods table is fine - dispatch handles them separately.
@@ -699,6 +721,47 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionFiber::getCallable", rfibGetCallable);
     try vm.native_fns.put(a, "ReflectionFiber::getFiber", rfibGetFiber);
     try vm.native_fns.put(a, "ReflectionFiber::getTrace", rfibGetTrace);
+}
+
+fn rextConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    if (args.len == 0 or args[0] != .string) return throwReflection(ctx, "ReflectionExtension::__construct() expects an extension name");
+    const loaded = try ctx.vm.callByName("extension_loaded", args[0..1]);
+    if (!loaded.isTruthy()) {
+        const msg = try std.fmt.allocPrint(ctx.allocator, "Extension \"{s}\" does not exist", .{args[0].string});
+        try ctx.vm.strings.append(ctx.allocator, msg);
+        return throwReflection(ctx, msg);
+    }
+    const this = getThis(ctx) orelse return .null;
+    this.set(ctx.allocator, "name", .{ .string = try ctx.createString(args[0].string) }) catch return error.OutOfMemory;
+    return .null;
+}
+
+fn rextGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .null;
+    return this.get("name");
+}
+
+fn rextGetVersion(_: *NativeContext, _: []const Value) RuntimeError!Value {
+    return .{ .string = "8.4.1" };
+}
+
+fn reflectionEmptyArray(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    return .{ .array = try ctx.createArray() };
+}
+
+fn reflectionTrue(_: *NativeContext, _: []const Value) RuntimeError!Value {
+    return .{ .bool = true };
+}
+
+fn rextInfo(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .null;
+    const name = this.get("name");
+    if (name == .string) try ctx.vm.output.appendSlice(ctx.allocator, name.string);
+    return .null;
+}
+
+fn rextToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    return rextGetName(ctx, &.{});
 }
 
 fn getThis(ctx: *NativeContext) ?*PhpObject {

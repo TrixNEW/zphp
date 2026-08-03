@@ -15,6 +15,15 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try def.interfaces.append(a, "Countable");
     try def.interfaces.append(a, "ArrayAccess");
     try def.interfaces.append(a, "Iterator");
+    for ([_]struct { name: []const u8, value: i64 }{
+        .{ .name = "BZ2", .value = 8192 }, .{ .name = "GZ", .value = 4096 },
+        .{ .name = "NONE", .value = 0 }, .{ .name = "PHAR", .value = 1 },
+        .{ .name = "TAR", .value = 2 }, .{ .name = "ZIP", .value = 3 },
+        .{ .name = "MD5", .value = 1 }, .{ .name = "SHA1", .value = 2 },
+        .{ .name = "SHA256", .value = 3 }, .{ .name = "SHA512", .value = 4 },
+        .{ .name = "OPENSSL", .value = 16 }, .{ .name = "OPENSSL_SHA256", .value = 17 },
+        .{ .name = "OPENSSL_SHA512", .value = 18 },
+    }) |constant| try def.static_props.put(a, constant.name, .{ .int = constant.value });
 
     try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try def.methods.put(a, "addFromString", .{ .name = "addFromString", .arity = 2 });
