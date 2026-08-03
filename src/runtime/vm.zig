@@ -358,6 +358,22 @@ pub const ClassDef = struct {
         allocator.free(attrs);
     }
 
+    fn freeFunctionAttributeValue(allocator: Allocator, value: Value) void {
+        if (value != .array or Value.isEmptyArrayDefault(value)) return;
+        for (value.array.entries.items) |entry| freeFunctionAttributeValue(allocator, if (entry.ref) |ref| ref.* else entry.value);
+        value.array.deinit(allocator);
+        allocator.destroy(value.array);
+    }
+
+    fn freeFunctionAttributeDefs(allocator: Allocator, attrs: []const AttributeDef) void {
+        for (attrs) |a| {
+            for (a.args) |arg| freeFunctionAttributeValue(allocator, arg);
+            if (a.args.len > 0) allocator.free(a.args);
+            if (a.arg_names.len > 0) allocator.free(a.arg_names);
+        }
+        allocator.free(attrs);
+    }
+
     fn deinit(self: *ClassDef, allocator: Allocator) void {
         self.methods.deinit(allocator);
         self.method_order.deinit(allocator);
@@ -1921,7 +1937,7 @@ pub const VM = struct {
         self.phar_cache.deinit(self.allocator);
         self.profile_calls.deinit(self.allocator);
         var fa_iter = self.function_attributes.valueIterator();
-        while (fa_iter.next()) |attrs| ClassDef.freeAttributeDefs(self.allocator, attrs.*);
+        while (fa_iter.next()) |attrs| ClassDef.freeFunctionAttributeDefs(self.allocator, attrs.*);
         self.function_attributes.deinit(self.allocator);
         self.native_fns.deinit(self.allocator);
         self.output.deinit(self.allocator);
