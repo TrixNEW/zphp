@@ -42,6 +42,7 @@ pub fn build(b: *std.Build) void {
     addLibsodium(b, exe_mod);
     addLibldap(b, exe_mod);
     addXxhashShim(b, exe_mod);
+    addFsSpaceShim(b, exe_mod);
     exe_mod.link_libc = true;
     exe_mod.addObject(fast_loop_obj);
 
@@ -91,6 +92,7 @@ pub fn build(b: *std.Build) void {
     addLibsodium(b, test_mod);
     addLibldap(b, test_mod);
     addXxhashShim(b, test_mod);
+    addFsSpaceShim(b, test_mod);
     test_mod.link_libc = true;
     test_mod.addObject(fast_loop_test_obj);
 
@@ -155,6 +157,13 @@ fn addLibicu(b: *std.Build, mod: *std.Build.Module) void {
 // libicu headers
 // vendored xxhash (single-header); compiled inline so xxh128 doesn't add a
 // system library dependency on every CI runner
+fn addFsSpaceShim(b: *std.Build, mod: *std.Build.Module) void {
+    mod.addCSourceFile(.{
+        .file = b.path("src/stdlib/fs_space_shim.c"),
+        .flags = &.{"-std=c11"},
+    });
+}
+
 fn addXxhashShim(b: *std.Build, mod: *std.Build.Module) void {
     mod.addCSourceFile(.{
         .file = b.path("src/stdlib/xxhash_shim.c"),

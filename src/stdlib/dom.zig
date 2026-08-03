@@ -54,7 +54,7 @@ var captured_errors: std.ArrayListUnmanaged(CapturedError) = .{};
 // always-available and doesn't depend on the per-script arena being live
 var capture_allocator: std.mem.Allocator = std.heap.page_allocator;
 
-fn structuredErrorHandler(_: ?*anyopaque, err_ptr: [*c]c.xmlError) callconv(.c) void {
+fn structuredErrorHandler(_: ?*anyopaque, err_ptr: [*c]const c.xmlError) callconv(.c) void {
     if (!libxml_internal_errors_enabled) return;
     if (err_ptr == null) return;
     const err = err_ptr.*;
@@ -618,19 +618,19 @@ fn domGenericSet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         const s = if (val == .string) val.string else "";
         const s_z = try dupZ(ctx, s);
         // wipe existing content and set fresh
-        c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
+        _ = c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
         return .null;
     }
     if (std.mem.eql(u8, prop, "data") and (node.type == c.XML_TEXT_NODE or node.type == c.XML_CDATA_SECTION_NODE or node.type == c.XML_COMMENT_NODE)) {
         const s = if (val == .string) val.string else "";
         const s_z = try dupZ(ctx, s);
-        c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
+        _ = c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
         return .null;
     }
     if (std.mem.eql(u8, prop, "value") and node.type == c.XML_ATTRIBUTE_NODE) {
         const s = if (val == .string) val.string else "";
         const s_z = try dupZ(ctx, s);
-        c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
+        _ = c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
         return .null;
     }
     // unrecognized property: fall back to stashing in PhpObject (matches the
@@ -1131,7 +1131,7 @@ fn domCdAppendData(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     const obj = getThis(ctx) orelse return .null;
     const node = getNodePtr(obj) orelse return .null;
     const text_z = try dupZ(ctx, args[0].string);
-    c.xmlNodeAddContent(node, @ptrCast(text_z.ptr));
+    _ = c.xmlNodeAddContent(node, @ptrCast(text_z.ptr));
     return .null;
 }
 

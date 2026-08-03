@@ -3437,18 +3437,17 @@ fn native_mime_content_type(ctx: *NativeContext, args: []const Value) RuntimeErr
     return .{ .string = try ctx.createString(mimeFromExt(path)) };
 }
 
-const c_statvfs = @cImport({
-    @cInclude("sys/statvfs.h");
-});
+extern fn zphp_disk_space(path: [*:0]const u8, free_bytes: *u64, total_bytes: *u64) c_int;
 
 fn native_disk_free_space(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
     const path_z = try ctx.allocator.allocSentinel(u8, args[0].string.len, 0);
     defer ctx.allocator.free(path_z);
     @memcpy(path_z[0..args[0].string.len], args[0].string);
-    var st: c_statvfs.struct_statvfs = undefined;
-    if (c_statvfs.statvfs(path_z, &st) != 0) return .{ .bool = false };
-    return .{ .float = @floatFromInt(@as(u64, st.f_bavail) * @as(u64, st.f_frsize)) };
+    var free_bytes: u64 = 0;
+    var total_bytes: u64 = 0;
+    if (zphp_disk_space(path_z, &free_bytes, &total_bytes) != 0) return .{ .bool = false };
+    return .{ .float = @floatFromInt(free_bytes) };
 }
 
 fn native_disk_total_space(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -3456,9 +3455,10 @@ fn native_disk_total_space(ctx: *NativeContext, args: []const Value) RuntimeErro
     const path_z = try ctx.allocator.allocSentinel(u8, args[0].string.len, 0);
     defer ctx.allocator.free(path_z);
     @memcpy(path_z[0..args[0].string.len], args[0].string);
-    var st: c_statvfs.struct_statvfs = undefined;
-    if (c_statvfs.statvfs(path_z, &st) != 0) return .{ .bool = false };
-    return .{ .float = @floatFromInt(@as(u64, st.f_blocks) * @as(u64, st.f_frsize)) };
+    var free_bytes: u64 = 0;
+    var total_bytes: u64 = 0;
+    if (zphp_disk_space(path_z, &free_bytes, &total_bytes) != 0) return .{ .bool = false };
+    return .{ .float = @floatFromInt(total_bytes) };
 }
 
 fn native_linkinfo(_: *NativeContext, args: []const Value) RuntimeError!Value {
