@@ -9,7 +9,7 @@ const TypeHint = @import("pipeline/compiler.zig").TypeHint;
 const Allocator = std.mem.Allocator;
 
 const MAGIC = "ZPHPC\x00";
-const FORMAT_VERSION: u16 = 5;
+const FORMAT_VERSION: u16 = 6;
 
 // tag bytes for serialized values
 const TAG_NULL: u8 = 0;
@@ -20,6 +20,8 @@ const TAG_FLOAT: u8 = 4;
 const TAG_STRING: u8 = 5;
 const TAG_EMPTY_ARRAY: u8 = 6;
 const TAG_NEW_DEFAULT: u8 = 7;
+const TAG_ARRAY: u8 = 8;
+const TAG_DEFERRED_EXPR: u8 = 9;
 
 const StringTable = struct {
     entries: std.ArrayListUnmanaged([]const u8) = .{},
@@ -55,9 +57,7 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
     for (result.functions.items) |*func| {
         _ = try strtab.intern(allocator, func.name);
         for (func.params) |p| _ = try strtab.intern(allocator, p);
-        for (func.defaults) |d| {
-            if (d == .string and !bytecode.isNewDefaultSentinel(d.string)) _ = try strtab.intern(allocator, d.string);
-        }
+        for (func.defaults) |d| try internValueStrings(allocator, &strtab, d);
         for (func.slot_names) |sn| _ = try strtab.intern(allocator, sn);
         if (func.file_path.len > 0) _ = try strtab.intern(allocator, func.file_path);
         if (func.doc_comment.len > 0) _ = try strtab.intern(allocator, func.doc_comment);
@@ -65,14 +65,22 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
     }
     for (result.new_defaults.items) |nd| {
         _ = try strtab.intern(allocator, nd.class_name);
-        for (nd.args) |a| {
-            if (a == .string and !bytecode.isNewDefaultSentinel(a.string)) _ = try strtab.intern(allocator, a.string);
-        }
+        for (nd.args) |a| try internValueStrings(allocator, &strtab, a);
     }
     for (result.type_hints.items) |th| {
         _ = try strtab.intern(allocator, th.name);
         if (th.return_type.len > 0) _ = try strtab.intern(allocator, th.return_type);
         for (th.param_types) |pt| _ = try strtab.intern(allocator, pt);
+    }
+    for (result.function_attrs.items) |fa| {
+        _ = try strtab.intern(allocator, fa.name);
+        for (fa.attrs) |attr| {
+            _ = try strtab.intern(allocator, attr.name);
+            for (attr.args) |arg| try internValueStrings(allocator, &strtab, arg);
+            for (attr.arg_names) |arg_name| {
+                if (arg_name) |name| _ = try strtab.intern(allocator, name);
+            }
+        }
     }
 
     // header
@@ -119,12 +127,50 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
         }
     }
 
+    // function and closure attributes are registered directly from CompileResult.
+    try writeU32(&buf, allocator, @intCast(result.function_attrs.items.len));
+    for (result.function_attrs.items) |fa| {
+        try writeU32(&buf, allocator, try strtab.intern(allocator, fa.name));
+        try writeU16(&buf, allocator, @intCast(fa.attrs.len));
+        for (fa.attrs) |attr| {
+            try writeU32(&buf, allocator, try strtab.intern(allocator, attr.name));
+            try writeU16(&buf, allocator, @intCast(attr.args.len));
+            for (attr.args) |arg| try serializeValue(&buf, allocator, &strtab, arg);
+            try writeU16(&buf, allocator, @intCast(attr.arg_names.len));
+            for (attr.arg_names) |arg_name| {
+                try writeU32(&buf, allocator, if (arg_name) |name| try strtab.intern(allocator, name) else 0xFFFFFFFF);
+            }
+        }
+    }
+
     return buf.toOwnedSlice(allocator);
 }
 
 fn internChunkStrings(allocator: Allocator, strtab: *StringTable, chunk: *const Chunk) !void {
-    for (chunk.constants.items) |val| {
-        if (val == .string) _ = try strtab.intern(allocator, val.string);
+    for (chunk.constants.items) |val| try internValueStrings(allocator, strtab, val);
+}
+
+fn internValueStrings(allocator: Allocator, strtab: *StringTable, val: Value) !void {
+    switch (val) {
+        .string => |s| {
+            if (bytecode.deferredExprPtr(s)) |de| {
+                try internValueStrings(allocator, strtab, de.lhs);
+                try internValueStrings(allocator, strtab, de.rhs);
+            } else if (bytecode.newDefaultPtr(s)) |nd| {
+                _ = try strtab.intern(allocator, nd.class_name);
+                for (nd.args) |arg| try internValueStrings(allocator, strtab, arg);
+            } else {
+                _ = try strtab.intern(allocator, s);
+            }
+        },
+        .array => |arr| {
+            if (val.isEmptyArrayDefault()) return;
+            for (arr.entries.items) |entry| {
+                if (entry.key == .string) _ = try strtab.intern(allocator, entry.key.string);
+                try internValueStrings(allocator, strtab, if (entry.ref) |ref| ref.* else entry.value);
+            }
+        },
+        else => {},
     }
 }
 
@@ -210,7 +256,12 @@ fn serializeValue(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab
             try writeF64(buf, allocator, f);
         },
         .string => |s| {
-            if (bytecode.newDefaultPtr(s)) |nd| {
+            if (bytecode.deferredExprPtr(s)) |de| {
+                try buf.append(allocator, TAG_DEFERRED_EXPR);
+                try buf.append(allocator, @intFromEnum(de.op));
+                try serializeValue(buf, allocator, strtab, de.lhs);
+                try serializeValue(buf, allocator, strtab, de.rhs);
+            } else if (bytecode.newDefaultPtr(s)) |nd| {
                 try buf.append(allocator, TAG_NEW_DEFAULT);
                 try writeU32(buf, allocator, try strtab.intern(allocator, nd.class_name));
                 try buf.append(allocator, @intCast(nd.args.len));
@@ -220,14 +271,28 @@ fn serializeValue(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab
                 try writeU32(buf, allocator, try strtab.intern(allocator, s));
             }
         },
-        .array => {
+        .array => |arr| {
             if (val.isEmptyArrayDefault()) {
                 try buf.append(allocator, TAG_EMPTY_ARRAY);
             } else {
-                try buf.append(allocator, TAG_NULL);
+                try buf.append(allocator, TAG_ARRAY);
+                try writeU32(buf, allocator, @intCast(arr.entries.items.len));
+                for (arr.entries.items) |entry| {
+                    switch (entry.key) {
+                        .int => |key| {
+                            try buf.append(allocator, 0);
+                            try writeI64(buf, allocator, key);
+                        },
+                        .string => |key| {
+                            try buf.append(allocator, 1);
+                            try writeU32(buf, allocator, try strtab.intern(allocator, key));
+                        },
+                    }
+                    try serializeValue(buf, allocator, strtab, if (entry.ref) |ref| ref.* else entry.value);
+                }
             }
         },
-        else => try buf.append(allocator, TAG_NULL),
+        .object, .generator, .fiber => return error.UnsupportedValue,
     }
 }
 
@@ -308,6 +373,7 @@ const DeserCtx = struct {
     allocator: Allocator,
     strings: []const []const u8,
     new_defaults: *std.ArrayListUnmanaged(*bytecode.NewDefault),
+    deferred_exprs: *std.ArrayListUnmanaged(*bytecode.DeferredExpr),
     string_allocs: *std.ArrayListUnmanaged([]const u8),
 };
 
@@ -358,10 +424,16 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
         }
         new_defaults.deinit(allocator);
     }
+    var deferred_exprs = std.ArrayListUnmanaged(*bytecode.DeferredExpr){};
+    errdefer {
+        for (deferred_exprs.items) |de| allocator.destroy(de);
+        deferred_exprs.deinit(allocator);
+    }
     var ctx = DeserCtx{
         .allocator = allocator,
         .strings = strings,
         .new_defaults = &new_defaults,
+        .deferred_exprs = &deferred_exprs,
         .string_allocs = &string_allocs,
     };
 
@@ -390,22 +462,49 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
 
     // type hints
     var type_hints = std.ArrayListUnmanaged(TypeHint){};
-    const th_count = r.readU32() catch 0;
+    errdefer {
+        for (type_hints.items) |th| if (th.param_types.len > 0) allocator.free(th.param_types);
+        type_hints.deinit(allocator);
+    }
+    const th_count = r.readU32() catch return error.InvalidFormat;
     for (0..th_count) |_| {
-        const th_name_idx = r.readU32() catch break;
-        const th_ret_idx = r.readU32() catch break;
-        const th_param_count = r.readU16() catch break;
-        const param_types = allocator.alloc([]const u8, th_param_count) catch break;
-        for (0..th_param_count) |pi| {
-            const pt_idx = r.readU32() catch break;
-            param_types[pi] = strings[pt_idx];
-        }
-        type_hints.append(allocator, .{
+        const th_name_idx = try readStringIndex(&r, strings);
+        const th_ret_idx = r.readU32() catch return error.InvalidFormat;
+        if (th_ret_idx != 0xFFFFFFFF and th_ret_idx >= strings.len) return error.InvalidFormat;
+        const th_param_count = r.readU16() catch return error.InvalidFormat;
+        const param_types = allocator.alloc([]const u8, th_param_count) catch return error.OutOfMemory;
+        errdefer allocator.free(param_types);
+        for (0..th_param_count) |pi| param_types[pi] = strings[try readStringIndex(&r, strings)];
+        try type_hints.append(allocator, .{
             .name = strings[th_name_idx],
             .return_type = if (th_ret_idx == 0xFFFFFFFF) "" else strings[th_ret_idx],
             .param_types = param_types,
-        }) catch break;
+        });
     }
+
+    var function_attrs = std.ArrayListUnmanaged(@import("pipeline/compiler.zig").FunctionAttrEntry){};
+    const function_attr_count = r.readU32() catch return error.InvalidFormat;
+    for (0..function_attr_count) |_| {
+        const fn_name = strings[try readStringIndex(&r, strings)];
+        const attr_count = r.readU16() catch return error.InvalidFormat;
+        const attrs = try allocator.alloc(@import("runtime/vm.zig").AttributeDef, attr_count);
+        for (0..attr_count) |ai| {
+            const attr_name = strings[try readStringIndex(&r, strings)];
+            const arg_count = r.readU16() catch return error.InvalidFormat;
+            const args = try allocator.alloc(Value, arg_count);
+            for (0..arg_count) |i| args[i] = try deserializeValue(&r, &ctx);
+            const arg_name_count = r.readU16() catch return error.InvalidFormat;
+            const arg_names = try allocator.alloc(?[]const u8, arg_name_count);
+            for (0..arg_name_count) |i| {
+                const idx = r.readU32() catch return error.InvalidFormat;
+                if (idx != 0xFFFFFFFF and idx >= strings.len) return error.InvalidFormat;
+                arg_names[i] = if (idx == 0xFFFFFFFF) null else strings[idx];
+            }
+            attrs[ai] = .{ .name = attr_name, .args = args, .arg_names = arg_names };
+        }
+        try function_attrs.append(allocator, .{ .name = fn_name, .attrs = attrs });
+    }
+    if (r.pos != data.len) return error.InvalidFormat;
 
     allocator.free(strings);
 
@@ -419,7 +518,9 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
         .file_path = file_path,
         .strict_types = strict_types,
         .type_hints = type_hints,
+        .function_attrs = function_attrs,
         .new_defaults = new_defaults,
+        .deferred_exprs = deferred_exprs,
     };
 }
 
@@ -442,6 +543,12 @@ fn deserializeChunk(r: *Reader, ctx: *DeserCtx) !Chunk {
     }
 
     return chunk;
+}
+
+fn readStringIndex(r: *Reader, strings: []const []const u8) !u32 {
+    const idx = try r.readU32();
+    if (idx >= strings.len) return error.InvalidFormat;
+    return idx;
 }
 
 fn deserializeFunction(r: *Reader, ctx: *DeserCtx) !ObjFunction {
@@ -522,10 +629,27 @@ fn deserializeValue(r: *Reader, ctx: *DeserCtx) !Value {
         TAG_BOOL_TRUE => .{ .bool = true },
         TAG_INT => .{ .int = try r.readI64() },
         TAG_FLOAT => .{ .float = try r.readF64() },
-        TAG_STRING => .{ .string = ctx.strings[try r.readU32()] },
+        TAG_STRING => .{ .string = ctx.strings[try readStringIndex(r, ctx.strings)] },
         TAG_EMPTY_ARRAY => Value.empty_array_default,
+        TAG_ARRAY => blk: {
+            const arr = try ctx.allocator.create(@import("runtime/value.zig").PhpArray);
+            errdefer ctx.allocator.destroy(arr);
+            arr.* = .{};
+            errdefer arr.deinit(ctx.allocator);
+            const count = try r.readU32();
+            for (0..count) |_| {
+                const key_tag = try r.readByte();
+                const key: @import("runtime/value.zig").PhpArray.Key = switch (key_tag) {
+                    0 => .{ .int = try r.readI64() },
+                    1 => .{ .string = ctx.strings[try readStringIndex(r, ctx.strings)] },
+                    else => return error.InvalidFormat,
+                };
+                try arr.set(ctx.allocator, key, try deserializeValue(r, ctx));
+            }
+            break :blk .{ .array = arr };
+        },
         TAG_NEW_DEFAULT => blk: {
-            const class_idx = try r.readU32();
+            const class_idx = try readStringIndex(r, ctx.strings);
             const arg_count = try r.readByte();
             const args = try ctx.allocator.alloc(Value, arg_count);
             errdefer ctx.allocator.free(args);
@@ -538,7 +662,19 @@ fn deserializeValue(r: *Reader, ctx: *DeserCtx) !Value {
             try ctx.string_allocs.append(ctx.allocator, sentinel);
             break :blk .{ .string = sentinel };
         },
-        else => .null,
+        TAG_DEFERRED_EXPR => blk: {
+            const op = std.meta.intToEnum(bytecode.DeferredExpr.Op, try r.readByte()) catch return error.InvalidFormat;
+            const lhs = try deserializeValue(r, ctx);
+            const rhs = try deserializeValue(r, ctx);
+            const de = try ctx.allocator.create(bytecode.DeferredExpr);
+            errdefer ctx.allocator.destroy(de);
+            de.* = .{ .op = op, .lhs = lhs, .rhs = rhs };
+            try ctx.deferred_exprs.append(ctx.allocator, de);
+            const sentinel = bytecode.encodeDeferredExprSentinel(ctx.allocator, de) catch return error.OutOfMemory;
+            try ctx.string_allocs.append(ctx.allocator, sentinel);
+            break :blk .{ .string = sentinel };
+        },
+        else => return error.InvalidFormat,
     };
 }
 

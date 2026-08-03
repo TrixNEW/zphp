@@ -1921,13 +1921,7 @@ pub const VM = struct {
         self.phar_cache.deinit(self.allocator);
         self.profile_calls.deinit(self.allocator);
         var fa_iter = self.function_attributes.valueIterator();
-        while (fa_iter.next()) |attrs| {
-            for (attrs.*) |a| {
-                if (a.args.len > 0) self.allocator.free(a.args);
-                if (a.arg_names.len > 0) self.allocator.free(a.arg_names);
-            }
-            self.allocator.free(attrs.*);
-        }
+        while (fa_iter.next()) |attrs| ClassDef.freeAttributeDefs(self.allocator, attrs.*);
         self.function_attributes.deinit(self.allocator);
         self.native_fns.deinit(self.allocator);
         self.output.deinit(self.allocator);

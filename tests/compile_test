@@ -120,6 +120,28 @@ echo ($d instanceof Animal ? "yes" : "no") . "\n";
 EOF
 run_test "classes" "$TMPDIR/classes.php"
 
+cat > "$TMPDIR/metadata.php" << 'EOF'
+<?php
+#[Attribute(Attribute::TARGET_FUNCTION)]
+class Route {
+    public function __construct(public array $methods, public string $path) {}
+}
+
+class Flags {
+    public const READ = 1;
+    public const WRITE = 2;
+}
+
+#[Route(['GET', 'POST'], '/items')]
+function endpoint(int $flags = Flags::READ | Flags::WRITE): int {
+    return $flags;
+}
+
+$attribute = (new ReflectionFunction('endpoint'))->getAttributes(Route::class)[0]->newInstance();
+echo implode(',', $attribute->methods), ' ', $attribute->path, ' ', endpoint(), "\n";
+EOF
+run_test "metadata" "$TMPDIR/metadata.php"
+
 cat > "$TMPDIR/strings.php" << 'EOF'
 <?php
 $s = "hello world";
