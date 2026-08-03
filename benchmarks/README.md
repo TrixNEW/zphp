@@ -22,20 +22,18 @@ Requires PHP installed locally. zphp must be built with ReleaseFast - debug buil
 
 | benchmark | php | zphp | ratio |
 |---|---|---|---|
-| string_ops | 88 ms | 58 ms | 0.66x |
-| array_ops | 86 ms | 64 ms | 0.74x |
-| objects | 87 ms | 79 ms | 0.91x |
-| closures | 96 ms | 114 ms | 1.19x |
-| fibonacci | 162 ms | 240 ms | 1.48x |
-| loops | 130 ms | 203 ms | 1.56x |
+| string_ops | 95 ms | 58 ms | 0.61x |
+| array_ops | 85 ms | 59 ms | 0.69x |
+| objects | 99 ms | 80 ms | 0.81x |
+| closures | 96 ms | 115 ms | 1.20x |
+| fibonacci | 165 ms | 268 ms | 1.62x |
+| loops | 131 ms | 212 ms | 1.62x |
 
 zphp remains faster on the array, string, and object benchmarks. Sequential-array key lookup, fastLoop concat handling, the growable concat-assignment buffer, property slot indices, and inline-cached property access are the main advantages in those workloads.
 
 Closures, Fibonacci, and loops are slower than PHP in the current ownership-correct runtime. Object, array, generator, and fiber lifetime tracking adds tag checks to general operand-stack operations. A conservative compile-time proof for scalar-only function stacks was implemented and fully tested, but it made Fibonacci and loops slower through VM code-generation perturbation, so it was not shipped. The table reports the measured implementation rather than retaining earlier results from before the ownership model changed.
 
 These six microbenchmarks are code-generation canaries, not the primary performance target. Real WordPress and Laravel harnesses are measured separately with `benchmarks/macro/run`; request and application throughput take priority over an isolated recursive call or arithmetic loop.
-
-### Optimization targets
 
 ## serve
 
