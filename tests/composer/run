@@ -10,6 +10,6 @@ zphp_version=$(bounded "$Z" run "$P" --version 2>/dev/null | sed 's/ PHP version
 php_locked=$(bounded php "$P" show --locked --format=json --no-interaction 2>/dev/null | php -r '$v=json_decode(stream_get_contents(STDIN),true); echo json_encode($v, JSON_UNESCAPED_SLASHES);')
 zphp_locked=$(bounded "$Z" run "$P" show --locked --format=json --no-interaction 2>/dev/null | php -r '$v=json_decode(stream_get_contents(STDIN),true); echo json_encode($v, JSON_UNESCAPED_SLASHES);')
 [ "$php_locked" = "$zphp_locked" ] || { printf 'locked-package mismatch\nphp: %s\nzphp: %s\n' "$php_locked" "$zphp_locked"; exit 1; }
-bounded php "$P" validate --no-check-publish --no-check-version --no-interaction >/dev/null 2>&1
-bounded "$Z" run "$P" validate --no-check-publish --no-check-version --no-interaction >/dev/null 2>&1
+php_validate=$(bounded php "$P" validate --no-check-publish --no-check-version --no-interaction 2>&1) || { printf 'php validate failed:\n%s\n' "$php_validate"; exit 1; }
+zphp_validate=$(bounded "$Z" run "$P" validate --no-check-publish --no-check-version --no-interaction 2>&1) || { printf 'zphp validate failed:\n%s\n' "$zphp_validate"; exit 1; }
 printf 'composer compatibility suite passed under php and zphp\n'
