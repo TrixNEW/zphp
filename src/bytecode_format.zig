@@ -3,13 +3,14 @@ const Value = @import("runtime/value.zig").Value;
 const bytecode = @import("pipeline/bytecode.zig");
 const Chunk = bytecode.Chunk;
 const ObjFunction = bytecode.ObjFunction;
-const CompileResult = @import("pipeline/compiler.zig").CompileResult;
-const TypeHint = @import("pipeline/compiler.zig").TypeHint;
+const compiler = @import("pipeline/compiler.zig");
+const CompileResult = compiler.CompileResult;
+const TypeHint = compiler.TypeHint;
 
 const Allocator = std.mem.Allocator;
 
 const MAGIC = "ZPHPC\x00";
-const FORMAT_VERSION: u16 = 6;
+const FORMAT_VERSION: u16 = 7;
 
 // tag bytes for serialized values
 const TAG_NULL: u8 = 0;
@@ -106,6 +107,7 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
         try writeU32(&buf, allocator, 0xFFFFFFFF);
     }
     try buf.append(allocator, if (result.strict_types) 1 else 0);
+    try writeU32(&buf, allocator, compiler.closureCounter());
 
     // main chunk
     try serializeChunk(&buf, allocator, &strtab, &result.chunk, result.source);
@@ -415,6 +417,8 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
     const file_path_idx = r.readU32() catch return error.InvalidFormat;
     const file_path: []const u8 = if (file_path_idx == 0xFFFFFFFF) "" else strings[file_path_idx];
     const strict_types = (r.readByte() catch return error.InvalidFormat) != 0;
+    const closure_counter = r.readU32() catch return error.InvalidFormat;
+    if (closure_counter > compiler.closureCounter()) compiler.setClosureCounter(closure_counter);
 
     var new_defaults = std.ArrayListUnmanaged(*bytecode.NewDefault){};
     errdefer {

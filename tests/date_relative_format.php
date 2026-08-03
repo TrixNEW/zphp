@@ -12,6 +12,7 @@ echo date('Y-m-d', strtotime("last sunday", strtotime("2024-01-15"))), "\n"; // 
 echo date('Y-m-d', strtotime("first day of next month", strtotime("2024-01-15"))), "\n"; // 2024-02-01
 echo date('Y-m-d', strtotime("last day of this month", strtotime("2024-02-15"))), "\n"; // 2024-02-29
 echo date('Y-m-d', strtotime("+2 weeks +3 days", strtotime("2024-01-01"))), "\n"; // 2024-01-18
+echo strtotime("now - 7200 seconds", strtotime("2024-01-15 12:00:00")), "\n";
 echo date('Y-m-d H:i', strtotime("tomorrow", strtotime("2024-01-15 10:30:00"))), "\n"; // next day 00:00
 echo date('Y-m-d', strtotime("yesterday", strtotime("2024-01-15"))), "\n"; // 2024-01-14
 echo date('Y-m-d', strtotime("today", strtotime("2024-06-20"))), "\n"; // 2024-06-20

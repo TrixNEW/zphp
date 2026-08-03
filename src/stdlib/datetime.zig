@@ -2893,6 +2893,11 @@ pub fn parseRelativeTime(input: []const u8, base: i64) Value {
 
     // "now"
     if (eqlLower(s, "now")) return .{ .int = base };
+    if (startsWithLower(s, "now ")) {
+        var rest = s[4..];
+        while (rest.len > 0 and rest[0] == ' ') rest = rest[1..];
+        if (rest.len > 0) return parseRelativeTime(rest, base);
+    }
 
     // compound "midnight"/"noon" + a date expression. PHP applies tokens
     // left to right: a leading midnight/noon sets the time-of-day on the

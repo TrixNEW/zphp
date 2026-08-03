@@ -136,7 +136,9 @@ fn dumpProfile(vm: *@import("runtime/vm.zig").VM) void {
         list.append(a, .{ .name = e.key_ptr.*, .count = e.value_ptr.* }) catch return;
     }
     std.sort.heap(Entry, list.items, {}, struct {
-        fn lt(_: void, x: Entry, y: Entry) bool { return x.count > y.count; }
+        fn lt(_: void, x: Entry, y: Entry) bool {
+            return x.count > y.count;
+        }
     }.lt);
     const sfe = std.fs.File{ .handle = 2 };
     _ = sfe.write("[profile] top callees:\n") catch {};
@@ -148,9 +150,59 @@ fn dumpProfile(vm: *@import("runtime/vm.zig").VM) void {
     }
 }
 
+const compile_cache_dir = "bytecode-v7";
+
+fn compileCachePath(allocator: std.mem.Allocator, path: []const u8, stat: std.fs.File.Stat, closure_counter: u32) ![]u8 {
+    var digest: [32]u8 = undefined;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(path);
+    hasher.update(std.mem.asBytes(&stat.inode));
+    hasher.update(std.mem.asBytes(&stat.size));
+    hasher.update(std.mem.asBytes(&stat.mtime));
+    hasher.update(std.mem.asBytes(&stat.ctime));
+    hasher.update(std.mem.asBytes(&closure_counter));
+    hasher.final(&digest);
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    const cache_root = try std.fs.getAppDataDir(allocator, "zphp");
+    defer allocator.free(cache_root);
+    return std.fmt.allocPrint(allocator, "{s}/{s}/{s}.zphpc", .{ cache_root, compile_cache_dir, hex });
+}
+
+fn loadCompileCache(allocator: std.mem.Allocator, path: []const u8, stat: std.fs.File.Stat, closure_counter: u32) ?*CompileResult {
+    const cache_path = compileCachePath(allocator, path, stat, closure_counter) catch return null;
+    defer allocator.free(cache_path);
+    const data = std.fs.cwd().readFileAlloc(allocator, cache_path, 256 * 1024 * 1024) catch return null;
+    defer allocator.free(data);
+    const result = bytecode_format.deserialize(allocator, data) catch {
+        std.fs.cwd().deleteFile(cache_path) catch {};
+        return null;
+    };
+    const heap_result = allocator.create(CompileResult) catch {
+        var owned = result;
+        owned.deinit();
+        return null;
+    };
+    heap_result.* = result;
+    return heap_result;
+}
+
+fn saveCompileCache(allocator: std.mem.Allocator, path: []const u8, stat: std.fs.File.Stat, closure_counter: u32, result: *const CompileResult) void {
+    const cache_path = compileCachePath(allocator, path, stat, closure_counter) catch return;
+    defer allocator.free(cache_path);
+    const data = bytecode_format.serialize(allocator, result) catch return;
+    defer allocator.free(data);
+    var write_buffer: [64 * 1024]u8 = undefined;
+    var atomic = std.fs.cwd().atomicFile(cache_path, .{ .make_path = true, .write_buffer = &write_buffer }) catch return;
+    defer atomic.deinit();
+    atomic.file_writer.interface.writeAll(data) catch return;
+    atomic.finish() catch return;
+}
+
 fn loadFile(path: []const u8, allocator: std.mem.Allocator, vm: *@import("runtime/vm.zig").VM) ?*CompileResult {
     var abs_path: []const u8 = undefined;
     var source: []const u8 = undefined;
+    var source_stat: ?std.fs.File.Stat = null;
+    const closure_counter = compiler.closureCounter();
 
     if (std.mem.startsWith(u8, path, "phar://")) {
         // resolve phar://[alias-or-fspath]/[internal-path] to (archive-path, internal-path)
@@ -229,7 +281,34 @@ fn loadFile(path: []const u8, allocator: std.mem.Allocator, vm: *@import("runtim
         };
     } else {
         abs_path = std.fs.cwd().realpathAlloc(allocator, path) catch allocator.dupe(u8, path) catch return null;
-        source = std.fs.cwd().readFileAlloc(allocator, abs_path, max_source_size) catch return null;
+        const file = std.fs.cwd().openFile(abs_path, .{}) catch {
+            allocator.free(abs_path);
+            return null;
+        };
+        defer file.close();
+        const stat = file.stat() catch {
+            allocator.free(abs_path);
+            return null;
+        };
+        if (loadCompileCache(allocator, abs_path, stat, closure_counter)) |cached| {
+            allocator.free(abs_path);
+            return cached;
+        }
+        source = file.readToEndAlloc(allocator, max_source_size) catch {
+            allocator.free(abs_path);
+            return null;
+        };
+        const read_stat = file.stat() catch {
+            allocator.free(source);
+            allocator.free(abs_path);
+            return null;
+        };
+        if (stat.inode != read_stat.inode or stat.size != read_stat.size or stat.mtime != read_stat.mtime or stat.ctime != read_stat.ctime) {
+            allocator.free(source);
+            allocator.free(abs_path);
+            return loadFile(path, allocator, vm);
+        }
+        source_stat = stat;
     }
 
     var ast = parser.parse(allocator, source) catch {
@@ -275,6 +354,8 @@ fn loadFile(path: []const u8, allocator: std.mem.Allocator, vm: *@import("runtim
         allocator.destroy(heap_result);
         return null;
     };
+
+    if (source_stat) |stat| saveCompileCache(allocator, abs_path, stat, closure_counter, heap_result);
 
     return heap_result;
 }

@@ -19,6 +19,14 @@ const Error = Allocator.Error || error{CompileError};
 
 var global_closure_counter: u32 = 0;
 
+pub fn closureCounter() u32 {
+    return global_closure_counter;
+}
+
+pub fn setClosureCounter(value: u32) void {
+    global_closure_counter = value;
+}
+
 pub const TypeHint = struct {
     name: []const u8,
     param_types: []const []const u8 = &.{},
