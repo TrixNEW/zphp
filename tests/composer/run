@@ -2,6 +2,9 @@
 set -eu
 D=$(CDPATH= cd -- "$(dirname "$0")" && pwd); Z=${ZPHP:-"$D/../../zig-out/bin/zphp"}; P="$D/composer.phar"; A="$D/fixture/app"
 export COMPOSER_AUTH='{}'
+export COMPOSER_HOME="$D/.composer-home"
+rm -rf "$COMPOSER_HOME"
+mkdir -p "$COMPOSER_HOME"
 [ -x "$Z" ] || { echo "zphp not found at $Z"; exit 1; }; [ -f "$P" ] || { echo "run tests/composer/setup first"; exit 1; }; command -v php >/dev/null
 bounded() { if command -v timeout >/dev/null 2>&1; then timeout 120 "$@"; elif command -v gtimeout >/dev/null 2>&1; then gtimeout 120 "$@"; else "$@"; fi; }
 cd "$A"
