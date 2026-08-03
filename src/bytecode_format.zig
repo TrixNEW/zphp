@@ -9,7 +9,7 @@ const TypeHint = @import("pipeline/compiler.zig").TypeHint;
 const Allocator = std.mem.Allocator;
 
 const MAGIC = "ZPHPC\x00";
-const FORMAT_VERSION: u16 = 4;
+const FORMAT_VERSION: u16 = 5;
 
 // tag bytes for serialized values
 const TAG_NULL: u8 = 0;
@@ -59,6 +59,8 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
             if (d == .string and !bytecode.isNewDefaultSentinel(d.string)) _ = try strtab.intern(allocator, d.string);
         }
         for (func.slot_names) |sn| _ = try strtab.intern(allocator, sn);
+        if (func.file_path.len > 0) _ = try strtab.intern(allocator, func.file_path);
+        if (func.doc_comment.len > 0) _ = try strtab.intern(allocator, func.doc_comment);
         try internChunkStrings(allocator, &strtab, &func.chunk);
     }
     for (result.new_defaults.items) |nd| {
@@ -95,6 +97,7 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
     } else {
         try writeU32(&buf, allocator, 0xFFFFFFFF);
     }
+    try buf.append(allocator, if (result.strict_types) 1 else 0);
 
     // main chunk
     try serializeChunk(&buf, allocator, &strtab, &result.chunk, result.source);
@@ -157,8 +160,18 @@ fn serializeFunction(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, str
     if (func.is_variadic) flags |= 1;
     if (func.is_generator) flags |= 2;
     if (func.is_arrow) flags |= 4;
+    if (func.is_static) flags |= 8;
+    if (func.returns_ref) flags |= 16;
+    if (func.locals_only) flags |= 32;
+    if (func.strict_types) flags |= 64;
+    if (func.has_param_types) flags |= 128;
     try buf.append(allocator, flags);
     try writeU16(buf, allocator, func.cond_id);
+    try buf.append(allocator, @intFromEnum(func.return_type_kind));
+    try writeU32(buf, allocator, if (func.file_path.len > 0) try strtab.intern(allocator, func.file_path) else 0xFFFFFFFF);
+    try writeU32(buf, allocator, func.start_line);
+    try writeU32(buf, allocator, func.end_line);
+    try writeU32(buf, allocator, if (func.doc_comment.len > 0) try strtab.intern(allocator, func.doc_comment) else 0xFFFFFFFF);
 
     try buf.append(allocator, @intCast(func.params.len));
     for (func.params) |p| {
@@ -335,6 +348,7 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
     }
     const file_path_idx = r.readU32() catch return error.InvalidFormat;
     const file_path: []const u8 = if (file_path_idx == 0xFFFFFFFF) "" else strings[file_path_idx];
+    const strict_types = (r.readByte() catch return error.InvalidFormat) != 0;
 
     var new_defaults = std.ArrayListUnmanaged(*bytecode.NewDefault){};
     errdefer {
@@ -403,6 +417,7 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
         .local_count = local_count,
         .slot_names = slot_names,
         .file_path = file_path,
+        .strict_types = strict_types,
         .type_hints = type_hints,
         .new_defaults = new_defaults,
     };
@@ -437,6 +452,11 @@ fn deserializeFunction(r: *Reader, ctx: *DeserCtx) !ObjFunction {
     const required = try r.readByte();
     const flags = try r.readByte();
     const cond_id = try r.readU16();
+    const return_type_kind = std.meta.intToEnum(bytecode.ReturnTypeKind, try r.readByte()) catch return error.InvalidFormat;
+    const file_path_idx = try r.readU32();
+    const start_line = try r.readU32();
+    const end_line = try r.readU32();
+    const doc_comment_idx = try r.readU32();
 
     const param_count = try r.readByte();
     const params = try allocator.alloc([]const u8, param_count);
@@ -474,6 +494,16 @@ fn deserializeFunction(r: *Reader, ctx: *DeserCtx) !ObjFunction {
         .is_variadic = (flags & 1) != 0,
         .is_generator = (flags & 2) != 0,
         .is_arrow = (flags & 4) != 0,
+        .is_static = (flags & 8) != 0,
+        .returns_ref = (flags & 16) != 0,
+        .locals_only = (flags & 32) != 0,
+        .strict_types = (flags & 64) != 0,
+        .has_param_types = (flags & 128) != 0,
+        .return_type_kind = return_type_kind,
+        .file_path = if (file_path_idx == 0xFFFFFFFF) "" else strings[file_path_idx],
+        .start_line = start_line,
+        .end_line = end_line,
+        .doc_comment = if (doc_comment_idx == 0xFFFFFFFF) "" else strings[doc_comment_idx],
         .cond_id = cond_id,
         .params = params,
         .defaults = defaults,
