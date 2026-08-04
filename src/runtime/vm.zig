@@ -72,7 +72,6 @@ pub const NativeContext = struct {
     strings: *std.ArrayListUnmanaged([]const u8),
     vm: *VM,
     call_name: ?[]const u8 = null,
-    arg_sources: ?[]const RefSource = null,
 
     pub fn createArray(self: *NativeContext) !*PhpArray {
         const arr = try self.allocator.create(PhpArray);
@@ -106,53 +105,18 @@ pub const NativeContext = struct {
 
     pub fn setCallerVar(self: *NativeContext, arg_index: usize, arg_count: usize, value: Value) void {
         const vm = self.vm;
-        if (vm.pending_ref_args) |args| {
-            if (arg_index < args.len) args[arg_index] = value;
-        }
         if (vm.frame_count == 0) return;
-        const scanned_sources = vm.scanCallerArgSources(arg_count);
-        const arg_sources = self.arg_sources orelse scanned_sources[0..arg_count];
+        const arg_sources = vm.scanCallerArgSources(arg_count);
         const caller = vm.currentFrame();
-        if (arg_index >= arg_sources.len) return;
-        const source = arg_sources[arg_index];
-        switch (source) {
 
-            .local => |slot| {
-                if (slot < caller.locals.len) caller.locals[slot] = value;
-                if (caller.func) |func| {
-                    if (slot < func.slot_names.len and func.slot_names[slot].len > 0) {
-                        const var_name = func.slot_names[slot];
-                        caller.vars.put(vm.allocator, var_name, value) catch return;
-                        if (caller.ref_slots.get(var_name)) |cell| {
-                            cell.* = value;
-                            vm.propagateCellWrite(cell, value) catch {};
-                        }
-                    }
-                }
-            },
+        switch (arg_sources[arg_index]) {
             .simple => |var_name| {
-                if (caller.ref_slots.get(var_name)) |cell| {
-                    cell.* = value;
-                    vm.propagateCellWrite(cell, value) catch {};
-                }
                 caller.vars.put(vm.allocator, var_name, value) catch return;
                 const sn = if (caller.func) |func| func.slot_names else vm.global_slot_names;
-                var found_slot = false;
                 for (sn, 0..) |sn_name, si| {
                     if (std.mem.eql(u8, sn_name, var_name)) {
                         if (si < caller.locals.len) caller.locals[si] = value;
-                        found_slot = true;
                         break;
-                    }
-                }
-                if (!found_slot) {
-                    if (caller.func) |func| {
-                        for (func.params, 0..) |param, pi| {
-                            if (!std.mem.eql(u8, param, var_name)) continue;
-                            const slot = if (caller.locals.len > func.params.len) pi + 1 else pi;
-                            if (slot < caller.locals.len) caller.locals[slot] = value;
-                            break;
-                        }
                     }
                 }
                 // if the caller's param itself is a reference (e.g. function
@@ -238,7 +202,7 @@ pub const NativeContext = struct {
         // __invoke on an object instance
         if (callable == .object) {
             if (std.mem.eql(u8, callable.object.class_name, "Closure")) {
-                return self.invokeCallableRef(callable.object.get("__callable"), args);
+                return self.vm.callValueCallable(callable.object.get("__callable"), args);
             }
             if (self.vm.hasMethod(callable.object.class_name, "__invoke")) {
                 return self.vm.callMethodRef(callable.object, "__invoke", args);
@@ -277,7 +241,6 @@ pub const CaptureEntry = struct {
 const RefSource = union(enum) {
     none,
     simple: []const u8,
-    local: u16,
     array_elem: struct {
         var_name: []const u8,
         is_local: bool,
@@ -614,7 +577,6 @@ pub const VM = struct {
     // the called function sees the real args, not stale data from whatever
     // last used this frame slot
     pending_invoke_args: ?[]const Value = null,
-    pending_ref_args: ?[]Value = null,
     static_vars: std.ArrayListUnmanaged(StaticEntry) = .{},
     global_vars: std.ArrayListUnmanaged(StaticEntry) = .{},
     file_loader: ?*const FileLoader = null,
@@ -631,7 +593,6 @@ pub const VM = struct {
     file_path: []const u8 = "",
     autoload_callbacks: std.ArrayListUnmanaged(Value) = .{},
     autoload_depth: u8 = 0,
-    autoload_active: std.StringHashMapUnmanaged(void) = .{},
     // when a required script does an early `return X` at top level, the
     // return op pops its frame before the require handler runs the merge.
     // require sets this to the about-to-be-popped frame depth before
@@ -2052,9 +2013,6 @@ pub const VM = struct {
     }
 
     pub fn deinit(self: *VM) void {
-        for (self.autoload_callbacks.items) |callback| self.releaseValue(callback);
-        self.autoload_callbacks.deinit(self.allocator);
-        self.autoload_active.deinit(self.allocator);
         self.releaseFrames();
         self.freeHeapItems(true);
         self.builtin_classes.deinit(self.allocator);
@@ -2174,6 +2132,7 @@ pub const VM = struct {
         self.compile_results.deinit(self.allocator);
         self.ob_stack.deinit(self.allocator);
         self.request_vars.deinit(self.allocator);
+        self.autoload_callbacks.deinit(self.allocator);
         self.magic_get_guard.deinit(self.allocator);
         self.magic_call_guard.deinit(self.allocator);
         self.prop_hook_guard.deinit(self.allocator);
@@ -2292,7 +2251,6 @@ pub const VM = struct {
             // warm-request cost (native_fns put/grow/hash churn). only re-seed when
             // builtins weren't snapshotted (shouldn't happen in serve mode)
             if (!self.builtins_recorded) registerStdlibClasses(self, self.allocator) catch {};
-            for (self.autoload_callbacks.items) |callback| self.releaseValue(callback);
             self.autoload_callbacks.clearRetainingCapacity();
             self.closure_instance_count = 0;
         } else {
@@ -2639,7 +2597,7 @@ pub const VM = struct {
                     // a discarded expression-statement result - a statement
                     // boundary, so run any destructors queued by this statement
                     _ = self.pop();
-                    if (self.pending_destruct.items.len > 0 and !self.operandStackHasArray()) self.drainPendingDestruct();
+                    if (self.pending_destruct.items.len > 0) self.drainPendingDestruct();
                 },
                 .dup => self.push(self.stack[self.sp - 1]),
                 .swap => {
@@ -2719,9 +2677,8 @@ pub const VM = struct {
                 .set_var => {
                     const idx = self.readU16();
                     const name = self.currentChunk().constants.items[idx].string;
-                    const ref_cell = self.currentFrame().ref_slots.get(name);
                     const val = try self.copyValue(self.peek());
-                    if (ref_cell) |cell| {
+                    if (self.currentFrame().ref_slots.get(name)) |cell| {
                         cell.* = val;
                         try self.propagateCellWrite(cell, val);
                     } else {
@@ -3109,11 +3066,6 @@ pub const VM = struct {
                         self.dropN(ac + 1);
                         const result = if (std.mem.eql(u8, name_val.object.class_name, "Closure")) blk: {
                             const callable = name_val.object.get("__callable");
-                            if (callable == .string) {
-                                if (self.functions.get(callable.string)) |func| {
-                                    if (func.ref_params.len > 0) break :blk try self.callByNameRef(callable.string, args_buf[0..ac]);
-                                }
-                            }
                             break :blk try self.callValueCallable(callable, args_buf[0..ac]);
                         } else try self.callMethod(name_val.object, "__invoke", args_buf[0..ac]);
                         self.push(result);
@@ -3323,22 +3275,6 @@ pub const VM = struct {
                     }
                     const arr = args_val.array;
                     if (name_val == .string) {
-                        var ref_args: [256]Value = undefined;
-                        if (arr.entries.items.len > ref_args.len) return error.RuntimeError;
-                        for (arr.entries.items, 0..) |entry, i| ref_args[i] = if (entry.ref) |ref| ref.* else entry.value;
-                        const ref_func = self.functions.get(name_val.string);
-                        const native_needs_refs = self.native_fns.contains(name_val.string) and (std.mem.eql(u8, name_val.string, "preg_match") or std.mem.eql(u8, name_val.string, "preg_match_all") or std.mem.eql(u8, name_val.string, "is_callable"));
-                        if (native_needs_refs or (ref_func != null and ref_func.?.ref_params.len > 0)) {
-                            const result = try self.callByNameRef(name_val.string, ref_args[0..arr.entries.items.len]);
-                            for (arr.entries.items, 0..) |*entry, i| {
-                                if (entry.ref) |ref| {
-                                    ref.* = ref_args[i];
-                                    try self.propagateCellWrite(ref, ref_args[i]);
-                                }
-                            }
-                            self.push(result);
-                            continue;
-                        }
                         var has_named_args = false;
                         for (arr.entries.items) |entry| {
                             if (entry.key == .string) {
@@ -3383,7 +3319,7 @@ pub const VM = struct {
                             const target = cb_arr.entries.items[0].value;
                             const method_val = cb_arr.entries.items[1].value;
                             if (method_val == .string) {
-                                var args_buf: [256]Value = undefined;
+                                var args_buf: [32]Value = undefined;
                                 const ac = arr.entries.items.len;
                                 for (0..ac) |i| args_buf[i] = arr.entries.items[i].value;
                                 const result = if (target == .object)
@@ -3407,14 +3343,11 @@ pub const VM = struct {
                             if (try self.throwBuiltinException("TypeError", "Array callback must have exactly two elements")) continue;
                             return error.RuntimeError;
                         }
-                    } else if (name_val == .object and (std.mem.eql(u8, name_val.object.class_name, "Closure") or self.hasMethod(name_val.object.class_name, "__invoke"))) {
-                        var args_buf: [256]Value = undefined;
+                    } else if (name_val == .object and self.hasMethod(name_val.object.class_name, "__invoke")) {
+                        var args_buf: [32]Value = undefined;
                         const ac = arr.entries.items.len;
-                        for (0..ac) |i| args_buf[i] = if (arr.entries.items[i].ref) |ref| ref.* else arr.entries.items[i].value;
-                        const result = if (std.mem.eql(u8, name_val.object.class_name, "Closure"))
-                            try self.callValueCallable(name_val.object.get("__callable"), args_buf[0..ac])
-                        else
-                            try self.callMethod(name_val.object, "__invoke", args_buf[0..ac]);
+                        for (0..ac) |i| args_buf[i] = arr.entries.items[i].value;
+                        const result = try self.callMethod(name_val.object, "__invoke", args_buf[0..ac]);
                         self.push(result);
                     } else {
                         var buf2: [256]u8 = undefined;
@@ -3526,22 +3459,6 @@ pub const VM = struct {
                     try self.arrays.append(self.allocator, arr);
                     self.push(.{ .array = arr });
                 },
-                .array_push_assign => {
-                    const val = self.pop();
-                    const arr_val = self.pop();
-                    if (arr_val == .array) {
-                        try arr_val.array.append(self.allocator, val);
-                    } else if (arr_val == .object and self.hasMethod(arr_val.object.class_name, "offsetSet")) {
-                        _ = self.callMethod(arr_val.object, "offsetSet", &.{ .null, val }) catch {
-                            if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
-                            return error.RuntimeError;
-                        };
-                    } else if (arr_val == .string) {
-                        if (try self.throwBuiltinException("Error", "[] operator not supported for strings")) continue;
-                        return error.RuntimeError;
-                    }
-                    self.push(val);
-                },
                 .array_push => {
                     const val = self.pop();
                     const arr_val = self.peek();
@@ -3571,7 +3488,7 @@ pub const VM = struct {
                         if (!(self.array_ref_active and try self.writeArrayElemRef(arr_val.array, norm_key, val))) {
                             const old_val = arr_val.array.get(norm_key);
                             try arr_val.array.set(self.allocator, norm_key, val);
-                                if (old_val == .object or old_val == .array) {
+                            if (old_val == .object or old_val == .array) {
                                 self.releaseValue(old_val);
                             }
                         }
@@ -3604,8 +3521,7 @@ pub const VM = struct {
                         if (!arr_val.array.contains(ak)) {
                             self.emitUndefinedKeyWarning(ak);
                         }
-                        const elem = arr_val.array.get(ak);
-                        self.push(elem);
+                        self.push(arr_val.array.get(ak));
                     } else if (arr_val == .object and self.hasMethod(arr_val.object.class_name, "offsetGet")) {
                         const result = self.callMethod(arr_val.object, "offsetGet", &.{key}) catch {
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
@@ -4279,9 +4195,6 @@ pub const VM = struct {
                                 self.push(.{ .array = sep });
                                 continue;
                             }
-                        }
-                        if (from_ref and cur == .array) {
-                            if (frame.ref_slots.get(ea_slot_name)) |cell| try self.propagateCellWrite(cell, cur);
                         }
                         self.push(cur);
                         continue;
@@ -5030,9 +4943,7 @@ pub const VM = struct {
                         const frame = self.currentFrame();
                         const cell = try self.getOrCreateVarCell(frame, source_name);
                         try obj_val.object.set(self.allocator, prop_name, cell.*);
-                        const persistent_owner = try self.persistentRefOwner();
-                        try self.regRefObject(persistent_owner, cell, obj_val.object, prop_name);
-                        if (frame.ref_owner != 0) try (try self.refIndex()).transferCell(self.allocator, frame.ref_owner, persistent_owner, cell);
+                        try self.regRefObject(try self.persistentRefOwner(), cell, obj_val.object, prop_name);
                         self.obj_ref_active = true;
                     }
                 },
@@ -6390,11 +6301,7 @@ pub const VM = struct {
                             if (entry.key == .string) {
                                 try target.array.set(self.allocator, entry.key, entry.value);
                             } else {
-                                const key: PhpArray.Key = .{ .int = if (target.array.has_int_keys) target.array.next_int_key else 0 };
-                                try target.array.append(self.allocator, if (entry.ref) |ref| ref.* else entry.value);
-                                if (entry.ref) |ref| {
-                                    if (target.array.getPtr(key)) |copy| copy.ref = ref;
-                                }
+                                try target.array.append(self.allocator, entry.value);
                             }
                         }
                     } else if (src == .generator) {
@@ -6486,13 +6393,6 @@ pub const VM = struct {
 
                     const const_count = self.readByte();
                     var def = ClassDef{ .name = iface_name };
-                    def.file_path = blk: {
-                        if (self.frame_count > 0) {
-                            const sp = self.currentFrame().script_path;
-                            if (sp.len > 0) break :blk sp;
-                        }
-                        break :blk self.file_path;
-                    };
                     if (const_count > 0) {
                         var ci: usize = const_count;
                         while (ci > 0) : (ci -= 1) {
@@ -6541,7 +6441,6 @@ pub const VM = struct {
                 .trait_decl => {
                     const name_idx = self.readU16();
                     const trait_name = self.currentChunk().constants.items[name_idx].string;
-                    if (self.trait_method_cache.fetchRemove(trait_name)) |cached| self.allocator.free(cached.value);
                     try self.traits.put(self.allocator, trait_name, {});
                     const sub_count = self.readByte();
                     if (sub_count > 0) {
@@ -6952,15 +6851,12 @@ pub const VM = struct {
                                         try new_vars.put(self.allocator, func.params[i], try self.bindFrameArg(self.stack[self.sp - ac + i]));
                                     }
                                 }
+                                self.dropN(ac);
                                 if (!func.is_variadic and ac < func.arity) for (ac..func.arity) |i| {
                                     const default = if (i < func.defaults.len) try self.resolveDefault(func.defaults[i]) else Value.null;
                                     try new_vars.put(self.allocator, func.params[i], default);
                                 };
-                                var ctor_refs: std.StringHashMapUnmanaged(*Value) = .{};
-                                const ctor_owner = (try self.refIndex()).createOwner();
-                                try self.bindRefParams(ac, func, &new_vars, &ctor_refs, ctor_owner);
-                                self.dropN(ac);
-                                self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = ctor_refs, .ref_owner = ctor_owner, .called_class = class_name };
+                                self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = class_name };
                                 self.frames[self.frame_count].entry_sp = self.sp;
                                 self.frame_count += 1;
                                 self.retainFrameObjects(self.frame_count - 1);
@@ -7795,10 +7691,7 @@ pub const VM = struct {
                         const mc_chunk_key = @intFromPtr(self.currentChunk());
                         const mc_idx = InlineCache.methodIndex(mc_chunk_key, mc_ip);
                         const mc_entry = &ic.method[mc_idx];
-                        const mc_full_name = self.resolveMethod(obj.class_name, method_name) catch "";
-                        const mc_func = self.functions.get(mc_full_name);
-                        const mc_native = self.native_fns.get(mc_full_name);
-                        if (mc_entry.key == mc_ip and mc_entry.chunk_key == mc_chunk_key and mc_entry.class_ptr == @intFromPtr(obj.class_name.ptr) and std.mem.eql(u8, mc_entry.full_name, mc_full_name) and mc_entry.func == mc_func and mc_entry.native == mc_native) {
+                        if (mc_entry.key == mc_ip and mc_entry.chunk_key == mc_chunk_key and mc_entry.class_ptr == @intFromPtr(obj.class_name.ptr)) {
                             if (mc_entry.func) |func| {
                                 if (func.locals_only and self.captures.items.len == 0) {
                                     const lc: usize = func.local_count;
@@ -8003,7 +7896,6 @@ pub const VM = struct {
                             continue;
                         }
                     } else if (self.functions.get(full_name)) |func| {
-                        if (try self.checkParamTypes(full_name, arg_count)) continue;
                         if (ac < func.required_params) {
                             self.dropN(ac + 1);
                             const msg = try self.formatTooFewArgs(full_name, ac, func);
@@ -10898,14 +10790,14 @@ pub const VM = struct {
             while (sa_iter.next()) |se| {
                 // walk parent chain looking for a non-abstract implementation
                 var found_concrete = false;
-                if (findMethodInfo(&def.methods, se.key_ptr.*)) |m| {
+                if (def.methods.get(se.key_ptr.*)) |m| {
                     if (!m.is_abstract) found_concrete = true;
                 }
                 if (!found_concrete) {
                     var pp: ?[]const u8 = def.parent;
                     while (pp) |pn2| {
                         if (self.classes.get(pn2)) |pc| {
-                            if (findMethodInfo(&pc.methods, se.key_ptr.*)) |pm| {
+                            if (pc.methods.get(se.key_ptr.*)) |pm| {
                                 if (!pm.is_abstract) {
                                     found_concrete = true;
                                     break;
@@ -11218,15 +11110,6 @@ pub const VM = struct {
         return val;
     }
 
-    fn findMethodInfo(methods: *const std.StringHashMapUnmanaged(ClassDef.MethodInfo), name: []const u8) ?ClassDef.MethodInfo {
-        if (methods.get(name)) |method| return method;
-        var it = methods.iterator();
-        while (it.next()) |entry| {
-            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
-        }
-        return null;
-    }
-
     fn readMethodInfo(self: *VM) struct { []const u8, ClassDef.MethodInfo } {
         const mname_idx = self.readU16();
         const method_name = self.currentChunk().constants.items[mname_idx].string;
@@ -11363,12 +11246,12 @@ pub const VM = struct {
             if (!self.functions.contains(class_method)) {
                 try self.functions.put(self.allocator, class_method, tm.func);
                 try self.indexFunctionByChunk(class_method, &tm.func.chunk);
+                try def.addMethod(self.allocator, .{
+                    .name = tm.name,
+                    .arity = tm.func.arity,
+                    .visibility = vis_override orelse .public,
+                });
             }
-            try def.addMethod(self.allocator, .{
-                .name = tm.name,
-                .arity = tm.func.arity,
-                .visibility = vis_override orelse .public,
-            });
         }
 
         if (self.trait_props.get(trait_name)) |props| {
@@ -12527,7 +12410,10 @@ pub const VM = struct {
                     }
                 } else if (code[aip] == @intFromEnum(OpCode.get_local)) {
                     const slot = (@as(u16, code[aip + 1]) << 8) | code[aip + 2];
-                    sources[scan_idx] = .{ .local = slot };
+                    const sn = if (caller.func) |func| func.slot_names else self.global_slot_names;
+                    if (slot < sn.len) {
+                        sources[scan_idx] = .{ .simple = sn[slot] };
+                    }
                 }
             } else if (arg_instr_count == 2) {
                 // get_var/get_local + get_prop
@@ -12760,30 +12646,6 @@ pub const VM = struct {
         for (0..ref_window) |ri| {
             if (!func.ref_params[ri]) continue;
             switch (arg_sources[ri]) {
-                .local => |slot| {
-                    const sn = if (self.currentFrame().func) |caller_func| caller_func.slot_names else self.global_slot_names;
-                    if (slot < sn.len and sn[slot].len > 0) {
-                        const caller_var = sn[slot];
-                        if (self.currentFrame().ref_slots.get(caller_var)) |existing_cell| {
-                            existing_cell.* = new_vars.get(func.params[ri]) orelse .null;
-                            if (existing_cell.* == .array) arrayRetain(existing_cell.*.array);
-                            try refs.put(self.allocator, func.params[ri], existing_cell);
-                        } else {
-                            var bound = new_vars.get(func.params[ri]) orelse .null;
-                            if (bound == .array and bound.array.refcount > 1) {
-                                bound = .{ .array = try self.shallowCloneCow(bound.array) };
-                                try new_vars.put(self.allocator, func.params[ri], bound);
-                                if (slot < self.currentFrame().locals.len) self.currentFrame().locals[slot] = bound;
-                            }
-                            const cell = try self.allocator.create(Value);
-                            cell.* = bound;
-                            if (cell.* == .array) arrayRetain(cell.*.array);
-                            try self.ref_cells.append(self.allocator, cell);
-                            try self.currentFrame().ref_slots.put(self.allocator, caller_var, cell);
-                            try refs.put(self.allocator, func.params[ri], cell);
-                        }
-                    }
-                },
                 .simple => |caller_var| {
                     if (self.currentFrame().ref_slots.get(caller_var)) |existing_cell| {
                         existing_cell.* = new_vars.get(func.params[ri]) orelse .null;
@@ -12961,9 +12823,7 @@ pub const VM = struct {
         if (self.classes.contains(class_name)) return;
         if (self.interfaces.contains(class_name)) return;
         if (self.traits.contains(class_name)) return;
-        if (self.autoload_depth >= 64 or self.autoload_active.contains(class_name)) return;
-        try self.autoload_active.put(self.allocator, class_name, {});
-        defer _ = self.autoload_active.remove(class_name);
+        if (self.autoload_depth >= 64) return;
         self.autoload_depth += 1;
         defer self.autoload_depth -= 1;
 
@@ -12974,7 +12834,7 @@ pub const VM = struct {
                 var ctx = self.makeContext(null);
                 _ = ctx.invokeCallable(callback, &.{.{ .string = class_name }}) catch continue;
             }
-            if (self.classes.contains(class_name) or self.interfaces.contains(class_name) or self.traits.contains(class_name)) return;
+            if (self.classes.contains(class_name)) return;
         }
     }
 
@@ -14404,26 +14264,14 @@ pub const VM = struct {
                 return false;
             const class_name = if (raw_class.len > 0 and raw_class[0] == '\\') raw_class[1..] else raw_class;
             if (self.classes.get(class_name)) |cdef| {
-                var found: ?ClassDef.MethodInfo = cdef.methods.get(method);
-                if (found == null) {
-                    var methods = cdef.methods.iterator();
-                    while (methods.next()) |entry| {
-                        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, method)) {
-                            found = entry.value_ptr.*;
-                            break;
-                        }
-                    }
-                }
-                if (found) |mi| {
-                    if (mi.visibility != .public) {
-                        const caller_name = if (self.frame_count > 0 and self.currentFrame().func != null) self.currentFrame().func.?.name else "";
-                        const separator = std.mem.indexOf(u8, caller_name, "::") orelse return false;
-                        if (!std.mem.eql(u8, caller_name[0..separator], class_name)) return false;
-                    }
+                if (cdef.methods.get(method)) |mi| {
+                    if (mi.visibility != .public) return false;
                     if (target == .string and !mi.is_static) return false;
                 }
             }
-            return self.hasMethod(class_name, method);
+            var buf: [256]u8 = undefined;
+            const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ class_name, method }) catch return false;
+            return self.native_fns.contains(full) or self.functions.contains(full);
         }
         return false;
     }
@@ -14806,11 +14654,9 @@ pub const VM = struct {
             var args: [64]Value = undefined;
             const ac: usize = arg_count;
             for (0..ac) |i| args[i] = self.stack[self.sp - ac + i];
-            const native_sources = self.scanCallerArgSources(ac);
             self.dropN(ac);
             const pre_handler_count = self.handler_count;
             var ctx = self.makeContext(name);
-            ctx.arg_sources = native_sources[0..ac];
             const result = self.invokeNative(native, &ctx, args[0..ac]) catch {
                 if (self.pending_exception) |exc| {
                     // capture the native's name + args so writeStackTrace can
@@ -15172,17 +15018,12 @@ pub const VM = struct {
             // mt_rand distinguish by name) work when dispatched indirectly via
             // call_user_func / first-class-callable / array callable
             var ctx = self.makeContext(name);
-            const result = self.invokeNative(native, &ctx, args) catch |native_err| {
+            return self.invokeNative(native, &ctx, args) catch |native_err| {
                 if (self.pending_exception) |exc| {
                     if (!isFrameOutNative(name)) self.prependNativeFrameToTrace(exc, name, args) catch {};
                 }
                 return native_err;
             };
-            if (self.pending_ref_args) |ref_args| {
-                if ((std.mem.eql(u8, name, "preg_match") or std.mem.eql(u8, name, "preg_match_all")) and args.len >= 3)
-                    ref_args[2] = args[2];
-            }
-            return result;
         } else if (self.functions.get(name)) |func| {
             if (args.len < func.required_params) return error.RuntimeError;
             if (self.ic) |ic| ic.pending_arg_count = @intCast(@min(args.len, 255));
@@ -15364,9 +15205,6 @@ pub const VM = struct {
             }
             return result;
         }
-        const saved_ref_args = self.pending_ref_args;
-        self.pending_ref_args = args;
-        defer self.pending_ref_args = saved_ref_args;
         return self.callByName(name, args);
     }
 
@@ -15619,11 +15457,6 @@ pub const VM = struct {
         const b = self.pop();
         const a = self.pop();
         self.push(op(a, b));
-    }
-
-    fn operandStackHasArray(self: *const VM) bool {
-        for (self.stack[0..self.sp]) |value| if (value == .array) return true;
-        return false;
     }
 
     fn push(self: *VM, value: Value) void {

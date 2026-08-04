@@ -5,7 +5,6 @@ const std = @import("std");
 // names include the $ prefix to match php convention and user-defined function param format.
 
 pub const map = std.StaticStringMap([]const []const u8).initComptime(.{
-    .{ "is_callable", &.{ "$value", "$syntax_only", "$callable_name" } },
     // strings
     .{ "substr", &.{ "$string", "$offset", "$length" } },
     .{ "str_replace", &.{ "$search", "$replace", "$subject", "$count" } },

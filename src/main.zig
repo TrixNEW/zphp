@@ -6,7 +6,7 @@ const CompileResult = @import("pipeline/compiler.zig").CompileResult;
 const bytecode_format = @import("bytecode_format.zig");
 const error_format = @import("error_format.zig");
 
-const max_source_size = 1024 * 1024 * 64;
+const max_source_size = 1024 * 1024 * 10;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

@@ -299,7 +299,6 @@ pub const OpCode = enum(u8) {
     // declaring CompileResult. unconditional top-level declarations are still
     // hoisted at registration time, matching PHP's early binding
     declare_fn,
-    array_push_assign,
 
     pub fn width(self: OpCode) usize {
         return switch (self) {

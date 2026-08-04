@@ -642,9 +642,7 @@ fn native_is_file(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         if (r.internal_path.len == 0) return .{ .bool = true };
         var loaded = loadPhar(ctx.allocator, r.archive_path) catch return Value{ .bool = false };
         defer freePhar(ctx.allocator, &loaded);
-        const normalized = normalizePharInternalPath(ctx.allocator, r.internal_path) catch return .{ .bool = false };
-        defer ctx.allocator.free(normalized);
-        return .{ .bool = loaded.parsed.lookup(normalized) != null };
+        return .{ .bool = loaded.parsed.lookup(r.internal_path) != null };
     }
     if (std.mem.startsWith(u8, path, ZLIB_PREFIX)) {
         const stat = std.fs.cwd().statFile(path[ZLIB_PREFIX.len..]) catch return Value{ .bool = false };
@@ -1113,9 +1111,8 @@ fn globMatchFlags(pattern: []const u8, name: []const u8, flags: i64) bool {
 
 // file info
 
-fn native_is_readable(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+fn native_is_readable(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    if (std.mem.startsWith(u8, args[0].string, "phar://")) return native_is_file(ctx, args);
     std.fs.cwd().access(args[0].string, .{ .mode = .read_only }) catch return Value{ .bool = false };
     return .{ .bool = true };
 }

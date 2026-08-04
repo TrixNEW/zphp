@@ -23,7 +23,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // checks instanceof / get_parent_class
     var rt_def = ClassDef{ .name = "ReflectionType" };
     rt_def.is_abstract = true;
-    try rt_def.interfaces.append(a, "Reflector");
     try rt_def.methods.put(a, "allowsNull", .{ .name = "allowsNull", .arity = 0 });
     try rt_def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
     try vm.classes.put(a, "ReflectionType", rt_def);
@@ -76,7 +75,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     // ReflectionClass
     var rc_def = ClassDef{ .name = "ReflectionClass" };
-    try rc_def.interfaces.append(a, "Reflector");
     try rc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try rc_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -202,8 +200,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try ro_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try vm.classes.put(a, "ReflectionObject", ro_def);
 
-    var rfa_def = ClassDef{ .name = "ReflectionFunctionAbstract", .is_abstract = true };
-    try rfa_def.interfaces.append(a, "Reflector");
+    const rfa_def = ClassDef{ .name = "ReflectionFunctionAbstract", .is_abstract = true };
     try vm.classes.put(a, "ReflectionFunctionAbstract", rfa_def);
 
     // ReflectionMethod
@@ -223,7 +220,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rm_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rm_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
     try rm_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
-    try rm_def.methods.put(a, "createFromMethodName", .{ .name = "createFromMethodName", .arity = 1, .is_static = true });
     try rm_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try rm_def.methods.put(a, "getParameters", .{ .name = "getParameters", .arity = 0 });
     try rm_def.methods.put(a, "isPublic", .{ .name = "isPublic", .arity = 0 });
@@ -263,7 +259,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.classes.put(a, "ReflectionMethod", rm_def);
 
     try vm.native_fns.put(a, "ReflectionMethod::__construct", rmConstruct);
-    try vm.native_fns.put(a, "ReflectionMethod::createFromMethodName", rmCreateFromMethodName);
     try vm.native_fns.put(a, "ReflectionMethod::getName", rmGetName);
     try vm.native_fns.put(a, "ReflectionMethod::getParameters", rmGetParameters);
     try vm.native_fns.put(a, "ReflectionMethod::isPublic", rmIsPublic);
@@ -303,7 +298,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     // ReflectionParameter
     var rp_def = ClassDef{ .name = "ReflectionParameter" };
-    try rp_def.interfaces.append(a, "Reflector");
     try rp_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rp_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
     try rp_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -2221,21 +2215,6 @@ fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     }
 
     return .null;
-}
-
-fn rmCreateFromMethodName(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return throwReflection(ctx, "ReflectionMethod::createFromMethodName() expects Class::method format");
-    const obj = try ctx.createObject("ReflectionMethod");
-    const frame = ctx.vm.currentFrame();
-    const previous_this = frame.vars.get("$this");
-    try frame.vars.put(ctx.allocator, "$this", .{ .object = obj });
-    defer if (previous_this) |value| {
-        frame.vars.put(ctx.allocator, "$this", value) catch {};
-    } else {
-        _ = frame.vars.remove("$this");
-    };
-    _ = try rmConstruct(ctx, args);
-    return .{ .object = obj };
 }
 
 fn rmGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {

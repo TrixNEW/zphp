@@ -795,12 +795,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const mc_chunk_key = @intFromPtr(frame.chunk);
                     const mc_idx = InlineCache.methodIndex(mc_chunk_key, mc_ip);
                     const mc_entry = &ic.method[mc_idx];
-                    const mc_name_idx: u16 = (@as(u16, code[mc_ip + 1]) << 8) | code[mc_ip + 2];
-                    const mc_method_name = consts[mc_name_idx].string;
-                    const mc_full_name = self.resolveMethod(mc_obj.class_name, mc_method_name) catch "";
-                    const resolved_func = self.functions.get(mc_full_name);
-                    const resolved_native = self.native_fns.get(mc_full_name);
-                    if (mc_entry.key == mc_ip and mc_entry.chunk_key == mc_chunk_key and mc_entry.class_ptr == @intFromPtr(mc_obj.class_name.ptr) and std.mem.eql(u8, mc_entry.full_name, mc_full_name) and mc_entry.func == resolved_func and mc_entry.native == resolved_native) {
+                    if (mc_entry.key == mc_ip and mc_entry.chunk_key == mc_chunk_key and mc_entry.class_ptr == @intFromPtr(mc_obj.class_name.ptr)) {
                         if (mc_entry.func) |mc_func| {
                             if (mc_func.locals_only and self.captures.items.len == 0) {
                                 if (mc_func.has_param_types) {

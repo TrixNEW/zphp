@@ -471,37 +471,6 @@ const Parser = struct {
             return self.addNode(.{ .tag = .block, .main_token = tok, .data = .{ .lhs = block_extra } });
         }
 
-        if (self.peek() == .comma) {
-            var stmts = std.ArrayListUnmanaged(u32){};
-            defer stmts.deinit(self.allocator);
-            const first_extra = try self.addExtraList(prefix.items);
-            const tag: Ast.Node.Tag = if (outer_is_fn) .use_fn_stmt else if (outer_is_const) .use_const_stmt else .use_stmt;
-            try stmts.append(self.allocator, try self.addNode(.{ .tag = tag, .main_token = tok, .data = .{ .lhs = first_extra } }));
-            while (self.peek() == .comma) {
-                _ = self.advance();
-                var parts = std.ArrayListUnmanaged(u32){};
-                defer parts.deinit(self.allocator);
-                try parts.append(self.allocator, self.pos);
-                if (self.peek() == .identifier or isSemiReserved(self.peek())) _ = self.advance() else _ = try self.expect(.identifier);
-                while (self.peek() == .backslash) {
-                    _ = self.advance();
-                    try parts.append(self.allocator, self.pos);
-                    if (self.peek() == .identifier or isSemiReserved(self.peek())) _ = self.advance() else _ = try self.expect(.identifier);
-                }
-                var item_alias: u32 = 0;
-                if (self.peek() == .kw_as) {
-                    _ = self.advance();
-                    item_alias = self.pos;
-                    _ = try self.expect(.identifier);
-                }
-                const item_extra = try self.addExtraList(parts.items);
-                try stmts.append(self.allocator, try self.addNode(.{ .tag = tag, .main_token = tok, .data = .{ .lhs = item_extra, .rhs = item_alias } }));
-            }
-            _ = try self.expect(.semicolon);
-            const block_extra = try self.addExtraList(stmts.items);
-            return self.addNode(.{ .tag = .block, .main_token = tok, .data = .{ .lhs = block_extra } });
-        }
-
         var alias: u32 = 0;
         if (self.peek() == .kw_as) {
             _ = self.advance();
@@ -782,17 +751,6 @@ const Parser = struct {
         return self.addNode(.{ .tag = .foreach_stmt, .main_token = tok, .data = .{ .lhs = extra, .rhs = body } });
     }
 
-    fn appendConstDecls(self: *Parser, members: *std.ArrayListUnmanaged(u32)) Error!void {
-        const node_idx = try self.parseConstDecl();
-        const node = self.nodes.items[node_idx];
-        if (node.tag == .block) {
-            const count = self.extra_data.items[node.data.lhs];
-            for (self.extra_data.items[node.data.lhs + 1 .. node.data.lhs + 1 + count]) |decl| try members.append(self.allocator, decl);
-        } else {
-            try members.append(self.allocator, node_idx);
-        }
-    }
-
     fn parseConstDecl(self: *Parser) Error!u32 {
         _ = self.advance(); // const
         // PHP 8.3 typed class constants: `const string NAME = "hi";`. accept
@@ -814,25 +772,16 @@ const Parser = struct {
                 type_range = self.collectTypeHint();
             }
         }
-        var declarations = std.ArrayListUnmanaged(u32){};
-        defer declarations.deinit(self.allocator);
+        const name_tok = try self.expectFunctionName();
+        _ = try self.expect(.equal);
+        const value = try self.parseExpression();
+        _ = try self.expect(.semicolon);
         var rhs: u32 = 0;
         if (type_range[0] != type_range[1]) {
             const ext = try self.addExtra(&type_range);
             rhs = (ext + 1) << 16;
         }
-        while (true) {
-            const name_tok = try self.expectFunctionName();
-            _ = try self.expect(.equal);
-            const value = try self.parseExpression();
-            try declarations.append(self.allocator, try self.addNode(.{ .tag = .const_decl, .main_token = name_tok, .data = .{ .lhs = value, .rhs = rhs } }));
-            if (self.peek() != .comma) break;
-            _ = self.advance();
-        }
-        _ = try self.expect(.semicolon);
-        if (declarations.items.len == 1) return declarations.items[0];
-        const extra = try self.addExtraList(declarations.items);
-        return self.addNode(.{ .tag = .block, .main_token = declarations.items[0], .data = .{ .lhs = extra } });
+        return self.addNode(.{ .tag = .const_decl, .main_token = name_tok, .data = .{ .lhs = value, .rhs = rhs } });
     }
 
     fn parseSwitchStmt(self: *Parser) Error!u32 {
@@ -1342,12 +1291,11 @@ const Parser = struct {
                 self.nodes.items[prop].data.rhs = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
                 try members.append(self.allocator, prop);
             } else if (self.peek() == .kw_const) {
-                const before = members.items.len;
-                try self.appendConstDecls(&members);
-                for (members.items[before..]) |cd| {
-                    const type_bits = self.nodes.items[cd].data.rhs & ~@as(u32, 0xffff);
-                    self.nodes.items[cd].data.rhs = visibility | (if (is_final) @as(u32, 1) << 4 else 0) | type_bits;
-                }
+                const cd = try self.parseConstDecl();
+                // bits 0-1: visibility, bit 4: final, bits 16+: type extra idx
+                const type_bits = self.nodes.items[cd].data.rhs & ~@as(u32, 0xffff);
+                self.nodes.items[cd].data.rhs = visibility | (if (is_final) @as(u32, 1) << 4 else 0) | type_bits;
+                try members.append(self.allocator, cd);
             } else if (self.isTypeName() or self.peek() == .question or self.peek() == .l_paren) {
                 const tr = self.collectTypeHint();
                 if (self.peek() == .variable) {
@@ -1510,12 +1458,11 @@ const Parser = struct {
                 self.nodes.items[prop].data.rhs = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
                 try members.append(self.allocator, prop);
             } else if (self.peek() == .kw_const) {
-                const before = members.items.len;
-                try self.appendConstDecls(&members);
-                for (members.items[before..]) |cd| {
-                    const type_bits = self.nodes.items[cd].data.rhs & ~@as(u32, 0xffff);
-                    self.nodes.items[cd].data.rhs = visibility | (if (is_final) @as(u32, 1) << 4 else 0) | type_bits;
-                }
+                const cd = try self.parseConstDecl();
+                // bits 0-1: visibility, bit 4: final, bits 16+: type extra idx
+                const type_bits = self.nodes.items[cd].data.rhs & ~@as(u32, 0xffff);
+                self.nodes.items[cd].data.rhs = visibility | (if (is_final) @as(u32, 1) << 4 else 0) | type_bits;
+                try members.append(self.allocator, cd);
             } else if (self.isTypeName() or self.peek() == .question or self.peek() == .l_paren) {
                 const tr = self.collectTypeHint();
                 if (self.peek() == .variable) {
@@ -1585,7 +1532,7 @@ const Parser = struct {
             if (self.peek() == .kw_function) {
                 try methods.append(self.allocator, try self.parseInterfaceMethod());
             } else if (self.peek() == .kw_const) {
-                try self.appendConstDecls(&methods);
+                try methods.append(self.allocator, try self.parseConstDecl());
             } else {
                 // PHP 8.4 interface property hooks: `public T $name { get; }` or
                 // `public T $name { get; set; }`. we accept the syntax for parse
@@ -1704,7 +1651,7 @@ const Parser = struct {
                     _ = self.advance();
                 }
             } else if (self.peek() == .kw_const) {
-                try self.appendConstDecls(&members);
+                try members.append(self.allocator, try self.parseConstDecl());
             } else if (self.peek() == .kw_use) {
                 try members.append(self.allocator, try self.parseTraitUse());
             } else {
@@ -1764,7 +1711,7 @@ const Parser = struct {
                     .data = .{ .lhs = value_expr },
                 }));
             } else if (self.peek() == .kw_const) {
-                try self.appendConstDecls(&members);
+                try members.append(self.allocator, try self.parseConstDecl());
             } else if (self.peek() == .kw_use) {
                 try members.append(self.allocator, try self.parseTraitUse());
             } else {
@@ -1786,7 +1733,7 @@ const Parser = struct {
                     self.nodes.items[method].data.rhs = self.nodes.items[method].data.rhs | (visibility << 30);
                     try members.append(self.allocator, method);
                 } else if (self.peek() == .kw_const) {
-                    try self.appendConstDecls(&members);
+                    try members.append(self.allocator, try self.parseConstDecl());
                 } else {
                     _ = self.advance();
                 }

@@ -2,10 +2,8 @@ const std = @import("std");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
-const vm_mod = @import("../runtime/vm.zig");
-const NativeContext = vm_mod.NativeContext;
-const ClassDef = vm_mod.ClassDef;
-const VM = vm_mod.VM;
+const NativeContext = @import("../runtime/vm.zig").NativeContext;
+const ClassDef = @import("../runtime/vm.zig").ClassDef;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
 pub const entries = .{
@@ -916,7 +914,6 @@ fn property_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = false };
     const val = args[0];
-    const syntax_only = args.len > 1 and args[1].isTruthy();
     // PHP's 3rd by-ref param receives the resolved callable name on success
     // (or its string form). populated regardless of return value so caller
     // code can inspect failed resolution attempts too
@@ -932,7 +929,6 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Val
         const raw = val.string;
         const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
         fillName(ctx, args, name);
-        if (syntax_only) return .{ .bool = true };
         if (ctx.vm.native_fns.contains(name)) return .{ .bool = true };
         if (ctx.vm.functions.contains(name)) return .{ .bool = true };
         // Class::method string form
@@ -969,7 +965,6 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Val
             const resolved = std.fmt.bufPrint(&name_buf, "{s}::{s}", .{ class_name, method }) catch "";
             fillName(ctx, args, resolved);
         }
-        if (syntax_only) return .{ .bool = true };
         if (ctx.vm.classes.get(class_name)) |cdef| {
             if (cdef.methods.get(method)) |mi| {
                 if (mi.visibility != .public) return .{ .bool = false };
@@ -2293,10 +2288,7 @@ fn native_class_alias(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 
 fn native_spl_autoload_register(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = false };
-    const callback = args[0];
-    VM.retainValue(callback);
-    const prepend = args.len >= 3 and args[2].isTruthy();
-    if (prepend) try ctx.vm.autoload_callbacks.insert(ctx.allocator, 0, callback) else try ctx.vm.autoload_callbacks.append(ctx.allocator, callback);
+    try ctx.vm.autoload_callbacks.append(ctx.allocator, args[0]);
     return .{ .bool = true };
 }
 
@@ -2317,8 +2309,7 @@ fn native_spl_autoload_unregister(ctx: *NativeContext, args: []const Value) Runt
     while (i < ctx.vm.autoload_callbacks.items.len) {
         const cb = ctx.vm.autoload_callbacks.items[i];
         if (callablesEqual(cb, target)) {
-            const removed = ctx.vm.autoload_callbacks.orderedRemove(i);
-            ctx.vm.releaseValue(removed);
+            _ = ctx.vm.autoload_callbacks.orderedRemove(i);
         } else {
             i += 1;
         }
@@ -2482,18 +2473,9 @@ fn native_class_implements(ctx: *NativeContext, args: []const Value) RuntimeErro
         return Value{ .bool = false };
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
 
-    var result = try ctx.createArray();
-    if (ctx.vm.interfaces.get(class_name)) |iface_def| {
-        var parent = iface_def.parent;
-        while (parent) |p| {
-            try result.set(ctx.allocator, .{ .string = p }, .{ .string = p });
-            const pdef = ctx.vm.interfaces.get(p) orelse break;
-            parent = pdef.parent;
-        }
-        return .{ .array = result };
-    }
-    const cls = ctx.vm.classes.get(class_name) orelse return .{ .array = result };
+    const cls = ctx.vm.classes.get(class_name) orelse return Value{ .bool = false };
 
+    var result = try ctx.createArray();
     var queue = std.ArrayListUnmanaged([]const u8){};
     defer queue.deinit(ctx.allocator);
     // PHP enumerates direct interfaces in declaration order, but interfaces
@@ -2537,10 +2519,8 @@ fn native_class_parents(ctx: *NativeContext, args: []const Value) RuntimeError!V
         return Value{ .bool = false };
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
 
-    if (ctx.vm.interfaces.contains(class_name)) return .{ .array = try ctx.createArray() };
     const cls = ctx.vm.classes.get(class_name) orelse {
         try ctx.vm.tryAutoload(class_name);
-        if (ctx.vm.interfaces.contains(class_name)) return .{ .array = try ctx.createArray() };
         if (ctx.vm.classes.get(class_name) == null) return Value{ .bool = false };
         const normalized = [_]Value{.{ .string = class_name }};
         return native_class_parents(ctx, &normalized);
@@ -3371,9 +3351,6 @@ const T_CLOSE_TAG: i64 = 396;
 const T_WHITESPACE: i64 = 397;
 const T_VARIABLE: i64 = 266;
 const T_STRING: i64 = 262;
-const T_NAME_FULLY_QUALIFIED: i64 = 263;
-const T_NAME_RELATIVE: i64 = 264;
-const T_NAME_QUALIFIED: i64 = 265;
 const T_LNUMBER: i64 = 260;
 const T_DNUMBER: i64 = 261;
 const T_CONSTANT_ENCAPSED_STRING: i64 = 269;
@@ -3565,20 +3542,11 @@ fn native_token_get_all(ctx: *NativeContext, args: []const Value) RuntimeError!V
                 while (pos < input.len and (std.ascii.isDigit(input[pos]) or input[pos] == '.')) pos += 1;
                 const has_dot = std.mem.indexOfScalar(u8, input[start..pos], '.') != null;
                 try result.append(ctx.allocator, try makeToken(ctx, if (has_dot) T_DNUMBER else T_LNUMBER, input[start..pos], line));
-            } else if (input[pos] == '\\' and pos + 1 < input.len and (std.ascii.isAlphabetic(input[pos + 1]) or input[pos + 1] == '_')) {
-                const start = pos;
-                pos += 1;
-                while (pos < input.len and (std.ascii.isAlphanumeric(input[pos]) or input[pos] == '_' or input[pos] == '\\')) pos += 1;
-                try result.append(ctx.allocator, try makeToken(ctx, T_NAME_FULLY_QUALIFIED, input[start..pos], line));
             } else if (std.ascii.isAlphabetic(input[pos]) or input[pos] == '_') {
                 const start = pos;
-                while (pos < input.len and (std.ascii.isAlphanumeric(input[pos]) or input[pos] == '_' or input[pos] == '\\')) pos += 1;
+                while (pos < input.len and (std.ascii.isAlphanumeric(input[pos]) or input[pos] == '_')) pos += 1;
                 const ident = input[start..pos];
-                const has_separator = std.mem.indexOfScalar(u8, ident, '\\') != null;
-                const tok_id = if (has_separator)
-                    (if (std.mem.startsWith(u8, ident, "namespace\\")) T_NAME_RELATIVE else T_NAME_QUALIFIED)
-                else
-                    keywordTokenId(ident) orelse T_STRING;
+                const tok_id = keywordTokenId(ident) orelse T_STRING;
                 try result.append(ctx.allocator, try makeToken(ctx, tok_id, ident, line));
             } else {
                 // single character token returned as string
