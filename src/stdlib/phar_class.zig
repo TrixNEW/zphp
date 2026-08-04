@@ -400,13 +400,26 @@ fn phCanCompress(_: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .bool = args[0].int == 0 or args[0].int == 4096 };
 }
 
-fn phRunning(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    // returns the path to the currently-executing phar, or "" when not running from one
-    _ = ctx;
-    return .{ .string = "" };
+fn phRunning(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    if (!std.mem.endsWith(u8, ctx.vm.file_path, ".phar")) return .{ .string = "" };
+    if (args.len > 0 and args[0].isTruthy()) {
+        const uri = try std.fmt.allocPrint(ctx.allocator, "phar://{s}", .{ctx.vm.file_path});
+        try ctx.vm.strings.append(ctx.allocator, uri);
+        return .{ .string = uri };
+    }
+    return .{ .string = ctx.vm.file_path };
 }
 
-fn phLoadPhar(_: *NativeContext, _: []const Value) RuntimeError!Value {
+fn phLoadPhar(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    if (args.len == 0 or args[0] != .string) return .{ .bool = false };
+    const path = std.fs.cwd().realpathAlloc(ctx.allocator, args[0].string) catch return .{ .bool = false };
+    defer ctx.allocator.free(path);
+    const alias = if (args.len >= 2 and args[1] == .string) args[1].string else std.fs.path.basename(path);
+    const alias_dup = try ctx.allocator.dupe(u8, alias);
+    const path_dup = try ctx.allocator.dupe(u8, path);
+    try ctx.vm.strings.append(ctx.allocator, alias_dup);
+    try ctx.vm.strings.append(ctx.allocator, path_dup);
+    try ctx.vm.phar_aliases.put(ctx.allocator, alias_dup, path_dup);
     return .{ .bool = true };
 }
 

@@ -675,8 +675,16 @@ fn native_hash_file(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     const filename = args[1].string;
     const raw_output = args.len >= 3 and args[2].isTruthy();
     const algo = HashAlgo.fromString(algo_name) orelse return Value{ .bool = false };
-    const data = std.fs.cwd().readFileAlloc(ctx.allocator, filename, 10 * 1024 * 1024) catch return Value{ .bool = false };
-    defer ctx.allocator.free(data);
+    var owned_data: ?[]u8 = null;
+    defer if (owned_data) |data| ctx.allocator.free(data);
+    const data = if (std.mem.indexOf(u8, filename, "://") != null) blk: {
+        const contents = ctx.vm.callByName("file_get_contents", &.{.{ .string = filename }}) catch return .{ .bool = false };
+        if (contents != .string) return .{ .bool = false };
+        break :blk contents.string;
+    } else blk: {
+        owned_data = std.fs.cwd().readFileAlloc(ctx.allocator, filename, 64 * 1024 * 1024) catch return Value{ .bool = false };
+        break :blk owned_data.?;
+    };
     var digest: [64]u8 = undefined;
     const dlen = algo.digestLen();
     computeHash(algo, data, digest[0..dlen]);

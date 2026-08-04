@@ -1124,6 +1124,7 @@ fn classDeclEarlyBindable(self: *Compiler, node: Ast.Node) bool {
     const parent_node = self.ast.extra_data[rhs_base + 1];
     if (parent_node != 0) {
         const pnode = self.ast.nodes[parent_node];
+        if (pnode.tag == .qualified_name) return false;
         const parent_name = if (pnode.tag == .qualified_name)
             (self.buildQualifiedString(self.ast.extraSlice(pnode.data.lhs)) catch return false)
         else
@@ -1239,13 +1240,13 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     var impl_names: [16][]const u8 = undefined;
     for (0..impl_count) |i| {
         const impl_node = self.ast.nodes[self.ast.extra_data[rhs_base + 3 + i]];
-        impl_names[i] = if (impl_node.tag == .qualified_name) (self.buildQualifiedString(self.ast.extraSlice(impl_node.data.lhs)) catch self.ast.tokenSlice(impl_node.main_token)) else self.resolveClassName(self.ast.tokenSlice(impl_node.main_token));
+        impl_names[i] = @import("compiler_expr.zig").resolveNodeClassName(self, impl_node) catch self.ast.tokenSlice(impl_node.main_token);
     }
 
     const prev_parent = self.current_parent;
     self.current_parent = if (parent_node != 0) blk: {
         const pnode = self.ast.nodes[parent_node];
-        break :blk if (pnode.tag == .qualified_name) (self.buildQualifiedString(self.ast.extraSlice(pnode.data.lhs)) catch self.ast.tokenSlice(pnode.main_token)) else self.resolveClassName(self.ast.tokenSlice(pnode.main_token));
+        break :blk @import("compiler_expr.zig").resolveNodeClassName(self, pnode) catch self.ast.tokenSlice(pnode.main_token);
     } else "";
     defer self.current_parent = prev_parent;
 
@@ -1570,7 +1571,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
 
     if (parent_node != 0) {
         const pnode = self.ast.nodes[parent_node];
-        const parent_name = if (pnode.tag == .qualified_name) try self.buildQualifiedString(self.ast.extraSlice(pnode.data.lhs)) else self.resolveClassName(self.ast.tokenSlice(pnode.main_token));
+        const parent_name = try @import("compiler_expr.zig").resolveNodeClassName(self, pnode);
         const parent_idx = try self.addConstant(.{ .string = parent_name });
         try self.emitU16(parent_idx);
     } else {
@@ -2696,6 +2697,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         .use_fn_aliases = self.use_fn_aliases,
         .use_const_aliases = self.use_const_aliases,
         .current_class = class_name,
+        .current_parent = self.current_parent,
         .current_function = method_name,
         .in_trait = self.in_trait,
     };

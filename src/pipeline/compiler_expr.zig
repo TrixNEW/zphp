@@ -139,7 +139,7 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
         }
         try compileVivifyChain(self,target.data.lhs);
         try self.compileNode(node.data.rhs);
-        try self.emitOp(.array_push);
+        try self.emitOp(.array_push_assign);
         return;
     }
 
@@ -204,13 +204,16 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
                     slot_opt = self.getOrCreateSlot(var_name);
                 }
                 if (slot_opt) |slot| {
-                    try self.compileNode(target.data.rhs);
                     try self.compileNode(node.data.rhs);
+                    try self.emitOp(.dup);
+                    try self.compileNode(target.data.rhs);
+                    try self.emitOp(.swap);
                     // ref-assign skips clone so the destination shares the
                     // underlying array pointer (needed for cycle detection
                     // in print_r/var_dump/var_export)
                     try self.emitOp(if (rhs_is_ref) .array_set_local_ref else .array_set_local);
                     try self.emitU16(slot);
+                    try self.emitOp(.pop);
                     return;
                 }
             }
@@ -1234,6 +1237,17 @@ pub fn compileArrayLiteral(self: *Compiler, node: Ast.Node) Error!void {
             try self.compileNode(elem.data.lhs);
             try self.emitOp(.array_set_elem);
         } else {
+            const value_node = self.ast.nodes[elem.data.lhs];
+            if (value_node.tag == .ref_target) {
+                const ref_inner = self.ast.nodes[value_node.data.lhs];
+                if (ref_inner.tag == .variable) {
+                    try self.emitOp(.dup);
+                    try self.emitOp(.array_push_bind_ref);
+                    try self.emitU16(try self.addConstant(.{ .string = self.ast.tokenSlice(ref_inner.main_token) }));
+                    try self.emitOp(.pop);
+                    continue;
+                }
+            }
             try self.compileNode(elem.data.lhs);
             try self.emitOp(.array_push);
         }
