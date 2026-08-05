@@ -3459,6 +3459,22 @@ pub const VM = struct {
                     try self.arrays.append(self.allocator, arr);
                     self.push(.{ .array = arr });
                 },
+                .array_push_assign => {
+                    const val = self.pop();
+                    const arr_val = self.pop();
+                    if (arr_val == .array) {
+                        try arr_val.array.append(self.allocator, val);
+                    } else if (arr_val == .object and self.hasMethod(arr_val.object.class_name, "offsetSet")) {
+                        _ = self.callMethod(arr_val.object, "offsetSet", &.{ .null, val }) catch {
+                            if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                            return error.RuntimeError;
+                        };
+                    } else if (arr_val == .string) {
+                        if (try self.throwBuiltinException("Error", "[] operator not supported for strings")) continue;
+                        return error.RuntimeError;
+                    }
+                    self.push(val);
+                },
                 .array_push => {
                     const val = self.pop();
                     const arr_val = self.peek();

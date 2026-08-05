@@ -139,7 +139,7 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
         }
         try compileVivifyChain(self,target.data.lhs);
         try self.compileNode(node.data.rhs);
-        try self.emitOp(.array_push);
+        try self.emitOp(.array_push_assign);
         return;
     }
 
