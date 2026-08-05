@@ -471,6 +471,37 @@ const Parser = struct {
             return self.addNode(.{ .tag = .block, .main_token = tok, .data = .{ .lhs = block_extra } });
         }
 
+        if (self.peek() == .comma) {
+            var stmts = std.ArrayListUnmanaged(u32){};
+            defer stmts.deinit(self.allocator);
+            const first_extra = try self.addExtraList(prefix.items);
+            const tag: Ast.Node.Tag = if (outer_is_fn) .use_fn_stmt else if (outer_is_const) .use_const_stmt else .use_stmt;
+            try stmts.append(self.allocator, try self.addNode(.{ .tag = tag, .main_token = tok, .data = .{ .lhs = first_extra } }));
+            while (self.peek() == .comma) {
+                _ = self.advance();
+                var parts = std.ArrayListUnmanaged(u32){};
+                defer parts.deinit(self.allocator);
+                try parts.append(self.allocator, self.pos);
+                if (self.peek() == .identifier or isSemiReserved(self.peek())) _ = self.advance() else _ = try self.expect(.identifier);
+                while (self.peek() == .backslash) {
+                    _ = self.advance();
+                    try parts.append(self.allocator, self.pos);
+                    if (self.peek() == .identifier or isSemiReserved(self.peek())) _ = self.advance() else _ = try self.expect(.identifier);
+                }
+                var item_alias: u32 = 0;
+                if (self.peek() == .kw_as) {
+                    _ = self.advance();
+                    item_alias = self.pos;
+                    _ = try self.expect(.identifier);
+                }
+                const item_extra = try self.addExtraList(parts.items);
+                try stmts.append(self.allocator, try self.addNode(.{ .tag = tag, .main_token = tok, .data = .{ .lhs = item_extra, .rhs = item_alias } }));
+            }
+            _ = try self.expect(.semicolon);
+            const block_extra = try self.addExtraList(stmts.items);
+            return self.addNode(.{ .tag = .block, .main_token = tok, .data = .{ .lhs = block_extra } });
+        }
+
         var alias: u32 = 0;
         if (self.peek() == .kw_as) {
             _ = self.advance();
