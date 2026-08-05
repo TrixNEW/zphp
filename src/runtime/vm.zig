@@ -11262,6 +11262,8 @@ pub const VM = struct {
             if (!self.functions.contains(class_method)) {
                 try self.functions.put(self.allocator, class_method, tm.func);
                 try self.indexFunctionByChunk(class_method, &tm.func.chunk);
+            }
+            if (!def.methods.contains(tm.name)) {
                 try def.addMethod(self.allocator, .{
                     .name = tm.name,
                     .arity = tm.func.arity,
