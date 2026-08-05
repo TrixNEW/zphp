@@ -105,6 +105,9 @@ pub const NativeContext = struct {
 
     pub fn setCallerVar(self: *NativeContext, arg_index: usize, arg_count: usize, value: Value) void {
         const vm = self.vm;
+        if (vm.pending_ref_args) |args| {
+            if (arg_index < args.len) args[arg_index] = value;
+        }
         if (vm.frame_count == 0) return;
         const arg_sources = vm.scanCallerArgSources(arg_count);
         const caller = vm.currentFrame();
@@ -577,6 +580,7 @@ pub const VM = struct {
     // the called function sees the real args, not stale data from whatever
     // last used this frame slot
     pending_invoke_args: ?[]const Value = null,
+    pending_ref_args: ?[]Value = null,
     static_vars: std.ArrayListUnmanaged(StaticEntry) = .{},
     global_vars: std.ArrayListUnmanaged(StaticEntry) = .{},
     file_loader: ?*const FileLoader = null,
@@ -3259,8 +3263,33 @@ pub const VM = struct {
                             try self.callNamedFunction(name, @intCast(arr.entries.items.len));
                         }
                     } else {
-                        for (arr.entries.items) |entry| self.push(entry.value);
-                        try self.callNamedFunction(name, @intCast(arr.entries.items.len));
+                        const ref_func = self.functions.get(name);
+                        var function_needs_refs = false;
+                        if (ref_func) |func| {
+                            for (func.ref_params) |is_ref| {
+                                if (is_ref) {
+                                    function_needs_refs = true;
+                                    break;
+                                }
+                            }
+                        }
+                        const native_needs_refs = self.native_fns.contains(name) and (std.mem.eql(u8, name, "preg_match") or std.mem.eql(u8, name, "preg_match_all"));
+                        if (native_needs_refs or function_needs_refs) {
+                            var ref_args: [256]Value = undefined;
+                            if (arr.entries.items.len > ref_args.len) return error.RuntimeError;
+                            for (arr.entries.items, 0..) |entry, i| ref_args[i] = if (entry.ref) |ref| ref.* else entry.value;
+                            const result = try self.callByNameRef(name, ref_args[0..arr.entries.items.len]);
+                            for (arr.entries.items, 0..) |*entry, i| {
+                                if (entry.ref) |ref| {
+                                    ref.* = ref_args[i];
+                                    try self.propagateCellWrite(ref, ref_args[i]);
+                                }
+                            }
+                            self.push(result);
+                        } else {
+                            for (arr.entries.items) |entry| self.push(entry.value);
+                            try self.callNamedFunction(name, @intCast(arr.entries.items.len));
+                        }
                     }
                 },
                 .call_indirect_spread => {
@@ -3275,6 +3304,31 @@ pub const VM = struct {
                     }
                     const arr = args_val.array;
                     if (name_val == .string) {
+                        const ref_func = self.functions.get(name_val.string);
+                        var function_needs_refs = false;
+                        if (ref_func) |func| {
+                            for (func.ref_params) |is_ref| {
+                                if (is_ref) {
+                                    function_needs_refs = true;
+                                    break;
+                                }
+                            }
+                        }
+                        const native_needs_refs = self.native_fns.contains(name_val.string) and (std.mem.eql(u8, name_val.string, "preg_match") or std.mem.eql(u8, name_val.string, "preg_match_all"));
+                        if (native_needs_refs or function_needs_refs) {
+                            var ref_args: [256]Value = undefined;
+                            if (arr.entries.items.len > ref_args.len) return error.RuntimeError;
+                            for (arr.entries.items, 0..) |entry, i| ref_args[i] = if (entry.ref) |ref| ref.* else entry.value;
+                            const result = try self.callByNameRef(name_val.string, ref_args[0..arr.entries.items.len]);
+                            for (arr.entries.items, 0..) |*entry, i| {
+                                if (entry.ref) |ref| {
+                                    ref.* = ref_args[i];
+                                    try self.propagateCellWrite(ref, ref_args[i]);
+                                }
+                            }
+                            self.push(result);
+                            continue;
+                        }
                         var has_named_args = false;
                         for (arr.entries.items) |entry| {
                             if (entry.key == .string) {
@@ -6315,7 +6369,14 @@ pub const VM = struct {
                     if (src == .array) {
                         for (src.array.entries.items) |entry| {
                             if (entry.key == .string) {
-                                try target.array.set(self.allocator, entry.key, entry.value);
+                                try target.array.set(self.allocator, entry.key, if (entry.ref) |ref| ref.* else entry.value);
+                            } else if (entry.ref) |ref| {
+                                const key: PhpArray.Key = .{ .int = target.array.next_int_key };
+                                try target.array.append(self.allocator, ref.*);
+                                if (target.array.getPtr(key)) |ep| ep.ref = ref;
+                                try self.array_ref_bindings.append(self.allocator, .{ .cell = ref, .array = target.array, .key = key });
+                                try self.regRefArray(try self.persistentRefOwner(), ref, target.array, key);
+                                self.array_ref_active = true;
                             } else {
                                 try target.array.append(self.allocator, entry.value);
                             }
@@ -13715,6 +13776,7 @@ pub const VM = struct {
         // is an array, where cycles become possible.
         var has_nested = false;
         for (src.entries.items) |entry| {
+            if (entry.ref != null) return try self.shallowCloneCow(src);
             if (entry.value == .array) {
                 has_nested = true;
                 break;
@@ -15223,6 +15285,9 @@ pub const VM = struct {
             }
             return result;
         }
+        const saved_ref_args = self.pending_ref_args;
+        self.pending_ref_args = args;
+        defer self.pending_ref_args = saved_ref_args;
         return self.callByName(name, args);
     }
 

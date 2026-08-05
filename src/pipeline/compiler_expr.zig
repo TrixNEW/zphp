@@ -1234,6 +1234,17 @@ pub fn compileArrayLiteral(self: *Compiler, node: Ast.Node) Error!void {
             try self.compileNode(elem.data.lhs);
             try self.emitOp(.array_set_elem);
         } else {
+            const value_node = self.ast.nodes[elem.data.lhs];
+            if (value_node.tag == .ref_target) {
+                const ref_inner = self.ast.nodes[value_node.data.lhs];
+                if (ref_inner.tag == .variable) {
+                    try self.emitOp(.dup);
+                    try self.emitOp(.array_push_bind_ref);
+                    try self.emitU16(try self.addConstant(.{ .string = self.ast.tokenSlice(ref_inner.main_token) }));
+                    try self.emitOp(.pop);
+                    continue;
+                }
+            }
             try self.compileNode(elem.data.lhs);
             try self.emitOp(.array_push);
         }
