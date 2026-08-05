@@ -15,6 +15,9 @@ echo "exists readme: " . (file_exists("phar://$pharFile/readme.md") ? "y" : "n")
 echo "exists deep: " . (file_exists("phar://$pharFile/a/b/c/deep.txt") ? "y" : "n") . "\n";
 echo "exists missing: " . (file_exists("phar://$pharFile/nope") ? "y" : "n") . "\n";
 echo "is_file readme: " . (is_file("phar://$pharFile/readme.md") ? "y" : "n") . "\n";
+echo "is_file normalized: " . (is_file("phar://$pharFile/a/../readme.md") ? "y" : "n") . "\n";
+echo "is_readable readme: " . (is_readable("phar://$pharFile/readme.md") ? "y" : "n") . "\n";
+echo "is_readable normalized: " . (is_readable("phar://$pharFile/a/../readme.md") ? "y" : "n") . "\n";
 echo "is_file lib: " . (is_file("phar://$pharFile/lib") ? "y" : "n") . "\n";
 echo "is_dir lib: " . (is_dir("phar://$pharFile/lib") ? "y" : "n") . "\n";
 echo "is_dir a/b: " . (is_dir("phar://$pharFile/a/b") ? "y" : "n") . "\n";
