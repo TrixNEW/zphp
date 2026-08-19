@@ -101,9 +101,9 @@ pub const entries = .{
     .{ "memory_get_peak_usage", native_memory_get_usage },
     .{ "memory_reset_peak_usage", native_noop_null },
     .{ "eval", native_eval },
-    .{ "gc_enabled", native_noop_true },
-    .{ "gc_disable", native_noop_null },
-    .{ "gc_enable", native_noop_null },
+    .{ "gc_enabled", native_gc_enabled },
+    .{ "gc_disable", native_gc_disable },
+    .{ "gc_enable", native_gc_enable },
     .{ "gc_collect_cycles", native_gc_collect_cycles },
     .{ "set_error_handler", native_set_error_handler },
     .{ "set_exception_handler", native_set_exception_handler },
@@ -1902,6 +1902,20 @@ fn native_noop_zero(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .int = 0 };
 }
 
+fn native_gc_enabled(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    return .{ .bool = ctx.vm.gc_enabled };
+}
+
+fn native_gc_disable(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    ctx.vm.gc_enabled = false;
+    return .null;
+}
+
+fn native_gc_enable(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    ctx.vm.gc_enabled = true;
+    return .null;
+}
+
 fn native_gc_collect_cycles(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const collected = ctx.vm.collectCycles();
     return .{ .int = @intCast(collected) };
@@ -1943,11 +1957,12 @@ fn native_gc_status(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     try arr.set(ctx.allocator, .{ .string = "running" }, .{ .bool = false });
     try arr.set(ctx.allocator, .{ .string = "protected" }, .{ .bool = false });
     try arr.set(ctx.allocator, .{ .string = "full" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "runs" }, .{ .int = 0 });
-    try arr.set(ctx.allocator, .{ .string = "collected" }, .{ .int = 0 });
-    try arr.set(ctx.allocator, .{ .string = "threshold" }, .{ .int = 10001 });
+    try arr.set(ctx.allocator, .{ .string = "runs" }, .{ .int = @intCast(ctx.vm.gc_runs) });
+    try arr.set(ctx.allocator, .{ .string = "collected" }, .{ .int = @intCast(ctx.vm.gc_collected) });
+    try arr.set(ctx.allocator, .{ .string = "threshold" }, .{ .int = @intCast(ctx.vm.gc_threshold) });
     try arr.set(ctx.allocator, .{ .string = "buffer_size" }, .{ .int = 16384 });
-    try arr.set(ctx.allocator, .{ .string = "roots" }, .{ .int = 0 });
+    const roots = ctx.vm.cycle_candidates.items.len + ctx.vm.cycle_array_candidates.items.len;
+    try arr.set(ctx.allocator, .{ .string = "roots" }, .{ .int = @intCast(roots) });
     try arr.set(ctx.allocator, .{ .string = "application_time" }, .{ .float = 0 });
     try arr.set(ctx.allocator, .{ .string = "collector_time" }, .{ .float = 0 });
     try arr.set(ctx.allocator, .{ .string = "destructor_time" }, .{ .float = 0 });

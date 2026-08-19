@@ -495,6 +495,10 @@ pub const VM = struct {
     // hitting 0. arrays need their own roots so pure array cycles are visible
     cycle_candidates: std.ArrayListUnmanaged(*PhpObject) = .{},
     cycle_array_candidates: std.ArrayListUnmanaged(*PhpArray) = .{},
+    gc_enabled: bool = true,
+    gc_runs: usize = 0,
+    gc_collected: usize = 0,
+    gc_threshold: usize = 10001,
     // ref-returning function call mechanism: a `&function` sets these on
     // return_ref - the cell it's returning a reference to + the bindings
     // that propagate writes through the cell back to underlying storage
@@ -1013,8 +1017,7 @@ pub const VM = struct {
 
     pub fn initOnHeap(allocator: Allocator) RuntimeError!*VM {
         const vm = try allocator.create(VM);
-        @memset(std.mem.asBytes(vm), 0);
-        vm.allocator = allocator;
+        vm.* = .{ .allocator = allocator };
         try initVm(vm, allocator);
         return vm;
     }
@@ -2605,6 +2608,7 @@ pub const VM = struct {
                     // boundary, so run any destructors queued by this statement
                     _ = self.pop();
                     if (self.pending_destruct.items.len > 0) self.drainPendingDestruct();
+                    self.collectCyclesIfNeeded();
                 },
                 .dup => self.push(self.stack[self.sp - 1]),
                 .swap => {
@@ -3028,6 +3032,7 @@ pub const VM = struct {
                 .jump_back => {
                     const offset = self.readU16();
                     self.currentFrame().ip -= offset;
+                    self.collectCyclesIfNeeded();
                     try self.pollExecutionDeadline();
                     if (self.currentFrame().locals.len > 0) {
                         try self.fastLoop();
@@ -15764,6 +15769,7 @@ pub const VM = struct {
     pub fn collectCycles(self: *VM) usize {
         if (self.draining_destructors) return 0;
         if (self.cycle_candidates.items.len == 0 and self.cycle_array_candidates.items.len == 0) return 0;
+        self.gc_runs += 1;
         // drain any pending normal destructs first so the candidate set
         // doesn't include objects that are about to be released anyway
         self.drainPendingDestruct();
@@ -15856,7 +15862,14 @@ pub const VM = struct {
         self.cycle_candidates.clearRetainingCapacity();
         self.cycle_array_candidates.clearRetainingCapacity();
         self.drainPendingDestruct();
+        self.gc_collected += collected;
         return collected;
+    }
+
+    fn collectCyclesIfNeeded(self: *VM) void {
+        if (!self.gc_enabled) return;
+        const roots = self.cycle_candidates.items.len + self.cycle_array_candidates.items.len;
+        if (roots >= self.gc_threshold) _ = self.collectCycles();
     }
 
     fn cycleVisit(self: *VM, obj: *PhpObject, vo: anytype, va: anytype) void {
