@@ -15787,7 +15787,7 @@ pub const VM = struct {
             self.cycleVisit(c, &visited_objs, &visited_arrs);
         }
         for (self.cycle_array_candidates.items) |c| {
-            if (c.elements_released) continue;
+            if (c.elements_released or c.storage_released) continue;
             self.cycleVisitArr(c, &visited_objs, &visited_arrs);
         }
 
@@ -15886,7 +15886,7 @@ pub const VM = struct {
     }
 
     fn cycleVisitArr(self: *VM, arr: *PhpArray, vo: anytype, va: anytype) void {
-        if (va.contains(arr)) return;
+        if (arr.storage_released or va.contains(arr)) return;
         va.put(self.allocator, arr, {}) catch return;
         arr.scratch_rc = @intCast(arr.refcount);
         for (arr.entries.items) |e| self.cycleVisitChild(e.value, vo, va);
@@ -15909,6 +15909,7 @@ pub const VM = struct {
     }
 
     fn cycleDecrementChildrenArr(self: *VM, arr: *PhpArray, vo: anytype, va: anytype) void {
+        if (arr.storage_released) return;
         for (arr.entries.items) |e| self.cycleDecChild(e.value, vo, va);
     }
 
@@ -16051,7 +16052,7 @@ pub const VM = struct {
         if (arr.refcount == 0) return;
         arr.refcount -= 1;
         if (arr.refcount != 0) {
-            if (!arr.elements_released) {
+            if (!arr.elements_released and !arr.storage_released) {
                 self.cycle_array_candidates.append(self.allocator, arr) catch {};
             }
             return;
