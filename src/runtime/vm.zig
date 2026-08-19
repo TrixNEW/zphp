@@ -10567,14 +10567,22 @@ pub const VM = struct {
         }
 
         const prop_count = self.readU16();
-        var prop_names: [256][]const u8 = undefined;
-        var prop_has_default: [256]u8 = undefined;
-        var prop_vis: [256]ClassDef.Visibility = undefined;
-        var prop_set_vis: [256]ClassDef.Visibility = undefined;
-        var prop_readonly: [256]bool = .{false} ** 256;
-        var prop_promoted: [256]bool = .{false} ** 256;
-        var prop_type: [256][]const u8 = .{""} ** 256;
-        var prop_doc: [256][]const u8 = .{""} ** 256;
+        const prop_names = try self.allocator.alloc([]const u8, prop_count);
+        const prop_has_default = try self.allocator.alloc(u8, prop_count);
+        const prop_vis = try self.allocator.alloc(ClassDef.Visibility, prop_count);
+        const prop_set_vis = try self.allocator.alloc(ClassDef.Visibility, prop_count);
+        const prop_readonly = try self.allocator.alloc(bool, prop_count);
+        const prop_promoted = try self.allocator.alloc(bool, prop_count);
+        const prop_type = try self.allocator.alloc([]const u8, prop_count);
+        const prop_doc = try self.allocator.alloc([]const u8, prop_count);
+        defer self.allocator.free(prop_names);
+        defer self.allocator.free(prop_has_default);
+        defer self.allocator.free(prop_vis);
+        defer self.allocator.free(prop_set_vis);
+        defer self.allocator.free(prop_readonly);
+        defer self.allocator.free(prop_promoted);
+        defer self.allocator.free(prop_type);
+        defer self.allocator.free(prop_doc);
         for (0..prop_count) |pi| {
             const pname_idx = self.readU16();
             prop_names[pi] = self.currentChunk().constants.items[pname_idx].string;
@@ -10592,12 +10600,18 @@ pub const VM = struct {
         }
 
         const static_prop_count = self.readU16();
-        var sprop_names: [256][]const u8 = undefined;
-        var sprop_has_default: [256]u8 = undefined;
-        var sprop_is_const: [256]u8 = undefined;
-        var sprop_visibility: [256]u8 = undefined;
-        var sprop_type: [256][]const u8 = .{""} ** 256;
-        var sprop_doc: [256][]const u8 = .{""} ** 256;
+        const sprop_names = try self.allocator.alloc([]const u8, static_prop_count);
+        const sprop_has_default = try self.allocator.alloc(u8, static_prop_count);
+        const sprop_is_const = try self.allocator.alloc(u8, static_prop_count);
+        const sprop_visibility = try self.allocator.alloc(u8, static_prop_count);
+        const sprop_type = try self.allocator.alloc([]const u8, static_prop_count);
+        const sprop_doc = try self.allocator.alloc([]const u8, static_prop_count);
+        defer self.allocator.free(sprop_names);
+        defer self.allocator.free(sprop_has_default);
+        defer self.allocator.free(sprop_is_const);
+        defer self.allocator.free(sprop_visibility);
+        defer self.allocator.free(sprop_type);
+        defer self.allocator.free(sprop_doc);
         for (0..static_prop_count) |pi| {
             const pname_idx = self.readU16();
             sprop_names[pi] = self.currentChunk().constants.items[pname_idx].string;
@@ -10610,8 +10624,10 @@ pub const VM = struct {
             sprop_doc[pi] = if (sd_idx == 0xffff) "" else self.currentChunk().constants.items[sd_idx].string;
         }
 
-        const sdefaults = self.popDefaults(256, sprop_has_default[0..static_prop_count]);
-        const defaults = self.popDefaults(256, prop_has_default[0..prop_count]);
+        const sdefaults = try self.popDefaultsAlloc(sprop_has_default);
+        defer self.allocator.free(sdefaults);
+        const defaults = try self.popDefaultsAlloc(prop_has_default);
+        defer self.allocator.free(defaults);
 
         var dj: usize = 0;
         for (0..prop_count) |pi| {
@@ -11202,6 +11218,20 @@ pub const VM = struct {
             if (hd == 1) count += 1;
         }
         var i: usize = count;
+        while (i > 0) {
+            i -= 1;
+            values[i] = self.pop();
+        }
+        return values;
+    }
+
+    fn popDefaultsAlloc(self: *VM, has_default: []const u8) RuntimeError![]Value {
+        var count: usize = 0;
+        for (has_default) |hd| {
+            if (hd == 1) count += 1;
+        }
+        const values = try self.allocator.alloc(Value, count);
+        var i = count;
         while (i > 0) {
             i -= 1;
             values[i] = self.pop();
