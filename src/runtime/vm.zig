@@ -2148,6 +2148,8 @@ pub const VM = struct {
 
     pub fn reset(self: *VM) void {
         self.releaseFrames();
+        for (self.autoload_callbacks.items) |callback| self.releaseValue(callback);
+        self.autoload_callbacks.clearRetainingCapacity();
         // reap before freeHeapItems frees the proc objects (the map keys)
         self.reapProcChildren();
         self.frame_high_water = 0;
@@ -2257,8 +2259,6 @@ pub const VM = struct {
             // warm-request cost (native_fns put/grow/hash churn). only re-seed when
             // builtins weren't snapshotted (shouldn't happen in serve mode)
             if (!self.builtins_recorded) registerStdlibClasses(self, self.allocator) catch {};
-            for (self.autoload_callbacks.items) |callback| self.releaseValue(callback);
-            self.autoload_callbacks.clearRetainingCapacity();
             self.closure_instance_count = 0;
         } else {
             self.compile_results.clearRetainingCapacity();
