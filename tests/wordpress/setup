@@ -30,14 +30,15 @@ if [ ! -f "$APP_DIR/wp-load.php" ]; then
     rm /tmp/wp.tar.gz
 fi
 
-# install the SQLite drop-in plugin so we can run without a mysql server
+# install a pinned SQLite drop-in so upstream releases cannot change CI behavior
+SQLITE_VERSION="2.2.23"
 DROPIN_DIR="$APP_DIR/wp-content"
 if [ ! -d "$DROPIN_DIR/plugins/sqlite-database-integration" ]; then
-    echo "downloading sqlite-database-integration plugin..."
+    echo "downloading sqlite-database-integration $SQLITE_VERSION..."
     if command -v curl &>/dev/null; then
-        curl -sSL https://downloads.wordpress.org/plugin/sqlite-database-integration.zip -o /tmp/sqlite-db.zip
+        curl -sSL "https://downloads.wordpress.org/plugin/sqlite-database-integration.${SQLITE_VERSION}.zip" -o /tmp/sqlite-db.zip
     else
-        wget -q https://downloads.wordpress.org/plugin/sqlite-database-integration.zip -O /tmp/sqlite-db.zip
+        wget -q "https://downloads.wordpress.org/plugin/sqlite-database-integration.${SQLITE_VERSION}.zip" -O /tmp/sqlite-db.zip
     fi
     mkdir -p "$DROPIN_DIR/plugins"
     cd "$DROPIN_DIR/plugins"
