@@ -151,7 +151,7 @@ pub const NativeContext = struct {
                 const ak = Value.toArrayKey(ae.key);
                 const old = ae.array.get(ak);
                 ae.array.set(vm.allocator, ak, value) catch return;
-                if (old == .object or old == .array) vm.releaseValue(old);
+                vm.releaseValue(old);
             },
             .prop_array_elem => |pae| {
                 const obj_val = vm.resolveCallerVar(pae.var_name, pae.is_local, pae.slot);
@@ -491,10 +491,10 @@ pub const VM = struct {
     // here; on object destruct we walk this list to remove entries whose key
     // is the just-destructed object (weak semantics)
     weakmaps: std.ArrayListUnmanaged(*PhpObject) = .{},
-    // cycle collector candidate roots: objects whose refcount decremented
-    // without hitting 0. when gc_collect_cycles fires we trial-decrement
-    // the reachable subgraph to find truly-unreachable cycles
+    // cycle collector candidate roots whose refcount decremented without
+    // hitting 0. arrays need their own roots so pure array cycles are visible
     cycle_candidates: std.ArrayListUnmanaged(*PhpObject) = .{},
+    cycle_array_candidates: std.ArrayListUnmanaged(*PhpArray) = .{},
     // ref-returning function call mechanism: a `&function` sets these on
     // return_ref - the cell it's returning a reference to + the bindings
     // that propagate writes through the cell back to underlying storage
@@ -2073,6 +2073,7 @@ pub const VM = struct {
         self.pending_fiber_release.deinit(self.allocator);
         self.weakmaps.deinit(self.allocator);
         self.cycle_candidates.deinit(self.allocator);
+        self.cycle_array_candidates.deinit(self.allocator);
         self.array_ref_bindings.deinit(self.allocator);
         if (self.ref_index) |ri| {
             ri.deinit(self.allocator);
@@ -2210,6 +2211,7 @@ pub const VM = struct {
         self.weakmaps.clearRetainingCapacity();
         self.shutdown_callbacks.clearRetainingCapacity();
         self.cycle_candidates.clearRetainingCapacity();
+        self.cycle_array_candidates.clearRetainingCapacity();
         self.captures.clearRetainingCapacity();
         self.capture_index.clearRetainingCapacity();
         self.ob_stack.clearRetainingCapacity();
@@ -2255,6 +2257,7 @@ pub const VM = struct {
             // warm-request cost (native_fns put/grow/hash churn). only re-seed when
             // builtins weren't snapshotted (shouldn't happen in serve mode)
             if (!self.builtins_recorded) registerStdlibClasses(self, self.allocator) catch {};
+            for (self.autoload_callbacks.items) |callback| self.releaseValue(callback);
             self.autoload_callbacks.clearRetainingCapacity();
             self.closure_instance_count = 0;
         } else {
@@ -2757,7 +2760,7 @@ pub const VM = struct {
                                     if (si < self.currentFrame().locals.len) {
                                         // Stage 2 overwrite-release on the slot
                                         const old_lv = self.currentFrame().locals[si];
-                                        if (old_lv == .object) self.objRelease(old_lv.object);
+                                        self.releaseValue(old_lv);
                                         self.currentFrame().locals[si] = val;
                                     }
                                     found_slot = true;
@@ -2769,7 +2772,7 @@ pub const VM = struct {
                                 try self.strings.append(self.allocator, stable_key);
                                 // Stage 2 overwrite-release on the vars map
                                 if (self.currentFrame().vars.get(stable_key)) |old| {
-                                    if (old == .object) self.objRelease(old.object);
+                                    self.releaseValue(old);
                                 }
                                 try self.currentFrame().vars.put(self.allocator, stable_key, val);
                             }
@@ -3558,9 +3561,7 @@ pub const VM = struct {
                         if (!(self.array_ref_active and try self.writeArrayElemRef(arr_val.array, norm_key, val))) {
                             const old_val = arr_val.array.get(norm_key);
                             try arr_val.array.set(self.allocator, norm_key, val);
-                            if (old_val == .object or old_val == .array) {
-                                self.releaseValue(old_val);
-                            }
+                            self.releaseValue(old_val);
                         }
                     } else if (arr_val == .object and self.hasMethod(arr_val.object.class_name, "offsetSet")) {
                         _ = self.callMethod(arr_val.object, "offsetSet", &.{ key, val }) catch {
@@ -3811,9 +3812,7 @@ pub const VM = struct {
                         if (!(self.array_ref_active and try self.writeArrayElemRef(ea.array, ik, v))) {
                             const inner_old = ea.array.get(ik);
                             try ea.array.set(self.allocator, ik, v);
-                            if (inner_old == .object or inner_old == .array) {
-                                self.releaseValue(inner_old);
-                            }
+                            self.releaseValue(inner_old);
                         }
                         self.push(v);
                         continue;
@@ -3952,9 +3951,7 @@ pub const VM = struct {
                         if (!(self.array_ref_active and try self.writeArrayElemRef(ea.array, ik, v))) {
                             const inner_old = ea.array.get(ik);
                             try ea.array.set(self.allocator, ik, v);
-                            if (inner_old == .object or inner_old == .array) {
-                                self.releaseValue(inner_old);
-                            }
+                            self.releaseValue(inner_old);
                         }
                         self.push(v);
                         continue;
@@ -4021,9 +4018,7 @@ pub const VM = struct {
                         if (is_ref or !(self.array_ref_active and try self.writeArrayElemRef(arr_val.array, norm_key, val))) {
                             const old_val = arr_val.array.get(norm_key);
                             try arr_val.array.set(self.allocator, norm_key, val);
-                            if (old_val == .object or old_val == .array) {
-                                self.releaseValue(old_val);
-                            }
+                            self.releaseValue(old_val);
                         }
                         if (self.globals_array) |ga| {
                             if (arr_val.array == ga and key == .string) {
@@ -4067,9 +4062,7 @@ pub const VM = struct {
                             if (!(self.array_ref_active and try self.writeArrayElemRef(arr_val.array, ak, cloned))) {
                                 const old_val = arr_val.array.get(ak);
                                 try arr_val.array.set(self.allocator, ak, cloned);
-                                if (old_val == .object or old_val == .array) {
-                                    self.releaseValue(old_val);
-                                }
+                                self.releaseValue(old_val);
                             }
                         }
                     }
@@ -4196,9 +4189,7 @@ pub const VM = struct {
                         if (op == .array_set_local_ref or !(self.array_ref_active and try self.writeArrayElemRef(cur.array, norm_key, val))) {
                             const old_val = cur.array.get(norm_key);
                             try cur.array.set(self.allocator, norm_key, val);
-                            if (old_val == .object or old_val == .array) {
-                                self.releaseValue(old_val);
-                            }
+                            self.releaseValue(old_val);
                         }
                         if (self.globals_array) |ga| {
                             if (cur.array == ga and key == .string) {
@@ -4860,7 +4851,7 @@ pub const VM = struct {
                         // entry a reference, and register the writeback binding
                         const old = arr_ptr.get(key);
                         try arr_ptr.set(self.allocator, key, cell.*);
-                        if (old == .object or old == .array) self.releaseValue(old);
+                        self.releaseValue(old);
                         if (arr_ptr.getPtr(key)) |ep| ep.ref = cell;
                         try self.array_ref_bindings.append(self.allocator, .{ .cell = cell, .array = arr_ptr, .key = key });
                         try self.regRefArray(try self.persistentRefOwner(), cell, arr_ptr, key);
@@ -15742,7 +15733,7 @@ pub const VM = struct {
     //    + free
     pub fn collectCycles(self: *VM) usize {
         if (self.draining_destructors) return 0;
-        if (self.cycle_candidates.items.len == 0) return 0;
+        if (self.cycle_candidates.items.len == 0 and self.cycle_array_candidates.items.len == 0) return 0;
         // drain any pending normal destructs first so the candidate set
         // doesn't include objects that are about to be released anyway
         self.drainPendingDestruct();
@@ -15756,6 +15747,10 @@ pub const VM = struct {
         for (self.cycle_candidates.items) |c| {
             if (c.destructed) continue;
             self.cycleVisit(c, &visited_objs, &visited_arrs);
+        }
+        for (self.cycle_array_candidates.items) |c| {
+            if (c.elements_released) continue;
+            self.cycleVisitArr(c, &visited_objs, &visited_arrs);
         }
 
         // pass 2: walk every visited node, decrement child scratch_rc for
@@ -15829,6 +15824,7 @@ pub const VM = struct {
             }
         }
         self.cycle_candidates.clearRetainingCapacity();
+        self.cycle_array_candidates.clearRetainingCapacity();
         self.drainPendingDestruct();
         return collected;
     }
@@ -16009,7 +16005,13 @@ pub const VM = struct {
     pub fn arrayRelease(self: *VM, arr: *PhpArray) void {
         if (arr.refcount == 0) return;
         arr.refcount -= 1;
-        if (arr.refcount != 0 or arr.elements_released) return;
+        if (arr.refcount != 0) {
+            if (!arr.elements_released) {
+                self.cycle_array_candidates.append(self.allocator, arr) catch {};
+            }
+            return;
+        }
+        if (arr.elements_released) return;
         self.pending_array_release.append(self.allocator, arr) catch {};
     }
 

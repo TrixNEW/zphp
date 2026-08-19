@@ -29,6 +29,17 @@ echo "before gc\n";
 $n = gc_collect_cycles();
 echo "collected $n\n";
 
+echo "== pure array self-cycle ==\n";
+function makeArrayCycle()
+{
+    $arrayCycle = [];
+    $arrayCycle[0] = &$arrayCycle;
+}
+makeArrayCycle();
+echo "before gc\n";
+$n = gc_collect_cycles();
+echo "collected $n\n";
+
 echo "== three-cycle A->B->C->A ==\n";
 $a = new N('A1');
 $b = new N('B1');

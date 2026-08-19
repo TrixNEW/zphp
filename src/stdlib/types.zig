@@ -2,6 +2,7 @@ const std = @import("std");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
+const VM = @import("../runtime/vm.zig").VM;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
 const ClassDef = @import("../runtime/vm.zig").ClassDef;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
@@ -2288,6 +2289,7 @@ fn native_class_alias(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 
 fn native_spl_autoload_register(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = false };
+    VM.retainValue(args[0]);
     try ctx.vm.autoload_callbacks.append(ctx.allocator, args[0]);
     return .{ .bool = true };
 }
@@ -2309,6 +2311,7 @@ fn native_spl_autoload_unregister(ctx: *NativeContext, args: []const Value) Runt
     while (i < ctx.vm.autoload_callbacks.items.len) {
         const cb = ctx.vm.autoload_callbacks.items[i];
         if (callablesEqual(cb, target)) {
+            ctx.vm.releaseValue(cb);
             _ = ctx.vm.autoload_callbacks.orderedRemove(i);
         } else {
             i += 1;
