@@ -27,6 +27,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
@@ -45,6 +48,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - run: zig build
       - run: ./tests/serve_test
@@ -58,6 +64,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - run: zig build
       - run: ./tests/test_runner_test
@@ -71,6 +80,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - run: zig build
       - run: ./tests/pkg_test
@@ -83,6 +95,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - run: zig build
       - run: ./tests/fmt_test
@@ -95,6 +110,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - uses: shivammathur/setup-php@v2
         with:
@@ -111,6 +129,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - uses: shivammathur/setup-php@v2
         with:
@@ -126,6 +147,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - uses: shivammathur/setup-php@v2
         with:
@@ -144,6 +168,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - uses: shivammathur/setup-php@v2
         with:
@@ -162,6 +189,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - uses: shivammathur/setup-php@v2
         with:
@@ -180,6 +210,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - uses: shivammathur/setup-php@v2
         with:
@@ -197,6 +230,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - uses: shivammathur/setup-php@v2
         with:
@@ -215,6 +251,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev unzip
       - uses: shivammathur/setup-php@v2
         with:
@@ -232,6 +271,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - uses: shivammathur/setup-php@v2
         with:
@@ -267,6 +309,9 @@ jobs:
         with:
           version: 0.15.1
       - name: install system libs
+        timeout-minutes: 5
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: sudo apt-get update && sudo apt-get install -y libpcre2-dev libsqlite3-dev zlib1g-dev libmysqlclient-dev libpq-dev libssl-dev libnghttp2-dev libcurl4-openssl-dev libxml2-dev libicu-dev libgmp-dev libgd-dev libsodium-dev libldap2-dev
       - run: zig build
       - run: ./tests/pdo_test
