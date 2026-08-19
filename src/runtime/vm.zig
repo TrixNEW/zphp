@@ -1927,7 +1927,7 @@ pub const VM = struct {
         for (self.fibers.items) |f| self.cleanupFiberFrames(f);
         for (self.strings.items[str_start..]) |s| self.allocator.free(s);
         for (self.arrays.items[arr_start..]) |a| {
-            a.deinit(self.allocator);
+            if (!a.storage_released) a.deinit(self.allocator);
             self.allocator.destroy(a);
         }
         for (self.objects.items[obj_start..]) |o| {
@@ -15733,6 +15733,8 @@ pub const VM = struct {
                 // reachable through unserialize R:N) is not re-queued
                 arr.elements_released = true;
                 self.releaseArrayElements(arr);
+                arr.deinit(self.allocator);
+                arr.storage_released = true;
             }
             while (self.gen_release_cursor < self.pending_gen_release.items.len) {
                 const gen = self.pending_gen_release.items[self.gen_release_cursor];
