@@ -5519,17 +5519,10 @@ pub const VM = struct {
                         // ref-cell refcounting later) (Stage 1)
                         const old_lv = frame.locals[slot];
                         if (!self.slotIsRefBound(frame, slot)) {
-                            // Stage 2: also handles .generator and .fiber via
-                            // releaseValue. arrays in locals aren't retained
-                            // by the slot in Option B, so releaseValue's
-                            // .array branch would over-release; gate on
-                            // object/gen/fiber only
-                            switch (old_lv) {
-                                .object => self.objRelease(old_lv.object),
-                                .generator => self.genRelease(old_lv.generator),
-                                .fiber => self.fiberRelease(old_lv.fiber),
-                                else => {},
-                            }
+                            // Named locals and frame.vars are two views of one
+                            // owning binding. copyValue retains its array/object
+                            // value once, so overwrite releases it once here.
+                            self.releaseValue(old_lv);
                         }
                         frame.locals[slot] = val;
                     }
