@@ -22,10 +22,21 @@ const ParsedAttr = struct {
 
 fn isModifierToken(tag: Token.Tag) bool {
     return switch (tag) {
-        .kw_public, .kw_protected, .kw_private, .kw_static,
-        .kw_abstract, .kw_readonly, .kw_final, .kw_function,
-        .kw_class, .kw_var, .kw_enum, .kw_interface, .kw_trait,
-        .kw_const, .kw_case,
+        .kw_public,
+        .kw_protected,
+        .kw_private,
+        .kw_static,
+        .kw_abstract,
+        .kw_readonly,
+        .kw_final,
+        .kw_function,
+        .kw_class,
+        .kw_var,
+        .kw_enum,
+        .kw_interface,
+        .kw_trait,
+        .kw_const,
+        .kw_case,
         => true,
         else => false,
     };
@@ -33,9 +44,19 @@ fn isModifierToken(tag: Token.Tag) bool {
 
 fn isTypeToken(tag: Token.Tag) bool {
     return switch (tag) {
-        .identifier, .question, .pipe, .backslash, .amp,
-        .kw_array, .kw_callable, .kw_self, .kw_parent, .kw_null,
-        .kw_true, .kw_false, .kw_static,
+        .identifier,
+        .question,
+        .pipe,
+        .backslash,
+        .amp,
+        .kw_array,
+        .kw_callable,
+        .kw_self,
+        .kw_parent,
+        .kw_null,
+        .kw_true,
+        .kw_false,
+        .kw_static,
         => true,
         else => false,
     };
@@ -235,7 +256,6 @@ fn findAttrRangeForToken(attr_ranges: []const ast_mod.AttrRange, tokens: []const
     return null;
 }
 
-
 fn extractAttributes(self: *Compiler, main_token: u32) []const ParsedAttr {
     const ar = findAttrRangeForToken(self.ast.attr_ranges, self.ast.tokens, main_token) orelse return &.{};
 
@@ -251,8 +271,7 @@ fn extractAttributes(self: *Compiler, main_token: u32) []const ParsedAttr {
         var rb_pos: usize = pos;
         var depth: u32 = 1;
         while (rb_pos < end and depth > 0) {
-            if (self.ast.tokens[rb_pos].tag == .l_bracket) depth += 1
-            else if (self.ast.tokens[rb_pos].tag == .r_bracket) depth -= 1;
+            if (self.ast.tokens[rb_pos].tag == .l_bracket) depth += 1 else if (self.ast.tokens[rb_pos].tag == .r_bracket) depth -= 1;
             if (depth > 0) rb_pos += 1;
         }
 
@@ -383,7 +402,10 @@ fn emitAttrValue(self: *Compiler, val: Value) Error!void {
             const arr = val.array;
             var has_string_keys = false;
             for (arr.entries.items) |entry| {
-                if (entry.key == .string) { has_string_keys = true; break; }
+                if (entry.key == .string) {
+                    has_string_keys = true;
+                    break;
+                }
             }
             if (has_string_keys) {
                 try self.emitByte(0x07); // associative array
@@ -483,10 +505,10 @@ fn buildTypeString(self: *Compiler, start_tok: u32, end_tok: u32) Error![]const 
 
 fn isPrimitiveType(name: []const u8) bool {
     const primitives = [_][]const u8{
-        "int", "integer", "float", "double", "bool", "boolean",
-        "string", "array", "object", "callable", "void", "null",
-        "false", "true", "mixed", "never", "iterable", "self",
-        "static", "parent", "Generator", "Fiber", "Closure",
+        "int",    "integer", "float",     "double",   "bool",     "boolean",
+        "string", "array",   "object",    "callable", "void",     "null",
+        "false",  "true",    "mixed",     "never",    "iterable", "self",
+        "static", "parent",  "Generator", "Fiber",    "Closure",
     };
     for (primitives) |p| {
         if (std.mem.eql(u8, name, p)) return true;
@@ -509,7 +531,9 @@ fn lineForOffset(self: *Compiler, off: u32) u32 {
     const src = self.ast.source;
     const clamped = @min(off, src.len);
     var line: u32 = 1;
-    for (src[0..clamped]) |c| if (c == '\n') { line += 1; };
+    for (src[0..clamped]) |c| if (c == '\n') {
+        line += 1;
+    };
     return line;
 }
 
@@ -520,12 +544,30 @@ fn lineForOffset(self: *Compiler, off: u32) u32 {
 // comment that immediately precedes it. returns the full comment text or ""
 fn isDeclLeadingTokenTag(tag: Token.Tag) bool {
     return switch (tag) {
-        .kw_function, .kw_class, .kw_interface, .kw_trait, .kw_enum,
-        .kw_public, .kw_protected, .kw_private,
-        .kw_static, .kw_final, .kw_abstract, .kw_readonly,
+        .kw_function,
+        .kw_class,
+        .kw_interface,
+        .kw_trait,
+        .kw_enum,
+        .kw_public,
+        .kw_protected,
+        .kw_private,
+        .kw_static,
+        .kw_final,
+        .kw_abstract,
+        .kw_readonly,
         // type hints in front of a parameter / property
-        .identifier, .kw_array, .kw_callable, .kw_self, .kw_parent,
-        .question, .pipe, .amp, .backslash, .l_paren, .r_paren,
+        .identifier,
+        .kw_array,
+        .kw_callable,
+        .kw_self,
+        .kw_parent,
+        .question,
+        .pipe,
+        .amp,
+        .backslash,
+        .l_paren,
+        .r_paren,
         => true,
         else => false,
     };
@@ -554,7 +596,10 @@ fn docCommentForToken(self: *Compiler, tok_idx: u32) []const u8 {
     var i: usize = 0;
     while (i < trivia.len) {
         const c = trivia[i];
-        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') { i += 1; continue; }
+        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
+            i += 1;
+            continue;
+        }
         if (c == '/' and i + 1 < trivia.len and trivia[i + 1] == '/') {
             while (i < trivia.len and trivia[i] != '\n') i += 1;
             continue;
@@ -568,8 +613,13 @@ fn docCommentForToken(self: *Compiler, tok_idx: u32) []const u8 {
             const is_doc = i + 2 < trivia.len and trivia[i + 2] == '*' and (i + 3 >= trivia.len or trivia[i + 3] != '/');
             i += 2;
             while (i + 1 < trivia.len) : (i += 1) {
-                if (trivia[i] == '*' and trivia[i + 1] == '/') { i += 2; break; }
-            } else { i = trivia.len; }
+                if (trivia[i] == '*' and trivia[i + 1] == '/') {
+                    i += 2;
+                    break;
+                }
+            } else {
+                i = trivia.len;
+            }
             if (is_doc) {
                 last_start = block_start;
                 last_end = i;
@@ -626,7 +676,10 @@ fn extractParamTypes(self: *Compiler, param_nodes: []const u32) Error![]const []
     var has_any = false;
     for (param_nodes) |p| {
         const rhs = self.ast.nodes[p].data.rhs;
-        if ((rhs >> 7) != 0) { has_any = true; break; }
+        if ((rhs >> 7) != 0) {
+            has_any = true;
+            break;
+        }
     }
     if (!has_any) return &.{};
 
@@ -1053,7 +1106,10 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         for (slot_names) |sn| {
             var is_param = false;
             for (param_names[0..param_nodes.len]) |pn| {
-                if (sn.len == pn.len and std.mem.eql(u8, sn, pn)) { is_param = true; break; }
+                if (sn.len == pn.len and std.mem.eql(u8, sn, pn)) {
+                    is_param = true;
+                    break;
+                }
             }
             if (is_param) continue;
             if (std.mem.eql(u8, sn, "$this")) continue;
@@ -1064,10 +1120,13 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
-    // bind $this for closures in method context
-    const this_idx = try self.addConstant(.{ .string = "$this" });
-    try self.emitOp(.closure_bind);
-    try self.emitU16(this_idx);
+    // Static closures never bind $this. Dynamic closures still emit the bind:
+    // at runtime it also records class scope when no object is present.
+    if (!is_static_closure) {
+        const this_idx = try self.addConstant(.{ .string = "$this" });
+        try self.emitOp(.closure_bind);
+        try self.emitU16(this_idx);
+    }
 }
 
 // a class/interface declaration default is "hoist-safe" only when it folds to
@@ -1081,8 +1140,7 @@ fn defaultExprIsLiteral(ast: *const Ast, idx: u32) bool {
     if (idx == 0) return true;
     const node = ast.nodes[idx];
     return switch (node.tag) {
-        .integer_literal, .float_literal, .string_literal,
-        .true_literal, .false_literal, .null_literal => true,
+        .integer_literal, .float_literal, .string_literal, .true_literal, .false_literal, .null_literal => true,
         .prefix_op => defaultExprIsLiteral(ast, node.data.lhs),
         .binary_op => defaultExprIsLiteral(ast, node.data.lhs) and defaultExprIsLiteral(ast, node.data.rhs),
         .array_literal => {
@@ -2119,7 +2177,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
     try self.emitByte(0); // param attrs
 
     // now instantiate with constructor args
-    const ctor_args_slice = self.ast.extra_data[ctor_args_start..ctor_args_start + ctor_arg_count];
+    const ctor_args_slice = self.ast.extra_data[ctor_args_start .. ctor_args_start + ctor_arg_count];
     if (@import("compiler_expr.zig").hasSplatOrNamed(self.ast, ctor_args_slice)) {
         try @import("compiler_expr.zig").emitSpreadArgs(self, ctor_args_slice);
         try self.emitOp(.new_obj);
@@ -2996,19 +3054,43 @@ fn opcodeWidth(b: u8) usize {
     const op: OpCode = std.meta.intToEnum(OpCode, b) catch return 1;
     return switch (op) {
         // 1 + u16 = 3 bytes
-        .constant, .get_var, .set_var, .jump, .jump_back, .jump_if_false, .jump_if_true,
-        .jump_if_not_null, .push_handler, .get_prop, .set_prop, .get_local, .set_local,
-        .get_global, .concat_assign, .unset_var, .unset_prop, .isset_prop,
-        .closure_bind, .closure_bind_ref, .define_const,
-        .iter_check, .inc_local, .dec_local, .trait_decl,
+        .constant,
+        .get_var,
+        .set_var,
+        .jump,
+        .jump_back,
+        .jump_if_false,
+        .jump_if_true,
+        .jump_if_not_null,
+        .push_handler,
+        .get_prop,
+        .set_prop,
+        .get_local,
+        .set_local,
+        .get_global,
+        .concat_assign,
+        .unset_var,
+        .unset_prop,
+        .isset_prop,
+        .closure_bind,
+        .closure_bind_ref,
+        .define_const,
+        .iter_check,
+        .inc_local,
+        .dec_local,
+        .trait_decl,
         => 3,
         // 1 + u16 + u8 = 4 bytes
         .call, .call_spread, .new_obj, .method_call, .method_call_spread, .static_call_dyn_method => 4,
         // 1 + u16 + u16 = 5 bytes
-        .get_static_prop, .set_static_prop,
-        .get_static, .set_static,
+        .get_static_prop,
+        .set_static_prop,
+        .get_static,
+        .set_static,
         .static_call_spread,
-        .add_local_to_local, .sub_local_to_local, .mul_local_to_local,
+        .add_local_to_local,
+        .sub_local_to_local,
+        .mul_local_to_local,
         => 5,
         // 1 + u16 + u16 + u8 = 6 bytes
         .static_call => 6,

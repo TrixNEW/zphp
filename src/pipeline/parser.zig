@@ -224,7 +224,10 @@ const Parser = struct {
                 },
                 .open_tag_echo => {
                     const node = self.parseOpenTagEcho() catch |err| switch (err) {
-                        error.ParseError => { self.synchronize(); continue; },
+                        error.ParseError => {
+                            self.synchronize();
+                            continue;
+                        },
                         error.OutOfMemory => return error.OutOfMemory,
                     };
                     try stmts.append(self.allocator, node);
@@ -236,7 +239,10 @@ const Parser = struct {
                 },
                 else => {
                     const stmt = self.parseStatement() catch |err| switch (err) {
-                        error.ParseError => { self.synchronize(); continue; },
+                        error.ParseError => {
+                            self.synchronize();
+                            continue;
+                        },
                         error.OutOfMemory => return error.OutOfMemory,
                     };
                     try stmts.append(self.allocator, stmt);
@@ -370,7 +376,10 @@ const Parser = struct {
             // body statements: drain pending then loop
             while (self.peek() != .r_brace and self.peek() != .eof) {
                 const node = self.parseStatement() catch |err| switch (err) {
-                    error.ParseError => { self.synchronize(); continue; },
+                    error.ParseError => {
+                        self.synchronize();
+                        continue;
+                    },
                     error.OutOfMemory => return error.OutOfMemory,
                 };
                 try self.pending_top_stmts.append(self.allocator, node);
@@ -594,7 +603,10 @@ const Parser = struct {
                 },
                 .open_tag_echo => {
                     const node = self.parseOpenTagEcho() catch |err| switch (err) {
-                        error.ParseError => { self.synchronize(); continue; },
+                        error.ParseError => {
+                            self.synchronize();
+                            continue;
+                        },
                         error.OutOfMemory => return error.OutOfMemory,
                     };
                     try stmts.append(self.allocator, node);
@@ -754,7 +766,10 @@ const Parser = struct {
         _ = try self.expect(.kw_as);
 
         var val_by_ref: u32 = 0;
-        if (self.peek() == .amp) { _ = self.advance(); val_by_ref = 1; }
+        if (self.peek() == .amp) {
+            _ = self.advance();
+            val_by_ref = 1;
+        }
         const first = try self.parseExpression();
         var value: u32 = first;
         var key: u32 = 0;
@@ -763,7 +778,10 @@ const Parser = struct {
             _ = self.advance();
             key = first;
             val_by_ref = 0;
-            if (self.peek() == .amp) { _ = self.advance(); val_by_ref = 1; }
+            if (self.peek() == .amp) {
+                _ = self.advance();
+                val_by_ref = 1;
+            }
             value = try self.parseExpression();
         }
 
@@ -887,7 +905,10 @@ const Parser = struct {
                 continue;
             }
             const stmt = self.parseStatement() catch |err| switch (err) {
-                error.ParseError => { self.synchronize(); continue; },
+                error.ParseError => {
+                    self.synchronize();
+                    continue;
+                },
                 error.OutOfMemory => return error.OutOfMemory,
             };
             try stmts.append(self.allocator, stmt);
@@ -912,7 +933,10 @@ const Parser = struct {
                 continue;
             }
             const stmt = self.parseStatement() catch |err| switch (err) {
-                error.ParseError => { self.synchronize(); continue; },
+                error.ParseError => {
+                    self.synchronize();
+                    continue;
+                },
                 error.OutOfMemory => return error.OutOfMemory,
             };
             try stmts.append(self.allocator, stmt);
@@ -1283,10 +1307,26 @@ const Parser = struct {
                 self.peek() == .kw_private or self.peek() == .kw_static or
                 self.peek() == .kw_abstract or self.peek() == .kw_final or self.peek() == .kw_readonly)
             {
-                if (self.peek() == .kw_static) { is_static = true; _ = self.advance(); continue; }
-                if (self.peek() == .kw_abstract) { is_abstract = true; _ = self.advance(); continue; }
-                if (self.peek() == .kw_final) { is_final = true; _ = self.advance(); continue; }
-                if (self.peek() == .kw_readonly) { is_readonly = true; _ = self.advance(); continue; }
+                if (self.peek() == .kw_static) {
+                    is_static = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_abstract) {
+                    is_abstract = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_final) {
+                    is_final = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_readonly) {
+                    is_readonly = true;
+                    _ = self.advance();
+                    continue;
+                }
                 const vis_val: u32 = if (self.peek() == .kw_protected) 1 else if (self.peek() == .kw_private) 2 else 0;
                 _ = self.advance();
                 if (self.peek() == .l_paren and self.peekAt(1) == .identifier and std.mem.eql(u8, self.lexemeAt(1), "set") and self.peekAt(2) == .r_paren) {
@@ -1445,10 +1485,26 @@ const Parser = struct {
                 self.peek() == .kw_private or self.peek() == .kw_static or
                 self.peek() == .kw_abstract or self.peek() == .kw_final or self.peek() == .kw_readonly)
             {
-                if (self.peek() == .kw_static) { is_static = true; _ = self.advance(); continue; }
-                if (self.peek() == .kw_abstract) { is_abstract = true; _ = self.advance(); continue; }
-                if (self.peek() == .kw_final) { is_final = true; _ = self.advance(); continue; }
-                if (self.peek() == .kw_readonly) { is_readonly = true; _ = self.advance(); continue; }
+                if (self.peek() == .kw_static) {
+                    is_static = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_abstract) {
+                    is_abstract = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_final) {
+                    is_final = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_readonly) {
+                    is_readonly = true;
+                    _ = self.advance();
+                    continue;
+                }
                 const vis_val: u32 = if (self.peek() == .kw_protected) 1 else if (self.peek() == .kw_private) 2 else 0;
                 _ = self.advance();
                 if (self.peek() == .l_paren and self.peekAt(1) == .identifier and std.mem.eql(u8, self.lexemeAt(1), "set") and self.peekAt(2) == .r_paren) {
@@ -1576,8 +1632,7 @@ const Parser = struct {
                         var depth: u32 = 1;
                         _ = self.advance();
                         while (depth > 0 and self.peek() != .eof) : (_ = self.advance()) {
-                            if (self.peek() == .l_brace) depth += 1
-                            else if (self.peek() == .r_brace) depth -= 1;
+                            if (self.peek() == .l_brace) depth += 1 else if (self.peek() == .r_brace) depth -= 1;
                         }
                     } else if (self.peek() == .semicolon) {
                         _ = self.advance();
@@ -1975,12 +2030,22 @@ const Parser = struct {
                 _ = self.advance();
                 const expr = try self.parseExpression();
                 _ = try self.expect(.semicolon);
-                if (is_get) { get_body = expr; get_short = 1; }
-                else { set_body = expr; set_short = 1; set_param_tok = local_set_param; }
+                if (is_get) {
+                    get_body = expr;
+                    get_short = 1;
+                } else {
+                    set_body = expr;
+                    set_short = 1;
+                    set_param_tok = local_set_param;
+                }
             } else if (self.peek() == .l_brace) {
                 const block = try self.parseBlock();
-                if (is_get) { get_body = block; }
-                else { set_body = block; set_param_tok = local_set_param; }
+                if (is_get) {
+                    get_body = block;
+                } else {
+                    set_body = block;
+                    set_param_tok = local_set_param;
+                }
             } else if (self.peek() == .semicolon) {
                 // abstract hook in interface (rare); skip
                 _ = self.advance();
@@ -1996,7 +2061,10 @@ const Parser = struct {
 
     fn parseClosureExpr(self: *Parser) Error!u32 {
         var is_static = false;
-        if (self.peek() == .kw_static) { is_static = true; _ = self.advance(); }
+        if (self.peek() == .kw_static) {
+            is_static = true;
+            _ = self.advance();
+        }
         const fn_tok = self.advance(); // function
         _ = try self.expect(.l_paren);
 
@@ -2021,14 +2089,20 @@ const Parser = struct {
             _ = try self.expect(.l_paren);
             if (self.peek() != .r_paren) {
                 var is_ref: u32 = 0;
-                if (self.peek() == .amp) { _ = self.advance(); is_ref = 1; }
+                if (self.peek() == .amp) {
+                    _ = self.advance();
+                    is_ref = 1;
+                }
                 const tok = try self.expect(.variable);
                 try use_vars.append(self.allocator, try self.addNode(.{ .tag = .variable, .main_token = tok, .data = .{ .rhs = is_ref } }));
                 while (self.peek() == .comma) {
                     _ = self.advance();
                     if (self.peek() == .r_paren) break;
                     is_ref = 0;
-                    if (self.peek() == .amp) { _ = self.advance(); is_ref = 1; }
+                    if (self.peek() == .amp) {
+                        _ = self.advance();
+                        is_ref = 1;
+                    }
                     const vtok = try self.expect(.variable);
                     try use_vars.append(self.allocator, try self.addNode(.{ .tag = .variable, .main_token = vtok, .data = .{ .rhs = is_ref } }));
                 }
@@ -2061,7 +2135,7 @@ const Parser = struct {
         return self.addNode(.{ .tag = .closure_expr, .main_token = fn_tok, .data = .{ .lhs = param_extra, .rhs = rhs_extra } });
     }
 
-    fn parseArrowFunc(self: *Parser) Error!u32 {
+    fn parseArrowFunc(self: *Parser, is_static: bool) Error!u32 {
         const fn_tok = self.advance(); // fn
         _ = try self.expect(.l_paren);
 
@@ -2092,15 +2166,17 @@ const Parser = struct {
         const body = try self.addNode(.{ .tag = .block, .main_token = fn_tok, .data = .{ .lhs = block_extra } });
 
         const param_extra = try self.addExtraListWithReturnType(params.items, ret_range);
-        // rhs = extra -> {body, use_count}. 0xFFFFFFFF signals arrow fn (implicit capture)
-        const rhs_extra = try self.addExtra(&.{ body, 0xFFFFFFFF });
+        // rhs = extra -> {body (bit 30 = static), use_count}.
+        // 0xFFFFFFFF signals arrow fn (implicit capture).
+        const encoded_body = body | (if (is_static) @as(u32, 1) << 30 else 0);
+        const rhs_extra = try self.addExtra(&.{ encoded_body, 0xFFFFFFFF });
 
         return self.addNode(.{ .tag = .closure_expr, .main_token = fn_tok, .data = .{ .lhs = param_extra, .rhs = rhs_extra } });
     }
 
     fn parseStaticArrowFunc(self: *Parser) Error!u32 {
         _ = self.advance(); // static
-        return self.parseArrowFunc();
+        return self.parseArrowFunc(true);
     }
 
     // parse a qualified name like App\Models\User or just User
@@ -2241,8 +2317,7 @@ const Parser = struct {
             var depth: u32 = 1;
             while (depth > 0 and self.peek() != .eof) {
                 const tok = self.advance();
-                if (self.tokens[tok].tag == .l_bracket) depth += 1
-                else if (self.tokens[tok].tag == .r_bracket) depth -= 1;
+                if (self.tokens[tok].tag == .l_bracket) depth += 1 else if (self.tokens[tok].tag == .r_bracket) depth -= 1;
             }
         }
         self.attr_ranges.append(self.allocator, .{
@@ -2264,7 +2339,11 @@ const Parser = struct {
         var loop_iters: u32 = 0;
         while (loop_iters < 4) : (loop_iters += 1) {
             const tag = self.peek();
-            if (tag == .kw_readonly) { param_readonly = true; _ = self.advance(); continue; }
+            if (tag == .kw_readonly) {
+                param_readonly = true;
+                _ = self.advance();
+                continue;
+            }
             if (tag == .kw_public or tag == .kw_protected or tag == .kw_private) {
                 const vis_val: u32 = if (tag == .kw_public) 1 else if (tag == .kw_protected) 2 else 3;
                 _ = self.advance();
@@ -2454,9 +2533,18 @@ const Parser = struct {
             .backslash => blk: {
                 // PHP treats `\true`, `\false`, `\null` as the literal values
                 // regardless of namespace (they're not namespaceable)
-                if (self.peekAt(1) == .kw_true) { _ = self.advance(); break :blk self.addLiteral(.true_literal); }
-                if (self.peekAt(1) == .kw_false) { _ = self.advance(); break :blk self.addLiteral(.false_literal); }
-                if (self.peekAt(1) == .kw_null) { _ = self.advance(); break :blk self.addLiteral(.null_literal); }
+                if (self.peekAt(1) == .kw_true) {
+                    _ = self.advance();
+                    break :blk self.addLiteral(.true_literal);
+                }
+                if (self.peekAt(1) == .kw_false) {
+                    _ = self.advance();
+                    break :blk self.addLiteral(.false_literal);
+                }
+                if (self.peekAt(1) == .kw_null) {
+                    _ = self.advance();
+                    break :blk self.addLiteral(.null_literal);
+                }
                 break :blk self.parseQualifiedName();
             },
             .kw_namespace => if (self.peekAt(1) == .backslash) self.parseQualifiedName() else blk: {
@@ -2479,7 +2567,7 @@ const Parser = struct {
             .kw_list => self.parseListDestructure(),
             .kw_match => if (self.isMatchExpr()) self.parseMatchExpr() else self.addLiteral(.identifier),
             .kw_function => self.parseClosureExpr(),
-            .kw_fn => self.parseArrowFunc(),
+            .kw_fn => self.parseArrowFunc(false),
             .hash_bracket => {
                 self.skipAttributes();
                 return self.parsePrimaryExpr();
@@ -2543,15 +2631,59 @@ const Parser = struct {
 
     fn isNamedArgKeyword(self: *const Parser) bool {
         return switch (self.peek()) {
-            .kw_class, .kw_match, .kw_array, .kw_list, .kw_static, .kw_self, .kw_parent,
-            .kw_true, .kw_false, .kw_null, .kw_fn, .kw_function, .kw_return, .kw_if,
-            .kw_else, .kw_for, .kw_foreach, .kw_while, .kw_do, .kw_switch, .kw_case,
-            .kw_default, .kw_break, .kw_continue, .kw_new, .kw_echo, .kw_throw,
-            .kw_try, .kw_catch, .kw_finally, .kw_interface, .kw_trait, .kw_enum,
-            .kw_abstract, .kw_final, .kw_readonly, .kw_global, .kw_const,
-            .kw_public, .kw_private, .kw_protected, .kw_extends, .kw_implements,
-            .kw_namespace, .kw_use, .kw_require, .kw_include, .kw_isset, .kw_empty,
-            .kw_unset, .kw_eval, .kw_exit, .kw_die,
+            .kw_class,
+            .kw_match,
+            .kw_array,
+            .kw_list,
+            .kw_static,
+            .kw_self,
+            .kw_parent,
+            .kw_true,
+            .kw_false,
+            .kw_null,
+            .kw_fn,
+            .kw_function,
+            .kw_return,
+            .kw_if,
+            .kw_else,
+            .kw_for,
+            .kw_foreach,
+            .kw_while,
+            .kw_do,
+            .kw_switch,
+            .kw_case,
+            .kw_default,
+            .kw_break,
+            .kw_continue,
+            .kw_new,
+            .kw_echo,
+            .kw_throw,
+            .kw_try,
+            .kw_catch,
+            .kw_finally,
+            .kw_interface,
+            .kw_trait,
+            .kw_enum,
+            .kw_abstract,
+            .kw_final,
+            .kw_readonly,
+            .kw_global,
+            .kw_const,
+            .kw_public,
+            .kw_private,
+            .kw_protected,
+            .kw_extends,
+            .kw_implements,
+            .kw_namespace,
+            .kw_use,
+            .kw_require,
+            .kw_include,
+            .kw_isset,
+            .kw_empty,
+            .kw_unset,
+            .kw_eval,
+            .kw_exit,
+            .kw_die,
             => true,
             else => false,
         };
@@ -3104,4 +3236,3 @@ const Parser = struct {
         };
     }
 };
-
