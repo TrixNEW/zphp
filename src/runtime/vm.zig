@@ -13814,9 +13814,8 @@ pub const VM = struct {
         copy.entries.ensureTotalCapacity(self.allocator, src.entries.items.len) catch return error.RuntimeError;
         for (src.entries.items, 0..) |entry, i| {
             copy.entries.appendAssumeCapacity(entry);
-            // the clone is a new array referencing this object element - a new
-            // reference, so retain it (refcounting Stage 2)
-            if (entry.value == .object) objRetain(entry.value.object);
+            // The clone owns every heap value copied into its entries.
+            retainValue(entry.value);
             if (entry.key == .string) {
                 copy.string_index.put(self.allocator, entry.key.string, i) catch return error.RuntimeError;
             }
