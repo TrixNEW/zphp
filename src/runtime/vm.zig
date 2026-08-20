@@ -525,6 +525,7 @@ pub const VM = struct {
     mt19937: @import("../stdlib/mt19937.zig").Mt19937 = .{},
     obj_id_base: usize = 0,
     generators: std.ArrayListUnmanaged(*Generator) = .{},
+    free_generators: std.ArrayListUnmanaged(*Generator) = .{},
     fibers: std.ArrayListUnmanaged(*Fiber) = .{},
     ref_cells: std.ArrayListUnmanaged(*Value) = .{},
     current_fiber: ?*Fiber = null,
@@ -1006,6 +1007,22 @@ pub const VM = struct {
         // index identifies the scope whose bindings receive include changes.
         include_parent: ?usize = null,
     };
+
+    fn allocGenerator(self: *VM, initial: Generator) RuntimeError!*Generator {
+        const gen = if (!self.serve_mode) self.free_generators.pop() orelse blk: {
+            const created = try self.allocator.create(Generator);
+            errdefer self.allocator.destroy(created);
+            try self.generators.append(self.allocator, created);
+            break :blk created;
+        } else blk: {
+            const created = try self.allocator.create(Generator);
+            errdefer self.allocator.destroy(created);
+            try self.generators.append(self.allocator, created);
+            break :blk created;
+        };
+        gen.* = initial;
+        return gen;
+    }
 
     fn allocUserObject(self: *VM, class_name: []const u8) RuntimeError!*PhpObject {
         const reusable = self.classIsPoolSafe(class_name);
@@ -1972,7 +1989,7 @@ pub const VM = struct {
             self.allocator.destroy(o);
         }
         for (self.generators.items) |g| {
-            g.deinit(self.allocator);
+            if (!g.pooled) g.deinit(self.allocator);
             self.allocator.destroy(g);
         }
         for (self.fibers.items) |f| {
@@ -2109,6 +2126,7 @@ pub const VM = struct {
         self.free_arrays.deinit(self.allocator);
         self.released_arrays.deinit(self.allocator);
         self.objects.deinit(self.allocator);
+        self.free_generators.deinit(self.allocator);
         self.free_objects.deinit(self.allocator);
         self.released_objects.deinit(self.allocator);
         self.pending_destruct.deinit(self.allocator);
@@ -2233,6 +2251,7 @@ pub const VM = struct {
         self.released_arrays.clearRetainingCapacity();
         self.free_objects.clearRetainingCapacity();
         self.released_objects.clearRetainingCapacity();
+        self.free_generators.clearRetainingCapacity();
         if (self.serve_mode and self.builtins_recorded) {
             self.strings.shrinkRetainingCapacity(self.builtin_str_hw);
             self.arrays.shrinkRetainingCapacity(self.builtin_arr_hw);
@@ -8069,10 +8088,8 @@ pub const VM = struct {
                         if (func.is_generator) {
                             method_refs.deinit(self.allocator);
                             if (self.ref_index) |ri| ri.releaseOwner(self.allocator, method_owner);
-                            const gen = try self.allocator.create(Generator);
-                            gen.* = .{ .func = func, .vars = new_vars };
+                            const gen = try self.allocGenerator(.{ .func = func, .vars = new_vars });
                             retainVarsObjects(&gen.vars);
-                            try self.generators.append(self.allocator, gen);
                             self.push(.{ .generator = gen });
                         } else {
                             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = method_refs, .ref_owner = method_owner };
@@ -14934,10 +14951,8 @@ pub const VM = struct {
                 // function calls inside the body see the cells; array/object
                 // bindings aren't represented on Generator yet
                 if (self.ref_index) |ri| ri.releaseOwner(self.allocator, callee_owner);
-                const gen = try self.allocator.create(Generator);
-                gen.* = .{ .func = func, .vars = new_vars, .ref_slots = callee_refs };
+                const gen = try self.allocGenerator(.{ .func = func, .vars = new_vars, .ref_slots = callee_refs });
                 retainVarsObjects(&gen.vars);
-                try self.generators.append(self.allocator, gen);
                 self.push(.{ .generator = gen });
             } else {
                 if (self.frame_count >= 2047) {
@@ -15054,10 +15069,8 @@ pub const VM = struct {
             const trimmed = if (func.is_variadic) args else args[0..@min(args.len, func.arity)];
             try self.bindArgs(&new_vars, func, trimmed);
             if (func.is_generator) {
-                const gen = try self.allocator.create(Generator);
-                gen.* = .{ .func = func, .vars = new_vars };
+                const gen = try self.allocGenerator(.{ .func = func, .vars = new_vars });
                 retainVarsObjects(&gen.vars);
-                try self.generators.append(self.allocator, gen);
                 return .{ .generator = gen };
             }
             // LSB: static::class inside this method must resolve to the object's
@@ -15823,11 +15836,16 @@ pub const VM = struct {
                 const gen = self.pending_gen_release.items[self.gen_release_cursor];
                 self.gen_release_cursor += 1;
                 // rescued if re-retained between queue and drain
-                if (gen.refcount != 0) continue;
+                if (gen.refcount != 0 or gen.pooled) continue;
                 // closeGenerator early-returns on .completed; releaseGeneratorVars
                 // is idempotent. closing a suspended gen may queue more work
                 self.closeGenerator(gen, self.frame_count) catch {};
                 self.releaseGeneratorVars(gen);
+                if (!self.serve_mode) {
+                    gen.deinit(self.allocator);
+                    gen.pooled = true;
+                    self.free_generators.append(self.allocator, gen) catch {};
+                }
             }
             while (self.fiber_release_cursor < self.pending_fiber_release.items.len) {
                 const fiber = self.pending_fiber_release.items[self.fiber_release_cursor];
