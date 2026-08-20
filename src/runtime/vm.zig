@@ -4717,6 +4717,8 @@ pub const VM = struct {
                     if (iterable == .generator) {
                         const gen = iterable.generator;
                         if (gen.state == .completed) {
+                            self.stackRelease(self.stack[self.sp - 2]);
+                            self.stack[self.sp - 2] = .null;
                             self.currentFrame().ip += offset;
                         } else {
                             self.push(gen.current_key);
