@@ -9312,7 +9312,9 @@ pub const VM = struct {
                     try self.saveGeneratorStack(gen);
                     self.saveGeneratorHandlers(gen);
                     gen.state = .suspended;
+                    self.currentFrame().generator = null;
                     self.frame_count -= 1;
+                    self.genRelease(gen);
                     return;
                 },
 
@@ -9334,7 +9336,9 @@ pub const VM = struct {
                     try self.saveGeneratorStack(gen);
                     self.saveGeneratorHandlers(gen);
                     gen.state = .suspended;
+                    self.currentFrame().generator = null;
                     self.frame_count -= 1;
+                    self.genRelease(gen);
                     return;
                 },
 
@@ -9419,7 +9423,9 @@ pub const VM = struct {
                             try self.saveGeneratorStack(outer_gen);
                             self.saveGeneratorHandlers(outer_gen);
                             outer_gen.state = .suspended;
+                            self.currentFrame().generator = null;
                             self.frame_count -= 1;
+                            self.genRelease(outer_gen);
                             return;
                         }
                         // inner already completed
@@ -9443,7 +9449,9 @@ pub const VM = struct {
                             try self.saveGeneratorStack(outer_gen);
                             self.saveGeneratorHandlers(outer_gen);
                             outer_gen.state = .suspended;
+                            self.currentFrame().generator = null;
                             self.frame_count -= 1;
+                            self.genRelease(outer_gen);
                             return;
                         }
                         self.push(.null);
@@ -10263,6 +10271,7 @@ pub const VM = struct {
             // first resume - allocate locals from initial vars
             gen_locals = try self.allocLocals(gen.func, &gen.vars);
         }
+        genRetain(gen);
         self.frames[self.frame_count] = .{
             .chunk = &gen.func.chunk,
             .ip = gen.ip,
@@ -12114,6 +12123,7 @@ pub const VM = struct {
     }
 
     pub fn deinitFrameSlot(self: *VM, idx: usize) void {
+        const frame_generator = self.frames[idx].generator;
         self.frames[idx].ref_slots.deinit(self.allocator);
         self.unregFrameBindings(&self.frames[idx]);
         // when the frame belongs to a generator, its vars hashmap is owned by
@@ -12132,6 +12142,8 @@ pub const VM = struct {
         }
         self.frames[idx].ref_slots = .{};
         self.frames[idx].vars = .{};
+        self.frames[idx].generator = null;
+        if (frame_generator) |gen| self.genRelease(gen);
     }
 
     pub fn freeLocals(self: *VM, locals: []Value) void {
