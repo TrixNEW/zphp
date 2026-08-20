@@ -656,6 +656,7 @@ pub const PhpObject = struct {
     // set once __destruct has run, so it never runs twice (refcount-zero path
     // and the end-of-request safety sweep must not double-fire it)
     destructed: bool = false,
+    pooled: bool = false,
 
     pub const SlotLayout = struct {
         names: []const []const u8,

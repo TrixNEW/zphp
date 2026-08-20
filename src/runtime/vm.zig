@@ -296,6 +296,7 @@ pub const ClassDef = struct {
     parent: ?[]const u8 = null,
     interfaces: std.ArrayListUnmanaged([]const u8) = .{},
     is_enum: bool = false,
+    is_internal: bool = true,
     is_abstract: bool = false,
     is_final: bool = false,
     is_readonly: bool = false,
@@ -455,6 +456,8 @@ pub const VM = struct {
     free_arrays: std.ArrayListUnmanaged(*PhpArray) = .{},
     released_arrays: std.ArrayListUnmanaged(*PhpArray) = .{},
     objects: std.ArrayListUnmanaged(*PhpObject) = .{},
+    free_objects: std.ArrayListUnmanaged(*PhpObject) = .{},
+    released_objects: std.ArrayListUnmanaged(*PhpObject) = .{},
     next_object_id: u32 = 0,
     // serve-mode builtin persistence: stdlib classes / native methods / their
     // objects are immutable, registered once at init. reset() frees only the
@@ -1003,6 +1006,29 @@ pub const VM = struct {
         // index identifies the scope whose bindings receive include changes.
         include_parent: ?usize = null,
     };
+
+    fn allocUserObject(self: *VM, class_name: []const u8) RuntimeError!*PhpObject {
+        const reusable = self.classIsPoolSafe(class_name);
+        const obj = (if (reusable) self.free_objects.pop() else null) orelse blk: {
+            const created = try self.allocator.create(PhpObject);
+            errdefer self.allocator.destroy(created);
+            try self.objects.append(self.allocator, created);
+            break :blk created;
+        };
+        self.next_object_id += 1;
+        obj.* = .{ .class_name = class_name, .id = self.next_object_id };
+        return obj;
+    }
+
+    fn classIsPoolSafe(self: *const VM, class_name: []const u8) bool {
+        var current: ?[]const u8 = class_name;
+        while (current) |name| {
+            const class = self.classes.get(name) orelse return false;
+            if (class.is_internal or class.methods.contains("__destruct")) return false;
+            current = class.parent;
+        }
+        return true;
+    }
 
     pub fn allocArray(self: *VM) RuntimeError!*PhpArray {
         if (self.free_arrays.pop()) |arr| {
@@ -1942,7 +1968,7 @@ pub const VM = struct {
             self.allocator.destroy(a);
         }
         for (self.objects.items[obj_start..]) |o| {
-            o.deinit(self.allocator);
+            if (!o.pooled) o.deinit(self.allocator);
             self.allocator.destroy(o);
         }
         for (self.generators.items) |g| {
@@ -2083,6 +2109,8 @@ pub const VM = struct {
         self.free_arrays.deinit(self.allocator);
         self.released_arrays.deinit(self.allocator);
         self.objects.deinit(self.allocator);
+        self.free_objects.deinit(self.allocator);
+        self.released_objects.deinit(self.allocator);
         self.pending_destruct.deinit(self.allocator);
         self.pending_array_release.deinit(self.allocator);
         self.pending_gen_release.deinit(self.allocator);
@@ -2203,6 +2231,8 @@ pub const VM = struct {
         // back to those marks instead of clearing them entirely
         self.free_arrays.clearRetainingCapacity();
         self.released_arrays.clearRetainingCapacity();
+        self.free_objects.clearRetainingCapacity();
+        self.released_objects.clearRetainingCapacity();
         if (self.serve_mode and self.builtins_recorded) {
             self.strings.shrinkRetainingCapacity(self.builtin_str_hw);
             self.arrays.shrinkRetainingCapacity(self.builtin_arr_hw);
@@ -6768,10 +6798,7 @@ pub const VM = struct {
                         }
                     }
 
-                    const obj = try self.allocator.create(PhpObject);
-                    self.next_object_id += 1;
-                    obj.* = .{ .class_name = class_name, .id = self.next_object_id };
-                    try self.objects.append(self.allocator, obj);
+                    const obj = try self.allocUserObject(class_name);
 
                     // set property defaults from class and parent chain
                     try self.initObjectProperties(obj, class_name);
@@ -6989,10 +7016,7 @@ pub const VM = struct {
                         return error.RuntimeError;
                     }
 
-                    const obj = try self.allocator.create(PhpObject);
-                    self.next_object_id += 1;
-                    obj.* = .{ .class_name = class_name, .id = self.next_object_id };
-                    try self.objects.append(self.allocator, obj);
+                    const obj = try self.allocUserObject(class_name);
                     try self.initObjectProperties(obj, class_name);
 
                     const ctor_name = self.resolveMethod(class_name, "__construct") catch null;
@@ -10555,7 +10579,7 @@ pub const VM = struct {
         const doc_idx = self.readU16();
         const method_count = self.readU16();
 
-        var def = ClassDef{ .name = class_name };
+        var def = ClassDef{ .name = class_name, .is_internal = false };
         def.is_abstract = (class_modifiers & 1) != 0;
         def.is_final = (class_modifiers & 2) != 0;
         def.is_readonly = (class_modifiers & 4) != 0;
@@ -15684,6 +15708,20 @@ pub const VM = struct {
                 self.free_arrays.append(self.allocator, arr) catch {};
             }
             self.released_arrays.clearRetainingCapacity();
+            for (self.released_objects.items) |obj| {
+                var i: usize = 0;
+                while (i < self.cycle_candidates.items.len) {
+                    if (self.cycle_candidates.items[i] == obj) {
+                        _ = self.cycle_candidates.swapRemove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
+                obj.deinit(self.allocator);
+                obj.pooled = true;
+                self.free_objects.append(self.allocator, obj) catch {};
+            }
+            self.released_objects.clearRetainingCapacity();
         }
         // the queues feed each other - a destructed object releases its
         // array-valued properties; a released array releases its object
@@ -15725,6 +15763,9 @@ pub const VM = struct {
                 // property slots held. runs after __destruct (PHP tears
                 // properties down after)
                 self.releaseObjectProperties(obj);
+                if (!self.serve_mode and self.classIsPoolSafe(obj.class_name)) {
+                    self.released_objects.append(self.allocator, obj) catch {};
+                }
             }
             while (self.array_release_cursor < self.pending_array_release.items.len) {
                 const arr = self.pending_array_release.items[self.array_release_cursor];

@@ -1756,6 +1756,7 @@ fn faSetSize(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             try arr.append(ctx.allocator, .null);
         }
     } else {
+        for (arr.entries.items[new_size..]) |entry| ctx.vm.releaseValue(entry.value);
         arr.entries.items.len = new_size;
     }
     try obj.set(ctx.allocator, "__size", .{ .int = @intCast(new_size) });
@@ -1877,7 +1878,11 @@ fn faOffsetSet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         try ctx.vm.setPendingException("OutOfBoundsException", "Index invalid or out of range");
         return error.RuntimeError;
     }
-    arr.entries.items[@intCast(raw)].value = args[1];
+    const idx: usize = @intCast(raw);
+    const old = arr.entries.items[idx].value;
+    VM.retainValue(args[1]);
+    arr.entries.items[idx].value = args[1];
+    ctx.vm.releaseValue(old);
     return .null;
 }
 
@@ -1896,7 +1901,9 @@ fn faOffsetUnset(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .null;
     const idx: usize = @intCast(@max(Value.toInt(args[0]), 0));
     if (idx >= arr.entries.items.len) return .null;
+    const old = arr.entries.items[idx].value;
     arr.entries.items[idx].value = .null;
+    ctx.vm.releaseValue(old);
     return .null;
 }
 
