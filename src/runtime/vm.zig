@@ -6422,6 +6422,8 @@ pub const VM = struct {
                         }
                     } else if (src == .generator) {
                         const gen = src.generator;
+                        genRetain(gen);
+                        defer self.genRelease(gen);
                         if (gen.state == .created) {
                             self.resumeGenerator(gen, .null) catch {
                                 if (self.dispatchPendingException(base_frame)) continue;
