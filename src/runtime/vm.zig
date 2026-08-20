@@ -870,6 +870,26 @@ pub const VM = struct {
     // separate normally instead of leaking through a dead reference. matches
     // PHP (is_ref drops when the last alias goes away). conservative: any doubt
     // (extra mirrors, another alias anywhere) leaves the binding in place
+    fn refCellHasVariableAlias(self: *VM, cell: *Value) bool {
+        for (self.frames[0..self.frame_count]) |*frame| {
+            var it = frame.ref_slots.valueIterator();
+            while (it.next()) |candidate| if (candidate.* == cell) return true;
+        }
+        var globals = self.globals_cells.valueIterator();
+        while (globals.next()) |candidate| if (candidate.* == cell) return true;
+        return false;
+    }
+
+    fn cellValueContainsItself(cell: *Value) bool {
+        if (cell.* != .array) return false;
+        const arr = cell.array;
+        for (arr.entries.items) |entry| {
+            const value = if (entry.ref) |entry_cell| entry_cell.* else entry.value;
+            if (value == .array and value.array == arr) return true;
+        }
+        return false;
+    }
+
     fn revertUncapturedCell(self: *VM, cell: *Value) void {
         const ri = self.ref_index orelse return;
         const list = ri.fwd.getPtr(cell) orelse return;
@@ -5257,7 +5277,11 @@ pub const VM = struct {
                     // by setLocalGlobal - mirror the removal so the object's
                     // last reference is dropped now, not at the shutdown sweep
                     if (uframe.include_parent) |parent_idx| self.unsetIncludeVar(parent_idx, name);
-                    if (!u_is_ref and uframe.func == null and uframe.include_parent == null and name.len > 1 and name[0] == '$') {
+                    if (uframe.func == null and uframe.include_parent == null and name.len > 1 and name[0] == '$') {
+                        if (u_cell) |cell| {
+                            _ = self.globals_cells.remove(name);
+                            if (!self.refCellHasVariableAlias(cell) and cellValueContainsItself(cell)) self.releaseValue(cell.*);
+                        }
                         if (self.globals_array) |ga| {
                             const gkey = PhpArray.Key{ .string = name[1..] };
                             // the $GLOBALS mirror is non-owning (setLocalGlobal
@@ -5267,7 +5291,9 @@ pub const VM = struct {
                             // becomes unreachable and a cycle can be collected
                             ga.remove(gkey);
                         }
-                        if (self.globals_cells.get(name)) |cell| cell.* = .null;
+                        if (!u_is_ref) {
+                            if (self.globals_cells.get(name)) |cell| cell.* = .null;
+                        }
                     }
                     // widen gate at unset: explicit-close intent drains every
                     // queue so __destruct timing matches PHP. inline-narrow
@@ -16011,7 +16037,7 @@ pub const VM = struct {
         if (va.contains(arr)) return;
         va.put(self.allocator, arr, {}) catch return;
         arr.scratch_rc = @intCast(arr.refcount);
-        for (arr.entries.items) |e| self.cycleVisitChild(e.value, vo, va);
+        for (arr.entries.items) |e| self.cycleVisitChild(if (e.ref) |cell| cell.* else e.value, vo, va);
     }
 
     fn cycleVisitChild(self: *VM, v: Value, vo: anytype, va: anytype) void {
@@ -16031,7 +16057,7 @@ pub const VM = struct {
     }
 
     fn cycleDecrementChildrenArr(self: *VM, arr: *PhpArray, vo: anytype, va: anytype) void {
-        for (arr.entries.items) |e| self.cycleDecChild(e.value, vo, va);
+        for (arr.entries.items) |e| self.cycleDecChild(if (e.ref) |cell| cell.* else e.value, vo, va);
     }
 
     fn cycleDecChild(_: *VM, v: Value, vo: anytype, va: anytype) void {
@@ -16062,7 +16088,7 @@ pub const VM = struct {
 
     fn cycleMarkAliveArr(self: *VM, arr: *PhpArray, vo: anytype, va: anytype) bool {
         var changed = false;
-        for (arr.entries.items) |e| if (self.cycleMarkAliveChild(e.value, vo, va)) {
+        for (arr.entries.items) |e| if (self.cycleMarkAliveChild(if (e.ref) |cell| cell.* else e.value, vo, va)) {
             changed = true;
         };
         return changed;
