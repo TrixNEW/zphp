@@ -4764,10 +4764,15 @@ pub const VM = struct {
                 .iter_advance => {
                     const iterable = self.stack[self.sp - 2];
                     if (iterable == .generator) {
-                        self.resumeGenerator(iterable.generator, .null) catch {
+                        const gen = iterable.generator;
+                        self.resumeGenerator(gen, .null) catch {
                             if (self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
                         };
+                        if (gen.state == .completed) {
+                            self.stackRelease(self.stack[self.sp - 2]);
+                            self.stack[self.sp - 2] = .null;
+                        }
                     } else if (Value.toInt(self.stack[self.sp - 1]) == -2 and iterable == .object) {
                         _ = self.callMethod(iterable.object, "next", &.{}) catch {};
                     } else {
