@@ -17,7 +17,6 @@ pub const PhpArray = struct {
     // elements_released guards against double-release / cyclic arrays
     refcount: u32 = 0,
     elements_released: bool = false,
-    pooled: bool = false,
 
     pub const Entry = struct {
         key: Key,
