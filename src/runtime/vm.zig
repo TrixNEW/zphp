@@ -9485,7 +9485,9 @@ pub const VM = struct {
                     gen.ref_slots = self.currentFrame().ref_slots;
                     self.currentFrame().ref_slots = .{};
                     self.saveFrameLocalsToGenerator(gen);
+                    self.currentFrame().generator = null;
                     self.frame_count -= 1;
+                    self.genRelease(gen);
                     // generator can no longer be resumed - drop its locals now
                     // rather than at end-of-request (Stage 2 finer lifetime)
                     self.releaseGeneratorVars(gen);
