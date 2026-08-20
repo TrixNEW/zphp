@@ -9398,6 +9398,7 @@ pub const VM = struct {
                         const arr = iterable.array;
                         if (arr.entries.items.len > 0) {
                             const entry = arr.entries.items[0];
+                            arrayRetain(arr);
                             outer_gen.delegate = .{ .array = .{ .arr = arr, .index = 1 } };
                             outer_gen.current_key = switch (entry.key) {
                                 .int => |i| .{ .int = i },
@@ -9913,12 +9914,10 @@ pub const VM = struct {
         // release the inner gen the outer was delegating to (yield from path)
         if (gen.delegate) |delegate| {
             switch (delegate) {
-                .gen => |inner| {
-                    self.genRelease(inner);
-                    gen.delegate = null;
-                },
-                else => {},
+                .gen => |inner| self.genRelease(inner),
+                .array => |state| self.arrayRelease(state.arr),
             }
+            gen.delegate = null;
         }
         var vit = gen.vars.valueIterator();
         while (vit.next()) |v| self.releaseValue(v.*);
@@ -10200,7 +10199,9 @@ pub const VM = struct {
                         return;
                     }
                     // array exhausted
+                    const arr = arr_state.arr;
                     gen.delegate = null;
+                    self.arrayRelease(arr);
                     return self.resumeGeneratorWithValue(gen, .null);
                 },
             }
