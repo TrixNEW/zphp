@@ -397,12 +397,21 @@ pub const RefIndex = struct {
     }
 
     pub fn removeTargetAllOwners(self: *RefIndex, a: std.mem.Allocator, cell: *Value, target: BindingTarget) void {
-        var it = self.by_owner.valueIterator();
-        while (it.next()) |list| {
+        var empty_owners: std.ArrayListUnmanaged(OwnerId) = .{};
+        defer empty_owners.deinit(a);
+        var owner_it = self.by_owner.iterator();
+        while (owner_it.next()) |entry| {
             var i: usize = 0;
-            while (i < list.items.len) {
-                const binding = list.items[i];
-                if (binding.cell == cell and targetEql(binding.target, target)) _ = list.swapRemove(i) else i += 1;
+            while (i < entry.value_ptr.items.len) {
+                const binding = entry.value_ptr.items[i];
+                if (binding.cell == cell and targetEql(binding.target, target)) _ = entry.value_ptr.swapRemove(i) else i += 1;
+            }
+            if (entry.value_ptr.items.len == 0) empty_owners.append(a, entry.key_ptr.*) catch {};
+        }
+        for (empty_owners.items) |owner| {
+            if (self.by_owner.fetchRemove(owner)) |removed| {
+                var list = removed.value;
+                list.deinit(a);
             }
         }
         self.removeTarget(a, cell, target);
@@ -476,6 +485,26 @@ pub const RefIndex = struct {
     // drop every target/cell associated with this cell (frame teardown, unset,
     // generator suspend). O(targets-for-this-cell), never a global scan
     pub fn removeCell(self: *RefIndex, a: std.mem.Allocator, cell: *Value) void {
+        var owners = self.by_owner.iterator();
+        var empty_owners: std.ArrayListUnmanaged(OwnerId) = .{};
+        defer empty_owners.deinit(a);
+        while (owners.next()) |entry| {
+            var i: usize = 0;
+            while (i < entry.value_ptr.items.len) {
+                if (entry.value_ptr.items[i].cell == cell) {
+                    _ = entry.value_ptr.swapRemove(i);
+                } else {
+                    i += 1;
+                }
+            }
+            if (entry.value_ptr.items.len == 0) empty_owners.append(a, entry.key_ptr.*) catch {};
+        }
+        for (empty_owners.items) |owner| {
+            if (self.by_owner.fetchRemove(owner)) |removed| {
+                var list = removed.value;
+                list.deinit(a);
+            }
+        }
         if (self.fwd.fetchRemove(cell)) |kv| {
             var list = kv.value;
             // also scrub this cell from any prop_rev lists it appears in
