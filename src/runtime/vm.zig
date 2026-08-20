@@ -74,10 +74,7 @@ pub const NativeContext = struct {
     call_name: ?[]const u8 = null,
 
     pub fn createArray(self: *NativeContext) !*PhpArray {
-        const arr = try self.allocator.create(PhpArray);
-        arr.* = .{};
-        try self.arrays.append(self.allocator, arr);
-        return arr;
+        return self.vm.allocArray();
     }
 
     pub fn createString(self: *NativeContext, data: []const u8) ![]const u8 {
@@ -455,6 +452,8 @@ pub const VM = struct {
     // pointers behind in the surviving tables)
     persistent_strings: std.ArrayListUnmanaged([]const u8) = .{},
     arrays: std.ArrayListUnmanaged(*PhpArray) = .{},
+    free_arrays: std.ArrayListUnmanaged(*PhpArray) = .{},
+    released_arrays: std.ArrayListUnmanaged(*PhpArray) = .{},
     objects: std.ArrayListUnmanaged(*PhpObject) = .{},
     next_object_id: u32 = 0,
     // serve-mode builtin persistence: stdlib classes / native methods / their
@@ -1004,6 +1003,18 @@ pub const VM = struct {
         // index identifies the scope whose bindings receive include changes.
         include_parent: ?usize = null,
     };
+
+    pub fn allocArray(self: *VM) RuntimeError!*PhpArray {
+        if (self.free_arrays.pop()) |arr| {
+            arr.* = .{};
+            return arr;
+        }
+        const arr = try self.allocator.create(PhpArray);
+        errdefer self.allocator.destroy(arr);
+        arr.* = .{};
+        try self.arrays.append(self.allocator, arr);
+        return arr;
+    }
 
     pub fn init(allocator: Allocator) RuntimeError!VM {
         return initInPlace(allocator);
@@ -1927,7 +1938,7 @@ pub const VM = struct {
         for (self.fibers.items) |f| self.cleanupFiberFrames(f);
         for (self.strings.items[str_start..]) |s| self.allocator.free(s);
         for (self.arrays.items[arr_start..]) |a| {
-            a.deinit(self.allocator);
+            if (!a.pooled) a.deinit(self.allocator);
             self.allocator.destroy(a);
         }
         for (self.objects.items[obj_start..]) |o| {
@@ -2069,6 +2080,8 @@ pub const VM = struct {
         self.shutdown_callbacks.deinit(self.allocator);
         self.error_handler_stack.deinit(self.allocator);
         self.arrays.deinit(self.allocator);
+        self.free_arrays.deinit(self.allocator);
+        self.released_arrays.deinit(self.allocator);
         self.objects.deinit(self.allocator);
         self.pending_destruct.deinit(self.allocator);
         self.pending_array_release.deinit(self.allocator);
@@ -2188,6 +2201,8 @@ pub const VM = struct {
         // serve mode keeps the builtin heap prefix (freeHeapItems freed only the
         // request items beyond the high-water marks); shrink the tracking lists
         // back to those marks instead of clearing them entirely
+        self.free_arrays.clearRetainingCapacity();
+        self.released_arrays.clearRetainingCapacity();
         if (self.serve_mode and self.builtins_recorded) {
             self.strings.shrinkRetainingCapacity(self.builtin_str_hw);
             self.arrays.shrinkRetainingCapacity(self.builtin_arr_hw);
@@ -3516,9 +3531,7 @@ pub const VM = struct {
                 .halt => return,
 
                 .array_new => {
-                    const arr = try self.allocator.create(PhpArray);
-                    arr.* = .{};
-                    try self.arrays.append(self.allocator, arr);
+                    const arr = try self.allocArray();
                     self.push(.{ .array = arr });
                 },
                 .array_push_assign => {
@@ -15657,6 +15670,20 @@ pub const VM = struct {
             self.gen_release_cursor = 0;
             self.pending_fiber_release.clearRetainingCapacity();
             self.fiber_release_cursor = 0;
+            for (self.released_arrays.items) |arr| {
+                var i: usize = 0;
+                while (i < self.cycle_array_candidates.items.len) {
+                    if (self.cycle_array_candidates.items[i] == arr) {
+                        _ = self.cycle_array_candidates.swapRemove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
+                arr.deinit(self.allocator);
+                arr.pooled = true;
+                self.free_arrays.append(self.allocator, arr) catch {};
+            }
+            self.released_arrays.clearRetainingCapacity();
         }
         // the queues feed each other - a destructed object releases its
         // array-valued properties; a released array releases its object
@@ -15718,7 +15745,7 @@ pub const VM = struct {
                         break;
                     }
                 }
-                if (stack_root) {
+                if (stack_root or self.arrayHasLiveContainerOwner(arr)) {
                     deferred_stack_arrays.append(self.allocator, arr) catch {};
                     continue;
                 }
@@ -15726,6 +15753,7 @@ pub const VM = struct {
                 // reachable through unserialize R:N) is not re-queued
                 arr.elements_released = true;
                 self.releaseArrayElements(arr);
+                if (!self.serve_mode) self.released_arrays.append(self.allocator, arr) catch {};
             }
             while (self.gen_release_cursor < self.pending_gen_release.items.len) {
                 const gen = self.pending_gen_release.items[self.gen_release_cursor];
@@ -15744,6 +15772,27 @@ pub const VM = struct {
                 self.cleanupFiberFrames(fiber);
             }
         }
+    }
+
+    fn arrayHasLiveContainerOwner(self: *VM, target: *PhpArray) bool {
+        for (self.arrays.items) |arr| {
+            if (arr == target or arr.elements_released or arr.pooled) continue;
+            for (arr.entries.items) |entry| {
+                const value = if (entry.ref) |cell| cell.* else entry.value;
+                if (value == .array and value.array == target) return true;
+            }
+        }
+        for (self.objects.items) |obj| {
+            if (obj.destructed) continue;
+            if (obj.slots) |slots| for (slots) |value| {
+                if (value == .array and value.array == target) return true;
+            };
+            var pit = obj.properties.iterator();
+            while (pit.next()) |entry| {
+                if (entry.value_ptr.* == .array and entry.value_ptr.array == target) return true;
+            }
+        }
+        return false;
     }
 
     // cycle collector: PHP-style trial-decrement to find unreachable object
