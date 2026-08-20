@@ -14023,6 +14023,7 @@ pub const VM = struct {
     }
 
     fn preparePropertyStore(self: *VM, val: Value) RuntimeError!Value {
+        if (val == .array and val.array.refcount == 0) return val;
         return self.cloneArrayValue(val);
     }
 
