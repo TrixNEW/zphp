@@ -527,6 +527,7 @@ pub const VM = struct {
     generators: std.ArrayListUnmanaged(*Generator) = .{},
     free_generators: std.ArrayListUnmanaged(*Generator) = .{},
     fibers: std.ArrayListUnmanaged(*Fiber) = .{},
+    free_fibers: std.ArrayListUnmanaged(*Fiber) = .{},
     ref_cells: std.ArrayListUnmanaged(*Value) = .{},
     current_fiber: ?*Fiber = null,
     fiber_suspend_pending: bool = false,
@@ -1057,11 +1058,12 @@ pub const VM = struct {
         return obj;
     }
 
-    fn classIsPoolSafe(self: *const VM, class_name: []const u8) bool {
+    fn classIsPoolSafe(self: *VM, class_name: []const u8) bool {
+        const throwable = self.isInstanceOf(class_name, "Throwable");
         var current: ?[]const u8 = class_name;
         while (current) |name| {
             const class = self.classes.get(name) orelse return false;
-            if (class.is_internal or class.methods.contains("__destruct")) return false;
+            if ((!throwable and class.is_internal) or class.methods.contains("__destruct")) return false;
             current = class.parent;
         }
         return true;
@@ -1998,7 +2000,7 @@ pub const VM = struct {
         @import("../stdlib/mysqli.zig").cleanupConnections(self.objects);
         // clean up fiber frames before strings/arrays/objects since fiber frames
         // may reference values that get freed by those passes
-        for (self.fibers.items) |f| self.cleanupFiberFrames(f);
+        for (self.fibers.items) |f| if (!f.pooled) self.cleanupFiberFrames(f);
         for (self.strings.items[str_start..]) |s| self.allocator.free(s);
         for (self.arrays.items[arr_start..]) |a| {
             if (!a.pooled) a.deinit(self.allocator);
@@ -2013,7 +2015,7 @@ pub const VM = struct {
             self.allocator.destroy(g);
         }
         for (self.fibers.items) |f| {
-            f.deinit(self.allocator);
+            if (!f.pooled) f.deinit(self.allocator);
             self.allocator.destroy(f);
         }
         for (self.ref_cells.items) |c| self.allocator.destroy(c);
@@ -2147,6 +2149,7 @@ pub const VM = struct {
         self.released_arrays.deinit(self.allocator);
         self.objects.deinit(self.allocator);
         self.free_generators.deinit(self.allocator);
+        self.free_fibers.deinit(self.allocator);
         self.free_objects.deinit(self.allocator);
         self.released_objects.deinit(self.allocator);
         self.pending_destruct.deinit(self.allocator);
@@ -6814,9 +6817,16 @@ pub const VM = struct {
                         }
                         const callable = self.stack[self.sp - ac];
                         self.dropN(ac);
-                        const fiber = try self.allocator.create(Fiber);
+                        const fiber = if (!self.serve_mode) self.free_fibers.pop() orelse blk: {
+                            const created = try self.allocator.create(Fiber);
+                            try self.fibers.append(self.allocator, created);
+                            break :blk created;
+                        } else blk: {
+                            const created = try self.allocator.create(Fiber);
+                            try self.fibers.append(self.allocator, created);
+                            break :blk created;
+                        };
                         fiber.* = .{ .callable = callable };
-                        try self.fibers.append(self.allocator, fiber);
                         self.push(.{ .fiber = fiber });
                         continue;
                     }
@@ -15877,8 +15887,17 @@ pub const VM = struct {
             while (self.fiber_release_cursor < self.pending_fiber_release.items.len) {
                 const fiber = self.pending_fiber_release.items[self.fiber_release_cursor];
                 self.fiber_release_cursor += 1;
-                if (fiber.refcount != 0) continue;
+                if (fiber.refcount != 0 or fiber.pooled) continue;
                 self.cleanupFiberFrames(fiber);
+                for (fiber.saved_stack.items) |value| self.releaseValue(value);
+                self.releaseValue(fiber.callable);
+                self.releaseValue(fiber.suspend_value);
+                self.releaseValue(fiber.return_value);
+                fiber.deinit(self.allocator);
+                if (!self.serve_mode) {
+                    fiber.pooled = true;
+                    self.free_fibers.append(self.allocator, fiber) catch {};
+                }
             }
         }
     }

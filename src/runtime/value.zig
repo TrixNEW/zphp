@@ -616,6 +616,7 @@ pub const Fiber = struct {
 
     suspend_value: Value = .null,
     return_value: Value = .null,
+    pooled: bool = false,
 
     pub const State = enum { created, running, suspended, terminated };
 
