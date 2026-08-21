@@ -297,6 +297,7 @@ pub const ClassDef = struct {
     is_abstract: bool = false,
     is_final: bool = false,
     is_readonly: bool = false,
+    native_cleanup: ?*const fn (*PhpObject) bool = null,
     // set when any property-hook method ($hook_get/$hook_set) is registered on
     // this class. lets hasPropHook skip the per-access bufPrint + method lookup
     // for the >99% of classes that declare no hooks (PHP 8.4 feature). does not
@@ -1064,26 +1065,10 @@ pub const VM = struct {
             std.mem.eql(u8, class_name, "XMLWriter");
     }
 
-    fn cleanupPoolableResource(obj: *PhpObject) bool {
-        if (std.mem.eql(u8, obj.class_name, "FileHandle")) {
-            @import("../stdlib/filesystem.zig").cleanupHandle(obj);
-            if (obj.get("__proc_ref") == .object) return false;
-            const fd = obj.get("__fd");
-            return fd != .int or fd.int > 2;
-        }
-        if (std.mem.eql(u8, obj.class_name, "CurlHandle")) {
-            @import("../stdlib/curl.zig").cleanupHandle(obj);
-            return true;
-        }
-        if (std.mem.eql(u8, obj.class_name, "XMLReader")) {
-            @import("../stdlib/xmlreader.zig").cleanupObject(obj);
-            return true;
-        }
-        if (std.mem.eql(u8, obj.class_name, "XMLWriter")) {
-            @import("../stdlib/xmlwriter.zig").cleanupObject(obj);
-            return true;
-        }
-        return false;
+    fn cleanupPoolableResource(self: *VM, obj: *PhpObject) bool {
+        const class = self.classes.get(obj.class_name) orelse return false;
+        const cleanup = class.native_cleanup orelse return false;
+        return cleanup(obj);
     }
 
     fn classIsPoolSafe(self: *VM, class_name: []const u8) bool {
@@ -15877,7 +15862,7 @@ pub const VM = struct {
                 // collapse the object tree: release the objects this object's
                 // property slots held. runs after __destruct (PHP tears
                 // properties down after)
-                const cleaned_resource = cleanupPoolableResource(obj);
+                const cleaned_resource = self.cleanupPoolableResource(obj);
                 self.releaseObjectProperties(obj);
                 const reusable = if (isPoolableResourceClass(obj.class_name))
                     cleaned_resource

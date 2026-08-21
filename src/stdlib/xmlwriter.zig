@@ -344,8 +344,13 @@ fn xwWritePi(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 // ---------------- registration ----------------
 
+fn cleanupPoolable(obj: *PhpObject) bool {
+    cleanupObject(obj);
+    return true;
+}
+
 pub fn register(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "XMLWriter" };
+    var def = ClassDef{ .name = "XMLWriter", .native_cleanup = cleanupPoolable };
 
     inline for (.{
         "openMemory", "openURI", "outputMemory", "flush",

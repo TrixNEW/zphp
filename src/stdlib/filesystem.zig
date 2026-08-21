@@ -150,8 +150,15 @@ pub const entries = .{
 
 // file handle management - store handles in PhpObjects with class "FileHandle"
 
+fn cleanupPoolableHandle(obj: *PhpObject) bool {
+    cleanupHandle(obj);
+    if (obj.get("__proc_ref") == .object) return false;
+    const fd = obj.get("__fd");
+    return fd != .int or fd.int > 2;
+}
+
 pub fn register(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "FileHandle" };
+    var def = ClassDef{ .name = "FileHandle", .native_cleanup = cleanupPoolableHandle };
     try def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
     try vm.classes.put(a, "FileHandle", def);
 

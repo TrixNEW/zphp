@@ -370,8 +370,13 @@ fn xrGet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 // ---------------- registration ----------------
 
+fn cleanupPoolable(obj: *PhpObject) bool {
+    cleanupObject(obj);
+    return true;
+}
+
 pub fn register(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "XMLReader" };
+    var def = ClassDef{ .name = "XMLReader", .native_cleanup = cleanupPoolable };
 
     inline for (.{
         "open", "XML", "close", "read", "next",

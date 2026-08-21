@@ -998,8 +998,13 @@ fn curlVersion(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .array = arr };
 }
 
+fn cleanupPoolable(obj: *PhpObject) bool {
+    cleanupHandle(obj);
+    return true;
+}
+
 pub fn register(vm: *VM, a: std.mem.Allocator) !void {
-    var curl_def = ClassDef{ .name = "CurlHandle" };
+    var curl_def = ClassDef{ .name = "CurlHandle", .native_cleanup = cleanupPoolable };
     try vm.classes.put(a, "CurlHandle", curl_def);
     _ = &curl_def;
 
