@@ -535,6 +535,8 @@ pub const VM = struct {
     captures: std.ArrayListUnmanaged(CaptureEntry) = .{},
     capture_index: std.StringHashMapUnmanaged(CaptureRange) = .{},
     closure_instance_count: u32 = 0,
+    closure_sweep_count: u32 = 0,
+    free_closure_names: std.ArrayListUnmanaged(struct { compile_name: []const u8, name: []const u8 }) = .{},
     php_constants: std.StringHashMapUnmanaged(Value) = .{},
     user_constants: std.StringHashMapUnmanaged(void) = .{},
     ini_settings: std.StringHashMapUnmanaged([]const u8) = .{},
@@ -2138,6 +2140,7 @@ pub const VM = struct {
         self.persistent_strings.deinit(self.allocator);
         self.captures.deinit(self.allocator);
         self.capture_index.deinit(self.allocator);
+        self.free_closure_names.deinit(self.allocator);
         self.php_constants.deinit(self.allocator);
         self.user_constants.deinit(self.allocator);
         self.ini_settings.deinit(self.allocator);
@@ -11508,15 +11511,27 @@ pub const VM = struct {
         if (std.mem.startsWith(u8, compile_name, "__closure_") and
             !std.mem.containsAtLeast(u8, compile_name["__closure_".len..], 1, "_"))
         {
-            const id = self.closure_instance_count;
-            self.closure_instance_count += 1;
-            const inst_name = try std.fmt.allocPrint(self.allocator, "{s}_{d}", .{ compile_name, id });
-            try self.strings.append(self.allocator, inst_name);
-            if (self.functions.get(compile_name)) |func| {
-                try self.functions.put(self.allocator, inst_name, func);
-                try self.indexFunctionByChunk(inst_name, &func.chunk);
+            self.closure_sweep_count += 1;
+            var inst_name: ?[]const u8 = null;
+            var i = self.free_closure_names.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (std.mem.eql(u8, self.free_closure_names.items[i].compile_name, compile_name)) {
+                    inst_name = self.free_closure_names.swapRemove(i).name;
+                    break;
+                }
             }
-            self.stack[self.sp - 1] = .{ .string = inst_name };
+            if (inst_name == null) {
+                const id = self.closure_instance_count;
+                self.closure_instance_count += 1;
+                inst_name = try std.fmt.allocPrint(self.allocator, "{s}_{d}", .{ compile_name, id });
+                try self.strings.append(self.allocator, inst_name.?);
+            }
+            if (self.functions.get(compile_name)) |func| {
+                try self.functions.put(self.allocator, inst_name.?, func);
+                try self.indexFunctionByChunk(inst_name.?, &func.chunk);
+            }
+            self.stack[self.sp - 1] = .{ .string = inst_name.? };
         }
     }
 
@@ -16036,7 +16051,173 @@ pub const VM = struct {
         return collected;
     }
 
+    fn markClosureValue(self: *VM, value: Value, marked: *std.StringHashMapUnmanaged(void), seen_arrays: *std.AutoHashMapUnmanaged(*PhpArray, void), seen_objects: *std.AutoHashMapUnmanaged(*PhpObject, void)) void {
+        switch (value) {
+            .string => |name| {
+                if (self.capture_index.contains(name)) marked.put(self.allocator, name, {}) catch {};
+            },
+            .array => |arr| {
+                if (seen_arrays.contains(arr)) return;
+                seen_arrays.put(self.allocator, arr, {}) catch return;
+                for (arr.entries.items) |entry| self.markClosureValue(if (entry.ref) |cell| cell.* else entry.value, marked, seen_arrays, seen_objects);
+            },
+            .object => |obj| {
+                if (seen_objects.contains(obj)) return;
+                seen_objects.put(self.allocator, obj, {}) catch return;
+                if (obj.slots) |slots| for (slots) |slot| self.markClosureValue(slot, marked, seen_arrays, seen_objects);
+                var properties = obj.properties.iterator();
+                while (properties.next()) |entry| self.markClosureValue(entry.value_ptr.*, marked, seen_arrays, seen_objects);
+            },
+            else => {},
+        }
+    }
+
+    fn markGeneratorClosures(self: *VM, gen: *Generator, marked: *std.StringHashMapUnmanaged(void), seen_arrays: *std.AutoHashMapUnmanaged(*PhpArray, void), seen_objects: *std.AutoHashMapUnmanaged(*PhpObject, void)) void {
+        var vars = gen.vars.valueIterator();
+        while (vars.next()) |value| self.markClosureValue(value.*, marked, seen_arrays, seen_objects);
+        for (gen.locals.items) |value| self.markClosureValue(value, marked, seen_arrays, seen_objects);
+        for (gen.stack.items) |value| self.markClosureValue(value, marked, seen_arrays, seen_objects);
+        var refs = gen.ref_slots.valueIterator();
+        while (refs.next()) |cell| self.markClosureValue(cell.*.*, marked, seen_arrays, seen_objects);
+        self.markClosureValue(gen.current_value, marked, seen_arrays, seen_objects);
+        self.markClosureValue(gen.current_key, marked, seen_arrays, seen_objects);
+        self.markClosureValue(gen.return_value, marked, seen_arrays, seen_objects);
+        if (gen.pending_throw) |value| self.markClosureValue(value, marked, seen_arrays, seen_objects);
+        if (gen.delegate) |delegate| switch (delegate) {
+            .array => |state| self.markClosureValue(.{ .array = state.arr }, marked, seen_arrays, seen_objects),
+            .gen => {},
+        };
+    }
+
+    fn markFiberClosures(self: *VM, fiber: *Fiber, marked: *std.StringHashMapUnmanaged(void), seen_arrays: *std.AutoHashMapUnmanaged(*PhpArray, void), seen_objects: *std.AutoHashMapUnmanaged(*PhpObject, void)) void {
+        self.markClosureValue(fiber.callable, marked, seen_arrays, seen_objects);
+        for (fiber.saved_stack.items) |value| self.markClosureValue(value, marked, seen_arrays, seen_objects);
+        self.markClosureValue(fiber.suspend_value, marked, seen_arrays, seen_objects);
+        self.markClosureValue(fiber.return_value, marked, seen_arrays, seen_objects);
+        for (fiber.saved_frames.items) |*frame| {
+            var vars = frame.vars.valueIterator();
+            while (vars.next()) |value| self.markClosureValue(value.*, marked, seen_arrays, seen_objects);
+            for (frame.locals) |value| self.markClosureValue(value, marked, seen_arrays, seen_objects);
+            var refs = frame.ref_slots.valueIterator();
+            while (refs.next()) |cell| self.markClosureValue(cell.*.*, marked, seen_arrays, seen_objects);
+            if (frame.generator) |gen| self.markGeneratorClosures(gen, marked, seen_arrays, seen_objects);
+        }
+    }
+
+    fn collectClosureMetadata(self: *VM) void {
+        if (self.capture_index.count() == 0) return;
+        var marked: std.StringHashMapUnmanaged(void) = .{};
+        defer marked.deinit(self.allocator);
+        var seen_arrays: std.AutoHashMapUnmanaged(*PhpArray, void) = .{};
+        defer seen_arrays.deinit(self.allocator);
+        var seen_objects: std.AutoHashMapUnmanaged(*PhpObject, void) = .{};
+        defer seen_objects.deinit(self.allocator);
+
+        for (self.stack[0..self.sp]) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        if (self.frame_count > 0) {
+            const global = &self.frames[0];
+            const names = if (global.func) |func| func.slot_names else global.slot_names;
+            for (global.locals, 0..) |value, i| {
+                if (i < names.len and names[i].len > 0) self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+            }
+        }
+        for (self.frames[0..self.frame_count]) |*frame| {
+            if (frame.call_name) |name| if (self.capture_index.contains(name)) marked.put(self.allocator, name, {}) catch {};
+            var vars = frame.vars.valueIterator();
+            while (vars.next()) |value| self.markClosureValue(value.*, &marked, &seen_arrays, &seen_objects);
+            for (frame.locals) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+            var refs = frame.ref_slots.valueIterator();
+            while (refs.next()) |cell| self.markClosureValue(cell.*.*, &marked, &seen_arrays, &seen_objects);
+        }
+        var statics = self.statics.valueIterator();
+        while (statics.next()) |value| self.markClosureValue(value.*, &marked, &seen_arrays, &seen_objects);
+        var globals = self.globals_cells.valueIterator();
+        while (globals.next()) |cell| self.markClosureValue(cell.*.*, &marked, &seen_arrays, &seen_objects);
+        for (self.shutdown_callbacks.items) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        for (self.autoload_callbacks.items) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        if (self.user_error_handler) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        if (self.user_exception_handler) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        if (self.prev_error_handler) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        for (self.error_handler_stack.items) |entry| self.markClosureValue(entry.handler, &marked, &seen_arrays, &seen_objects);
+        for (self.exception_handler_stack.items) |handler| if (handler) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        for (self.ob_stack.items) |level| if (level.callback) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        if (self.pending_exception) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        for (self.pending_native_args) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        if (self.pending_invoke_args) |args| for (args) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        if (self.pending_ref_args) |args| for (args) |value| self.markClosureValue(value, &marked, &seen_arrays, &seen_objects);
+        var constants = self.php_constants.valueIterator();
+        while (constants.next()) |value| self.markClosureValue(value.*, &marked, &seen_arrays, &seen_objects);
+        var callbacks = self.ini_callbacks.valueIterator();
+        while (callbacks.next()) |value| self.markClosureValue(value.*, &marked, &seen_arrays, &seen_objects);
+        var requests = self.request_vars.valueIterator();
+        while (requests.next()) |value| self.markClosureValue(value.*, &marked, &seen_arrays, &seen_objects);
+        var static_cells = self.statics_cells.valueIterator();
+        while (static_cells.next()) |cell| self.markClosureValue(cell.*.*, &marked, &seen_arrays, &seen_objects);
+        if (self.last_return_ref) |cell| self.markClosureValue(cell.*, &marked, &seen_arrays, &seen_objects);
+        if (self.globals_array) |array| self.markClosureValue(.{ .array = array }, &marked, &seen_arrays, &seen_objects);
+        if (self.response_headers) |array| self.markClosureValue(.{ .array = array }, &marked, &seen_arrays, &seen_objects);
+        for (self.generators.items) |gen| if (!gen.pooled and gen.refcount > 0) self.markGeneratorClosures(gen, &marked, &seen_arrays, &seen_objects);
+        for (self.fibers.items) |fiber| if (!fiber.pooled and fiber.refcount > 0) self.markFiberClosures(fiber, &marked, &seen_arrays, &seen_objects);
+        if (self.current_fiber) |fiber| self.markFiberClosures(fiber, &marked, &seen_arrays, &seen_objects);
+        self.markClosureValue(self.fiber_suspend_value, &marked, &seen_arrays, &seen_objects);
+
+        var classes = self.classes.valueIterator();
+        while (classes.next()) |class| {
+            var props = class.static_props.valueIterator();
+            while (props.next()) |value| self.markClosureValue(value.*, &marked, &seen_arrays, &seen_objects);
+            for (class.properties.items) |property| if (property.has_default) self.markClosureValue(property.default, &marked, &seen_arrays, &seen_objects);
+        }
+
+        var changed = true;
+        while (changed) {
+            changed = false;
+            var capture_ranges = self.capture_index.iterator();
+            while (capture_ranges.next()) |entry| {
+                if (!marked.contains(entry.key_ptr.*)) continue;
+                const range = entry.value_ptr.*;
+                for (0..range.len) |i| {
+                    const before = marked.count();
+                    const capture = self.captures.items[range.start + i];
+                    self.markClosureValue(if (capture.ref_cell) |cell| cell.* else capture.value, &marked, &seen_arrays, &seen_objects);
+                    if (marked.count() != before) changed = true;
+                }
+            }
+        }
+
+        var dead: std.ArrayListUnmanaged([]const u8) = .{};
+        defer dead.deinit(self.allocator);
+        var ranges = self.capture_index.iterator();
+        while (ranges.next()) |entry| if (!marked.contains(entry.key_ptr.*)) dead.append(self.allocator, entry.key_ptr.*) catch {};
+        for (dead.items) |name| if (self.capture_index.fetchRemove(name)) |removed| {
+            for (0..removed.value.len) |i| {
+                const capture = &self.captures.items[removed.value.start + i];
+                if (capture.ref_cell == null) self.releaseValue(capture.value);
+                capture.value = .null;
+                capture.ref_cell = null;
+            }
+            _ = self.functions.remove(name);
+            const separator = std.mem.lastIndexOfScalar(u8, name, '_') orelse continue;
+            self.free_closure_names.append(self.allocator, .{ .compile_name = name[0..separator], .name = name }) catch {};
+        };
+
+        var compacted: std.ArrayListUnmanaged(CaptureEntry) = .{};
+        compacted.ensureTotalCapacity(self.allocator, self.captures.items.len) catch return;
+        var live = self.capture_index.iterator();
+        while (live.next()) |entry| {
+            const old = entry.value_ptr.*;
+            const start: u32 = @intCast(compacted.items.len);
+            compacted.appendSlice(self.allocator, self.captures.items[old.start .. old.start + old.len]) catch return;
+            entry.value_ptr.start = start;
+        }
+        self.captures.deinit(self.allocator);
+        self.captures = compacted;
+    }
+
     fn collectCyclesIfNeeded(self: *VM) void {
+        if (self.closure_sweep_count >= 1024) {
+            self.closure_sweep_count = 0;
+            self.collectClosureMetadata();
+        }
         if (!self.gc_enabled) return;
         const roots = self.cycle_candidates.items.len + self.cycle_array_candidates.items.len;
         if (roots >= self.gc_threshold) _ = self.collectCycles();
