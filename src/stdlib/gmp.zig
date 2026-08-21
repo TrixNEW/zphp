@@ -477,8 +477,14 @@ pub const entries = .{
     .{ "gmp_perfect_square", gmpPerfectSquare },
 };
 
+fn cleanupGmp(obj: *PhpObject) bool {
+    if (getMpz(obj)) |p| zphp_mpz_destroy(p);
+    if (obj.properties.getPtr("__mpz")) |slot| slot.* = .{ .int = 0 };
+    return true;
+}
+
 pub fn register(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "GMP" };
+    var def = ClassDef{ .name = "GMP", .native_cleanup = cleanupGmp };
     // GMP is mostly a value-holding class; user-facing methods are
     // PHP's procedural ones. providing __toString lets `(string)$gmp` work
     try def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
@@ -509,7 +515,7 @@ fn gmpToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
     for (objects.items) |obj| {
-        if (!std.mem.eql(u8, obj.class_name, "GMP")) continue;
-        if (getMpz(obj)) |p| zphp_mpz_destroy(p);
+        if (obj.pooled or !std.mem.eql(u8, obj.class_name, "GMP")) continue;
+        _ = cleanupGmp(obj);
     }
 }
