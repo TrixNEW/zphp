@@ -723,8 +723,14 @@ pub const entries = .{
     .{ "getimagesize", imgGetSize },
 };
 
+fn cleanupImage(obj: *PhpObject) bool {
+    if (getImg(obj)) |im| c.gdImageDestroy(im);
+    if (obj.properties.getPtr("__gd_ptr")) |slot| slot.* = .{ .int = 0 };
+    return true;
+}
+
 pub fn register(vm: *VM, a: Allocator) !void {
-    const def = ClassDef{ .name = "GdImage" };
+    const def = ClassDef{ .name = "GdImage", .native_cleanup = cleanupImage };
     try vm.classes.put(a, "GdImage", def);
 
     // font size constants
@@ -756,7 +762,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
     for (objects.items) |obj| {
-        if (!std.mem.eql(u8, obj.class_name, "GdImage")) continue;
-        if (getImg(obj)) |im| c.gdImageDestroy(im);
+        if (obj.pooled or !std.mem.eql(u8, obj.class_name, "GdImage")) continue;
+        _ = cleanupImage(obj);
     }
 }

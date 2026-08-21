@@ -1058,11 +1058,9 @@ pub const VM = struct {
         return obj;
     }
 
-    fn isPoolableResourceClass(class_name: []const u8) bool {
-        return std.mem.eql(u8, class_name, "FileHandle") or
-            std.mem.eql(u8, class_name, "CurlHandle") or
-            std.mem.eql(u8, class_name, "XMLReader") or
-            std.mem.eql(u8, class_name, "XMLWriter");
+    fn isPoolableResourceClass(self: *VM, class_name: []const u8) bool {
+        const class = self.classes.get(class_name) orelse return false;
+        return class.native_cleanup != null;
     }
 
     fn cleanupPoolableResource(self: *VM, obj: *PhpObject) bool {
@@ -1073,7 +1071,7 @@ pub const VM = struct {
 
     fn classIsPoolSafe(self: *VM, class_name: []const u8) bool {
         const throwable = self.isInstanceOf(class_name, "Throwable");
-        const cleaned_resource = isPoolableResourceClass(class_name);
+        const cleaned_resource = self.isPoolableResourceClass(class_name);
         var current: ?[]const u8 = class_name;
         while (current) |name| {
             const class = self.classes.get(name) orelse return false;
@@ -15864,7 +15862,7 @@ pub const VM = struct {
                 // properties down after)
                 const cleaned_resource = self.cleanupPoolableResource(obj);
                 self.releaseObjectProperties(obj);
-                const reusable = if (isPoolableResourceClass(obj.class_name))
+                const reusable = if (self.isPoolableResourceClass(obj.class_name))
                     cleaned_resource
                 else
                     self.classIsPoolSafe(obj.class_name);

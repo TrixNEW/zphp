@@ -9,8 +9,12 @@ const ClassDef = vm_mod.ClassDef;
 const Allocator = std.mem.Allocator;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
+fn cleanupParser(_: *PhpObject) bool {
+    return true;
+}
+
 pub fn register(vm: *VM, a: Allocator) !void {
-    try vm.classes.put(a, "XMLParser", ClassDef{ .name = "XMLParser" });
+    try vm.classes.put(a, "XMLParser", ClassDef{ .name = "XMLParser", .native_cleanup = cleanupParser });
 
     try vm.native_fns.put(a, "xml_parser_create", create);
     try vm.native_fns.put(a, "xml_parser_create_ns", createNs);
@@ -47,15 +51,13 @@ fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
 }
 
 fn create(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = try ctx.allocator.create(PhpObject);
-    obj.* = .{ .class_name = "XMLParser" };
+    const obj = try ctx.createObject("XMLParser");
     try obj.set(ctx.allocator, "__case_fold", .{ .bool = true });
     try obj.set(ctx.allocator, "__skip_white", .{ .bool = false });
     try obj.set(ctx.allocator, "__line", .{ .int = 1 });
     try obj.set(ctx.allocator, "__col", .{ .int = 0 });
     try obj.set(ctx.allocator, "__byte", .{ .int = 0 });
     try obj.set(ctx.allocator, "__error", .{ .int = 0 });
-    try ctx.vm.objects.append(ctx.allocator, obj);
     return .{ .object = obj };
 }
 

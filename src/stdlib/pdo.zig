@@ -250,7 +250,7 @@ pub fn dupeZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
 }
 
 pub fn register(vm: *VM, a: Allocator) !void {
-    var pdo_def = ClassDef{ .name = "PDO" };
+    var pdo_def = ClassDef{ .name = "PDO", .native_cleanup = cleanupConnection };
     try pdo_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
     try pdo_def.methods.put(a, "exec", .{ .name = "exec", .arity = 1 });
     try pdo_def.methods.put(a, "query", .{ .name = "query", .arity = 1 });
@@ -403,7 +403,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "PDO::setAttribute", pdoSetAttribute);
     try vm.native_fns.put(a, "PDO::getAttribute", pdoGetAttribute);
 
-    var stmt_def = ClassDef{ .name = "PDOStatement" };
+    var stmt_def = ClassDef{ .name = "PDOStatement", .native_cleanup = cleanupStatement };
     try stmt_def.interfaces.append(a, "Iterator");
     try stmt_def.interfaces.append(a, "Traversable");
     try stmt_def.methods.put(a, "execute", .{ .name = "execute", .arity = 1 });
@@ -505,11 +505,38 @@ fn stmtFetchObject(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     return .{ .object = obj };
 }
 
+fn cleanupStatement(obj: *PhpObject) bool {
+    const drv = getDriver(obj);
+    if (std.mem.eql(u8, drv, "mysql")) {
+        pdo_mysql.cleanupStatement(obj);
+    } else if (std.mem.eql(u8, drv, "pgsql")) {
+        pdo_pgsql.cleanupStatement(obj);
+    } else if (getStmtPtr(obj)) |stmt| {
+        _ = sqlite.sqlite3_finalize(stmt);
+    }
+    if (obj.properties.getPtr("__stmt_ptr")) |slot| slot.* = .{ .int = 0 };
+    return true;
+}
+
+fn cleanupConnection(obj: *PhpObject) bool {
+    const drv = getDriver(obj);
+    if (std.mem.eql(u8, drv, "mysql")) {
+        pdo_mysql.cleanupConnection(obj);
+    } else if (std.mem.eql(u8, drv, "pgsql")) {
+        pdo_pgsql.cleanupConnection(obj);
+    } else if (getDbPtr(obj)) |db| {
+        _ = sqlite.sqlite3_close_v2(db);
+    }
+    if (obj.properties.getPtr("__db_ptr")) |slot| slot.* = .{ .int = 0 };
+    return true;
+}
+
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
     // finalize statements first, then close databases. the obj is being torn down
     // right after this so we don't need to clear the pointer fields in the
     // property map (which would require the VM allocator to grow the bucket).
     for (objects.items) |obj| {
+        if (obj.pooled) continue;
         if (std.mem.eql(u8, obj.class_name, "PDOStatement")) {
             const drv = getDriver(obj);
             if (std.mem.eql(u8, drv, "mysql")) {
@@ -522,6 +549,7 @@ pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
         }
     }
     for (objects.items) |obj| {
+        if (obj.pooled) continue;
         // PDO base class plus the PHP 8.4 driver subclasses live under PDO\
         if (std.mem.eql(u8, obj.class_name, "PDO") or std.mem.startsWith(u8, obj.class_name, "PDO\\")) {
             const drv = getDriver(obj);
