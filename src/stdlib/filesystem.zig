@@ -372,28 +372,22 @@ fn parseDataUri(a: Allocator, path: []const u8) !?[]u8 {
     return try base64DecodeBytes(a, decoded);
 }
 
-pub fn cleanupHandles(objects: std.ArrayListUnmanaged(*PhpObject)) void {
-    for (objects.items) |obj| {
-        if (std.mem.eql(u8, obj.class_name, "FileHandle")) {
-            // proc_open pipe fds are owned by the live *Child (closed by fclose,
-            // proc_close, or reapProcChildren via wait()); closing them here too
-            // would double-close (File.close panics on BADF)
-            if (obj.get("__proc_ref") == .object) continue;
-            const open = obj.get("__open");
-            if (open == .bool and open.bool) {
-                if (getFileHandle(obj)) |file| {
-                    // never close stdin/stdout/stderr - they belong to the host
-                    if (file.handle > 2) {
-                        // use raw syscall to avoid panic on invalid fd
-                        _ = std.posix.system.close(file.handle);
-                    }
-                }
-                // mutate the existing entry rather than grow the map (the map's
-                // allocator is owned by the VM and isn't available here)
-                if (obj.properties.getPtr("__open")) |slot| slot.* = .{ .bool = false };
-            }
+pub fn cleanupHandle(obj: *PhpObject) void {
+    if (obj.pooled or !std.mem.eql(u8, obj.class_name, "FileHandle")) return;
+    if (obj.get("__proc_ref") == .object) return;
+    const fd = obj.get("__fd");
+    if (fd == .int and fd.int <= 2) return;
+    const open = obj.get("__open");
+    if (open == .bool and open.bool) {
+        if (getFileHandle(obj)) |file| {
+            if (file.handle > 2) _ = std.posix.system.close(file.handle);
         }
+        if (obj.properties.getPtr("__open")) |slot| slot.* = .{ .bool = false };
     }
+}
+
+pub fn cleanupHandles(objects: std.ArrayListUnmanaged(*PhpObject)) void {
+    for (objects.items) |obj| cleanupHandle(obj);
 }
 
 // file read/write
@@ -1287,77 +1281,63 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     }
 
     if (std.mem.eql(u8, path, "php://stdout") or std.mem.eql(u8, path, "php://output")) {
-        const obj = try ctx.allocator.create(PhpObject);
-        obj.* = .{ .class_name = "FileHandle" };
+        const obj = try ctx.createObject("FileHandle");
         try obj.set(ctx.allocator, "__fd", .{ .int = 1 });
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = "w" });
-        try ctx.vm.objects.append(ctx.allocator, obj);
         return .{ .object = obj };
     }
     if (std.mem.eql(u8, path, "php://stderr")) {
-        const obj = try ctx.allocator.create(PhpObject);
-        obj.* = .{ .class_name = "FileHandle" };
+        const obj = try ctx.createObject("FileHandle");
         try obj.set(ctx.allocator, "__fd", .{ .int = 2 });
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = "w" });
-        try ctx.vm.objects.append(ctx.allocator, obj);
         return .{ .object = obj };
     }
     if (std.mem.eql(u8, path, "php://stdin")) {
-        const obj = try ctx.allocator.create(PhpObject);
-        obj.* = .{ .class_name = "FileHandle" };
+        const obj = try ctx.createObject("FileHandle");
         try obj.set(ctx.allocator, "__fd", .{ .int = 0 });
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = "r" });
-        try ctx.vm.objects.append(ctx.allocator, obj);
         return .{ .object = obj };
     }
     if (std.mem.eql(u8, path, "php://input")) {
         const body_val = ctx.vm.request_vars.get("__raw_body");
         const body: []const u8 = if (body_val != null and body_val.? == .string) body_val.?.string else "";
-        const obj = try ctx.allocator.create(PhpObject);
-        obj.* = .{ .class_name = "FileHandle" };
+        const obj = try ctx.createObject("FileHandle");
         try obj.set(ctx.allocator, "__buffer", .{ .string = body });
         try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = "r" });
-        try ctx.vm.objects.append(ctx.allocator, obj);
         return .{ .object = obj };
     }
     if (std.mem.startsWith(u8, path, "data:")) {
         const payload = (parseDataUri(ctx.allocator, path) catch return Value{ .bool = false }) orelse return Value{ .bool = false };
         try ctx.strings.append(ctx.allocator, payload);
-        const obj = try ctx.allocator.create(PhpObject);
-        obj.* = .{ .class_name = "FileHandle" };
+        const obj = try ctx.createObject("FileHandle");
         try obj.set(ctx.allocator, "__buffer", .{ .string = payload });
         try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = "r" });
-        try ctx.vm.objects.append(ctx.allocator, obj);
         return .{ .object = obj };
     }
     if (std.mem.startsWith(u8, path, "phar://")) {
         const r = resolvePharPathWithCtx(path, ctx) orelse return .{ .bool = false };
         const payload = (readPharEntry(ctx.allocator, r.archive_path, r.internal_path) catch return Value{ .bool = false }) orelse return Value{ .bool = false };
         try ctx.strings.append(ctx.allocator, payload);
-        const obj = try ctx.allocator.create(PhpObject);
-        obj.* = .{ .class_name = "FileHandle" };
+        const obj = try ctx.createObject("FileHandle");
         try obj.set(ctx.allocator, "__buffer", .{ .string = payload });
         try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = "r" });
-        try ctx.vm.objects.append(ctx.allocator, obj);
         return .{ .object = obj };
     }
     if (std.mem.startsWith(u8, path, ZLIB_PREFIX)) {
         const is_write = mode.len >= 1 and (mode[0] == 'w' or mode[0] == 'a' or mode[0] == 'x');
-        const obj = try ctx.allocator.create(PhpObject);
-        obj.* = .{ .class_name = "FileHandle" };
+        const obj = try ctx.createObject("FileHandle");
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = mode });
         try obj.set(ctx.allocator, "__zlib_path", .{ .string = try ctx.createString(path) });
-        try ctx.vm.objects.append(ctx.allocator, obj);
         if (is_write) {
             try obj.set(ctx.allocator, "__zlib_writing", .{ .bool = true });
             try obj.set(ctx.allocator, "__buffer", .{ .string = "" });
@@ -1389,14 +1369,12 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return Value{ .bool = false };
     };
 
-    const obj = try ctx.allocator.create(PhpObject);
-    obj.* = .{ .class_name = "FileHandle" };
+    const obj = try ctx.createObject("FileHandle");
     try obj.set(ctx.allocator, "__fd", .{ .int = @intCast(file.handle) });
     try obj.set(ctx.allocator, "__open", .{ .bool = true });
     try obj.set(ctx.allocator, "__mode", .{ .string = mode });
     try obj.set(ctx.allocator, "__path", .{ .string = try ctx.createString(path) });
     if (is_memory_stream) try obj.set(ctx.allocator, "__peek_eof", .{ .bool = true });
-    try ctx.vm.objects.append(ctx.allocator, obj);
     return .{ .object = obj };
 }
 
@@ -2171,12 +2149,10 @@ fn dispatchUserOpen(ctx: *NativeContext, class_name: []const u8, path: []const u
     };
     const ok = try ctx.callMethod(wrapper, "stream_open", &open_args);
     if (!ok.isTruthy()) return null;
-    const fh = try ctx.allocator.create(PhpObject);
-    fh.* = .{ .class_name = "FileHandle" };
+    const fh = try ctx.createObject("FileHandle");
     try fh.set(ctx.allocator, "__wrapper_obj", .{ .object = wrapper });
     try fh.set(ctx.allocator, "__open", .{ .bool = true });
     try fh.set(ctx.allocator, "__mode", .{ .string = mode });
-    try ctx.vm.objects.append(ctx.allocator, fh);
     return Value{ .object = fh };
 }
 
@@ -2878,9 +2854,7 @@ fn runShellWith(
 }
 
 fn makeReadBufferHandle(ctx: *NativeContext, data: []const u8) !*PhpObject {
-    const obj = try ctx.allocator.create(PhpObject);
-    obj.* = .{ .class_name = "FileHandle" };
-    try ctx.vm.objects.append(ctx.allocator, obj);
+    const obj = try ctx.createObject("FileHandle");
     try obj.set(ctx.allocator, "__buffer", .{ .string = data });
     try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
     try obj.set(ctx.allocator, "__open", .{ .bool = true });
@@ -2889,9 +2863,7 @@ fn makeReadBufferHandle(ctx: *NativeContext, data: []const u8) !*PhpObject {
 }
 
 fn makePopenWriteHandle(ctx: *NativeContext, command: []const u8) !*PhpObject {
-    const obj = try ctx.allocator.create(PhpObject);
-    obj.* = .{ .class_name = "FileHandle" };
-    try ctx.vm.objects.append(ctx.allocator, obj);
+    const obj = try ctx.createObject("FileHandle");
     const cmd_copy = try ctx.allocator.dupe(u8, command);
     try ctx.vm.strings.append(ctx.allocator, cmd_copy);
     try obj.set(ctx.allocator, "__popen_cmd", .{ .string = cmd_copy });

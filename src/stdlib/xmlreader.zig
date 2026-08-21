@@ -50,6 +50,11 @@ fn setReader(obj: *PhpObject, allocator: Allocator, reader: ?*c.xmlTextReader) !
 
 fn closeExisting(obj: *PhpObject) void {
     if (getReader(obj)) |r| c.xmlFreeTextReader(r);
+    if (obj.properties.getPtr("__reader")) |slot| slot.* = .{ .int = 0 };
+}
+
+pub fn cleanupObject(obj: *PhpObject) void {
+    if (!obj.pooled and std.mem.eql(u8, obj.class_name, "XMLReader")) closeExisting(obj);
 }
 
 // ---------------- methods ----------------
@@ -440,7 +445,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
     for (objects.items) |obj| {
-        if (!std.mem.eql(u8, obj.class_name, "XMLReader")) continue;
-        if (getReader(obj)) |r| c.xmlFreeTextReader(r);
+        cleanupObject(obj);
     }
 }

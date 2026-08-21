@@ -53,6 +53,12 @@ fn getBuffer(obj: *const PhpObject) ?*c.xmlBuffer {
 fn closeExisting(obj: *PhpObject) void {
     if (getWriter(obj)) |w| c.xmlFreeTextWriter(w);
     if (getBuffer(obj)) |b| c.xmlBufferFree(b);
+    if (obj.properties.getPtr("__writer")) |slot| slot.* = .{ .int = 0 };
+    if (obj.properties.getPtr("__buffer")) |slot| slot.* = .{ .int = 0 };
+}
+
+pub fn cleanupObject(obj: *PhpObject) void {
+    if (!obj.pooled and std.mem.eql(u8, obj.class_name, "XMLWriter")) closeExisting(obj);
 }
 
 // ---------------- methods ----------------
@@ -472,8 +478,6 @@ fn methodNameFor(comptime _: anytype) []const u8 { return ""; }
 
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
     for (objects.items) |obj| {
-        if (!std.mem.eql(u8, obj.class_name, "XMLWriter")) continue;
-        if (getWriter(obj)) |w| c.xmlFreeTextWriter(w);
-        if (getBuffer(obj)) |b| c.xmlBufferFree(b);
+        cleanupObject(obj);
     }
 }

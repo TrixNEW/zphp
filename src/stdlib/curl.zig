@@ -386,7 +386,8 @@ fn curlClose(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .null;
 }
 
-fn cleanupHandle(obj: *PhpObject) void {
+pub fn cleanupHandle(obj: *PhpObject) void {
+    if (obj.pooled) return;
     // free slist
     const slist_v = obj.get("__slist_ptr");
     if (slist_v == .int and slist_v.int != 0) {

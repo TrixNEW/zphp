@@ -84,10 +84,7 @@ pub const NativeContext = struct {
     }
 
     pub fn createObject(self: *NativeContext, class_name: []const u8) !*PhpObject {
-        const obj = try self.allocator.create(PhpObject);
-        self.vm.next_object_id += 1;
-        obj.* = .{ .class_name = class_name, .id = self.vm.next_object_id };
-        try self.vm.objects.append(self.allocator, obj);
+        const obj = try self.vm.allocUserObject(class_name);
         try self.vm.initObjectProperties(obj, class_name);
         return obj;
     }
@@ -1060,12 +1057,42 @@ pub const VM = struct {
         return obj;
     }
 
+    fn isPoolableResourceClass(class_name: []const u8) bool {
+        return std.mem.eql(u8, class_name, "FileHandle") or
+            std.mem.eql(u8, class_name, "CurlHandle") or
+            std.mem.eql(u8, class_name, "XMLReader") or
+            std.mem.eql(u8, class_name, "XMLWriter");
+    }
+
+    fn cleanupPoolableResource(obj: *PhpObject) bool {
+        if (std.mem.eql(u8, obj.class_name, "FileHandle")) {
+            @import("../stdlib/filesystem.zig").cleanupHandle(obj);
+            if (obj.get("__proc_ref") == .object) return false;
+            const fd = obj.get("__fd");
+            return fd != .int or fd.int > 2;
+        }
+        if (std.mem.eql(u8, obj.class_name, "CurlHandle")) {
+            @import("../stdlib/curl.zig").cleanupHandle(obj);
+            return true;
+        }
+        if (std.mem.eql(u8, obj.class_name, "XMLReader")) {
+            @import("../stdlib/xmlreader.zig").cleanupObject(obj);
+            return true;
+        }
+        if (std.mem.eql(u8, obj.class_name, "XMLWriter")) {
+            @import("../stdlib/xmlwriter.zig").cleanupObject(obj);
+            return true;
+        }
+        return false;
+    }
+
     fn classIsPoolSafe(self: *VM, class_name: []const u8) bool {
         const throwable = self.isInstanceOf(class_name, "Throwable");
+        const cleaned_resource = isPoolableResourceClass(class_name);
         var current: ?[]const u8 = class_name;
         while (current) |name| {
             const class = self.classes.get(name) orelse return false;
-            if ((!throwable and class.is_internal) or class.methods.contains("__destruct")) return false;
+            if ((!throwable and !cleaned_resource and class.is_internal) or class.methods.contains("__destruct")) return false;
             current = class.parent;
         }
         return true;
@@ -15850,8 +15877,13 @@ pub const VM = struct {
                 // collapse the object tree: release the objects this object's
                 // property slots held. runs after __destruct (PHP tears
                 // properties down after)
+                const cleaned_resource = cleanupPoolableResource(obj);
                 self.releaseObjectProperties(obj);
-                if (!self.serve_mode and self.classIsPoolSafe(obj.class_name)) {
+                const reusable = if (isPoolableResourceClass(obj.class_name))
+                    cleaned_resource
+                else
+                    self.classIsPoolSafe(obj.class_name);
+                if (!self.serve_mode and reusable) {
                     self.released_objects.append(self.allocator, obj) catch {};
                 }
             }
