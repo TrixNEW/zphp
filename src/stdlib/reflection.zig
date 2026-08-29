@@ -3360,7 +3360,7 @@ fn rpropIsProtectedSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value
 }
 
 fn rpropIsPublicSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const this = getThis(ctx) orelse return .{ .bool = true };
+    const this = getThis(ctx) orelse return .{ .bool = false };
     const vis = this.get("_visibility");
     const set_vis = this.get("_set_visibility");
     const ro = this.get("_is_readonly");
@@ -3368,7 +3368,7 @@ fn rpropIsPublicSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const vis_val = if (vis == .int) vis.int else 0;
     const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
     if (is_ro) return .{ .bool = false };
-    return .{ .bool = set_vis_val == 0 };
+    return .{ .bool = set_vis_val == 0 and vis_val == 0 };
 }
 
 fn rpropIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -3479,14 +3479,18 @@ fn rpropGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const is_ro = ro == .bool and ro.bool;
     if (is_ro) mods |= 128; // IS_READONLY
 
-    const is_final = rpropIsFinal(ctx, &.{}) catch Value{ .bool = false };
-    if (is_final == .bool and is_final.bool) mods |= 32; // IS_FINAL
+    const set_vis = this.get("_set_visibility");
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
 
-    const is_prot_set = rpropIsProtectedSet(ctx, &.{}) catch Value{ .bool = false };
-    if (is_prot_set == .bool and is_prot_set.bool) mods |= 2048; // IS_PROTECTED_SET
+    const final_v = this.get("_is_final");
+    const is_explicit_final = final_v == .bool and final_v.bool;
+    const is_asym_private_set = set_vis_val == 2 and vis_val != 2;
+    if (is_explicit_final or is_asym_private_set) mods |= 32; // IS_FINAL
 
-    const is_priv_set = rpropIsPrivateSet(ctx, &.{}) catch Value{ .bool = false };
-    if (is_priv_set == .bool and is_priv_set.bool) mods |= 4096; // IS_PRIVATE_SET
+    const is_asym_prot_set = (set_vis_val == 1 and vis_val == 0) or (is_ro and vis_val == 0);
+    if (is_asym_prot_set) mods |= 2048; // IS_PROTECTED_SET
+
+    if (is_asym_private_set) mods |= 4096; // IS_PRIVATE_SET
 
     return .{ .int = mods };
 }
