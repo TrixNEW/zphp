@@ -500,6 +500,11 @@ pub const ObjFunction = struct {
     is_generator: bool = false,
     is_arrow: bool = false,
     is_static: bool = false,
+    // Class/trait method declaration metadata. Keeping this on the compiled
+    // function lets trait imports preserve modifiers instead of defaulting
+    // every imported method to public and non-final.
+    method_visibility: u8 = 0, // 0=public, 1=protected, 2=private
+    is_final: bool = false,
     // `&function foo() { ... }` - return is a reference, not a copy. when
     // such a function is called via `$r = &foo(...)`, the caller's $r binds
     // to the storage the function returned a ref to. the return-expression

@@ -11487,7 +11487,16 @@ pub const VM = struct {
                         if (!self.functions.contains(alias_method)) {
                             try self.functions.put(self.allocator, alias_method, tm.func);
                             try self.indexFunctionByChunk(alias_method, &tm.func.chunk);
-                            try def.addMethod(self.allocator, .{ .name = rule.alias, .arity = tm.func.arity, .visibility = if (rule.visibility != 0) rule_vis else .public });
+                            try def.addMethod(self.allocator, .{
+                                .name = rule.alias,
+                                .arity = tm.func.arity,
+                                .is_static = tm.func.is_static,
+                                .is_final = tm.func.is_final,
+                                .visibility = if (rule.visibility != 0)
+                                    rule_vis
+                                else
+                                    @enumFromInt(tm.func.method_visibility),
+                            });
                         }
                     }
                 }
@@ -11518,7 +11527,9 @@ pub const VM = struct {
                 try def.addMethod(self.allocator, .{
                     .name = tm.name,
                     .arity = tm.func.arity,
-                    .visibility = vis_override orelse .public,
+                    .is_static = tm.func.is_static,
+                    .is_final = tm.func.is_final,
+                    .visibility = vis_override orelse @enumFromInt(tm.func.method_visibility),
                 });
             }
         }
