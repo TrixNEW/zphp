@@ -1160,7 +1160,6 @@ pub const VM = struct {
         try @import("../stdlib/gd.zig").register(vm, allocator);
         try @import("../stdlib/soap.zig").register(vm, allocator);
         try @import("../stdlib/mysqli.zig").register(vm, allocator);
-        try @import("../stdlib/chunkutils2.zig").register(vm, allocator);
 
         // HashContext is the type returned by hash_init - register so
         // class_exists('HashContext') and instanceof checks see it
@@ -2005,7 +2004,6 @@ pub const VM = struct {
         @import("../stdlib/intl.zig").cleanupResources(self.objects);
         @import("../stdlib/gmp.zig").cleanupResources(self.objects);
         @import("../stdlib/gd.zig").cleanupResources(self.objects);
-        @import("../stdlib/chunkutils2.zig").cleanupResources(self.objects);
         @import("../stdlib/ftp.zig").cleanupResources(self.objects);
         @import("../stdlib/ldap.zig").cleanupResources(self.objects);
         @import("../stdlib/mysqli.zig").cleanupConnections(self.objects);
@@ -15622,7 +15620,6 @@ pub const VM = struct {
         }
         fiber.saved_handlers.clearRetainingCapacity();
     }
-
 
     fn readByte(self: *VM) u8 {
         const frame = &self.frames[self.frame_count - 1];
