@@ -2803,6 +2803,8 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         .is_generator = method_gen,
         .returns_ref = method_returns_ref,
         .is_static = member.tag == .static_class_method,
+        .method_visibility = @intCast((member.data.rhs >> 30) & 0x3),
+        .is_final = ((member.data.rhs >> 28) & 1) != 0,
         .locals_only = method_lo,
         .params = param_names[0..param_nodes.len],
         .defaults = defaults_owned,
