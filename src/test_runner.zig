@@ -3,6 +3,7 @@ const parser = @import("pipeline/parser.zig");
 const compiler = @import("pipeline/compiler.zig");
 const CompileResult = compiler.CompileResult;
 const VM = @import("runtime/vm.zig").VM;
+const Value = @import("runtime/value.zig").Value;
 const ObjFunction = @import("pipeline/bytecode.zig").ObjFunction;
 const tui = @import("tui.zig");
 
@@ -113,7 +114,10 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
             result.failed = 1;
             return result;
         };
-        defer { vm.deinit(); allocator.destroy(vm); }
+        defer {
+            vm.deinit();
+            allocator.destroy(vm);
+        }
 
         vm.interpret(&compile_result) catch {
             printFail(path, if (vm.error_msg) |m| m else "runtime error");
@@ -129,11 +133,17 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
     tui.step("file", path);
     for (test_fns.items) |func| {
         const vm = VM.initOnHeap(allocator) catch continue;
-        defer { vm.deinit(); allocator.destroy(vm); }
+        defer {
+            vm.deinit();
+            allocator.destroy(vm);
+        }
 
-        // register all functions from the compile result (without executing top-level code)
-        for (compile_result.functions.items) |*f| {
-            vm.registerFunction(f) catch continue;
+        vm.registerResultFunctions(&compile_result) catch continue;
+
+        var locals: []Value = &.{};
+        if (func.local_count > 0) {
+            locals = allocator.alloc(Value, func.local_count) catch continue;
+            @memset(locals, .null);
         }
 
         // execute the test function
@@ -141,6 +151,8 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
             .chunk = &func.chunk,
             .ip = 0,
             .vars = .{},
+            .locals = locals,
+            .func = func,
         };
         vm.frame_count = 1;
 
@@ -148,8 +160,10 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
             const err_msg = if (vm.error_msg) |m| m else "assertion failed";
             printFail(func.name, err_msg);
             result.failed += 1;
+            vm.runShutdownDestructors();
             continue;
         };
+        vm.runShutdownDestructors();
 
         printPass(func.name);
         result.passed += 1;
