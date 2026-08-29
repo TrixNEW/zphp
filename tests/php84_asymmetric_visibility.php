@@ -19,7 +19,6 @@ foreach ($props as $name) {
         . ($rp->isPublic() ? 'pub ' : '')
         . ($rp->isProtected() ? 'prot ' : '')
         . ($rp->isPrivate() ? 'priv ' : '')
-        . ($rp->isPublicSet() ? 'pubSet ' : '')
         . ($rp->isProtectedSet() ? 'protSet ' : '')
         . ($rp->isPrivateSet() ? 'privSet ' : '')
         . ($rp->isStatic() ? 'static ' : '')
