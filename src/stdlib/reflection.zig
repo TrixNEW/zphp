@@ -512,10 +512,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rprop_def.methods.put(a, "getAttributes", .{ .name = "getAttributes", .arity = 0 });
     try rprop_def.methods.put(a, "getDocComment", .{ .name = "getDocComment", .arity = 0 });
     try rprop_def.methods.put(a, "isVirtual", .{ .name = "isVirtual", .arity = 0 });
-    // PHP 8.4 asymmetric visibility methods. zphp doesn't yet model
-    // separate set visibility but the symfony/property-access component
-    // probes for these unconditionally; return false until we implement
-    // `public(set)` / `protected(set)` / `private(set)` modifiers
+    // php8.4 asymmetric visibility methods
     try rprop_def.methods.put(a, "isPrivateSet", .{ .name = "isPrivateSet", .arity = 0 });
     try rprop_def.methods.put(a, "isProtectedSet", .{ .name = "isProtectedSet", .arity = 0 });
     try rprop_def.methods.put(a, "isPublicSet", .{ .name = "isPublicSet", .arity = 0 });
@@ -528,17 +525,25 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rprop_def.methods.put(a, "isLazy", .{ .name = "isLazy", .arity = 1 });
     try rprop_def.methods.put(a, "skipLazyInitialization", .{ .name = "skipLazyInitialization", .arity = 1 });
     try rprop_def.static_props.put(a, "IS_STATIC", .{ .int = 16 });
+    try rprop_def.static_props.put(a, "IS_READONLY", .{ .int = 128 });
     try rprop_def.static_props.put(a, "IS_PUBLIC", .{ .int = 1 });
     try rprop_def.static_props.put(a, "IS_PROTECTED", .{ .int = 2 });
     try rprop_def.static_props.put(a, "IS_PRIVATE", .{ .int = 4 });
-    try rprop_def.static_props.put(a, "IS_READONLY", .{ .int = 128 });
+    try rprop_def.static_props.put(a, "IS_ABSTRACT", .{ .int = 64 });
+    try rprop_def.static_props.put(a, "IS_PROTECTED_SET", .{ .int = 2048 });
+    try rprop_def.static_props.put(a, "IS_PRIVATE_SET", .{ .int = 4096 });
     try rprop_def.static_props.put(a, "IS_VIRTUAL", .{ .int = 512 });
+    try rprop_def.static_props.put(a, "IS_FINAL", .{ .int = 32 });
     try rprop_def.constant_names.put(a, "IS_STATIC", {});
+    try rprop_def.constant_names.put(a, "IS_READONLY", {});
     try rprop_def.constant_names.put(a, "IS_PUBLIC", {});
     try rprop_def.constant_names.put(a, "IS_PROTECTED", {});
     try rprop_def.constant_names.put(a, "IS_PRIVATE", {});
-    try rprop_def.constant_names.put(a, "IS_READONLY", {});
+    try rprop_def.constant_names.put(a, "IS_ABSTRACT", {});
+    try rprop_def.constant_names.put(a, "IS_PROTECTED_SET", {});
+    try rprop_def.constant_names.put(a, "IS_PRIVATE_SET", {});
     try rprop_def.constant_names.put(a, "IS_VIRTUAL", {});
+    try rprop_def.constant_names.put(a, "IS_FINAL", {});
     try vm.classes.put(a, "ReflectionProperty", rprop_def);
 
     try vm.native_fns.put(a, "ReflectionProperty::__construct", rpConstruct);
@@ -553,11 +558,11 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionProperty::isPublic", rpropIsPublic);
     try vm.native_fns.put(a, "ReflectionProperty::isProtected", rpropIsProtected);
     try vm.native_fns.put(a, "ReflectionProperty::isPrivate", rpropIsPrivate);
-    try vm.native_fns.put(a, "ReflectionProperty::isPrivateSet", reflectionFalse);
-    try vm.native_fns.put(a, "ReflectionProperty::isProtectedSet", reflectionFalse);
-    try vm.native_fns.put(a, "ReflectionProperty::isPublicSet", reflectionFalse);
-    try vm.native_fns.put(a, "ReflectionProperty::isFinal", reflectionFalse);
-    try vm.native_fns.put(a, "ReflectionProperty::isAbstract", reflectionFalse);
+    try vm.native_fns.put(a, "ReflectionProperty::isPrivateSet", rpropIsPrivateSet);
+    try vm.native_fns.put(a, "ReflectionProperty::isProtectedSet", rpropIsProtectedSet);
+    try vm.native_fns.put(a, "ReflectionProperty::isPublicSet", rpropIsPublicSet);
+    try vm.native_fns.put(a, "ReflectionProperty::isFinal", rpropIsFinal);
+    try vm.native_fns.put(a, "ReflectionProperty::isAbstract", rpropIsAbstract);
     try vm.native_fns.put(a, "ReflectionProperty::hasHooks", reflectionFalse);
     try vm.native_fns.put(a, "ReflectionProperty::hasHook", reflectionFalse);
     try vm.native_fns.put(a, "ReflectionProperty::getHooks", rpropGetHooks);
@@ -921,6 +926,7 @@ fn buildPropertyObjStatic(ctx: *NativeContext, class_name: []const u8, prop: Cla
     try obj.set(ctx.allocator, "_has_default", .{ .bool = effective_has_default });
     try obj.set(ctx.allocator, "_default_value", if (effective_has_default) prop.default else .null);
     try obj.set(ctx.allocator, "_declaring_class", .{ .string = declaring_class });
+    try obj.set(ctx.allocator, "_set_visibility", .{ .int = @intFromEnum(prop.set_visibility) });
     try obj.set(ctx.allocator, "_is_readonly", .{ .bool = prop.is_readonly });
     try obj.set(ctx.allocator, "_is_static", .{ .bool = is_static });
     return obj;
@@ -3191,7 +3197,9 @@ fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         try this.set(ctx.allocator, "_has_default", .{ .bool = effective_has_default });
         try this.set(ctx.allocator, "_default_value", if (effective_has_default) result.prop.default else .null);
         try this.set(ctx.allocator, "_declaring_class", .{ .string = result.declaring_class });
+        try this.set(ctx.allocator, "_set_visibility", .{ .int = @intFromEnum(result.prop.set_visibility) });
         try this.set(ctx.allocator, "_is_readonly", .{ .bool = result.prop.is_readonly });
+        try this.set(ctx.allocator, "_is_static", .{ .bool = result.is_static });
     } else {
         // PHP throws when the property is not declared on the class (or any
         // ancestor) - a non-existent / dynamic-only property has no
@@ -3331,6 +3339,47 @@ fn rpropIsPrivate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = vis == .int and vis.int == 2 };
 }
 
+fn rpropIsPrivateSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .{ .bool = false };
+    const vis = this.get("_visibility");
+    const set_vis = this.get("_set_visibility");
+    const vis_val = if (vis == .int) vis.int else 0;
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    return .{ .bool = set_vis_val == 2 and vis_val != 2 };
+}
+
+fn rpropIsProtectedSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .{ .bool = false };
+    const vis = this.get("_visibility");
+    const set_vis = this.get("_set_visibility");
+    const vis_val = if (vis == .int) vis.int else 0;
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    return .{ .bool = set_vis_val == 1 and vis_val == 0 };
+}
+
+fn rpropIsPublicSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .{ .bool = true };
+    const vis = this.get("_visibility");
+    const set_vis = this.get("_set_visibility");
+    const vis_val = if (vis == .int) vis.int else 0;
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    return .{ .bool = set_vis_val == 0 };
+}
+
+fn rpropIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .{ .bool = false };
+    const vis = this.get("_visibility");
+    const set_vis = this.get("_set_visibility");
+    const vis_val = if (vis == .int) vis.int else 0;
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    if (set_vis_val == 2 and vis_val != 2) return .{ .bool = true };
+    return .{ .bool = false };
+}
+
+fn rpropIsAbstract(_: *NativeContext, _: []const Value) RuntimeError!Value {
+    return .{ .bool = false };
+}
+
 fn rpropGetDefaultValue(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const has_default = this.get("_has_default");
@@ -3410,15 +3459,26 @@ fn rpropHasType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn rpropGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .int = 0 };
     const vis = this.get("_visibility");
-    var mods: i64 = switch (if (vis == .int) vis.int else -1) {
+    const vis_val = if (vis == .int) vis.int else 0;
+    var mods: i64 = switch (vis_val) {
         1 => 2, // protected
         2 => 4, // private
         else => 1, // public (0) / fallback
     };
+    const st = this.get("_is_static");
+    if (st == .bool and st.bool) mods |= 16;
     // a readonly property carries IS_READONLY (128) plus an internal readonly
-    // flag (2048); php 8.4 and 8.5 both report 2177 for a public readonly prop
+    // flag (2048) php 8.4 and 8.5 both report 2177 for a public readonly prop
     const ro = this.get("_is_readonly");
     if (ro == .bool and ro.bool) mods |= 128 | 2048;
+
+    const set_vis = this.get("_set_visibility");
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    if (set_vis_val == 1 and vis_val == 0) {
+        mods |= 2048;
+    } else if (set_vis_val == 2 and vis_val != 2) {
+        mods |= 4096 | 32;
+    }
     return .{ .int = mods };
 }
 
