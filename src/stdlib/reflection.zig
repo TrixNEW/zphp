@@ -3469,12 +3469,9 @@ fn rpropIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const vis = this.get("_visibility");
     const set_vis = this.get("_set_visibility");
     const has_set_vis = this.get("_has_set_visibility");
-    const ro = this.get("_is_readonly");
-
     const vis_val = if (vis == .int) vis.int else 0;
     const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
     const has_explicit_set = has_set_vis == .bool and has_set_vis.bool;
-    const is_ro = ro == .bool and ro.bool;
 
     // PHP 8.4 only treats asymmetric private(set) as implicitly final.
     // Symmetric `private private(set)` and private readonly remain non-final.
