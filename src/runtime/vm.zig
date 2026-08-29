@@ -342,7 +342,9 @@ pub const ClassDef = struct {
         has_default: bool = false,
         visibility: Visibility = .public,
         set_visibility: Visibility = .public,
+        has_set_visibility: bool = false,
         is_readonly: bool = false,
+        is_final: bool = false,
         is_promoted: bool = false,
         type_str: []const u8 = "",
         doc_comment: []const u8 = "",
@@ -10679,32 +10681,56 @@ pub const VM = struct {
         const prop_has_default = try self.allocator.alloc(u8, prop_count);
         const prop_vis = try self.allocator.alloc(ClassDef.Visibility, prop_count);
         const prop_set_vis = try self.allocator.alloc(ClassDef.Visibility, prop_count);
+        const prop_has_set_vis = try self.allocator.alloc(bool, prop_count);
         const prop_readonly = try self.allocator.alloc(bool, prop_count);
+        const prop_final = try self.allocator.alloc(bool, prop_count);
         const prop_promoted = try self.allocator.alloc(bool, prop_count);
         const prop_type = try self.allocator.alloc([]const u8, prop_count);
         const prop_doc = try self.allocator.alloc([]const u8, prop_count);
+
         defer self.allocator.free(prop_names);
         defer self.allocator.free(prop_has_default);
         defer self.allocator.free(prop_vis);
         defer self.allocator.free(prop_set_vis);
+        defer self.allocator.free(prop_has_set_vis);
         defer self.allocator.free(prop_readonly);
+        defer self.allocator.free(prop_final);
         defer self.allocator.free(prop_promoted);
         defer self.allocator.free(prop_type);
         defer self.allocator.free(prop_doc);
+
         for (0..prop_count) |pi| {
             const pname_idx = self.readU16();
             prop_names[pi] = self.currentChunk().constants.items[pname_idx].string;
             prop_has_default[pi] = self.readByte();
+
             const vis_byte = self.readByte();
+
             prop_vis[pi] = @enumFromInt(vis_byte & 0x03);
             prop_readonly[pi] = (vis_byte & 0x04) != 0;
+
             const has_asymm = (vis_byte & 0x20) != 0;
-            prop_set_vis[pi] = if (has_asymm) @enumFromInt((vis_byte >> 3) & 0x03) else prop_vis[pi];
+            prop_has_set_vis[pi] = has_asymm;
+
+            prop_set_vis[pi] = if (has_asymm)
+                @enumFromInt((vis_byte >> 3) & 0x03)
+            else
+                prop_vis[pi];
+
             prop_promoted[pi] = (vis_byte & 0x40) != 0;
+            prop_final[pi] = (vis_byte & 0x80) != 0;
+
             const type_idx = self.readU16();
-            prop_type[pi] = if (type_idx == 0xffff) "" else self.currentChunk().constants.items[type_idx].string;
+            prop_type[pi] = if (type_idx == 0xffff)
+                ""
+            else
+                self.currentChunk().constants.items[type_idx].string;
+
             const doc_idx_p = self.readU16();
-            prop_doc[pi] = if (doc_idx_p == 0xffff) "" else self.currentChunk().constants.items[doc_idx_p].string;
+            prop_doc[pi] = if (doc_idx_p == 0xffff)
+                ""
+            else
+                self.currentChunk().constants.items[doc_idx_p].string;
         }
 
         const static_prop_count = self.readU16();
@@ -10714,26 +10740,37 @@ pub const VM = struct {
         const sprop_visibility = try self.allocator.alloc(u8, static_prop_count);
         const sprop_type = try self.allocator.alloc([]const u8, static_prop_count);
         const sprop_doc = try self.allocator.alloc([]const u8, static_prop_count);
+
         defer self.allocator.free(sprop_names);
         defer self.allocator.free(sprop_has_default);
         defer self.allocator.free(sprop_is_const);
         defer self.allocator.free(sprop_visibility);
         defer self.allocator.free(sprop_type);
         defer self.allocator.free(sprop_doc);
+
         for (0..static_prop_count) |pi| {
             const pname_idx = self.readU16();
             sprop_names[pi] = self.currentChunk().constants.items[pname_idx].string;
             sprop_has_default[pi] = self.readByte();
             sprop_visibility[pi] = self.readByte();
             sprop_is_const[pi] = self.readByte();
+
             const t_idx = self.readU16();
-            sprop_type[pi] = if (t_idx == 0xffff) "" else self.currentChunk().constants.items[t_idx].string;
+            sprop_type[pi] = if (t_idx == 0xffff)
+                ""
+            else
+                self.currentChunk().constants.items[t_idx].string;
+
             const sd_idx = self.readU16();
-            sprop_doc[pi] = if (sd_idx == 0xffff) "" else self.currentChunk().constants.items[sd_idx].string;
+            sprop_doc[pi] = if (sd_idx == 0xffff)
+                ""
+            else
+                self.currentChunk().constants.items[sd_idx].string;
         }
 
         const sdefaults = try self.popDefaultsAlloc(sprop_has_default);
         defer self.allocator.free(sdefaults);
+
         const defaults = try self.popDefaultsAlloc(prop_has_default);
         defer self.allocator.free(defaults);
 
@@ -10744,17 +10781,19 @@ pub const VM = struct {
                 dj += 1;
                 break :blk v;
             } else Value{ .null = {} };
-            // the class def is a durable holder of this default - retain so
-            // arrays / objects in defaults are properly refcounted (copyValue
-            // in initObjectProperties relies on refcount > 0 to clone)
+
+            // The ClassDef owns this default, so retain arrays/objects here.
             retainValue(default_val);
+
             try def.properties.append(self.allocator, .{
                 .name = prop_names[pi],
                 .default = default_val,
                 .has_default = prop_has_default[pi] == 1,
                 .visibility = prop_vis[pi],
                 .set_visibility = prop_set_vis[pi],
+                .has_set_visibility = prop_has_set_vis[pi],
                 .is_readonly = prop_readonly[pi] or def.is_readonly,
+                .is_final = prop_final[pi],
                 .is_promoted = prop_promoted[pi],
                 .type_str = prop_type[pi],
                 .doc_comment = prop_doc[pi],

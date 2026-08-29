@@ -131,7 +131,6 @@ const Parser = struct {
         return self.addNode(.{ .tag = .echo_stmt, .main_token = echo_tok, .data = .{ .lhs = extra } });
     }
 
-
     fn parseStatement(self: *Parser) Error!u32 {
         if (self.peek() == .hash_bracket) {
             self.skipAttributes();
@@ -1246,6 +1245,23 @@ const Parser = struct {
         return self.addNode(.{ .tag = .new_expr, .main_token = name_tok, .data = .{ .lhs = extra, .rhs = name_extra } });
     }
 
+    // Property metadata stored in the low byte of class_property rhs.
+    // bits 0-1: read visibility, bit 2: readonly, bits 3-4: set visibility,
+    // bit 5: explicit asymmetric set visibility, bit 7: final.
+    inline fn encodePropertyFlags(
+        visibility: u32,
+        set_visibility: u32,
+        has_set_visibility: bool,
+        is_readonly: bool,
+        is_final: bool,
+    ) u32 {
+        return visibility |
+            (if (is_readonly) @as(u32, 1) << 2 else 0) |
+            (set_visibility << 3) |
+            (if (has_set_visibility) @as(u32, 1) << 5 else 0) |
+            (if (is_final) @as(u32, 1) << 7 else 0);
+    }
+
     fn parseAnonymousClass(self: *Parser, new_tok: u32) Error!u32 {
         _ = self.advance(); // class
 
@@ -1349,7 +1365,7 @@ const Parser = struct {
                 if (is_static) {
                     self.nodes.items[prop].tag = .static_class_property;
                 }
-                self.nodes.items[prop].data.rhs = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
+                self.nodes.items[prop].data.rhs = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                 try members.append(self.allocator, prop);
             } else if (self.peek() == .kw_const) {
                 const cd = try self.parseConstDecl();
@@ -1364,7 +1380,7 @@ const Parser = struct {
                     if (is_static) {
                         self.nodes.items[prop].tag = .static_class_property;
                     }
-                    var rhs: u32 = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
+                    var rhs: u32 = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                     if (tr[0] != tr[1]) {
                         const ext = try self.addExtra(&tr);
                         rhs |= (ext + 1) << 16;
@@ -1528,8 +1544,8 @@ const Parser = struct {
                 if (is_static) {
                     self.nodes.items[prop].tag = .static_class_property;
                 }
-                // bits 0-1: read visibility, bit 2: readonly, bits 3-4: set visibility, bit 5: has asymmetric set
-                self.nodes.items[prop].data.rhs = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
+                // Property flags are encoded by encodePropertyFlags(); type metadata remains in bits 16+.
+                self.nodes.items[prop].data.rhs = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                 try members.append(self.allocator, prop);
             } else if (self.peek() == .kw_const) {
                 const cd = try self.parseConstDecl();
@@ -1544,7 +1560,7 @@ const Parser = struct {
                     if (is_static) {
                         self.nodes.items[prop].tag = .static_class_property;
                     }
-                    var rhs: u32 = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
+                    var rhs: u32 = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                     if (tr[0] != tr[1]) {
                         const ext = try self.addExtra(&tr);
                         rhs |= (ext + 1) << 16;
@@ -3071,7 +3087,6 @@ const Parser = struct {
             else => .binary_op,
         };
     }
-
 
     fn peek(self: *const Parser) Tag {
         if (self.pos >= self.tokens.len) return .eof;

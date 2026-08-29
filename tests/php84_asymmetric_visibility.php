@@ -10,9 +10,11 @@ class AsymTest {
     public readonly string $g;
     protected readonly string $h;
     private readonly string $i;
+    public public(set) readonly string $j;
+    final protected string $k;
 }
 
-$props = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
+$props = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'];
 foreach ($props as $name) {
     $rp = new ReflectionProperty(AsymTest::class, $name);
     echo $name . ': '

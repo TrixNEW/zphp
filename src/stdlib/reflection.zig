@@ -643,9 +643,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
     var rext_def = ClassDef{ .name = "ReflectionExtension" };
     try rext_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     for ([_][]const u8{
-        "__construct", "getName", "getVersion", "getFunctions", "getConstants",
-        "getINIEntries", "getClasses", "getClassNames", "getDependencies",
-        "info", "isPersistent", "isTemporary", "__toString",
+        "__construct",   "getName",     "getVersion",    "getFunctions",    "getConstants",
+        "getINIEntries", "getClasses",  "getClassNames", "getDependencies", "info",
+        "isPersistent",  "isTemporary", "__toString",
     }) |method| try rext_def.methods.put(a, method, .{ .name = method, .arity = if (std.mem.eql(u8, method, "__construct")) 1 else 0 });
     try vm.classes.put(a, "ReflectionExtension", rext_def);
     try vm.native_fns.put(a, "ReflectionExtension::__construct", rextConstruct);
@@ -768,8 +768,9 @@ fn throwReflection(ctx: *NativeContext, msg: []const u8) RuntimeError {
 
 fn isBuiltinType(name: []const u8) bool {
     const builtins = [_][]const u8{
-        "int", "string", "bool", "float", "array", "callable",
-        "null", "void", "never", "mixed", "object", "iterable", "false", "true",
+        "int",   "string", "bool",  "float", "array",  "callable",
+        "null",  "void",   "never", "mixed", "object", "iterable",
+        "false", "true",
     };
     for (builtins) |b| {
         if (std.mem.eql(u8, name, b)) return true;
@@ -914,21 +915,48 @@ fn buildPropertyObj(ctx: *NativeContext, class_name: []const u8, prop: ClassDef.
     return try buildPropertyObjStatic(ctx, class_name, prop, declaring_class, false);
 }
 
-fn buildPropertyObjStatic(ctx: *NativeContext, class_name: []const u8, prop: ClassDef.PropertyDef, declaring_class: []const u8, is_static: bool) !*PhpObject {
+fn buildPropertyObjStatic(
+    ctx: *NativeContext,
+    class_name: []const u8,
+    prop: ClassDef.PropertyDef,
+    declaring_class: []const u8,
+    is_static: bool,
+) !*PhpObject {
     const obj = try ctx.createObject("ReflectionProperty");
+
     try obj.set(ctx.allocator, "name", .{ .string = prop.name });
     try obj.set(ctx.allocator, "class", .{ .string = class_name });
     try obj.set(ctx.allocator, "_visibility", .{ .int = @intFromEnum(prop.visibility) });
+
     // PHP's ReflectionProperty::hasDefaultValue() always returns false for
-    // constructor-promoted properties, regardless of whether the promoted param
-    // has a default in the constructor signature
+    // constructor-promoted properties, even if the promoted parameter has
+    // a default in the constructor signature.
     const effective_has_default = prop.has_default and !prop.is_promoted;
+
     try obj.set(ctx.allocator, "_has_default", .{ .bool = effective_has_default });
-    try obj.set(ctx.allocator, "_default_value", if (effective_has_default) prop.default else .null);
+    try obj.set(
+        ctx.allocator,
+        "_default_value",
+        if (effective_has_default) prop.default else .null,
+    );
+
     try obj.set(ctx.allocator, "_declaring_class", .{ .string = declaring_class });
-    try obj.set(ctx.allocator, "_set_visibility", .{ .int = @intFromEnum(prop.set_visibility) });
+
+    try obj.set(
+        ctx.allocator,
+        "_set_visibility",
+        .{ .int = @intFromEnum(prop.set_visibility) },
+    );
+    try obj.set(
+        ctx.allocator,
+        "_has_set_visibility",
+        .{ .bool = prop.has_set_visibility },
+    );
+
     try obj.set(ctx.allocator, "_is_readonly", .{ .bool = prop.is_readonly });
+    try obj.set(ctx.allocator, "_is_final", .{ .bool = prop.is_final });
     try obj.set(ctx.allocator, "_is_static", .{ .bool = is_static });
+
     return obj;
 }
 
@@ -937,7 +965,10 @@ fn hasAbstractMethodInChain(vm: *VM, class_name: []const u8, method_name: []cons
     while (true) {
         const cls = vm.classes.get(current) orelse return false;
         if (cls.methods.get(method_name)) |_| return true;
-        if (cls.parent) |p| { current = p; continue; }
+        if (cls.parent) |p| {
+            current = p;
+            continue;
+        }
         return false;
     }
 }
@@ -952,7 +983,6 @@ fn hasInterfaceMethod(vm: *VM, iface_name: []const u8, method_name: []const u8) 
     }
     return false;
 }
-
 
 fn rcConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionClass::__construct() expects a class name");
@@ -2127,8 +2157,6 @@ fn rcSetStaticPropertyValue(ctx: *NativeContext, args: []const Value) RuntimeErr
     return throwReflection(ctx, "Static property does not exist");
 }
 
-
-
 fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionMethod::__construct() expects parameters");
     const this = getThis(ctx) orelse return .null;
@@ -2346,7 +2374,6 @@ fn rmGetNumberOfRequiredParameters(ctx: *NativeContext, _: []const Value) Runtim
     return if (req == .int) req else .{ .int = 0 };
 }
 
-
 fn rpGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     return this.get("name");
@@ -2506,7 +2533,6 @@ fn rpGetDeclaringFunction(ctx: *NativeContext, _: []const Value) RuntimeError!Va
     return .{ .object = obj };
 }
 
-
 fn rntGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     return this.get("type_name");
@@ -2545,7 +2571,6 @@ fn rntAllowsNull(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = false };
 }
 
-
 fn rutGetTypes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
     const ts_v = this.get("type_str");
@@ -2579,7 +2604,6 @@ fn rutToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return ts_v;
 }
 
-
 fn ritGetTypes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
     const ts_v = this.get("type_str");
@@ -2603,7 +2627,6 @@ fn ritToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const ts_v = this.get("type_str");
     return ts_v;
 }
-
 
 fn rfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionFunction::__construct() expects a function name");
@@ -2891,7 +2914,6 @@ fn rfIsStatic(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = false };
 }
 
-
 /// populate fields on a ReflectionParameter `this` object from a function +
 /// param index. shared between buildParamArray (constructing the full set for
 /// getParameters) and the public ReflectionParameter::__construct
@@ -3080,7 +3102,6 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
     return .{ .array = arr };
 }
 
-
 fn closureBind(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return .null;
     const closure = args[0];
@@ -3179,35 +3200,111 @@ fn rrefGetId(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
 }
 
-
 fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2) return throwReflection(ctx, "ReflectionProperty::__construct() expects class and property name");
+    if (args.len < 2) {
+        return throwReflection(
+            ctx,
+            "ReflectionProperty::__construct() expects class and property name",
+        );
+    }
+
     const this = getThis(ctx) orelse return .null;
 
-    const raw_class = if (args[0] == .string) args[0].string else if (args[0] == .object) args[0].object.class_name else return throwReflection(ctx, "ReflectionProperty::__construct() expects a class name");
-    const class_name = if (raw_class.len > 0 and raw_class[0] == '\\') raw_class[1..] else raw_class;
-    const prop_name = if (args[1] == .string) args[1].string else return throwReflection(ctx, "ReflectionProperty::__construct() expects a property name");
+    const raw_class = if (args[0] == .string)
+        args[0].string
+    else if (args[0] == .object)
+        args[0].object.class_name
+    else
+        return throwReflection(
+            ctx,
+            "ReflectionProperty::__construct() expects a class name",
+        );
+
+    const class_name = if (raw_class.len > 0 and raw_class[0] == '\\')
+        raw_class[1..]
+    else
+        raw_class;
+
+    const prop_name = if (args[1] == .string)
+        args[1].string
+    else
+        return throwReflection(
+            ctx,
+            "ReflectionProperty::__construct() expects a property name",
+        );
 
     try this.set(ctx.allocator, "name", .{ .string = prop_name });
     try this.set(ctx.allocator, "class", .{ .string = class_name });
 
     if (findPropertyDef(ctx.vm, class_name, prop_name)) |result| {
-        try this.set(ctx.allocator, "_visibility", .{ .int = @intFromEnum(result.prop.visibility) });
-        const effective_has_default = result.prop.has_default and !result.prop.is_promoted;
-        try this.set(ctx.allocator, "_has_default", .{ .bool = effective_has_default });
-        try this.set(ctx.allocator, "_default_value", if (effective_has_default) result.prop.default else .null);
-        try this.set(ctx.allocator, "_declaring_class", .{ .string = result.declaring_class });
-        try this.set(ctx.allocator, "_set_visibility", .{ .int = @intFromEnum(result.prop.set_visibility) });
-        try this.set(ctx.allocator, "_is_readonly", .{ .bool = result.prop.is_readonly });
-        try this.set(ctx.allocator, "_is_static", .{ .bool = result.is_static });
+        try this.set(
+            ctx.allocator,
+            "_visibility",
+            .{ .int = @intFromEnum(result.prop.visibility) },
+        );
+
+        const effective_has_default =
+            result.prop.has_default and !result.prop.is_promoted;
+
+        try this.set(
+            ctx.allocator,
+            "_has_default",
+            .{ .bool = effective_has_default },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_default_value",
+            if (effective_has_default) result.prop.default else .null,
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_declaring_class",
+            .{ .string = result.declaring_class },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_set_visibility",
+            .{ .int = @intFromEnum(result.prop.set_visibility) },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_has_set_visibility",
+            .{ .bool = result.prop.has_set_visibility },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_is_readonly",
+            .{ .bool = result.prop.is_readonly },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_is_final",
+            .{ .bool = result.prop.is_final },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_is_static",
+            .{ .bool = result.is_static },
+        );
     } else {
-        // PHP throws when the property is not declared on the class (or any
-        // ancestor) - a non-existent / dynamic-only property has no
-        // ReflectionProperty. matches "Property C::$x does not exist"
-        const msg = try std.fmt.allocPrint(ctx.allocator, "Property {s}::${s} does not exist", .{ class_name, prop_name });
+        const msg = try std.fmt.allocPrint(
+            ctx.allocator,
+            "Property {s}::${s} does not exist",
+            .{ class_name, prop_name },
+        );
+
         try ctx.vm.strings.append(ctx.allocator, msg);
+
         return throwReflection(ctx, msg);
     }
+
     return .null;
 }
 
@@ -3531,7 +3628,6 @@ fn rpropIsVirtual(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = false };
 }
 
-
 fn rmInvoke(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const method_name = if (this.get("name") == .string) this.get("name").string else return .null;
@@ -3699,7 +3795,6 @@ fn rpGetClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
 }
 
-
 fn attributeConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const flags = if (args.len > 0 and args[0] == .int) args[0] else Value{ .int = 127 };
@@ -3822,7 +3917,10 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         const arr = args_val.array;
         var has_named = false;
         for (arr.entries.items) |entry| {
-            if (entry.key == .string) { has_named = true; break; }
+            if (entry.key == .string) {
+                has_named = true;
+                break;
+            }
         }
 
         if (has_named) {
@@ -3880,7 +3978,6 @@ fn raIsRepeated(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const repeated = this.get("_is_repeated");
     return if (repeated == .bool) repeated else .{ .bool = false };
 }
-
 
 fn reConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionEnum::__construct() expects an enum name");
@@ -4012,7 +4109,6 @@ fn rebcGetBackingValue(ctx: *NativeContext, _: []const Value) RuntimeError!Value
     return case_obj_v.object.get("value");
 }
 
-
 fn rgConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .generator) return throwReflection(ctx, "ReflectionGenerator::__construct expects a Generator");
     const obj = getThis(ctx) orelse return .null;
@@ -4084,7 +4180,6 @@ fn rgGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     try arr.append(ctx.allocator, .{ .array = frame });
     return .{ .array = arr };
 }
-
 
 fn rfibConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .fiber) return throwReflection(ctx, "ReflectionFiber::__construct expects a Fiber");
