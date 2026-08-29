@@ -1,7 +1,4 @@
 <?php
-// covers: random_bytes, bin2hex, hex2bin, ord, chr, substr, sprintf,
-//   md5, sha1, str_replace, str_pad, strtolower, preg_match, strlen,
-//   pack, unpack, microtime, intdiv, usort, array_unique, count
 
 const NS_DNS = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 const NS_URL = '6ba7b811-9dad-11d1-80b4-00c04fd430c8';

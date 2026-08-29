@@ -1,7 +1,4 @@
 <?php
-// covers: backed enums (string + int), unbacked enums, enum interfaces,
-//   methods on enums, ::cases(), ::tryFrom(), ::from(), const on enums,
-//   enums as match-arm conditions
 
 interface Loggable { public function badge(): string; }
 

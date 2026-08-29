@@ -1,7 +1,4 @@
 <?php
-// covers: dependency injection, closures as factories, singleton pattern,
-//   interface-based resolution, object identity (===), array_key_exists,
-//   callable invocation with container injection
 
 class Container
 {
@@ -111,7 +108,6 @@ class NotificationService
     }
 }
 
-// wire up container
 $container = new Container();
 
 $container->singleton("logger", function ($c) {
@@ -126,7 +122,6 @@ $container->bind("notifications", function ($c) {
     return new NotificationService($c->get("logger"));
 });
 
-// use services
 $userService = $container->get("users");
 $userService->create("Alice", "alice@example.com");
 $userService->create("Bob", "bob@example.com");
@@ -141,23 +136,19 @@ foreach ($messages as $msg) {
     echo $msg . "\n";
 }
 
-// verify singleton identity
 $userService2 = $container->get("users");
 echo ($userService === $userService2) ? "singleton works" : "not singleton";
 echo "\n";
 
-// binding creates new instances
 $notifier2 = $container->get("notifications");
 echo ($notifier === $notifier2) ? "same" : "different instances";
 echo "\n";
 
-// container has
 echo $container->has("logger") ? "has logger" : "no logger";
 echo "\n";
 echo $container->has("missing") ? "has missing" : "no missing";
 echo "\n";
 
-// find user
 $user = $userService->find(1);
 echo $user["name"] . " " . $user["email"] . "\n";
 

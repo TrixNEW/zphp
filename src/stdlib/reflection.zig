@@ -27,7 +27,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rt_def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
     try vm.classes.put(a, "ReflectionType", rt_def);
 
-    // Attribute class with target constants
     var attr_def = ClassDef{ .name = "Attribute" };
     try attr_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try attr_def.static_props.put(a, "TARGET_CLASS", .{ .int = 1 });
@@ -62,18 +61,15 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try spv_def.methods.put(a, "getValue", .{ .name = "getValue", .arity = 0 });
     try vm.classes.put(a, "SensitiveParameterValue", spv_def);
 
-    // ReflectionException
     var exc_def = ClassDef{ .name = "ReflectionException" };
     exc_def.parent = "Exception";
     try vm.classes.put(a, "ReflectionException", exc_def);
 
-    // Reflection (utility class)
     var refl_def = ClassDef{ .name = "Reflection" };
     try refl_def.methods.put(a, "getModifierNames", .{ .name = "getModifierNames", .arity = 1, .is_static = true });
     try vm.classes.put(a, "Reflection", refl_def);
     try vm.native_fns.put(a, "Reflection::getModifierNames", reflectionGetModifierNames);
 
-    // ReflectionClass
     var rc_def = ClassDef{ .name = "ReflectionClass" };
     try rc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
@@ -203,7 +199,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     const rfa_def = ClassDef{ .name = "ReflectionFunctionAbstract", .is_abstract = true };
     try vm.classes.put(a, "ReflectionFunctionAbstract", rfa_def);
 
-    // ReflectionMethod
     var rm_def = ClassDef{ .name = "ReflectionMethod", .parent = "ReflectionFunctionAbstract" };
     try rm_def.static_props.put(a, "IS_STATIC", .{ .int = 16 });
     try rm_def.static_props.put(a, "IS_PUBLIC", .{ .int = 1 });
@@ -296,7 +291,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionMethod::isUserDefined", rmIsUserDefined);
     try vm.native_fns.put(a, "ReflectionMethod::isDeprecated", reflectionFalse);
 
-    // ReflectionParameter
     var rp_def = ClassDef{ .name = "ReflectionParameter" };
     try rp_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rp_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -340,7 +334,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionParameter::isDefaultValueConstant", rpIsDefaultValueConstant);
     try vm.native_fns.put(a, "ReflectionParameter::getDefaultValueConstantName", rpGetDefaultValueConstantName);
 
-    // ReflectionNamedType
     var rnt_def = ClassDef{ .name = "ReflectionNamedType", .parent = "ReflectionType" };
     try rnt_def.properties.append(a, .{ .name = "type_name", .default = .{ .string = "" } });
     try rnt_def.properties.append(a, .{ .name = "nullable", .default = .{ .bool = false } });
@@ -355,7 +348,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionNamedType::allowsNull", rntAllowsNull);
     try vm.native_fns.put(a, "ReflectionNamedType::__toString", rntToString);
 
-    // ReflectionUnionType
     var rut_def = ClassDef{ .name = "ReflectionUnionType", .parent = "ReflectionType" };
     try rut_def.properties.append(a, .{ .name = "type_str", .default = .{ .string = "" } });
     try rut_def.properties.append(a, .{ .name = "nullable", .default = .{ .bool = false } });
@@ -367,7 +359,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionUnionType::allowsNull", rutAllowsNull);
     try vm.native_fns.put(a, "ReflectionUnionType::__toString", rutToString);
 
-    // ReflectionIntersectionType
     var rit_def = ClassDef{ .name = "ReflectionIntersectionType", .parent = "ReflectionType" };
     try rit_def.properties.append(a, .{ .name = "type_str", .default = .{ .string = "" } });
     try rit_def.methods.put(a, "getTypes", .{ .name = "getTypes", .arity = 0 });
@@ -378,7 +369,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionIntersectionType::allowsNull", ritAllowsNull);
     try vm.native_fns.put(a, "ReflectionIntersectionType::__toString", ritToString);
 
-    // ReflectionEnum (extends ReflectionClass)
     var re_def = ClassDef{ .name = "ReflectionEnum" };
     re_def.parent = "ReflectionClass";
     try re_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
@@ -396,7 +386,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnum::getCase", reGetCase);
     try vm.native_fns.put(a, "ReflectionEnum::hasCase", reHasCase);
 
-    // ReflectionEnumUnitCase
     var reuc_def = ClassDef{ .name = "ReflectionEnumUnitCase" };
     try reuc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try reuc_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
@@ -408,7 +397,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnumUnitCase::getName", reucGetName);
     try vm.native_fns.put(a, "ReflectionEnumUnitCase::getValue", reucGetValue);
 
-    // ReflectionEnumBackedCase (extends ReflectionEnumUnitCase)
     var rebc_def = ClassDef{ .name = "ReflectionEnumBackedCase" };
     rebc_def.parent = "ReflectionEnumUnitCase";
     try rebc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
@@ -423,7 +411,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnumBackedCase::getValue", reucGetValue);
     try vm.native_fns.put(a, "ReflectionEnumBackedCase::getBackingValue", rebcGetBackingValue);
 
-    // ReflectionFunction
     var rf_def = ClassDef{ .name = "ReflectionFunction", .parent = "ReflectionFunctionAbstract" };
     try rf_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rf_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
@@ -495,7 +482,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionFunction::isDeprecated", reflectionFalse);
     try vm.native_fns.put(a, "ReflectionFunction::isDisabled", reflectionFalse);
 
-    // ReflectionProperty
     var rprop_def = ClassDef{ .name = "ReflectionProperty" };
     try rprop_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rprop_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
@@ -593,7 +579,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionProperty::getDocComment", rpropGetDocComment);
     try vm.native_fns.put(a, "ReflectionProperty::isVirtual", rpropIsVirtual);
 
-    // ReflectionAttribute
     var ra_def = ClassDef{ .name = "ReflectionAttribute" };
     try ra_def.static_props.put(a, "IS_INSTANCEOF", .{ .int = 2 });
     try ra_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -609,7 +594,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionAttribute::getTarget", raGetTarget);
     try vm.native_fns.put(a, "ReflectionAttribute::isRepeated", raIsRepeated);
 
-    // ReflectionClassConstant
     var rcc_def = ClassDef{ .name = "ReflectionClassConstant" };
     try rcc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rcc_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
@@ -963,7 +947,6 @@ fn hasInterfaceMethod(vm: *VM, iface_name: []const u8, method_name: []const u8) 
     return false;
 }
 
-// --- ReflectionClass ---
 
 fn rcConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionClass::__construct() expects a class name");
@@ -2139,7 +2122,6 @@ fn rcSetStaticPropertyValue(ctx: *NativeContext, args: []const Value) RuntimeErr
 }
 
 
-// --- ReflectionMethod ---
 
 fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionMethod::__construct() expects parameters");
@@ -2158,7 +2140,6 @@ fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             return throwReflection(ctx, "ReflectionMethod::__construct() expects a class name or object");
         }
     } else if (args[0] == .string) {
-        // "Class::method" string form
         const s = args[0].string;
         if (std.mem.indexOf(u8, s, "::")) |sep| {
             class_name = s[0..sep];
@@ -2169,7 +2150,6 @@ fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     } else {
         return throwReflection(ctx, "ReflectionMethod::__construct() expects a class name or object");
     }
-    // accept FQN with leading backslash
     if (class_name.len > 0 and class_name[0] == '\\') class_name = class_name[1..];
 
     if (!ctx.vm.hasMethod(class_name, method_name)) {
@@ -2360,7 +2340,6 @@ fn rmGetNumberOfRequiredParameters(ctx: *NativeContext, _: []const Value) Runtim
     return if (req == .int) req else .{ .int = 0 };
 }
 
-// --- ReflectionParameter ---
 
 fn rpGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
@@ -2403,7 +2382,6 @@ fn rpIsOptional(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const has_default = this.get("_has_default");
     if (has_default == .bool and has_default.bool) return .{ .bool = true };
-    // variadic params are always optional
     const is_var = this.get("_is_variadic");
     return .{ .bool = is_var == .bool and is_var.bool };
 }
@@ -2522,7 +2500,6 @@ fn rpGetDeclaringFunction(ctx: *NativeContext, _: []const Value) RuntimeError!Va
     return .{ .object = obj };
 }
 
-// --- ReflectionNamedType ---
 
 fn rntGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
@@ -2562,7 +2539,6 @@ fn rntAllowsNull(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = false };
 }
 
-// --- ReflectionUnionType ---
 
 fn rutGetTypes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
@@ -2597,7 +2573,6 @@ fn rutToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return ts_v;
 }
 
-// --- ReflectionIntersectionType ---
 
 fn ritGetTypes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
@@ -2623,7 +2598,6 @@ fn ritToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return ts_v;
 }
 
-// --- ReflectionFunction ---
 
 fn rfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionFunction::__construct() expects a function name");
@@ -2911,7 +2885,6 @@ fn rfIsStatic(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = false };
 }
 
-// --- shared helpers ---
 
 /// populate fields on a ReflectionParameter `this` object from a function +
 /// param index. shared between buildParamArray (constructing the full set for
@@ -3040,12 +3013,10 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
     for (func.params, 0..) |param_name, i| {
         const obj = try ctx.createObject("ReflectionParameter");
 
-        // strip $ prefix
         const clean_name = if (param_name.len > 0 and param_name[0] == '$') param_name[1..] else param_name;
         try obj.set(ctx.allocator, "name", .{ .string = clean_name });
         try obj.set(ctx.allocator, "_position", .{ .int = @intCast(i) });
 
-        // type info
         if (type_info) |ti| {
             if (i < ti.param_types.len and ti.param_types[i].len > 0) {
                 const raw_type = ti.param_types[i];
@@ -3065,7 +3036,6 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
             try obj.set(ctx.allocator, "_nullable", .{ .bool = false });
         }
 
-        // variadic
         const is_variadic = func.is_variadic and i == func.arity - 1;
         try obj.set(ctx.allocator, "_is_variadic", .{ .bool = is_variadic });
 
@@ -3081,7 +3051,6 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
             }
         }
 
-        // by-reference
         const by_ref = if (i < func.ref_params.len) func.ref_params[i] else false;
         try obj.set(ctx.allocator, "_by_reference", .{ .bool = by_ref });
 
@@ -3105,7 +3074,6 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
     return .{ .array = arr };
 }
 
-// --- Closure ---
 
 fn closureBind(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return .null;
@@ -3205,7 +3173,6 @@ fn rrefGetId(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
 }
 
-// --- ReflectionProperty ---
 
 fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return throwReflection(ctx, "ReflectionProperty::__construct() expects class and property name");
@@ -3491,7 +3458,6 @@ fn rpropIsVirtual(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = false };
 }
 
-// --- ReflectionMethod::invoke ---
 
 fn rmInvoke(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
@@ -3524,7 +3490,6 @@ fn rmInvokeArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (target == .object) {
         return ctx.callMethod(target.object, method_name, call_args[0..count]) catch .null;
     }
-    // static call: null target
     const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .null;
     var buf: [256]u8 = undefined;
     const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return .null;
@@ -3661,7 +3626,6 @@ fn rpGetClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
 }
 
-// --- ReflectionAttribute ---
 
 fn attributeConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
@@ -3738,7 +3702,6 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         return error.RuntimeError;
     }
 
-    // target enforcement
     const target_val = this.get("_target");
     if (target_val == .int) {
         const target = target_val.int;
@@ -3761,7 +3724,6 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         }
     }
 
-    // repeatability enforcement
     const is_repeated_val = this.get("_is_repeated");
     if (is_repeated_val == .bool and is_repeated_val.bool) {
         const flags = getAttributeFlags(ctx.vm, attr_name);
@@ -3846,7 +3808,6 @@ fn raIsRepeated(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return if (repeated == .bool) repeated else .{ .bool = false };
 }
 
-// --- ReflectionEnum ---
 
 fn reConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionEnum::__construct() expects an enum name");
@@ -3978,7 +3939,6 @@ fn rebcGetBackingValue(ctx: *NativeContext, _: []const Value) RuntimeError!Value
     return case_obj_v.object.get("value");
 }
 
-// ---------------- ReflectionGenerator ----------------
 
 fn rgConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .generator) return throwReflection(ctx, "ReflectionGenerator::__construct expects a Generator");
@@ -4052,7 +4012,6 @@ fn rgGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .array = arr };
 }
 
-// ---------------- ReflectionFiber ----------------
 
 fn rfibConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .fiber) return throwReflection(ctx, "ReflectionFiber::__construct expects a Fiber");

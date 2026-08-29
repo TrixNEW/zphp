@@ -1,7 +1,4 @@
 <?php
-// covers: imagecreate / imagecreatetruecolor, color allocation, drawing primitives,
-//   imagecopy / imagecopyresampled (thumbnail), imagepng/imagejpeg buffering,
-//   image size queries, palette transparency
 
 echo "=== create canvas and draw ===\n";
 $im = imagecreatetruecolor(200, 100);
@@ -49,7 +46,6 @@ $thumb = imagecreatetruecolor(80, 40);
 imagecopyresampled($thumb, $src, 0, 0, 0, 0, 80, 40, 400, 200);
 echo "thumb size: " . imagesx($thumb) . "x" . imagesy($thumb) . "\n";
 
-// center pixel should be white-ish
 $center = imagecolorsforindex($thumb, imagecolorat($thumb, 40, 20));
 echo "thumb center: $center[red] $center[green] $center[blue]\n";
 

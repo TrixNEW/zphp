@@ -1,10 +1,4 @@
 <?php
-// covers: __destruct timing - RAII scope guards, an auto-rollback
-//   transaction guard, a buffered writer that flushes when it leaves
-//   scope, connection-pool leases returned on destruct, an owned-node
-//   chain that cascades, and destruct on reassignment / unset / function
-//   return; constructor-promoted properties, readonly properties,
-//   closures stored in object properties
 
 require __DIR__ . '/Guards.php';
 

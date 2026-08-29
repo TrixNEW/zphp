@@ -1,7 +1,4 @@
 <?php
-// covers: str_getcsv, fgetcsv, fputcsv, fopen (php://memory, php://temp),
-//   fwrite, rewind, fclose, stream_get_contents, count, implode, explode,
-//   array_map, str_replace, substr, strlen, ord, sprintf, var_export
 
 function dump_row(array $row): string {
     $parts = [];
@@ -72,7 +69,6 @@ fclose($out);
 echo "  serialized bytes: " . strlen($blob) . "\n";
 echo "  begins with: " . substr($blob, 0, 30) . "...\n";
 
-// parse it back
 $h = fopen('php://memory', 'r+');
 fwrite($h, $blob);
 rewind($h);

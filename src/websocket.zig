@@ -212,7 +212,6 @@ pub fn writeCloseFrame(writer: anytype, code: u16) !void {
     try writeFrame(writer, .close, &payload);
 }
 
-// tests
 
 test "accept key computation" {
     var buf: [28]u8 = undefined;
@@ -241,12 +240,10 @@ fn writeMaskedFrame(stream: std.net.Stream, opcode: Opcode, payload: []const u8)
         std.mem.writeInt(u16, hdr[2..4], @intCast(payload.len), .big);
         hdr_len = 4;
     }
-    // mask key
     const mask = [4]u8{ 0x12, 0x34, 0x56, 0x78 };
     @memcpy(hdr[hdr_len .. hdr_len + 4], &mask);
     hdr_len += 4;
     _ = try stream.write(hdr[0..hdr_len]);
-    // write masked payload
     var masked: [256]u8 = undefined;
     for (0..payload.len) |i| masked[i] = payload[i] ^ mask[i % 4];
     if (payload.len > 0) _ = try stream.write(masked[0..payload.len]);
@@ -298,7 +295,6 @@ test "tryParseFrame from buffer" {
     // incomplete buffer returns null (no error)
     try std.testing.expect((try tryParseFrame(buf[0..3], 256)) == null);
 
-    // complete buffer returns frame
     const result = (try tryParseFrame(buf[0..total], 256)).?;
     try std.testing.expect(result.frame.fin);
     try std.testing.expectEqual(Opcode.text, result.frame.opcode);
@@ -311,7 +307,6 @@ test "unmasked frame rejected" {
     defer pair[0].close();
     defer pair[1].close();
 
-    // write an unmasked frame (server-style)
     try writeFrame(pair[0], .text, "bad");
 
     var buf: [256]u8 = undefined;
@@ -351,7 +346,6 @@ test "rsv bits rejected" {
 
 test "reserved opcodes rejected" {
     var buf: [16]u8 = undefined;
-    // opcode 0x3 is reserved
     buf[0] = 0x83;
     buf[1] = 0x80 | 0;
     @memset(buf[2..6], 0);
@@ -361,7 +355,6 @@ test "reserved opcodes rejected" {
 
 test "fragmented control frame rejected" {
     var buf: [16]u8 = undefined;
-    // ping with FIN=0
     buf[0] = 0x09;
     buf[1] = 0x80 | 0;
     @memset(buf[2..6], 0);

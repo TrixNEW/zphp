@@ -16,7 +16,6 @@ const c = @cImport({
 });
 
 pub fn register(vm: *VM, a: Allocator) !void {
-    // SoapClient
     {
         var def = ClassDef{ .name = "SoapClient" };
         try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -48,7 +47,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
         try vm.native_fns.put(a, "SoapClient::__getCookies", soapClientGetCookies);
     }
 
-    // SoapServer
     {
         var def = ClassDef{ .name = "SoapServer" };
         try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -72,7 +70,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
         try vm.native_fns.put(a, "SoapServer::setPersistence", soapServerSetPersistence);
     }
 
-    // SoapHeader
     {
         var def = ClassDef{ .name = "SoapHeader" };
         try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 5 });
@@ -80,7 +77,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
         try vm.native_fns.put(a, "SoapHeader::__construct", soapHeaderConstruct);
     }
 
-    // SoapVar
     {
         var def = ClassDef{ .name = "SoapVar" };
         try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 5 });
@@ -88,7 +84,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
         try vm.native_fns.put(a, "SoapVar::__construct", soapVarConstruct);
     }
 
-    // SoapParam
     {
         var def = ClassDef{ .name = "SoapParam" };
         try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -96,7 +91,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
         try vm.native_fns.put(a, "SoapParam::__construct", soapParamConstruct);
     }
 
-    // SoapFault - extends Exception
     {
         var def = ClassDef{ .name = "SoapFault" };
         def.parent = "Exception";
@@ -511,7 +505,6 @@ fn parseSoapResponse(ctx: *NativeContext, xml: []const u8) RuntimeError!Value {
 
     const body = xml[body_start.?..(body_end orelse xml.len)];
 
-    // check for Fault
     if (std.mem.indexOf(u8, body, "Fault") != null) {
         const code = extractBetween(body, "<faultcode>", "</faultcode>") orelse "Server";
         const str = extractBetween(body, "<faultstring>", "</faultstring>") orelse "SOAP fault";
@@ -532,7 +525,6 @@ fn parseSoapResponse(ctx: *NativeContext, xml: []const u8) RuntimeError!Value {
         try ctx.strings.append(ctx.allocator, owned);
         return .{ .string = owned };
     }
-    // skip past response element tag
     const tag_close = std.mem.indexOfScalarPos(u8, body, p, '>') orelse return .null;
     const inner_start = tag_close + 1;
     // find matching close - approximate by looking for </tag>
@@ -565,7 +557,6 @@ fn parseSoapResponse(ctx: *NativeContext, xml: []const u8) RuntimeError!Value {
     const child_inner_end = std.mem.indexOfPos(u8, inner, child_inner_start, child_close_tag) orelse return .null;
     const text = inner[child_inner_start..child_inner_end];
 
-    // try to coerce numeric
     if (text.len > 0) {
         if (std.fmt.parseInt(i64, text, 10)) |n| return .{ .int = n } else |_| {}
         if (std.fmt.parseFloat(f64, text)) |f| return .{ .float = f } else |_| {}

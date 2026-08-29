@@ -754,7 +754,6 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             return .{ .value = .{ .object = obj }, .pos = p };
         },
         'C' => {
-            // Serializable interface payload: C:<nlen>:"<name>":<dlen>:{<raw>}
             if (pos + 2 >= s.len or s[pos + 1] != ':') return error.RuntimeError;
             const colon1 = std.mem.indexOfPos(u8, s, pos + 2, ":") orelse return error.RuntimeError;
             const name_len = std.fmt.parseInt(usize, s[pos + 2 .. colon1], 10) catch return error.RuntimeError;
@@ -802,7 +801,6 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
 const StringResult = struct { str: []const u8, pos: usize };
 
 fn parseString(s: []const u8, pos: usize) !StringResult {
-    // s:LEN:"...";
     if (pos + 2 >= s.len or s[pos + 1] != ':') return error.RuntimeError;
     const len_start = pos + 2;
     const colon = std.mem.indexOfPos(u8, s, len_start, ":") orelse return error.RuntimeError;
@@ -815,4 +813,3 @@ fn parseString(s: []const u8, pos: usize) !StringResult {
     if (end + 1 >= s.len or s[end] != '"' or s[end + 1] != ';') return error.RuntimeError;
     return .{ .str = str, .pos = end + 2 };
 }
-

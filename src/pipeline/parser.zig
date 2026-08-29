@@ -76,12 +76,9 @@ const Parser = struct {
     found_yield: bool = false,
     pending_top_stmts: std.ArrayListUnmanaged(u32) = .{},
 
-    // ======================================================================
     // root
-    // ======================================================================
 
     fn parseRoot(self: *Parser) Error!void {
-        // reserve root at index 0
         _ = try self.addNode(.{ .tag = .root, .main_token = 0, .data = .{} });
 
         var stmts = std.ArrayListUnmanaged(u32){};
@@ -134,9 +131,6 @@ const Parser = struct {
         return self.addNode(.{ .tag = .echo_stmt, .main_token = echo_tok, .data = .{ .lhs = extra } });
     }
 
-    // ======================================================================
-    // statements
-    // ======================================================================
 
     fn parseStatement(self: *Parser) Error!u32 {
         if (self.peek() == .hash_bracket) {
@@ -634,9 +628,7 @@ const Parser = struct {
         return self.addNode(.{ .tag = .block, .main_token = brace_tok, .data = .{ .lhs = extra } });
     }
 
-    // ======================================================================
     // control flow
-    // ======================================================================
 
     fn parseIfStmt(self: *Parser) Error!u32 {
         return self.parseIfStmtInner(false);
@@ -1085,7 +1077,6 @@ const Parser = struct {
             }
         }
 
-        // optional variable
         var var_tok: u32 = 0;
         if (self.peek() == .variable) {
             var_tok = self.advance();
@@ -1258,7 +1249,6 @@ const Parser = struct {
     fn parseAnonymousClass(self: *Parser, new_tok: u32) Error!u32 {
         _ = self.advance(); // class
 
-        // constructor args
         var ctor_args = std.ArrayListUnmanaged(u32){};
         defer ctor_args.deinit(self.allocator);
         if (self.peek() == .l_paren) {
@@ -1410,7 +1400,6 @@ const Parser = struct {
         self.found_yield = true;
         const tok = self.advance(); // yield
 
-        // yield from $expr
         if (self.peek() == .identifier) {
             const next_tok = self.tokens[self.pos].lexeme(self.source);
             if (std.mem.eql(u8, next_tok, "from")) {
@@ -1420,7 +1409,6 @@ const Parser = struct {
             }
         }
 
-        // bare yield (no value)
         if (self.peek() == .semicolon or self.peek() == .r_paren or
             self.peek() == .r_bracket or self.peek() == .comma or self.peek() == .eof)
         {
@@ -1429,7 +1417,6 @@ const Parser = struct {
 
         const expr = try self.parseExprPrec(1);
 
-        // yield $key => $value
         if (self.peek() == .fat_arrow) {
             _ = self.advance();
             const value = try self.parseExprPrec(1);
@@ -2255,7 +2242,6 @@ const Parser = struct {
             return;
         }
 
-        // DNF: (Foo&Bar)|Baz
         if (self.peek() == .l_paren) {
             _ = self.advance();
             while (self.isTypeName()) {
@@ -2275,12 +2261,10 @@ const Parser = struct {
         if (!self.isTypeName()) return;
         self.skipTypeName();
 
-        // union: int|string|null or intersection: Foo&Bar
         if (self.peek() == .pipe) {
             while (self.peek() == .pipe) {
                 _ = self.advance();
                 if (self.peek() == .l_paren) {
-                    // DNF group mid-union
                     _ = self.advance();
                     while (self.isTypeName()) {
                         self.skipTypeName();
@@ -2360,10 +2344,8 @@ const Parser = struct {
             break;
         }
         const type_range = self.collectTypeHint();
-        // reference: &$param
         const is_ref = self.peek() == .amp;
         if (is_ref) _ = self.advance();
-        // variadic: ...$args
         const is_variadic = self.peek() == .ellipsis;
         if (is_variadic) _ = self.advance();
 
@@ -2388,9 +2370,7 @@ const Parser = struct {
         return self.addNode(.{ .tag = .variable, .main_token = tok, .data = .{ .lhs = default, .rhs = flags } });
     }
 
-    // ======================================================================
     // expressions
-    // ======================================================================
 
     fn parseExpression(self: *Parser) Error!u32 {
         return self.parseExprPrec(0);
@@ -2400,7 +2380,6 @@ const Parser = struct {
         var left = try self.parsePrefixExpr();
 
         while (true) {
-            // postfix: call, index, property, increment/decrement
             switch (self.peek()) {
                 .l_paren => {
                     left = try self.parseCallExpr(left);
@@ -2433,13 +2412,11 @@ const Parser = struct {
                 else => {},
             }
 
-            // ternary
             if (self.peek() == .question and infixPrec(.question) > min_prec) {
                 left = try self.parseTernary(left);
                 continue;
             }
 
-            // infix
             const prec = infixPrec(self.peek());
             if (prec == 0 or prec <= min_prec) {
                 // php allows assignment as rhs of any operator: false === $x = expr
@@ -2814,14 +2791,11 @@ const Parser = struct {
         return self.addNode(.{ .tag = .array_element, .main_token = 0, .data = .{ .lhs = expr } });
     }
 
-    // ======================================================================
     // postfix expressions
-    // ======================================================================
 
     fn parseCallExpr(self: *Parser, callee: u32) Error!u32 {
         const paren_tok = self.advance(); // (
 
-        // first-class callable: foo(...)
         if (self.peek() == .ellipsis and self.peekAt(1) == .r_paren) {
             _ = self.advance(); // ...
             _ = self.advance(); // )
@@ -2864,7 +2838,6 @@ const Parser = struct {
     fn parseIndexExpr(self: *Parser, array: u32) Error!u32 {
         const bracket_tok = self.advance(); // [
         if (self.peek() == .r_bracket) {
-            // $arr[] - array push syntax
             _ = self.advance();
             return self.addNode(.{ .tag = .array_push_target, .main_token = bracket_tok, .data = .{ .lhs = array } });
         }
@@ -2876,7 +2849,6 @@ const Parser = struct {
     fn parsePropExpr(self: *Parser, object: u32, nullsafe: bool) Error!u32 {
         _ = self.advance(); // -> or ?->
 
-        // dynamic property: $obj->{expr}
         if (self.peek() == .l_brace) {
             _ = self.advance();
             const expr = try self.parseExpression();
@@ -2892,11 +2864,9 @@ const Parser = struct {
         }
         const name_tok = self.advance();
 
-        // method call: $obj->method(...) or $obj?->method(...)
         if (self.peek() == .l_paren) {
             _ = self.advance(); // (
 
-            // first-class callable: $obj->method(...)
             if (self.peek() == .ellipsis and self.peekAt(1) == .r_paren) {
                 _ = self.advance(); // ...
                 _ = self.advance(); // )
@@ -2922,7 +2892,6 @@ const Parser = struct {
             return self.addNode(.{ .tag = tag, .main_token = name_tok, .data = .{ .lhs = object, .rhs = extra } });
         }
 
-        // property access: $obj->prop or $obj?->prop
         const prop = try self.addNode(.{ .tag = .identifier, .main_token = name_tok, .data = .{} });
         const tag: Ast.Node.Tag = if (nullsafe) .nullsafe_property_access else .property_access;
         return self.addNode(.{ .tag = tag, .main_token = name_tok, .data = .{ .lhs = object, .rhs = prop } });
@@ -2973,7 +2942,6 @@ const Parser = struct {
             return self.addNode(.{ .tag = .static_prop_access, .main_token = class_tok, .data = .{ .lhs = class_node } });
         }
 
-        // dynamic static call: Class::{expr}()
         if (self.peek() == .l_brace) {
             _ = self.advance(); // {
             const method_expr = try self.parseExpression();
@@ -3007,7 +2975,6 @@ const Parser = struct {
         if (self.peek() == .l_paren) {
             _ = self.advance();
 
-            // first-class callable: ClassName::method(...)
             if (self.peek() == .ellipsis and self.peekAt(1) == .r_paren) {
                 _ = self.advance(); // ...
                 _ = self.advance(); // )
@@ -3051,9 +3018,7 @@ const Parser = struct {
         return self.addNode(.{ .tag = .ternary, .main_token = q_tok, .data = .{ .lhs = cond, .rhs = extra } });
     }
 
-    // ======================================================================
     // precedence
-    // ======================================================================
 
     fn infixPrec(tag: Tag) u8 {
         return switch (tag) {
@@ -3107,9 +3072,6 @@ const Parser = struct {
         };
     }
 
-    // ======================================================================
-    // utilities
-    // ======================================================================
 
     fn peek(self: *const Parser) Tag {
         if (self.pos >= self.tokens.len) return .eof;

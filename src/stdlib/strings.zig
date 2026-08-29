@@ -456,7 +456,6 @@ fn str_shuffle(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (s.len <= 1) return .{ .string = s };
     const buf = try ctx.allocator.alloc(u8, s.len);
     @memcpy(buf, s);
-    // Fisher-Yates with the default PRNG
     var prng = std.Random.DefaultPrng.init(@bitCast(std.time.timestamp()));
     var i: usize = buf.len - 1;
     while (i > 0) : (i -= 1) {
@@ -583,7 +582,6 @@ fn natCompare(a: []const u8, b: []const u8, fold_case: bool) i64 {
         const ca = a[ai];
         const cb = b[bi];
         if (std.ascii.isDigit(ca) and std.ascii.isDigit(cb)) {
-            // skip leading zeros
             var as = ai;
             while (as < a.len and a[as] == '0') as += 1;
             var ae = as;
@@ -598,7 +596,6 @@ fn natCompare(a: []const u8, b: []const u8, fold_case: bool) i64 {
             for (a[as..ae], b[bs..be]) |x, y| {
                 if (x != y) return @as(i64, x) - @as(i64, y);
             }
-            // skip past digits
             ai = ae;
             bi = be;
             continue;
@@ -1007,7 +1004,6 @@ fn native_number_format(ctx: *NativeContext, args: []const Value) RuntimeError!V
         const power = std.math.pow(f64, 10.0, @floatFromInt(-decimals_signed));
         var rounded = @round(num / power) * power;
         if (rounded == 0) rounded = 0; // normalize -0
-        // recurse with decimals=0
         var combined: [4]Value = undefined;
         combined[0] = .{ .float = rounded };
         combined[1] = .{ .int = 0 };
@@ -1144,7 +1140,6 @@ fn roundFloatToDecimals(num: f64, decimals: usize, int_buf: []u8, frac_buf: []u8
             } else {
                 combined[k] = '0';
                 if (k == 0) {
-                    // need to prepend '1'
                     if (c_len >= combined.len) c_len = combined.len - 1;
                     var j: usize = c_len;
                     while (j > 0) : (j -= 1) combined[j] = combined[j - 1];
@@ -1173,7 +1168,6 @@ fn roundFloatToDecimals(num: f64, decimals: usize, int_buf: []u8, frac_buf: []u8
         frac_buf[fp_len] = if (idx < c_len) combined[idx] else '0';
     }
 
-    // suppress -0
     const all_zero = blk: {
         for (int_buf[0..ip_len]) |b| if (b != '0') break :blk false;
         for (frac_buf[0..fp_len]) |b| if (b != '0') break :blk false;
@@ -1313,7 +1307,6 @@ fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) ![
                 continue;
             }
 
-            // check for argument swapping: %N$
             var explicit_arg: ?usize = null;
             {
                 var j = i;
@@ -1372,7 +1365,6 @@ fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) ![
             if (i < fmt_str.len and fmt_str[i] == '.') {
                 i += 1;
                 if (i < fmt_str.len and fmt_str[i] == '*') {
-                    // dynamic precision from next arg
                     const prec_arg = if (arg_idx < args.len) args[arg_idx] else Value.null;
                     arg_idx += 1;
                     precision = @intCast(@max(0, Value.toInt(prec_arg)));
@@ -1790,7 +1782,6 @@ fn roundHalfToEven(x: f64) f64 {
     const diff = x - fl;
     if (diff < 0.5) return fl;
     if (diff > 0.5) return fl + 1;
-    // exact half: round to even
     const fl_i: i64 = @intFromFloat(fl);
     if (@mod(fl_i, 2) == 0) return fl;
     return fl + 1;
@@ -2550,7 +2541,6 @@ fn native_mb_check_encoding(_: *NativeContext, args: []const Value) RuntimeError
     var is_ascii = false;
     if (args.len >= 2 and args[1] == .string) {
         const enc = args[1].string;
-        // case-insensitive ASCII check
         if (enc.len >= 5) {
             var lo: [16]u8 = undefined;
             const cap = @min(enc.len, lo.len);
@@ -2646,9 +2636,7 @@ fn caseExpansionUpper(cp: u21) ?[]const u8 {
 }
 
 fn unicodeToUpper(cp: u21) u21 {
-    // latin-1 supplement: a-with-grave through o-with-diaeresis
     if (cp >= 0x00E0 and cp <= 0x00F6) return cp - 0x20;
-    // latin-1 supplement: o-with-slash through thorn
     if (cp >= 0x00F8 and cp <= 0x00FE) return cp - 0x20;
     // latin extended-a: pairing alternates per subrange. 0100-0137 and
     // 014A-0177 pair even-upper/odd-lower; 0139-0148 and 0179-017E pair
@@ -2686,9 +2674,7 @@ fn unicodeToUpper(cp: u21) u21 {
 }
 
 pub fn unicodeToLower(cp: u21) u21 {
-    // latin-1 supplement: A-with-grave through O-with-diaeresis
     if (cp >= 0x00C0 and cp <= 0x00D6) return cp + 0x20;
-    // latin-1 supplement: O-with-slash through Thorn
     if (cp >= 0x00D8 and cp <= 0x00DE) return cp + 0x20;
     // latin extended-a: pairing alternates per subrange (see unicodeToUpper)
     if (cp >= 0x0100 and cp <= 0x0137 and cp % 2 == 0) return cp + 1;
@@ -3076,7 +3062,6 @@ fn native_mb_convert_encoding(ctx: *NativeContext, args: []const Value) RuntimeE
         return args[0]; // ascii is a subset of both
     }
     if ((isUtf8Encoding(from) or isLatin1Encoding(from)) and isAsciiEncoding(to)) {
-        // strip non-ascii bytes
         var out = std.ArrayListUnmanaged(u8){};
         errdefer out.deinit(ctx.allocator);
         var i: usize = 0;
@@ -3591,7 +3576,6 @@ fn native_mb_strimwidth(ctx: *NativeContext, args: []const Value) RuntimeError!V
     if (max_width <= 0) return .{ .string = try ctx.createString("") };
     const marker = if (args.len >= 4 and args[3] == .string) args[3].string else "";
 
-    // marker width
     var marker_w: i64 = 0;
     {
         var mi: usize = 0;
@@ -3651,7 +3635,6 @@ fn native_mb_strcut(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     var start: i64 = if (args.len >= 2) Value.toInt(args[1]) else 0;
     if (start < 0) start = @max(0, @as(i64, @intCast(s.len)) + start);
     var ustart: usize = @intCast(@min(start, @as(i64, @intCast(s.len))));
-    // align to leading byte
     while (ustart < s.len and (s[ustart] & 0xC0) == 0x80) ustart += 1;
     var end: usize = s.len;
     if (args.len >= 3 and args[2] != .null) {
@@ -3963,13 +3946,11 @@ fn native_convert_uudecode(ctx: *NativeContext, args: []const Value) RuntimeErro
     var buf = std.ArrayListUnmanaged(u8){};
     var p: usize = 0;
     while (p < s.len) {
-        // read length byte
         const lb = s[p];
         p += 1;
         // backtick or space means end of stream
         const decoded_len: usize = if (lb == 0x60 or lb < 0x20) 0 else @intCast(lb - 0x20);
         if (decoded_len == 0) {
-            // skip optional newline and stop
             if (p < s.len and (s[p] == '\n' or s[p] == '\r')) p += 1;
             break;
         }
@@ -4702,7 +4683,6 @@ fn native_http_build_query(ctx: *NativeContext, args: []const Value) RuntimeErro
     if (args.len == 0 or args[0] != .array) return .{ .string = "" };
     const arr = args[0].array;
     const prefix_str: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else "";
-    // arg_separator default "&"
     const arg_sep: []const u8 = if (args.len >= 3 and args[2] == .string and args[2].string.len > 0) args[2].string else "&";
     // encoding: PHP_QUERY_RFC1738 = 1 (default, space → +), PHP_QUERY_RFC3986 = 2 (space → %20)
     const enc_type: i64 = if (args.len >= 4) Value.toInt(args[3]) else 1;
@@ -4938,21 +4918,18 @@ fn native_parse_url(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
     var rest = url[authority_start..];
 
-    // split off fragment
     var fragment: ?[]const u8 = null;
     if (std.mem.indexOf(u8, rest, "#")) |pos| {
         fragment = rest[pos + 1 ..];
         rest = rest[0..pos];
     }
 
-    // split off query
     var query: ?[]const u8 = null;
     if (std.mem.indexOf(u8, rest, "?")) |pos| {
         query = rest[pos + 1 ..];
         rest = rest[0..pos];
     }
 
-    // split authority from path
     var host: ?[]const u8 = null;
     var port: ?i64 = null;
     var user: ?[]const u8 = null;
@@ -5164,7 +5141,6 @@ fn insertParsedKey(ctx: *NativeContext, root: *PhpArray, key: []const u8, value:
         if (seg.len == 0) {
             // append: next_arr.append decides the int key
             current_arr = next_arr;
-            // pre-compute next int key
             var max_int: i64 = -1;
             for (next_arr.entries.items) |e| {
                 if (e.key == .int and e.key.int > max_int) max_int = e.key.int;
@@ -5186,7 +5162,6 @@ fn native_addcslashes(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     if (args.len < 2 or args[0] != .string or args[1] != .string) return if (args.len >= 1) args[0] else Value.null;
     const s = args[0].string;
     const charset = args[1].string;
-    // expand "a..z" ranges
     var mask = [_]bool{false} ** 256;
     var i: usize = 0;
     while (i < charset.len) : (i += 1) {
@@ -5346,7 +5321,6 @@ fn native_strtok(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     };
     const s = ctx.vm.strtok_state orelse return .{ .bool = false };
     var p = ctx.vm.strtok_pos;
-    // skip leading delimiters
     while (p < s.len and std.mem.indexOfScalar(u8, tokens, s[p]) != null) : (p += 1) {}
     if (p >= s.len) {
         ctx.vm.strtok_pos = s.len;
@@ -5371,7 +5345,6 @@ fn native_stristr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const lower_n = try toLowerBuf(ctx.allocator, needle);
     defer ctx.allocator.free(lower_n);
     if (std.mem.indexOf(u8, lower_h, lower_n)) |pos| {
-        // return the original-case substring
         if (before_needle) return .{ .string = try ctx.createString(haystack[0..pos]) };
         return .{ .string = try ctx.createString(haystack[pos..]) };
     }
@@ -5505,7 +5478,6 @@ fn vsprintfArgsTooFew(ctx: *NativeContext, fmt: []const u8, argc: usize) Runtime
         i += 1;
         if (i >= fmt.len) break;
         if (fmt[i] == '%') continue;
-        // positional %N$
         var j = i;
         var num: usize = 0;
         while (j < fmt.len and fmt[j] >= '0' and fmt[j] <= '9') : (j += 1) {
@@ -5538,7 +5510,6 @@ fn vsprintfArgsTooFew(ctx: *NativeContext, fmt: []const u8, argc: usize) Runtime
 
 fn native_fscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .object) return .null;
-    // read one line via fgets
     const line = try ctx.vm.callByName("fgets", &.{args[0]});
     if (line == .bool and !line.bool) return .{ .bool = false };
     if (line != .string) return .null;
@@ -5576,7 +5547,6 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         // % spec
         fp += 1;
         if (fp >= fmt.len) break;
-        // skip optional width
         var width: usize = 0;
         var has_width = false;
         while (fp < fmt.len and fmt[fp] >= '0' and fmt[fp] <= '9') {
@@ -5638,7 +5608,6 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 try captures.append(ctx.allocator, .{ .string = s });
             },
             'x', 'X' => {
-                // optional 0x / 0X prefix
                 if (ip + 1 < input.len and input[ip] == '0' and (input[ip + 1] == 'x' or input[ip + 1] == 'X')) ip += 2;
                 const start = ip;
                 while (ip < input.len and std.ascii.isHex(input[ip])) {
@@ -5679,7 +5648,6 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 }
             },
             'n' => {
-                // consumed-byte-count. doesn't read from input
                 try captures.append(ctx.allocator, .{ .int = @intCast(ip) });
             },
             '%' => {
@@ -5925,7 +5893,6 @@ fn native_metaphone(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
     var i: usize = 0;
 
-    // skip initial silent consonant pairs
     if (upper.len >= 2) {
         const pair = upper[0..2];
         if (std.mem.eql(u8, pair, "AE") or std.mem.eql(u8, pair, "GN") or
@@ -5953,7 +5920,6 @@ fn native_metaphone(ctx: *NativeContext, args: []const Value) RuntimeError!Value
             continue;
         }
 
-        // skip doubled letters (except C)
         if (c == prev and c != 'C') {
             i += 1;
             continue;

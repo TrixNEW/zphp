@@ -1,8 +1,6 @@
 <?php
-// covers: SplDoublyLinkedList, SplObjectStorage, closures with use(&$ref), ob_start, ob_get_clean, nested output buffering, named regex captures (?P<name>), preg_match_all PREG_SET_ORDER, generators with send(), priority queue insertion, exception handling in generators
 error_reporting(E_ALL & ~E_DEPRECATED);
 
-// DSL parser with named regex
 function parseJobDef(string $line): ?array {
     $pattern = '/^(?P<name>[a-z_]+)\s*\[(?P<priority>\d+)\]\s*:\s*(?P<action>.+)$/';
     if (preg_match($pattern, $line, $m)) {
@@ -122,7 +120,6 @@ echo "failed: " . $stats['failed'] . "\n";
 echo "recent: " . implode(",", $q->recentFirst()) . "\n";
 echo "tracked: " . count($q->trackedJobs()) . "\n";
 
-// generator on queue2
 $q2 = new Queue();
 $order2 = [];
 $q2->enqueue(new Job('task_a', 3, function($j) use (&$order2) { $order2[] = $j->name; echo "A"; }));
@@ -138,7 +135,6 @@ while ($gen->valid()) {
 echo "\nscheduler order: " . implode(",", $order2) . "\n";
 echo "scheduler completed: " . $q2->completedCount() . "\n";
 
-// nested output buffering
 ob_start();
 echo "outer";
 ob_start();

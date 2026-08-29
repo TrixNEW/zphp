@@ -1,11 +1,5 @@
 <?php
-// covers: set_error_handler, set_exception_handler, restore_error_handler,
-//   restore_exception_handler, trigger_error, E_USER_WARNING, E_USER_NOTICE,
-//   error_reporting, nested try/catch/finally, exception chaining (getPrevious),
-//   custom exception classes, TypeError, ValueError, RuntimeException,
-//   LogicException, stacked error handlers, catch without variable
 
-// --- custom exception classes ---
 class AppException extends RuntimeException {
     private string $context;
     public function __construct(string $message, string $context = '', int $code = 0, ?\Throwable $previous = null) {
@@ -133,7 +127,6 @@ foreach ($exceptions as $ex) {
     echo get_class($ex) . ": " . implode(', ', $types) . "\n";
 }
 
-// --- test 7: multi-catch ---
 echo "\n=== Test 7: Multi-catch ===\n";
 $cases = [
     fn() => throw new TypeError("t"),

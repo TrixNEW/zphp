@@ -1,7 +1,4 @@
 <?php
-// covers: SPL iterators - LimitIterator, FilterIterator, RegexIterator,
-//   AppendIterator, CachingIterator, IteratorIterator, RecursiveIteratorIterator,
-//   ArrayIterator + nested arrays
 
 echo "=== LimitIterator slice ===\n";
 $data = new ArrayIterator(range(1, 20));

@@ -46,7 +46,6 @@ pub const Phar = struct {
     }
 };
 
-// compression flag bits in entry.flags
 pub const COMPRESSION_MASK: u32 = 0x0000F000;
 pub const COMPRESSED_GZ: u32 = 0x00001000;
 pub const COMPRESSED_BZ2: u32 = 0x00002000;
@@ -162,7 +161,6 @@ pub fn parse(a: Allocator, raw: []const u8) ParseError!Phar {
             .data_offset = data_pos,
         });
         data_pos += er.compressed_size;
-        // synthesize parent directories
         var slash_search: usize = name_copy.len;
         while (slash_search > 0) {
             slash_search -= 1;
@@ -256,11 +254,9 @@ pub fn write(a: Allocator, stub: []const u8, alias: []const u8, entries: []const
         try writeU32LE(a, &mbody, 0); // entry metadata length
     }
 
-    // emit manifest length + body
     try writeU32LE(a, &buf, @intCast(mbody.items.len));
     try buf.appendSlice(a, mbody.items);
 
-    // emit file data
     for (blobs) |blob| try buf.appendSlice(a, blob);
 
     // signature: SHA1 over everything written so far (stub + manifest + data)

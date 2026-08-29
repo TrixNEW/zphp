@@ -305,7 +305,6 @@ fn emitInterpolationExpr(self: *Compiler, expr: []const u8) (Allocator.Error || 
             j = paren_end + 1;
         } else if (j + 1 < expr.len and expr[j] == '-' and expr[j + 1] == '>') {
             j += 2;
-            // dynamic property name: {$obj->$var}
             if (j < expr.len and expr[j] == '$') {
                 var k = j + 1;
                 while (k < expr.len and isVarChar(expr[k])) k += 1;
@@ -559,7 +558,6 @@ pub fn processEscapes(allocator: Allocator, s: []const u8) ![]const u8 {
                     i += 2;
                 },
                 'x' => {
-                    // \xNN hex escape
                     var val: u8 = 0;
                     var consumed: usize = 2;
                     var digits: usize = 0;
@@ -598,7 +596,6 @@ pub fn processEscapes(allocator: Allocator, s: []const u8) ![]const u8 {
                     i += consumed;
                 },
                 'u' => {
-                    // \u{NNNN} unicode escape
                     if (i + 3 < s.len and s[i + 2] == '{') {
                         var end = i + 3;
                         while (end < s.len and s[end] != '}') end += 1;

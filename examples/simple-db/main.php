@@ -1,7 +1,5 @@
 <?php
-// covers: array_column, array_filter, array_map, array_values, array_keys, array_unique, array_count_values, array_sum, array_product, usort, uasort, array_slice, array_chunk, array_splice, array_search, compact, extract, array_walk, array_fill, in_array, count, implode, sprintf, str_pad, strtolower, strtoupper, preg_match, min, max, round, number_format
 
-// --- in-memory table ---
 
 $employees = [
     ['id' => 1, 'name' => 'Alice',   'dept' => 'Engineering', 'salary' => 95000, 'active' => true],
@@ -16,18 +14,15 @@ $employees = [
     ['id' => 10, 'name' => 'Jack',   'dept' => 'Sales',       'salary' => 91000, 'active' => true],
 ];
 
-// --- SELECT (array_column) ---
 
 echo "All names:\n";
 $names = array_column($employees, 'name');
 echo implode(", ", $names) . "\n";
 
-// keyed by id
 $name_by_id = array_column($employees, 'name', 'id');
 echo "Employee 3: " . $name_by_id[3] . "\n";
 echo "Employee 7: " . $name_by_id[7] . "\n";
 
-// --- WHERE (array_filter) ---
 
 echo "\nActive engineers:\n";
 $active_eng = array_filter($employees, function($e) {
@@ -37,7 +32,6 @@ foreach ($active_eng as $e) {
     echo "  " . $e['name'] . " - $" . number_format($e['salary']) . "\n";
 }
 
-// filter with regex
 echo "\nNames starting with vowels:\n";
 $vowel_names = array_filter($employees, function($e) {
     return preg_match('/^[AEIOU]/i', $e['name']);
@@ -46,7 +40,6 @@ foreach ($vowel_names as $e) {
     echo "  " . $e['name'] . "\n";
 }
 
-// --- ORDER BY (usort) ---
 
 echo "\nTop earners:\n";
 $sorted = $employees;
@@ -91,18 +84,15 @@ foreach ($depts as $dept) {
     echo "    Range: $" . number_format($min_sal) . " - $" . number_format($max_sal) . "\n";
 }
 
-// --- DISTINCT ---
 
 echo "\nDistinct departments: ";
 echo implode(", ", $depts) . "\n";
 
-// --- COUNT with condition ---
 
 $active_count = count(array_filter($employees, function($e) { return $e['active']; }));
 $inactive_count = count($employees) - $active_count;
 echo "Active: $active_count, Inactive: $inactive_count\n";
 
-// --- array_count_values ---
 
 echo "\nEmployees per department:\n";
 $dept_counts = array_count_values(array_column($employees, 'dept'));
@@ -125,7 +115,6 @@ foreach ($depts as $dept) {
     }
 }
 
-// --- UPDATE (array_walk) ---
 
 echo "\nAfter 10% raise for sales:\n";
 $updated = $employees;
@@ -156,7 +145,6 @@ foreach ($projects as $p) {
     echo "  " . str_pad($emp['name'], 10) . $p['project'] . "\n";
 }
 
-// --- LIMIT/OFFSET (array_slice) ---
 
 echo "\nPage 2 (3 per page):\n";
 $page = array_slice($employees, 3, 3);
@@ -164,7 +152,6 @@ foreach ($page as $e) {
     echo "  " . $e['id'] . ". " . $e['name'] . "\n";
 }
 
-// --- compact/extract round-trip ---
 
 echo "\nCompact/extract:\n";
 $name = "TestUser";
@@ -180,7 +167,6 @@ echo "\n";
 extract($record);
 echo "Extract: name=$name, role=$role, level=$level\n";
 
-// --- array_search ---
 
 echo "\nSearch:\n";
 $names = array_column($employees, 'name');
@@ -198,7 +184,6 @@ foreach ($chunks as $i => $chunk) {
     echo "  Batch " . ($i + 1) . ": " . implode(", ", $names) . "\n";
 }
 
-// --- table display ---
 
 echo "\nEmployee table:\n";
 $header = sprintf("%-4s %-10s %-13s %10s %s", "ID", "Name", "Dept", "Salary", "Status");

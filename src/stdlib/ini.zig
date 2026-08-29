@@ -49,13 +49,11 @@ fn parseIni(ctx: *NativeContext, input: []const u8, process_sections: bool, mode
         var line = input[line_start..pos];
         if (pos < input.len) pos += 1;
 
-        // strip \r
         if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
 
         line = trimSpaces(line);
         if (line.len == 0 or line[0] == ';' or line[0] == '#') continue;
 
-        // section header
         if (line[0] == '[') {
             if (std.mem.indexOfScalar(u8, line, ']')) |end| {
                 if (process_sections) {
@@ -70,7 +68,6 @@ fn parseIni(ctx: *NativeContext, input: []const u8, process_sections: bool, mode
             continue;
         }
 
-        // key = value
         if (std.mem.indexOfScalar(u8, line, '=')) |eq_pos| {
             const raw_key = trimSpaces(line[0..eq_pos]);
             const raw_val = trimSpaces(if (eq_pos + 1 < line.len) line[eq_pos + 1 ..] else "");
@@ -92,7 +89,6 @@ fn parseIni(ctx: *NativeContext, input: []const u8, process_sections: bool, mode
 fn processValue(ctx: *NativeContext, raw: []const u8, mode: ScannerMode) Value {
     if (raw.len == 0) return .{ .string = "" };
 
-    // strip quotes
     if (raw.len >= 2 and ((raw[0] == '"' and raw[raw.len - 1] == '"') or (raw[0] == '\'' and raw[raw.len - 1] == '\''))) {
         return .{ .string = raw[1 .. raw.len - 1] };
     }
@@ -133,7 +129,6 @@ fn processValue(ctx: *NativeContext, raw: []const u8, mode: ScannerMode) Value {
         return .{ .string = val };
     }
 
-    // normal mode: booleans become "1"/""
     if (isBoolTrue(val)) return .{ .string = "1" };
     if (isBoolFalse(val)) return .{ .string = "" };
     return .{ .string = val };

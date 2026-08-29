@@ -1,8 +1,4 @@
 <?php
-// covers: file_get_contents, file_put_contents, file_exists, is_file, is_dir,
-//   basename, dirname, pathinfo, mkdir, rmdir, unlink, copy, rename, glob,
-//   scandir, file, fopen, fclose, fwrite, fread, fgets, feof, fseek, ftell,
-//   rewind, ftruncate, filesize, tempnam, sys_get_temp_dir
 
 $tmp = sys_get_temp_dir() . '/zphp_file_io_test';
 
@@ -12,7 +8,6 @@ if (file_exists($tmp)) {
     rmdir($tmp);
 }
 
-// --- directory operations ---
 
 echo "=== Directory Ops ===\n";
 
@@ -22,7 +17,6 @@ echo "exists after: " . (file_exists($tmp) ? 'yes' : 'no') . "\n";
 echo "is_dir: " . (is_dir($tmp) ? 'yes' : 'no') . "\n";
 echo "is_file: " . (is_file($tmp) ? 'yes' : 'no') . "\n";
 
-// --- file write/read ---
 
 echo "\n=== File Write/Read ===\n";
 
@@ -35,7 +29,6 @@ echo "size: " . filesize($file) . "\n";
 $content = file_get_contents($file);
 echo "read: $content\n";
 
-// --- file() function ---
 
 echo "\n=== File Lines ===\n";
 
@@ -45,7 +38,6 @@ foreach ($lines as $i => $line) {
     echo "  [$i]: " . rtrim($line) . "\n";
 }
 
-// --- path functions ---
 
 echo "\n=== Path Functions ===\n";
 
@@ -57,7 +49,6 @@ $info = pathinfo($file);
 echo "extension: " . $info['extension'] . "\n";
 echo "filename: " . $info['filename'] . "\n";
 
-// --- append mode ---
 
 echo "\n=== Append ===\n";
 
@@ -66,7 +57,6 @@ $lines_after = file($file);
 echo "lines after append: " . count($lines_after) . "\n";
 echo "last line: " . rtrim(end($lines_after)) . "\n";
 
-// --- copy and rename ---
 
 echo "\n=== Copy/Rename ===\n";
 
@@ -80,7 +70,6 @@ rename($copy_file, $renamed);
 echo "copy gone: " . (file_exists($copy_file) ? 'yes' : 'no') . "\n";
 echo "renamed exists: " . (file_exists($renamed) ? 'yes' : 'no') . "\n";
 
-// --- fopen/fwrite/fread ---
 
 echo "\n=== Stream IO ===\n";
 
@@ -108,7 +97,6 @@ $end_pos = ftell($fp);
 echo "end position: $end_pos\n";
 fclose($fp);
 
-// --- ftruncate ---
 
 echo "\n=== Truncate ===\n";
 
@@ -119,7 +107,6 @@ fclose($fp);
 echo "truncated: " . file_get_contents("$tmp/trunc.txt") . "\n";
 echo "truncated size: " . filesize("$tmp/trunc.txt") . "\n";
 
-// --- binary read ---
 
 echo "\n=== Binary Read ===\n";
 
@@ -128,7 +115,6 @@ $chunk = fread($fp, 6);
 echo "chunk: $chunk\n";
 fclose($fp);
 
-// --- glob ---
 
 echo "\n=== Glob ===\n";
 
@@ -139,7 +125,6 @@ foreach ($files as $f) {
     echo "  " . basename($f) . "\n";
 }
 
-// --- scandir ---
 
 echo "\n=== Scandir ===\n";
 
@@ -148,7 +133,6 @@ $entries = array_filter($entries, function($e) { return $e !== '.' && $e !== '..
 sort($entries);
 echo "entries: " . implode(', ', $entries) . "\n";
 
-// --- cleanup ---
 
 echo "\n=== Cleanup ===\n";
 

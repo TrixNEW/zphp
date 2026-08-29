@@ -1,6 +1,4 @@
 <?php
-// covers: Fiber start/resume/suspend, getReturn, isRunning/isSuspended/isTerminated,
-//   getCurrent, suspend value pass-through, throw into fiber, scheduler pattern
 
 echo "=== basic suspend / resume ===\n";
 $f = new Fiber(function (): string {

@@ -1,7 +1,4 @@
 <?php
-// covers: posix_getuid, posix_getgid, posix_getpwuid, posix_getgrgid,
-//   posix_getpid, posix_getppid, posix_geteuid, posix_strerror,
-//   array_diff_key, str_pad, sprintf, fprintf, type checks
 
 function summary(array $a, array $keys): array {
     $out = [];

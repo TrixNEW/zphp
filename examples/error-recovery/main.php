@@ -1,9 +1,5 @@
 <?php
-// covers: set_error_handler, set_exception_handler, trigger_error,
-//   error_reporting, restore_error_handler, ob_start, ob_get_clean,
-//   try/catch with custom handlers, E_USER_ERROR/E_USER_WARNING/E_USER_NOTICE
 
-// --- custom error handler ---
 echo "=== error handler ===\n";
 $errors = [];
 set_error_handler(function($errno, $errstr, $errfile, $errline) use (&$errors) {
@@ -20,7 +16,6 @@ echo "second: {$errors[1]['message']}\n";
 
 restore_error_handler();
 
-// --- custom exception handler ---
 echo "\n=== exception handler ===\n";
 $caught_ex = null;
 set_exception_handler(function($e) use (&$caught_ex) {
@@ -67,7 +62,6 @@ foreach ($log as $entry) {
 
 restore_error_handler();
 
-// --- error reporting level ---
 echo "\n=== error reporting ===\n";
 $level = error_reporting();
 echo "reporting is int: " . (is_int($level) ? 'yes' : 'no') . "\n";
@@ -84,7 +78,6 @@ try {
 $output = ob_get_clean();
 echo "captured: $output\n";
 
-// nested output buffering
 ob_start();
 echo "outer";
 ob_start();
@@ -95,7 +88,6 @@ $outer = ob_get_clean();
 echo "outer: $outer\n";
 echo "inner: $inner\n";
 
-// --- exception chaining ---
 echo "\n=== exception chaining ===\n";
 try {
     try {
@@ -109,7 +101,6 @@ try {
     echo "previous: " . ($prev ? $prev->getMessage() : 'none') . "\n";
 }
 
-// --- finally with return ---
 echo "\n=== finally ===\n";
 function withFinally($fail) {
     $result = "start";

@@ -1,7 +1,4 @@
 <?php
-// covers: namespaces spanning multiple files, use class aliases, use
-//   function, use const, group use, fully-qualified names, the namespace\
-//   relative operator, cross-namespace class extension and dispatch
 
 namespace App;
 

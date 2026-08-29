@@ -1,6 +1,4 @@
 <?php
-// covers: ldap_escape (filter + dn modes), ldap_explode_dn, ldap_err2str,
-//   string formatting, array filtering, defensive query building
 
 // build LDAP filters defensively for untrusted user input
 function buildUserFilter(string $username, string $email): string {

@@ -5,7 +5,6 @@ const std = @import("std");
 // names include the $ prefix to match php convention and user-defined function param format.
 
 pub const map = std.StaticStringMap([]const []const u8).initComptime(.{
-    // strings
     .{ "substr", &.{ "$string", "$offset", "$length" } },
     .{ "str_replace", &.{ "$search", "$replace", "$subject", "$count" } },
     .{ "explode", &.{ "$separator", "$string", "$limit" } },
@@ -31,7 +30,6 @@ pub const map = std.StaticStringMap([]const []const u8).initComptime(.{
     .{ "htmlspecialchars", &.{ "$string", "$flags", "$encoding", "$double_encode" } },
     .{ "nl2br", &.{ "$string", "$use_xhtml" } },
 
-    // arrays
     .{ "in_array", &.{ "$needle", "$haystack", "$strict" } },
     .{ "array_search", &.{ "$needle", "$haystack", "$strict" } },
     .{ "array_key_exists", &.{ "$key", "$array" } },
@@ -56,23 +54,19 @@ pub const map = std.StaticStringMap([]const []const u8).initComptime(.{
     .{ "compact", &.{ "$var_names" } },
     .{ "range", &.{ "$start", "$end", "$step" } },
 
-    // types
     .{ "intval", &.{ "$value", "$base" } },
     .{ "settype", &.{ "$var", "$type" } },
     .{ "call_user_func", &.{ "$callback" } },
     .{ "version_compare", &.{ "$version1", "$version2", "$operator" } },
 
-    // json
     .{ "json_encode", &.{ "$value", "$flags", "$depth" } },
     .{ "json_decode", &.{ "$json", "$associative", "$depth", "$flags" } },
 
-    // math
     .{ "round", &.{ "$num", "$precision", "$mode" } },
     .{ "rand", &.{ "$min", "$max" } },
     .{ "mt_rand", &.{ "$min", "$max" } },
     .{ "base_convert", &.{ "$num", "$from_base", "$to_base" } },
 
-    // io/filesystem
     .{ "file_get_contents", &.{ "$filename" } },
     .{ "file_put_contents", &.{ "$filename", "$data", "$flags" } },
     .{ "fopen", &.{ "$filename", "$mode" } },
@@ -80,29 +74,24 @@ pub const map = std.StaticStringMap([]const []const u8).initComptime(.{
     .{ "fwrite", &.{ "$stream", "$data", "$length" } },
     .{ "mkdir", &.{ "$directory", "$permissions", "$recursive" } },
 
-    // regex
     .{ "preg_match", &.{ "$pattern", "$subject", "$matches", "$flags", "$offset" } },
     .{ "preg_match_all", &.{ "$pattern", "$subject", "$matches", "$flags", "$offset" } },
     .{ "preg_replace", &.{ "$pattern", "$replacement", "$subject", "$limit", "$count" } },
     .{ "preg_split", &.{ "$pattern", "$subject", "$limit", "$flags" } },
 
-    // datetime
     .{ "date", &.{ "$format", "$timestamp" } },
     .{ "mktime", &.{ "$hour", "$minute", "$second", "$month", "$day", "$year" } },
     .{ "strtotime", &.{ "$datetime", "$baseTimestamp" } },
 
-    // crypto
     .{ "password_hash", &.{ "$password", "$algo", "$options" } },
     .{ "password_verify", &.{ "$password", "$hash" } },
     .{ "hash", &.{ "$algo", "$data", "$binary" } },
     .{ "hash_hmac", &.{ "$algo", "$data", "$key", "$binary" } },
     .{ "random_int", &.{ "$min", "$max" } },
 
-    // output
     .{ "var_dump", &.{ "$value" } },
     .{ "print_r", &.{ "$value", "$return" } },
     .{ "var_export", &.{ "$value", "$return" } },
 
-    // session
     .{ "setcookie", &.{ "$name", "$value", "$expires_or_options", "$path", "$domain", "$secure", "$httponly" } },
 });

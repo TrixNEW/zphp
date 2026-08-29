@@ -1,8 +1,4 @@
 <?php
-// covers: abstract classes, interface implementation, variadic params,
-//   callback rules (closures stored and invoked), __toString magic method,
-//   static factory methods, is_string/is_numeric/is_array/is_null type checks,
-//   preg_match, strlen, filter_var, in_array
 
 interface RuleInterface
 {
@@ -257,7 +253,6 @@ class Validator
     }
 }
 
-// === test: passing validation ===
 
 $validator = new Validator();
 $validator
@@ -276,7 +271,6 @@ echo "valid: " . var_export($result->passes(), true) . "\n";
 echo "error count: " . $result->errorCount() . "\n";
 echo $result . "\n";
 
-// === test: failing validation ===
 
 $badData = [
     "name" => "",
@@ -293,7 +287,6 @@ echo "name errors: " . count($result2->errorsFor("name")) . "\n";
 echo "first name error: " . $result2->firstError("name") . "\n";
 echo "first email error: " . $result2->firstError("email") . "\n";
 
-// === test: callback rules ===
 
 $v2 = new Validator();
 $v2->field("age",
@@ -312,7 +305,6 @@ $result4 = $v2->validate(["age" => 10]);
 echo "age 10: " . var_export($result4->passes(), true) . "\n";
 echo "age 10 error: " . $result4->firstError("age") . "\n";
 
-// === test: static factory ===
 
 $v3 = Validator::make([
     "username" => [new Required(), new MinLength(3)],
@@ -323,7 +315,6 @@ $result5 = $v3->validate(["username" => "ab", "password" => "short"]);
 echo "factory errors: " . $result5->errorCount() . "\n";
 foreach ($result5->allErrors() as $e) echo "  $e\n";
 
-// === test: missing fields ===
 
 $result6 = $validator->validate([]);
 echo "empty data errors: " . $result6->errorCount() . "\n";

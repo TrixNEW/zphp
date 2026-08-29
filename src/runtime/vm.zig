@@ -196,7 +196,6 @@ pub const NativeContext = struct {
 
     pub fn invokeCallableRef(self: *NativeContext, callable: Value, args: []Value) RuntimeError!Value {
         if (callable == .string) return self.vm.callByNameRef(callable.string, args);
-        // __invoke on an object instance
         if (callable == .object) {
             if (std.mem.eql(u8, callable.object.class_name, "Closure")) {
                 return self.vm.callValueCallable(callable.object.get("__callable"), args);
@@ -935,7 +934,6 @@ pub const VM = struct {
         locals_buf: [*]Value = undefined,
         locals_sp: usize = 0,
         locals_cap: usize = 0,
-        // single-entry function lookup cache
         fn_cache_name: []const u8 = "",
         fn_cache_func: ?*const ObjFunction = null,
         // per-frame sp save for inline call/ret in fastLoop
@@ -1633,7 +1631,6 @@ pub const VM = struct {
         try c.put(a, "E_DEPRECATED", .{ .int = 8192 });
         try c.put(a, "E_USER_DEPRECATED", .{ .int = 16384 });
         try c.put(a, "E_ALL", .{ .int = 30719 });
-        // phpinfo() / php_ini section flags
         try c.put(a, "INFO_GENERAL", .{ .int = 1 });
         try c.put(a, "INFO_CREDITS", .{ .int = 2 });
         try c.put(a, "INFO_CONFIGURATION", .{ .int = 4 });
@@ -2965,7 +2962,6 @@ pub const VM = struct {
                 .concat => {
                     const b = self.pop();
                     const a = self.pop();
-                    // fast path: both strings
                     if (a == .string and b == .string) {
                         const as = a.string;
                         const bs = b.string;
@@ -3247,7 +3243,6 @@ pub const VM = struct {
                     }
                     if (has_named) {
                         if (self.functions.get(name)) |func| {
-                            // resolve named args to positional
                             var resolved: [16]Value = .{.null} ** 16;
                             var assigned: [16]bool = .{false} ** 16;
                             var pos: usize = 0;
@@ -3340,7 +3335,6 @@ pub const VM = struct {
                                 }
                             }
                             if (!ok) continue;
-                            // fill defaults
                             const count = @max(pos, func.required_params);
                             for (0..count) |i| {
                                 if (resolved[i] == .null and i < func.defaults.len) {
@@ -3403,7 +3397,6 @@ pub const VM = struct {
                     }
                 },
                 .call_indirect_spread => {
-                    // stack: [... args_array, func_name]
                     const name_val = self.pop();
                     const args_val = self.pop();
                     if (args_val != .array) {
@@ -5448,7 +5441,6 @@ pub const VM = struct {
                                 ic.concat_buf.items.len >= current.string.len and
                                 current.string.ptr == ic.concat_buf.items.ptr)
                             {
-                                // append directly to the buffer
                                 if (append_val == .string) {
                                     try ic.concat_buf.appendSlice(self.allocator, append_val.string);
                                 } else {
@@ -6191,11 +6183,9 @@ pub const VM = struct {
                         self.deinitFrameSlot(self.frame_count);
                     }
 
-                    // restore stack and push exception
                     self.sp = handler.sp;
                     self.push(exception);
 
-                    // jump to catch code
                     self.currentFrame().ip = handler.catch_ip;
                 },
 
@@ -6612,12 +6602,10 @@ pub const VM = struct {
                         try def.interfaces.append(self.allocator, parent_names[pi]);
                     }
 
-                    // interface-level attributes
                     const iface_attrs = try self.readAttributeDefs();
                     for (iface_attrs) |a| try def.attributes.append(self.allocator, a);
                     if (iface_attrs.len > 0) self.allocator.free(iface_attrs);
 
-                    // method attributes
                     const iface_method_attr_count = self.readByte();
                     for (0..iface_method_attr_count) |_| {
                         const ma_name_idx = self.readU16();
@@ -6721,7 +6709,6 @@ pub const VM = struct {
                         try self.trait_constants.put(self.allocator, trait_name, tcs);
                     }
 
-                    // trait-level attributes
                     const trait_attrs = try self.readAttributeDefs();
                     const trait_method_attr_count = self.readByte();
                     var trait_method_attrs: [32]struct { name: []const u8, attrs: []const AttributeDef } = undefined;
@@ -6917,7 +6904,6 @@ pub const VM = struct {
                             return error.RuntimeError;
                         }
                         if (self.native_fns.get(cn)) |native| {
-                            // native constructor
                             var args_buf: [16]Value = undefined;
                             for (0..ac) |i| args_buf[i] = self.stack[self.sp - ac + i];
                             self.dropN(ac);
@@ -6954,7 +6940,6 @@ pub const VM = struct {
                                     }
                                     self.pending_exception = exc;
                                 } else {
-                                    // throwBuiltinException already dispatched to handler
                                     continue;
                                 }
                                 return error.RuntimeError;
@@ -7481,7 +7466,6 @@ pub const VM = struct {
                             // fall through to the regular slot/property write
                         }
 
-                        // IC: slot-indexed fast path
                         if (self.ic) |ic| {
                             const sp_idx = InlineCache.propIndex(@intFromPtr(self.currentChunk()), sp_ip);
                             const sp_entry = &ic.prop[sp_idx];
@@ -7605,7 +7589,6 @@ pub const VM = struct {
                         try self.triggerLazyInit(obj_val.object);
                     }
 
-                    // generator method dispatch
                     if (obj_val == .generator) {
                         const gen = obj_val.generator;
                         self.dropN(ac);
@@ -7975,7 +7958,6 @@ pub const VM = struct {
                         }
                     }
 
-                    // check visibility
                     const mvr = self.findMethodVisibility(obj.class_name, method_name);
                     if (!self.checkVisibility(mvr.defining_class, mvr.visibility)) {
                         const suffix = self.visScopeSuffix();
@@ -8028,7 +8010,6 @@ pub const VM = struct {
                         return error.RuntimeError;
                     };
                     if (self.native_fns.get(full_name)) |native| {
-                        // populate IC
                         if (self.ic) |ic| {
                             const mc_ip2 = self.currentFrame().ip - 4;
                             const mc_chunk_key2 = @intFromPtr(self.currentChunk());
@@ -8104,7 +8085,6 @@ pub const VM = struct {
                             self.setErrorMsg("Fatal error: Uncaught ArgumentCountError: {s}\n", .{msg});
                             return error.RuntimeError;
                         }
-                        // populate IC
                         if (self.ic) |ic| {
                             const mc_ip2 = self.currentFrame().ip - 4;
                             const mc_chunk_key2 = @intFromPtr(self.currentChunk());
@@ -8189,7 +8169,6 @@ pub const VM = struct {
                     }
                     const arr = args_val.array;
 
-                    // check for named args
                     var has_named = false;
                     for (arr.entries.items) |entry| {
                         if (entry.key == .string) {
@@ -8222,7 +8201,6 @@ pub const VM = struct {
                                             pos += 1;
                                         }
                                     }
-                                    // fill defaults
                                     ac = @max(pos, func.required_params);
                                     for (0..ac) |i| {
                                         if (resolved_buf[i] == .null and i < func.defaults.len) {
@@ -8508,7 +8486,6 @@ pub const VM = struct {
                 },
 
                 .method_call_dynamic_spread => {
-                    // stack: [object, method_name, args_array]
                     const args_val = self.pop();
                     const method_name_val = self.pop();
                     const obj_val = self.pop();
@@ -8533,7 +8510,6 @@ pub const VM = struct {
                     // push object and args back in method_call layout
                     self.push(obj_val);
                     for (arr.entries.items) |entry| self.push(entry.value);
-                    // reuse method_call logic
                     const full_name = self.resolveMethod(obj.class_name, method_name) catch {
                         if (self.hasMethod(obj.class_name, "__call")) {
                             const obj_id = @intFromPtr(obj);
@@ -9049,7 +9025,6 @@ pub const VM = struct {
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     };
-                    // accept FQN with leading backslash
                     const class_name = if (raw_class_name.len > 0 and raw_class_name[0] == '\\') raw_class_name[1..] else raw_class_name;
                     if (!self.classes.contains(class_name)) {
                         try self.tryAutoload(class_name);
@@ -9211,7 +9186,6 @@ pub const VM = struct {
                 },
 
                 .static_call_dyn_both_spread => {
-                    // stack: [class_name, method_name, args_array]
                     const args_val = self.pop();
                     const method_val = self.pop();
                     const class_val = self.pop();
@@ -9445,7 +9419,6 @@ pub const VM = struct {
                         return error.RuntimeError;
                     };
 
-                    // unwrap IteratorAggregate by calling getIterator
                     if (iterable == .object and self.hasMethod(iterable.object.class_name, "getIterator")) {
                         iterable = self.callMethod(iterable.object, "getIterator", &.{}) catch {
                             if (self.dispatchPendingException(base_frame)) continue;
@@ -9524,7 +9497,6 @@ pub const VM = struct {
                             self.genRelease(outer_gen);
                             return;
                         }
-                        // inner already completed
                         self.push(inner.return_value);
                     } else if (iterable == .array) {
                         const arr = iterable.array;
@@ -9710,7 +9682,6 @@ pub const VM = struct {
             }
             return name;
         }
-        // direct FQN with leading backslash
         if (name.len > 0 and name[0] == '\\') return name[1..];
         if (std.mem.eql(u8, name, "static")) {
             const f = self.currentFrame();
@@ -10334,7 +10305,6 @@ pub const VM = struct {
                         gen.current_value = entry.value;
                         return;
                     }
-                    // array exhausted
                     const arr = arr_state.arr;
                     gen.delegate = null;
                     self.arrayRelease(arr);
@@ -10423,7 +10393,6 @@ pub const VM = struct {
             }
             gen.state = .completed;
             self.handler_count = saved_handler_count;
-            // unwind any leftover generator frames
             while (self.frame_count > return_frame) {
                 self.frame_count -= 1;
                 self.deinitFrameSlot(self.frame_count);
@@ -10661,9 +10630,7 @@ pub const VM = struct {
         return "Object";
     }
 
-    // ==================================================================
     // opcode handlers (extracted from runLoop for readability)
-    // ==================================================================
 
     fn handleClassDecl(self: *VM) RuntimeError!void {
         const class_modifiers = self.readByte();
@@ -10846,7 +10813,6 @@ pub const VM = struct {
                     self.error_msg = msg;
                     return error.RuntimeError;
                 }
-                // reject overrides of final methods
                 var pcls_iter = parent_cls.methods.iterator();
                 while (pcls_iter.next()) |pe| {
                     if (!pe.value_ptr.is_final) continue;
@@ -10901,12 +10867,10 @@ pub const VM = struct {
             try def.used_traits.append(self.allocator, trait_name);
         }
 
-        // class-level attributes
         const class_attrs = try self.readAttributeDefs();
         for (class_attrs) |a| try def.attributes.append(self.allocator, a);
         if (class_attrs.len > 0) self.allocator.free(class_attrs);
 
-        // method attributes
         const method_attr_count = self.readByte();
         for (0..method_attr_count) |_| {
             const ma_name_idx = self.readU16();
@@ -10915,7 +10879,6 @@ pub const VM = struct {
             try def.method_attributes.put(self.allocator, ma_name, ma_attrs);
         }
 
-        // property attributes
         const prop_attr_count = self.readByte();
         for (0..prop_attr_count) |_| {
             const pa_name_idx = self.readU16();
@@ -10924,7 +10887,6 @@ pub const VM = struct {
             try def.property_attributes.put(self.allocator, pa_name, pa_attrs);
         }
 
-        // constant attributes
         const const_attr_count = self.readByte();
         for (0..const_attr_count) |_| {
             const ca_name_idx = self.readU16();
@@ -10933,7 +10895,6 @@ pub const VM = struct {
             try def.constant_attributes.put(self.allocator, ca_name, ca_attrs);
         }
 
-        // parameter attributes
         const param_attr_method_count = self.readByte();
         for (0..param_attr_method_count) |_| {
             const pam_name_idx = self.readU16();
@@ -11189,7 +11150,6 @@ pub const VM = struct {
         try def.interfaces.append(self.allocator, "UnitEnum");
         if (backed_type_byte != 0) try def.interfaces.append(self.allocator, "BackedEnum");
 
-        // traits
         const enum_trait_count = self.readByte();
         var enum_trait_names: [16][]const u8 = undefined;
         for (0..enum_trait_count) |ti| {
@@ -11199,12 +11159,10 @@ pub const VM = struct {
             try self.applyTrait(&def, enum_name, trait_name, &.{}, &.{});
         }
 
-        // enum-level attributes
         const enum_attrs = try self.readAttributeDefs();
         for (enum_attrs) |a| try def.attributes.append(self.allocator, a);
         if (enum_attrs.len > 0) self.allocator.free(enum_attrs);
 
-        // method attributes
         const enum_method_attr_count = self.readByte();
         for (0..enum_method_attr_count) |_| {
             const ma_name_idx = self.readU16();
@@ -11326,7 +11284,6 @@ pub const VM = struct {
         if (val != .string) return val;
         const s = val.string;
         if (s.len == 0) return val;
-        // check for Class::CONST pattern
         if (std.mem.indexOf(u8, s, "::")) |sep| {
             const class_name = s[0..sep];
             const const_name = s[sep + 2 ..];
@@ -11412,7 +11369,6 @@ pub const VM = struct {
         if (!self.traits.contains(trait_name)) {
             try self.tryAutoload(trait_name);
         }
-        // recursively apply sub-traits first
         if (self.trait_uses.get(trait_name)) |subs| {
             for (subs) |sub| {
                 try self.applyTrait(def, class_name, sub, &.{}, &.{});
@@ -11533,9 +11489,7 @@ pub const VM = struct {
         }
     }
 
-    // ==================================================================
     // closure and frame helpers
-    // ==================================================================
 
     fn ensureClosureInstance(self: *VM) !void {
         const compile_name = self.peek().string;
@@ -11849,7 +11803,6 @@ pub const VM = struct {
             break :blk s;
         };
 
-        // bind args to param slots
         const bind_count = @min(ac, func.arity);
         for (0..bind_count) |i| {
             locals[i] = try self.bindFrameArg(self.stack[self.sp - ac + i]);
@@ -12709,7 +12662,6 @@ pub const VM = struct {
                     }
                 }
             } else if (arg_instr_count == 2) {
-                // get_var/get_local + get_prop
                 const first_ip = instrs[i];
                 const second_ip = instrs[i + 1];
                 if (code[second_ip] == @intFromEnum(OpCode.get_prop)) {
@@ -13179,7 +13131,6 @@ pub const VM = struct {
                     std.mem.eql(u8, target_class, "Exception") or
                     std.mem.eql(u8, target_class, "Error"))
                 {
-                    // walk the builtin hierarchy
                     var bp = builtin_parent;
                     while (true) {
                         if (std.mem.eql(u8, bp, target_class)) return true;
@@ -14193,7 +14144,6 @@ pub const VM = struct {
             }
         }
 
-        // arrow functions inherit parent scope
         if (self.frame_count > 0) {
             const orig_name = self.getOrigClosureName(name);
             if (self.functions.get(orig_name)) |func| {
@@ -14270,7 +14220,6 @@ pub const VM = struct {
         }
         if (val == .string) {
             const s = val.string;
-            // deferred class constant: "\x00CC\x00ClassName\x00CONST_NAME"
             if (s.len > 4 and s[0] == 0 and s[1] == 'C' and s[2] == 'C' and s[3] == 0) {
                 const rest = s[4..];
                 if (std.mem.indexOfScalar(u8, rest, 0)) |sep| {
@@ -14480,7 +14429,6 @@ pub const VM = struct {
     fn tryWeakCoerce(self: *VM, val: Value, type_str: []const u8) RuntimeError!?Value {
         var t = type_str;
         if (t.len > 0 and t[0] == '?') t = t[1..];
-        // bail on intersection types
         for (t) |c| if (c == '&' or c == '(' or c == ')') return null;
         // unions: try each member in PHP's priority order, returning the first
         // that coerces successfully without lossy conversion. PHP's rule is to
@@ -15543,9 +15491,7 @@ pub const VM = struct {
         return self.callByName(name, args);
     }
 
-    // ==================================================================
     // fibers
-    // ==================================================================
 
     fn executeFiber(self: *VM, fiber: *Fiber, base_frame: usize, base_sp: usize, base_handler: usize) RuntimeError!Value {
         const prev_fiber = self.current_fiber;
@@ -15592,7 +15538,6 @@ pub const VM = struct {
     }
 
     fn saveFiberState(self: *VM, fiber: *Fiber, base_frame: usize, base_sp: usize, base_handler: usize) !void {
-        // clear previously saved state
         self.cleanupFiberFrames(fiber);
         fiber.saved_frames.clearRetainingCapacity();
         fiber.saved_stack.clearRetainingCapacity();
@@ -15619,7 +15564,6 @@ pub const VM = struct {
         }
         self.frame_count = base_frame;
 
-        // save stack values
         for (self.stack[base_sp..self.sp]) |val| {
             try fiber.saved_stack.append(self.allocator, val);
         }
@@ -15660,7 +15604,6 @@ pub const VM = struct {
         self.frame_count = base_frame + fiber.saved_frames.items.len;
         fiber.saved_frames.clearRetainingCapacity();
 
-        // restore stack
         for (fiber.saved_stack.items) |val| {
             self.stack[self.sp] = val;
             self.sp += 1;
@@ -15680,9 +15623,6 @@ pub const VM = struct {
         fiber.saved_handlers.clearRetainingCapacity();
     }
 
-    // ==================================================================
-    // helpers
-    // ==================================================================
 
     fn readByte(self: *VM) u8 {
         const frame = &self.frames[self.frame_count - 1];
@@ -15829,9 +15769,7 @@ pub const VM = struct {
         return self.stack[self.sp - 1];
     }
 
-    // ===================================================================
     // object refcounting (Stage 1) - see .handoff/refcounting.md
-    // ===================================================================
 
     // an object handle was copied into a new reference
     pub fn objRetain(obj: *PhpObject) void {

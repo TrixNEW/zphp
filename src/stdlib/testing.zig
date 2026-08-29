@@ -22,7 +22,6 @@ fn assertEq(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return failAssertion(ctx, "assert_eq requires 2 arguments");
     if (Value.identical(args[0], args[1])) return .null;
 
-    // build error message
     var buf1 = std.ArrayListUnmanaged(u8){};
     try args[0].format(&buf1, ctx.allocator);
     const s1 = try buf1.toOwnedSlice(ctx.allocator);

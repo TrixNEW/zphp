@@ -1,7 +1,4 @@
 <?php
-// covers: composer autoloading, PSR-7, PSR-15, Slim framework routing,
-//   middleware pipeline, request/response objects, namespace resolution,
-//   interface implementation, closures as route handlers, dependency injection
 
 require __DIR__ . '/vendor/autoload.php';
 

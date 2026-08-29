@@ -57,7 +57,6 @@ pub fn cleanupObject(obj: *PhpObject) void {
     if (!obj.pooled and std.mem.eql(u8, obj.class_name, "XMLReader")) closeExisting(obj);
 }
 
-// ---------------- methods ----------------
 
 fn xrOpen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
@@ -368,7 +367,6 @@ fn xrGet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .null;
 }
 
-// ---------------- registration ----------------
 
 fn cleanupPoolable(obj: *PhpObject) bool {
     cleanupObject(obj);
@@ -390,7 +388,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
         try def.methods.put(a, m, .{ .name = m, .arity = 0 });
     }
 
-    // class constants
     const xr_consts = .{
         .{ "NONE", 0 }, .{ "ELEMENT", 1 }, .{ "ATTRIBUTE", 2 }, .{ "TEXT", 3 },
         .{ "CDATA", 4 }, .{ "ENTITY_REF", 5 }, .{ "ENTITY", 6 }, .{ "PI", 7 },
@@ -439,7 +436,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
         .{ "COMMENT", 8 }, .{ "DOC", 9 }, .{ "DOC_TYPE", 10 }, .{ "DOC_FRAGMENT", 11 },
         .{ "NOTATION", 12 }, .{ "WHITESPACE", 13 }, .{ "SIGNIFICANT_WHITESPACE", 14 },
         .{ "END_ELEMENT", 15 }, .{ "END_ENTITY", 16 }, .{ "XML_DECLARATION", 17 },
-        // load options (subset)
         .{ "LOADDTD", 1 }, .{ "DEFAULTATTRS", 2 }, .{ "VALIDATE", 3 }, .{ "SUBST_ENTITIES", 4 },
     };
     inline for (consts) |k| {

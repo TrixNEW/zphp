@@ -1,12 +1,5 @@
 <?php
-// covers: closures capture by reference, Closure::bind, Closure::bindTo,
-//   Closure::fromCallable, arrow functions, first-class callable syntax,
-//   recursive closures, closures as method args (array_map, array_filter,
-//   usort), higher-order functions, static closures, array_reduce,
-//   array_walk, variable function calls, is_callable, closure default
-//   params, named arguments in closure calls
 
-// --- capture by reference ---
 echo "=== Capture by Reference ===\n";
 $counter = 0;
 $increment = function() use (&$counter) {
@@ -26,7 +19,6 @@ $push("b");
 $push("c");
 echo "values: " . implode(", ", $values) . "\n";
 
-// --- Closure::bind and Closure::bindTo ---
 echo "\n=== Closure::bind and bindTo ===\n";
 
 class Wallet {
@@ -56,7 +48,6 @@ $setter = Closure::bind($setBalance, $w1, Wallet::class);
 $setter(500);
 echo "w1 after set: " . $bound1() . "\n";
 
-// --- Closure::fromCallable ---
 echo "\n=== Closure::fromCallable ===\n";
 
 function triple(int $n): int {
@@ -83,7 +74,6 @@ $helper = new MathHelper();
 $cu = Closure::fromCallable([$helper, 'cube']);
 echo "cube(3): " . $cu(3) . "\n";
 
-// --- arrow functions ---
 echo "\n=== Arrow Functions ===\n";
 
 $double = fn($x) => $x * 2;
@@ -99,7 +89,6 @@ $timesThree = fn($x) => $x * 3;
 $addOneThenTriple = $compose($timesThree, $addOne);
 echo "compose(triple, addOne)(4): " . $addOneThenTriple(4) . "\n";
 
-// --- first-class callable syntax ---
 echo "\n=== First-Class Callable Syntax ===\n";
 
 $strlen = strlen(...);
@@ -127,7 +116,6 @@ echo "upper('hello'): " . $upperFn('hello') . "\n";
 $lowerFn = Formatter::lower(...);
 echo "lower('WORLD'): " . $lowerFn('WORLD') . "\n";
 
-// --- recursive closures ---
 echo "\n=== Recursive Closures ===\n";
 
 $factorial = null;
@@ -202,7 +190,6 @@ $transform = pipeline([
 ]);
 echo "pipeline(5): " . $transform(5) . "\n";
 
-// --- static closures ---
 echo "\n=== Static Closures ===\n";
 
 $static = static function(int $a, int $b): int {
@@ -213,7 +200,6 @@ echo "static add(3, 4): " . $static(3, 4) . "\n";
 $staticArrow = static fn(int $x) => $x * $x;
 echo "static square(9): " . $staticArrow(9) . "\n";
 
-// --- array_reduce and array_walk ---
 echo "\n=== array_reduce and array_walk ===\n";
 
 $nums = [1, 2, 3, 4, 5];
@@ -238,7 +224,6 @@ foreach ($prices as $name => $price) {
 }
 echo implode(", ", $parts) . "\n";
 
-// --- variable function calls ---
 echo "\n=== Variable Function Calls ===\n";
 
 $fn = 'strlen';
@@ -250,7 +235,6 @@ echo "upper('test'): " . $fn('test') . "\n";
 $fn = 'array_sum';
 echo "sum([1,2,3]): " . $fn([1, 2, 3]) . "\n";
 
-// --- is_callable checks ---
 echo "\n=== is_callable Checks ===\n";
 
 echo "closure: " . (is_callable(function() {}) ? "yes" : "no") . "\n";

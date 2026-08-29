@@ -1,5 +1,4 @@
 <?php
-// covers: preg_split, mb_strtolower, array_filter, array_map, array_unique, usort, array_slice, array_merge, str_repeat, sprintf, log, sqrt, count, in_array, array_keys, array_values, generator yields, iterator_to_array, json_encode, json_decode, array_count_values, array_intersect_key, ksort
 
 final class InvertedIndex {
     /** @var array<string, array<int, int>> term => doc_id => term_freq */
@@ -144,7 +143,6 @@ function parseQuery(InvertedIndex $idx, string $q): array {
 $q = parseQuery($idx, '+zig compiler !php');
 echo "parsed: must=" . implode(',', $q['must']) . " should=" . implode(',', $q['should']) . " not=" . implode(',', $q['must_not']) . "\n";
 
-// boolean query execution
 function executeBoolean(InvertedIndex $idx, array $q): array {
     $r = new ReflectionClass($idx);
     $postings = $r->getProperty('postings')->getValue($idx);
@@ -193,7 +191,6 @@ $data = json_decode($snippet, true);
 $body = $data['docs'][3]['body'];
 echo highlight($body, ['zig', 'compiler', 'lexing']) . "\n";
 
-// mb_* on multibyte strings
 $mb = 'Café résumé naïve';
 echo mb_strlen($mb) . " chars / " . strlen($mb) . " bytes\n";
 echo mb_strtoupper($mb) . "\n";

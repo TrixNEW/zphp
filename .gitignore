@@ -1,9 +1,26 @@
 zig-out/
 zig-cache/
 .zig-cache/
-test_compress
-/*.md
-!README.md
-.handoff/
 docs/book/
+
+# Local tooling
+.handoff/
 .claude/
+.idea/
+.vscode/
+*.code-workspace
+
+# Local state
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+
+# Generated dependencies and test artifacts
+**/vendor/
+**/.cache/
+test_compress

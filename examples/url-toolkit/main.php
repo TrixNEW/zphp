@@ -1,9 +1,5 @@
 <?php
-// covers: parse_url, parse_str, http_build_query, urlencode, urldecode,
-//   rawurlencode, rawurldecode, quoted_printable_encode, quoted_printable_decode,
-//   base64_encode, base64_decode, array auto-vivification, string interpolation
 
-// --- parse_url ---
 echo "=== parse_url ===\n";
 $url = "https://user:pass@example.com:8443/api/v2/users?sort=name&limit=10#results";
 $parts = parse_url($url);
@@ -21,7 +17,6 @@ echo "simple host: {$simple['host']}\n";
 echo "simple path: {$simple['path']}\n";
 echo "has port: " . (isset($simple['port']) ? 'yes' : 'no') . "\n";
 
-// --- parse_str ---
 echo "\n=== parse_str ===\n";
 parse_str("name=John+Doe&age=30&tags[]=php&tags[]=zig", $params);
 echo "name: {$params['name']}\n";
@@ -33,11 +28,9 @@ echo "color: {$p2['color']}\n";
 parse_str("key=" . urlencode("hello world&goodbye"), $p3);
 echo "encoded value: {$p3['key']}\n";
 
-// empty string
 parse_str("", $empty);
 echo "empty count: " . count($empty) . "\n";
 
-// --- http_build_query ---
 echo "\n=== http_build_query ===\n";
 $data = ['name' => 'Jane', 'city' => 'New York', 'active' => 1];
 $qs = http_build_query($data);
@@ -51,7 +44,6 @@ $nested = ['filter' => ['status' => 'open', 'priority' => 'high']];
 $nested_qs = http_build_query($nested);
 echo "nested: $nested_qs\n";
 
-// --- URL encoding ---
 echo "\n=== url encoding ===\n";
 $raw = "hello world & goodbye/friend";
 echo "urlencode: " . urlencode($raw) . "\n";
@@ -66,7 +58,6 @@ $special = "key=val&other=1+2";
 echo "double encode: " . urlencode($special) . "\n";
 echo "double decode: " . urldecode(urlencode($special)) . "\n";
 
-// --- quoted printable ---
 echo "\n=== quoted printable ===\n";
 $text = "Subject: Hello World\r\nThis line is fairly short.";
 $encoded = quoted_printable_encode($text);
@@ -78,7 +69,6 @@ $long = str_repeat("A", 100);
 $qp_long = quoted_printable_encode($long);
 echo "long line wrapped: " . (str_contains($qp_long, "=\r\n") ? 'yes' : 'no') . "\n";
 
-// --- URL builder pattern ---
 echo "\n=== url builder ===\n";
 function buildUrl($base, $path, $params = []) {
     $parts = parse_url($base);

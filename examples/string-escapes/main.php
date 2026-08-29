@@ -1,9 +1,5 @@
 <?php
-// covers: heredoc, nowdoc, string escapes, variable interpolation in strings,
-//         double-quoted escapes (\n, \t, \r, \\, \$, \", \x, \0, \u),
-//         multiline strings, sprintf, str_pad, number_format
 
-// --- double-quoted escapes ---
 
 echo "--- double-quoted ---\n";
 echo "tab:\there\n";
@@ -17,7 +13,6 @@ echo "hex: [\x41\x42\x43]\n";
 echo "octal: [\101\102\103]\n";
 echo "unicode: [\u{0041}\u{0042}\u{0043}]\n";
 
-// --- heredoc ---
 
 echo "--- heredoc ---\n";
 $name = "World";
@@ -35,7 +30,6 @@ $html = <<<HTML
 HTML;
 echo $html . "\n";
 
-// heredoc with escapes
 $escaped = <<<EOT
 tab:\there
 newline:\nhere
@@ -43,7 +37,6 @@ hex:\x41\x42\x43
 EOT;
 echo $escaped . "\n";
 
-// --- nowdoc (no interpolation) ---
 
 echo "--- nowdoc ---\n";
 $nowdoc = <<<'EOT'
@@ -53,7 +46,6 @@ Backslash: \n \t \x41
 EOT;
 echo $nowdoc . "\n";
 
-// --- string interpolation patterns ---
 
 echo "--- interpolation ---\n";
 $a = "first";
@@ -69,7 +61,6 @@ $obj = new stdClass();
 $obj->name = "test";
 echo "object: {$obj->name}\n";
 
-// --- multiline string operations ---
 
 echo "--- multiline ---\n";
 $multi = "line 1\nline 2\nline 3\nline 4\nline 5";
@@ -81,7 +72,6 @@ echo "last: {$lines[4]}\n";
 $joined = implode(" | ", $lines);
 echo "joined: $joined\n";
 
-// --- padding and formatting ---
 
 echo "--- formatting ---\n";
 echo str_pad("left", 10) . "|\n";
@@ -95,7 +85,6 @@ echo sprintf("%10s|", "right") . "\n";
 echo sprintf("%+d", 42) . "\n";
 echo sprintf("%+d", -42) . "\n";
 
-// --- edge cases ---
 
 echo "--- edge cases ---\n";
 echo "empty concat: " . "" . "" . "" . "end\n";
@@ -104,7 +93,6 @@ $empty = "";
 echo "empty length: " . strlen($empty) . "\n";
 echo "null coalesce: " . ($empty ?: "default") . "\n";
 
-// single char operations
 $ch = "A";
 echo "ord: " . ord($ch) . "\n";
 echo "chr: " . chr(65) . "\n";

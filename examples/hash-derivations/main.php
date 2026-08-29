@@ -1,7 +1,4 @@
 <?php
-// covers: hash() across algorithms, hash_hmac, hash_pbkdf2, hash_hkdf,
-//   hash_equals constant-time, streaming hash_init/update/final/copy,
-//   hash_file, crc32
 
 echo "=== hash() across algorithms ===\n";
 $msg = "the quick brown fox";

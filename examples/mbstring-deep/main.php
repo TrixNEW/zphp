@@ -1,7 +1,4 @@
 <?php
-// covers: mb_strlen vs strlen, mb_substr, mb_str_split, mb_convert_case,
-//   mb_strpos / mb_stripos, mb_strtolower/upper, mb_convert_encoding,
-//   mb_check_encoding, mb_detect_encoding
 
 echo "=== byte vs char length ===\n";
 $s = "Héllo Wörld 世界";

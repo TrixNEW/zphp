@@ -1,14 +1,5 @@
 <?php
-// covers: traits with late static binding (static::), abstract trait methods,
-// trait alias (as), enums with methods and interfaces, closures as callbacks,
-// compact(), array_map with closures, array_filter, implode, str_replace,
-// strtolower, strtoupper, ucfirst, sprintf, array destructuring with skipped
-// elements, match expressions, null coalesce (??), spread operator,
-// array_key_exists, compact, extract, constructor property promotion,
-// ArrayAccess, Countable, protected property access from closure in trait method,
-// multi-class trait method sharing with closures accessing private properties
 
-// --- trait: renderable ---
 
 trait Renderable {
     abstract protected function renderContent(): string;
@@ -38,7 +29,6 @@ trait Cacheable {
     }
 }
 
-// --- enum: node type ---
 
 enum NodeType: string {
     case Text = 'text';
@@ -58,7 +48,6 @@ enum NodeType: string {
     }
 }
 
-// --- interfaces ---
 
 interface NodeInterface {
     public function getType(): NodeType;
@@ -70,7 +59,6 @@ interface ContainerInterface {
     public function getChildren(): array;
 }
 
-// --- base node ---
 
 abstract class Node implements NodeInterface {
     use Renderable;
@@ -83,7 +71,6 @@ abstract class Node implements NodeInterface {
     abstract public static function tag(): string;
 }
 
-// --- concrete nodes ---
 
 class TextNode extends Node {
     use Cacheable;
@@ -238,7 +225,6 @@ class Context implements ArrayAccess, Countable {
     }
 }
 
-// --- test node types ---
 
 echo "=== Node Types ===\n";
 $text = new TextNode('Hello <world> & "friends"');
@@ -285,7 +271,6 @@ echo "new count: " . count($ctx) . "\n";
 unset($ctx['age']);
 echo "after unset: " . count($ctx) . "\n";
 
-// --- filters ---
 
 echo "\n=== Filters ===\n";
 $ctx->addFilter('upper', function(string $s): string {
@@ -303,7 +288,6 @@ echo $ctx->applyFilter('lower', 'HELLO WORLD') . "\n";
 echo $ctx->applyFilter('title', 'hELLO') . "\n";
 echo $ctx->applyFilter('unknown', 'passthrough') . "\n";
 
-// --- late static binding ---
 
 echo "\n=== Late Static Binding ===\n";
 
@@ -323,7 +307,6 @@ echo Child::create() . "\n";
 echo TextNode::tag() . "\n";
 echo BlockNode::tag() . "\n";
 
-// --- compact/extract ---
 
 echo "\n=== Compact/Extract ===\n";
 function buildContext(): array {
@@ -363,7 +346,6 @@ $prefixes = array_map(function(NodeType $t): string {
 }, $types);
 echo "prefixes: " . implode(', ', $prefixes) . "\n";
 
-// --- spread and defaults ---
 
 echo "\n=== Spread ===\n";
 function joinParts(string ...$parts): string {

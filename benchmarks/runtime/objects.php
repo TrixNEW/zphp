@@ -23,18 +23,15 @@ class Point {
 $n = 50000;
 $points = [];
 
-// create objects
 for ($i = 0; $i < $n; $i++) {
     $points[] = new Point($i * 0.1, $i * 0.2);
 }
 
-// method calls
 $totalDist = 0.0;
 for ($i = 1; $i < $n; $i++) {
     $totalDist += $points[$i]->distanceTo($points[$i - 1]);
 }
 
-// chained operations
 $sum = new Point(0, 0);
 for ($i = 0; $i < 1000; $i++) {
     $sum = $sum->add($points[$i]);

@@ -151,7 +151,6 @@ extern fn zphp_uidna_nameToUnicode(idna: *const UIDNA, name: [*]const UChar, nam
 extern fn zphp_uidna_info_size() usize;
 extern fn zphp_uidna_info_init(info: *anyopaque) void;
 
-// ---------------- helpers ----------------
 
 fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
     const owned = try ctx.allocator.dupe(u8, s);
@@ -208,7 +207,6 @@ fn u16ToUtf8(ctx: *NativeContext, s: []const u16) ![]const u8 {
     return buf;
 }
 
-// ---------------- Normalizer ----------------
 
 fn getNormalizer(form: i64) ?*const UNormalizer2 {
     var status: UErrorCode = U_ZERO_ERROR;
@@ -258,7 +256,6 @@ fn normalizerIsNormalized(ctx: *NativeContext, args: []const Value) RuntimeError
     return .{ .bool = ok != 0 };
 }
 
-// ---------------- Locale ----------------
 
 fn localeGetDefault(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const def = zphp_uloc_getDefault();
@@ -327,7 +324,6 @@ fn localeGetDisplayLanguage(ctx: *NativeContext, args: []const Value) RuntimeErr
 fn localeGetDisplayRegion(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return displayCall(ctx, args, zphp_uloc_getDisplayCountry); }
 fn localeGetDisplayScript(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return displayCall(ctx, args, zphp_uloc_getDisplayScript); }
 
-// ---------------- Collator ----------------
 
 fn getCollator(obj: *const PhpObject) ?*UCollator {
     const v = obj.get("__coll");
@@ -422,7 +418,6 @@ fn collSort(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .bool = true };
 }
 
-// ---------------- NumberFormatter ----------------
 
 fn getNumFmt(obj: *const PhpObject) ?*UNumberFormat {
     const v = obj.get("__nfmt");
@@ -544,7 +539,6 @@ fn nfGetAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .int = @intCast(zphp_unum_getAttribute(f, @intCast(args[0].int))) };
 }
 
-// ---------------- Transliterator ----------------
 
 fn getTranslit(obj: *const PhpObject) ?*UTransliterator {
     const v = obj.get("__trans");
@@ -587,7 +581,6 @@ fn transTransliterate(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     return .{ .string = out };
 }
 
-// ---------------- IntlDateFormatter ----------------
 
 fn getDateFmt(obj: *const PhpObject) ?*UDateFormat {
     const v = obj.get("__dfmt");
@@ -628,7 +621,6 @@ fn dfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const date_style: i32 = if (args[1] == .int) @intCast(args[1].int) else 0;
     const time_style: i32 = if (args[2] == .int) @intCast(args[2].int) else 0;
     const tz_opt: ?[]const u8 = if (args.len > 3 and args[3] == .string and args[3].string.len > 0) args[3].string else defaultTzName(ctx);
-    // skip args[4] (calendar) for now
     const pat_opt: ?[]const u8 = if (args.len > 5 and args[5] == .string and args[5].string.len > 0) args[5].string else null;
 
     const f = (try openDateFmt(ctx, args[0].string, date_style, time_style, tz_opt, pat_opt)) orelse return .null;
@@ -741,7 +733,6 @@ fn idnToUtf8(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return idnConvert(ctx, args, false);
 }
 
-// ---------------- MessageFormatter ----------------
 
 fn buildArgEntries(ctx: *NativeContext, arr: *PhpArray, owned_u16: *std.ArrayListUnmanaged([]u16)) ![]ArgEntry {
     const out = try ctx.allocator.alloc(ArgEntry, arr.entries.items.len);
@@ -871,7 +862,6 @@ fn mfGetLocale(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .string = try dupString(ctx, "") };
 }
 
-// ---------------- IntlCalendar ----------------
 
 fn getCal(obj: *const PhpObject) ?*UCalendar {
     const v = obj.get("__cal");
@@ -915,7 +905,6 @@ fn calConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     //   (int y, int m, int d, int h, int mi, int s)
     const obj = getThis(ctx) orelse return .null;
 
-    // tz/locale form
     if (args.len <= 2 and (args.len == 0 or args[0] == .string or args[0] == .null)) {
         var tz_opt: ?[]const u8 = null;
         if (args.len > 0 and args[0] == .string) tz_opt = args[0].string;
@@ -970,7 +959,6 @@ fn calSet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         zphp_ucal_set(cal, @intCast(args[0].int), @intCast(args[1].int));
         return .{ .bool = true };
     }
-    // year/month/day positional form
     const UCAL_YEAR: i32 = 1;
     const UCAL_MONTH: i32 = 2;
     const UCAL_DATE: i32 = 5;
@@ -1143,7 +1131,6 @@ fn calGetActualMinimum(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const cal = getCal(obj) orelse return .{ .bool = false };
     var status: UErrorCode = U_ZERO_ERROR;
-    // UCAL_ACTUAL_MINIMUM = 4
     return .{ .int = @intCast(zphp_ucal_getLimit(cal, @intCast(args[0].int), 4, &status)) };
 }
 
@@ -1174,7 +1161,6 @@ fn calEquals(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .bool = zphp_ucal_getMillis(a, &s1) == zphp_ucal_getMillis(b, &s2) };
 }
 
-// ---------------- IntlBreakIterator ----------------
 
 fn getBrk(obj: *const PhpObject) ?*ZphpBrk {
     const v = obj.get("__brk");
@@ -1336,7 +1322,6 @@ fn brkGetLocale(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .string = try dupString(ctx, buf[0..@intCast(n)]) };
 }
 
-// ---------------- registration ----------------
 
 const NativeFn = *const fn (*NativeContext, []const Value) RuntimeError!Value;
 
@@ -1479,7 +1464,6 @@ fn graphemeSubstr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     zphp_ubrk_setText(w, s.ptr, @intCast(s.len), &status);
     if (intlRecord(ctx.vm, status)) return .{ .bool = false };
 
-    // collect grapheme byte offsets
     var offsets = std.ArrayListUnmanaged(i32){};
     defer offsets.deinit(ctx.allocator);
     var pos = zphp_ubrk_first(w);
@@ -2269,7 +2253,6 @@ fn localeParseLocale(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
         try out.set(ctx.allocator, .{ .string = "region" }, .{ .string = parts[idx] });
         idx += 1;
     }
-    // remaining are variants
     var vi: usize = 0;
     while (idx < n) : ({ idx += 1; vi += 1; }) {
         var key_buf: [16]u8 = undefined;

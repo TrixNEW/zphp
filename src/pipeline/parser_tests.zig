@@ -531,9 +531,7 @@ fn renderNode(ast: *const Ast, idx: u32, buf: *Buf) !void {
     }
 }
 
-// ==========================================================================
 // tests
-// ==========================================================================
 
 test "integer literal" { try expectParse("<?php 42;", "42"); }
 test "float literal" { try expectParse("<?php 3.14;", "3.14"); }

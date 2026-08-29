@@ -195,7 +195,6 @@ fn getOwnerDocObj(obj: *PhpObject) ?*PhpObject {
     return null;
 }
 
-// ---------------- DOMDocument methods ----------------
 
 fn domDocConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureGlobalInit();
@@ -235,7 +234,6 @@ fn domDocLoadXML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const src = args[0].string;
     const opts = parseOptions(args, 1);
 
-    // replace any prior doc
     if (getDocPtr(obj)) |old| {
         c.xmlFreeDoc(old);
         try setNodePtr(obj, ctx.allocator, null);
@@ -327,7 +325,6 @@ fn domDocSaveXML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     }
 
     if (node) |n| {
-        // dump single node
         const buf = c.xmlBufferCreate();
         defer c.xmlBufferFree(buf);
         const fmt: c_int = if (formatOutputOn(obj)) 1 else 0;
@@ -444,7 +441,6 @@ fn domDocCreateElementNS(ctx: *NativeContext, args: []const Value) RuntimeError!
     const ns_uri: ?[]const u8 = if (args[0] == .string) args[0].string else null;
     const qname = args[1].string;
 
-    // split qname into prefix:localname
     var prefix_buf: ?[:0]u8 = null;
     var local_buf: [:0]u8 = undefined;
     if (std.mem.indexOfScalar(u8, qname, ':')) |colon| {
@@ -669,7 +665,6 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
     const node = node_opt.?;
 
     if (std.mem.eql(u8, prop, "nodeName")) {
-        // for documents, return "#document"
         if (node.type == c.XML_DOCUMENT_NODE or node.type == c.XML_HTML_DOCUMENT_NODE) {
             return .{ .string = try dupString(ctx, "#document") };
         }
@@ -844,7 +839,6 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
     return .null;
 }
 
-// ---------------- DOMNode write methods ----------------
 
 fn domNodeAppendChild(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .object) return .{ .bool = false };
@@ -852,7 +846,6 @@ fn domNodeAppendChild(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     const parent = getNodePtr(obj) orelse return .{ .bool = false };
     const child = getNodePtr(args[0].object) orelse return .{ .bool = false };
 
-    // unlink first if attached
     c.xmlUnlinkNode(child);
     const added = c.xmlAddChild(parent, child);
     if (added == null) return .{ .bool = false };
@@ -969,7 +962,6 @@ fn domNodeLookupNamespaceURI(ctx: *NativeContext, args: []const Value) RuntimeEr
     return try cstrToValue(ctx, ns.*.href);
 }
 
-// ---------------- DOMElement methods ----------------
 
 fn domElementGetAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .string = try dupString(ctx, "") };
@@ -1035,7 +1027,6 @@ fn domElementSetAttributeNS(ctx: *NativeContext, args: []const Value) RuntimeErr
     var ns_ptr: ?*c.xmlNs = null;
     if (args[0] == .string and args[0].string.len > 0) {
         const uri_z = try dupZ(ctx, args[0].string);
-        // resolve / create namespace
         if (std.mem.indexOfScalar(u8, qname, ':')) |colon| {
             const prefix_z = try dupZ(ctx, qname[0..colon]);
             ns_ptr = c.xmlSearchNs(node.doc, node, @ptrCast(prefix_z.ptr));
@@ -1124,7 +1115,6 @@ fn domElementGetAttributeNode(ctx: *NativeContext, args: []const Value) RuntimeE
     return wrapNode(ctx, @ptrCast(attr), getOwnerDocObj(obj) orelse obj);
 }
 
-// ---------------- DOMCharacterData methods ----------------
 
 fn domCdAppendData(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
@@ -1150,7 +1140,6 @@ fn domCdSubstringData(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     return .{ .string = try dupString(ctx, slice[off..end]) };
 }
 
-// ---------------- DOMNodeList ----------------
 
 fn makeNodeList(ctx: *NativeContext, owner_doc: *PhpObject, nodes: []*c.xmlNode) !Value {
     const list_obj = try ctx.createObject("DOMNodeList");
@@ -1240,7 +1229,6 @@ fn getThisGlobal() ?*PhpObject {
 
 var vm_singleton: ?*VM = null;
 
-// ---------------- DOMNamedNodeMap ----------------
 
 fn makeNamedNodeMap(ctx: *NativeContext, owner_doc: *PhpObject, element: *c.xmlNode) !Value {
     const map_obj = try ctx.createObject("DOMNamedNodeMap");
@@ -1290,7 +1278,6 @@ fn domNNMCount(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .int = @intCast(items.array.entries.items.len) };
 }
 
-// ---------------- DOMXPath ----------------
 
 fn domXpathConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .object) return .null;
@@ -1330,7 +1317,6 @@ fn domXpathQuery(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     defer c.xmlXPathFreeContext(xctx);
     if (context_node) |cn| xctx.*.node = cn;
 
-    // register any user namespaces
     const ns_map = obj.get("__namespaces");
     if (ns_map == .array) {
         for (ns_map.array.entries.items) |e| {
@@ -1442,7 +1428,6 @@ fn domXpathEvaluate(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     }
 }
 
-// ---------------- registration ----------------
 
 pub fn register(vm: *VM, a: Allocator) !void {
     vm_singleton = vm;

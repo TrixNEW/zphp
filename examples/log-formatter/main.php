@@ -1,10 +1,5 @@
 <?php
-// covers: vsprintf, preg_quote, preg_replace, preg_match, preg_split,
-//   date, gmdate, sprintf, str_pad, strtoupper, array_map, array_filter,
-//   array_keys, array_values, implode, count, substr, strpos, json_encode,
-//   number_format, microtime, round
 
-// log level constants
 $LEVELS = [
     'DEBUG' => 0,
     'INFO' => 1,
@@ -19,7 +14,6 @@ function formatLogLine(string $level, string $message, array $context = []): str
     $padded = str_pad(strtoupper($level), 8);
 
     if (count($context) > 0) {
-        // interpolate {key} placeholders
         foreach ($context as $key => $value) {
             $placeholder = '{' . $key . '}';
             if (is_array($value)) {
@@ -38,7 +32,6 @@ echo formatLogLine('warning', 'Disk usage at {percent}%', ['percent' => 85]) . "
 echo formatLogLine('error', 'Failed to connect to {host}:{port}', ['host' => 'db.example.com', 'port' => 5432]) . "\n";
 echo formatLogLine('debug', 'Query result: {data}', ['data' => ['rows' => 42, 'cached' => true]]) . "\n";
 
-// vsprintf for structured formatting
 echo "\n=== vsprintf formatting ===\n";
 $formats = [
     "%-20s %5d requests  %6.2f%% success",
@@ -64,7 +57,6 @@ foreach ($userInputs as $input) {
     echo sprintf("  %-15s -> pattern: %-25s match: %s\n", $input, $pattern, $matches ? 'yes' : 'no');
 }
 
-// log parsing with regex
 echo "\n=== log parsing ===\n";
 $logLines = [
     "[2024-01-15 10:30:45] ERROR    Database connection failed: timeout after 30s",
@@ -94,7 +86,6 @@ foreach ($errors as $err) {
     echo "    " . $err['time'] . " - " . $err['message'] . "\n";
 }
 
-// number formatting for metrics
 echo "\n=== number formatting ===\n";
 $metrics = [
     ['name' => 'requests', 'value' => 1234567],
@@ -107,7 +98,6 @@ foreach ($metrics as $metric) {
     echo sprintf("  %-20s %20s\n", $metric['name'], $formatted);
 }
 
-// splitting log messages
 echo "\n=== preg_split ===\n";
 $kvLog = "host=db.prod port=5432 user=admin db=myapp pool_size=10";
 $parts = preg_split('/\s+/', $kvLog);
@@ -128,7 +118,6 @@ $ts = 1705312245; // 2024-01-15 09:50:45 UTC
 echo "  utc:   " . gmdate('Y-m-d H:i:s', $ts) . "\n";
 echo "  rfc:   " . gmdate('D, d M Y H:i:s', $ts) . " GMT\n";
 
-// round with precision
 echo "\n=== round precision ===\n";
 $values = [3.14159, 2.71828, 1.41421, 0.57721];
 foreach ($values as $v) {

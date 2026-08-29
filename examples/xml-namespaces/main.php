@@ -1,6 +1,4 @@
 <?php
-// covers: SimpleXML with namespaces, registerXPathNamespace, children() with ns,
-//   attribute access, DOMDocument round-trip, namespaced XPath queries
 
 $xml = <<<XML
 <?xml version="1.0" encoding="UTF-8"?>
