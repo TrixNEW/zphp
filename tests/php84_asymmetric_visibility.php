@@ -8,19 +8,23 @@ class AsymTest {
     private string $e = "e";
     public static string $f = "f";
     public readonly string $g;
+    protected readonly string $h;
+    private readonly string $i;
 }
 
-$props = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+$props = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
 foreach ($props as $name) {
     $rp = new ReflectionProperty(AsymTest::class, $name);
     echo $name . ': '
         . ($rp->isPublic() ? 'pub ' : '')
         . ($rp->isProtected() ? 'prot ' : '')
         . ($rp->isPrivate() ? 'priv ' : '')
+        . ($rp->isPublicSet() ? 'pubSet ' : '')
         . ($rp->isProtectedSet() ? 'protSet ' : '')
         . ($rp->isPrivateSet() ? 'privSet ' : '')
         . ($rp->isStatic() ? 'static ' : '')
         . ($rp->isReadOnly() ? 'readonly ' : '')
+        . ($rp->isFinal() ? 'final ' : '')
         . 'mods=' . $rp->getModifiers()
         . "\n";
 }

@@ -3352,22 +3352,29 @@ fn rpropIsProtectedSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value
     const this = getThis(ctx) orelse return .{ .bool = false };
     const vis = this.get("_visibility");
     const set_vis = this.get("_set_visibility");
+    const ro = this.get("_is_readonly");
+    const is_ro = ro == .bool and ro.bool;
     const vis_val = if (vis == .int) vis.int else 0;
     const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
-    return .{ .bool = set_vis_val == 1 and vis_val == 0 };
+    return .{ .bool = (set_vis_val == 1 and vis_val == 0) or (is_ro and vis_val == 0) };
 }
 
 fn rpropIsPublicSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = true };
     const vis = this.get("_visibility");
     const set_vis = this.get("_set_visibility");
+    const ro = this.get("_is_readonly");
+    const is_ro = ro == .bool and ro.bool;
     const vis_val = if (vis == .int) vis.int else 0;
     const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    if (is_ro) return .{ .bool = false };
     return .{ .bool = set_vis_val == 0 };
 }
 
 fn rpropIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
+    const final_v = this.get("_is_final");
+    if (final_v == .bool and final_v.bool) return .{ .bool = true };
     const vis = this.get("_visibility");
     const set_vis = this.get("_set_visibility");
     const vis_val = if (vis == .int) vis.int else 0;
@@ -3461,24 +3468,26 @@ fn rpropGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const vis = this.get("_visibility");
     const vis_val = if (vis == .int) vis.int else 0;
     var mods: i64 = switch (vis_val) {
-        1 => 2, // protected
-        2 => 4, // private
-        else => 1, // public (0) / fallback
+        1 => 2, // protected (IS_PROTECTED)
+        2 => 4, // private (IS_PRIVATE)
+        else => 1, // public (IS_PUBLIC)
     };
     const st = this.get("_is_static");
-    if (st == .bool and st.bool) mods |= 16;
-    // a readonly property carries IS_READONLY (128) plus an internal readonly
-    // flag (2048) php 8.4 and 8.5 both report 2177 for a public readonly prop
-    const ro = this.get("_is_readonly");
-    if (ro == .bool and ro.bool) mods |= 128 | 2048;
+    if (st == .bool and st.bool) mods |= 16; // IS_STATIC
 
-    const set_vis = this.get("_set_visibility");
-    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
-    if (set_vis_val == 1 and vis_val == 0) {
-        mods |= 2048;
-    } else if (set_vis_val == 2 and vis_val != 2) {
-        mods |= 4096 | 32;
-    }
+    const ro = this.get("_is_readonly");
+    const is_ro = ro == .bool and ro.bool;
+    if (is_ro) mods |= 128; // IS_READONLY
+
+    const is_final = rpropIsFinal(ctx, &.{}) catch Value{ .bool = false };
+    if (is_final == .bool and is_final.bool) mods |= 32; // IS_FINAL
+
+    const is_prot_set = rpropIsProtectedSet(ctx, &.{}) catch Value{ .bool = false };
+    if (is_prot_set == .bool and is_prot_set.bool) mods |= 2048; // IS_PROTECTED_SET
+
+    const is_priv_set = rpropIsPrivateSet(ctx, &.{}) catch Value{ .bool = false };
+    if (is_priv_set == .bool and is_priv_set.bool) mods |= 4096; // IS_PRIVATE_SET
+
     return .{ .int = mods };
 }
 
