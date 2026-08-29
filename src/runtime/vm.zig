@@ -225,7 +225,7 @@ pub const NativeContext = struct {
     }
 };
 
-const NativeFn = *const fn (*NativeContext, []const Value) RuntimeError!Value;
+pub const NativeFn = *const fn (*NativeContext, []const Value) RuntimeError!Value;
 
 pub const CaptureEntry = struct {
     closure_name: []const u8,

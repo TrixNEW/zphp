@@ -4,8 +4,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // fastLoop compiled as a separate object so LLVM optimizes it
-    // independently of runLoop (prevents codegen perturbation)
+    const zphp_mod = b.addModule("zphp", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const fast_loop_mod = b.createModule(.{
         .root_source_file = b.path("src/fast_loop.zig"),
         .target = target,
@@ -45,6 +49,7 @@ pub fn build(b: *std.Build) void {
     addFsSpaceShim(b, exe_mod);
     exe_mod.link_libc = true;
     exe_mod.addObject(fast_loop_obj);
+    exe_mod.addImport("zphp", zphp_mod);
 
     const exe = b.addExecutable(.{
         .name = "zphp",
@@ -95,6 +100,7 @@ pub fn build(b: *std.Build) void {
     addFsSpaceShim(b, test_mod);
     test_mod.link_libc = true;
     test_mod.addObject(fast_loop_test_obj);
+    test_mod.addImport("zphp", zphp_mod);
 
     const unit_tests = b.addTest(.{
         .root_module = test_mod,
