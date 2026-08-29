@@ -1162,6 +1162,7 @@ pub const VM = struct {
         try @import("../stdlib/gd.zig").register(vm, allocator);
         try @import("../stdlib/soap.zig").register(vm, allocator);
         try @import("../stdlib/mysqli.zig").register(vm, allocator);
+        try @import("../stdlib/chunkutils2.zig").register(vm, allocator);
 
         // HashContext is the type returned by hash_init - register so
         // class_exists('HashContext') and instanceof checks see it
@@ -2007,6 +2008,7 @@ pub const VM = struct {
         @import("../stdlib/intl.zig").cleanupResources(self.objects);
         @import("../stdlib/gmp.zig").cleanupResources(self.objects);
         @import("../stdlib/gd.zig").cleanupResources(self.objects);
+        @import("../stdlib/chunkutils2.zig").cleanupResources(self.objects);
         @import("../stdlib/ftp.zig").cleanupResources(self.objects);
         @import("../stdlib/ldap.zig").cleanupResources(self.objects);
         @import("../stdlib/mysqli.zig").cleanupConnections(self.objects);
@@ -6078,7 +6080,9 @@ pub const VM = struct {
                         gop.value_ptr.* = .{ .start = cap_pos, .len = 1, .has_refs = false };
                     }
                     // closures defined inside class methods inherit class scope
+                    const lexical_class = self.currentDefiningClass();
                     if (std.mem.eql(u8, var_name, "$this") and val == .object) {
+                        // instance method closure: LSB = $this's runtime class
                         try self.captures.append(self.allocator, .{
                             .closure_name = closure_name,
                             .var_name = "$__closure_scope",
@@ -6086,13 +6090,30 @@ pub const VM = struct {
                         });
                         const gop2 = try self.capture_index.getOrPut(self.allocator, closure_name);
                         gop2.value_ptr.len += 1;
+                        if (lexical_class) |class_name| {
+                            try self.captures.append(self.allocator, .{
+                                .closure_name = closure_name,
+                                .var_name = "$__closure_defclass",
+                                .value = .{ .string = class_name },
+                            });
+                            const gop3 = try self.capture_index.getOrPut(self.allocator, closure_name);
+                            gop3.value_ptr.len += 1;
+                        }
                     } else if (!gop.found_existing) {
-                        // first capture for this closure - check if we're in a static class method
-                        const scope = self.currentFrame().called_class orelse self.currentDefiningClass();
+                        const scope = self.currentFrame().called_class orelse lexical_class;
                         if (scope) |class_name| {
                             try self.captures.append(self.allocator, .{
                                 .closure_name = closure_name,
                                 .var_name = "$__closure_scope",
+                                .value = .{ .string = class_name },
+                            });
+                            const gop2 = try self.capture_index.getOrPut(self.allocator, closure_name);
+                            gop2.value_ptr.len += 1;
+                        }
+                        if (lexical_class) |class_name| {
+                            try self.captures.append(self.allocator, .{
+                                .closure_name = closure_name,
+                                .var_name = "$__closure_defclass",
                                 .value = .{ .string = class_name },
                             });
                             const gop2 = try self.capture_index.getOrPut(self.allocator, closure_name);
@@ -11606,6 +11627,7 @@ pub const VM = struct {
             const new_start: u32 = @intCast(self.captures.items.len);
             var has_this = false;
             var has_scope = false;
+            var has_defclass = false;
             for (src) |cap| {
                 if (std.mem.eql(u8, cap.var_name, "$__closure_scope")) {
                     has_scope = true;
@@ -11619,6 +11641,23 @@ pub const VM = struct {
                         .set => |s| try self.captures.append(self.allocator, .{
                             .closure_name = new_name,
                             .var_name = "$__closure_scope",
+                            .value = .{ .string = s },
+                        }),
+                    }
+                    continue;
+                }
+                if (std.mem.eql(u8, cap.var_name, "$__closure_defclass")) {
+                    has_defclass = true;
+                    switch (scope_action) {
+                        .preserve => try self.captures.append(self.allocator, .{
+                            .closure_name = new_name,
+                            .var_name = "$__closure_defclass",
+                            .value = cap.value,
+                        }),
+                        .clear => {},
+                        .set => |s| try self.captures.append(self.allocator, .{
+                            .closure_name = new_name,
+                            .var_name = "$__closure_defclass",
                             .value = .{ .string = s },
                         }),
                     }
@@ -11657,6 +11696,16 @@ pub const VM = struct {
                     .preserve, .clear => {},
                 }
             }
+            if (!has_defclass) {
+                switch (scope_action) {
+                    .set => |s| try self.captures.append(self.allocator, .{
+                        .closure_name = new_name,
+                        .var_name = "$__closure_defclass",
+                        .value = .{ .string = s },
+                    }),
+                    .preserve, .clear => {},
+                }
+            }
             const new_len: u16 = @intCast(self.captures.items.len - new_start);
             try self.capture_index.put(self.allocator, new_name, .{ .start = new_start, .len = new_len, .has_refs = cr.has_refs });
         } else {
@@ -11670,11 +11719,18 @@ pub const VM = struct {
                 });
             }
             switch (scope_action) {
-                .set => |s| try self.captures.append(self.allocator, .{
-                    .closure_name = new_name,
-                    .var_name = "$__closure_scope",
-                    .value = .{ .string = s },
-                }),
+                .set => |s| {
+                    try self.captures.append(self.allocator, .{
+                        .closure_name = new_name,
+                        .var_name = "$__closure_scope",
+                        .value = .{ .string = s },
+                    });
+                    try self.captures.append(self.allocator, .{
+                        .closure_name = new_name,
+                        .var_name = "$__closure_defclass",
+                        .value = .{ .string = s },
+                    });
+                },
                 .preserve, .clear => {},
             }
             const cap_len = self.captures.items.len - new_start;
@@ -13378,6 +13434,44 @@ pub const VM = struct {
         return null;
     }
 
+    fn closureDefClassForFrame(self: *VM, frame: *const CallFrame) ?[]const u8 {
+        const compile_name = if (frame.func) |fn_| fn_.name else "";
+        if (!std.mem.startsWith(u8, compile_name, "__closure_")) return null;
+        if (frame.call_name) |inst_name| {
+            if (self.capture_index.get(inst_name)) |cr| {
+                const caps = self.captures.items[cr.start .. cr.start + cr.len];
+                for (caps) |cap| {
+                    if (std.mem.eql(u8, cap.var_name, "$__closure_defclass") and cap.value == .string)
+                        return cap.value.string;
+                }
+            }
+        }
+        if (self.chunk_to_func_names.get(@intFromPtr(frame.chunk))) |names| {
+            for (names.items) |name| {
+                if (!std.mem.startsWith(u8, name, "__closure_")) continue;
+                if (self.capture_index.get(name)) |cr| {
+                    const caps = self.captures.items[cr.start .. cr.start + cr.len];
+                    for (caps) |cap| {
+                        if (std.mem.eql(u8, cap.var_name, "$__closure_defclass") and cap.value == .string)
+                            return cap.value.string;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    pub fn closureDefClassByName(self: *VM, name: []const u8) ?[]const u8 {
+        if (self.capture_index.get(name)) |cr| {
+            const caps = self.captures.items[cr.start .. cr.start + cr.len];
+            for (caps) |cap| {
+                if (std.mem.eql(u8, cap.var_name, "$__closure_defclass") and cap.value == .string)
+                    return cap.value.string;
+            }
+        }
+        return null;
+    }
+
     pub fn closureThisByName(self: *VM, name: []const u8) Value {
         if (self.capture_index.get(name)) |cr| {
             const caps = self.captures.items[cr.start .. cr.start + cr.len];
@@ -13442,6 +13536,9 @@ pub const VM = struct {
     pub fn currentDefiningClass(self: *VM) ?[]const u8 {
         // bound closure scope takes priority over frame walk
         if (self.frame_count > 0) {
+            if (self.closureDefClassForFrame(&self.frames[self.frame_count - 1])) |scope|
+                return scope;
+            // fall back to $__closure_scope for closures created before the
             if (self.closureScopeForFrame(&self.frames[self.frame_count - 1])) |scope|
                 return scope;
         }
@@ -14087,6 +14184,7 @@ pub const VM = struct {
             const caps = self.captures.items[cr.start .. cr.start + cr.len];
             for (caps) |cap| {
                 if (std.mem.eql(u8, cap.var_name, "$__closure_scope")) continue;
+                if (std.mem.eql(u8, cap.var_name, "$__closure_defclass")) continue;
                 if (cap.ref_cell) |cell| {
                     if (ref_slots) |rs| try rs.put(self.allocator, cap.var_name, cell);
                 } else {
