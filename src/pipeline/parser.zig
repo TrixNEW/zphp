@@ -1347,6 +1347,15 @@ const Parser = struct {
             }
             if (!has_set_vis) set_visibility = visibility;
 
+            // PHP 8.4 asymmetric visibility is only valid on instance
+            // properties, and set visibility may not be wider than read visibility.
+            const starts_property = self.peek() == .variable or self.isTypeName() or
+                self.peek() == .question or self.peek() == .l_paren;
+            if (has_set_vis and (!starts_property or set_visibility < visibility or is_static)) {
+                try self.addError(.unexpected_token);
+                return error.ParseError;
+            }
+
             if (self.peek() == .kw_use) {
                 try members.append(self.allocator, try self.parseTraitUse());
             } else if (self.peek() == .kw_function) {
@@ -1361,6 +1370,11 @@ const Parser = struct {
                     try members.append(self.allocator, method);
                 }
             } else if (self.peek() == .variable) {
+                // Asymmetric set visibility requires an explicit property type.
+                if (has_set_vis) {
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
+                }
                 const prop = try self.parseClassProperty();
                 if (is_static) {
                     self.nodes.items[prop].tag = .static_class_property;
@@ -1522,6 +1536,15 @@ const Parser = struct {
             }
             if (!has_set_vis) set_visibility = visibility;
 
+            // PHP 8.4 asymmetric visibility is only valid on instance
+            // properties, and set visibility may not be wider than read visibility.
+            const starts_property = self.peek() == .variable or self.isTypeName() or
+                self.peek() == .question or self.peek() == .l_paren;
+            if (has_set_vis and (!starts_property or set_visibility < visibility or is_static)) {
+                try self.addError(.unexpected_token);
+                return error.ParseError;
+            }
+
             if (self.peek() == .kw_use) {
                 try members.append(self.allocator, try self.parseTraitUse());
             } else if (self.peek() == .kw_function) {
@@ -1540,6 +1563,11 @@ const Parser = struct {
                     try members.append(self.allocator, method);
                 }
             } else if (self.peek() == .variable) {
+                // Asymmetric set visibility requires an explicit property type.
+                if (has_set_vis) {
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
+                }
                 const prop = try self.parseClassProperty();
                 if (is_static) {
                     self.nodes.items[prop].tag = .static_class_property;
@@ -1697,44 +1725,125 @@ const Parser = struct {
 
         while (self.peek() != .r_brace and self.peek() != .eof) {
             self.skipAttributes();
+
             var is_static = false;
             var is_abstract = false;
+            var is_final = false;
+            var is_readonly = false;
+            var visibility: u32 = 0; // 0=public, 1=protected, 2=private
+            var set_visibility: u32 = 0;
+            var has_set_vis = false;
+
             while (self.peek() == .kw_public or self.peek() == .kw_protected or
                 self.peek() == .kw_private or self.peek() == .kw_static or
-                self.peek() == .kw_abstract or self.peek() == .kw_readonly)
+                self.peek() == .kw_abstract or self.peek() == .kw_final or self.peek() == .kw_readonly)
             {
-                if (self.peek() == .kw_static) is_static = true;
-                if (self.peek() == .kw_abstract) is_abstract = true;
+                if (self.peek() == .kw_static) {
+                    is_static = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_abstract) {
+                    is_abstract = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_final) {
+                    is_final = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_readonly) {
+                    is_readonly = true;
+                    _ = self.advance();
+                    continue;
+                }
+
+                const vis_val: u32 =
+                    if (self.peek() == .kw_protected) 1 else if (self.peek() == .kw_private) 2 else 0;
+
                 _ = self.advance();
+
+                if (self.peek() == .l_paren and
+                    self.peekAt(1) == .identifier and
+                    std.mem.eql(u8, self.lexemeAt(1), "set") and
+                    self.peekAt(2) == .r_paren)
+                {
+                    _ = self.advance();
+                    _ = self.advance();
+                    _ = self.advance();
+                    set_visibility = vis_val;
+                    has_set_vis = true;
+                } else {
+                    visibility = vis_val;
+                }
+            }
+
+            if (!has_set_vis) set_visibility = visibility;
+
+            const starts_property = self.peek() == .variable or self.isTypeName() or
+                self.peek() == .question or self.peek() == .l_paren;
+            if (has_set_vis and (!starts_property or set_visibility < visibility or is_static)) {
+                try self.addError(.unexpected_token);
+                return error.ParseError;
             }
 
             if (self.peek() == .kw_function) {
                 if (is_abstract) {
-                    try members.append(self.allocator, try self.parseInterfaceMethod());
+                    const method = try self.parseInterfaceMethod();
+                    self.nodes.items[method].data.rhs |= visibility << 28;
+                    try members.append(self.allocator, method);
                     continue;
                 }
+
                 const method = try self.parseClassMethod();
                 if (is_static) {
                     self.nodes.items[method].tag = .static_class_method;
                 }
+                self.nodes.items[method].data.rhs |=
+                    (visibility << 30) |
+                    (if (is_final) @as(u32, 1) << 28 else 0);
                 try members.append(self.allocator, method);
             } else if (self.peek() == .variable) {
+                if (has_set_vis) {
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
+                }
+
                 const prop = try self.parseClassProperty();
                 if (is_static) {
                     self.nodes.items[prop].tag = .static_class_property;
                 }
+                self.nodes.items[prop].data.rhs = encodePropertyFlags(
+                    visibility,
+                    set_visibility,
+                    has_set_vis,
+                    is_readonly,
+                    is_final,
+                );
                 try members.append(self.allocator, prop);
             } else if (self.isTypeName() or self.peek() == .question or self.peek() == .l_paren) {
                 const tr = self.collectTypeHint();
+
                 if (self.peek() == .variable) {
                     const prop = try self.parseClassProperty();
                     if (is_static) {
                         self.nodes.items[prop].tag = .static_class_property;
                     }
+
+                    var rhs = encodePropertyFlags(
+                        visibility,
+                        set_visibility,
+                        has_set_vis,
+                        is_readonly,
+                        is_final,
+                    );
                     if (tr[0] != tr[1]) {
                         const ext = try self.addExtra(&tr);
-                        self.nodes.items[prop].data.rhs |= (ext + 1) << 16;
+                        rhs |= (ext + 1) << 16;
                     }
+
+                    self.nodes.items[prop].data.rhs = rhs;
                     try members.append(self.allocator, prop);
                 } else {
                     _ = self.advance();
@@ -1747,10 +1856,14 @@ const Parser = struct {
                 _ = self.advance();
             }
         }
-        _ = try self.expect(.r_brace);
 
+        _ = try self.expect(.r_brace);
         const extra = try self.addExtraList(members.items);
-        return self.addNode(.{ .tag = .trait_decl, .main_token = name_tok, .data = .{ .lhs = extra } });
+        return self.addNode(.{
+            .tag = .trait_decl,
+            .main_token = name_tok,
+            .data = .{ .lhs = extra },
+        });
     }
 
     fn parseEnumDecl(self: *Parser) Error!u32 {
@@ -2360,6 +2473,16 @@ const Parser = struct {
             break;
         }
         const type_range = self.collectTypeHint();
+
+        // PHP 8.4 asymmetric promoted-property validation.
+        if (set_promotion > 0) {
+            if (promotion == 0) promotion = 1;
+
+            if (set_promotion < promotion or type_range[0] == type_range[1]) {
+                try self.addError(.unexpected_token);
+                return error.ParseError;
+            }
+        }
         const is_ref = self.peek() == .amp;
         if (is_ref) _ = self.advance();
         const is_variadic = self.peek() == .ellipsis;

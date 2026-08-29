@@ -515,7 +515,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // php8.4 asymmetric visibility methods
     try rprop_def.methods.put(a, "isPrivateSet", .{ .name = "isPrivateSet", .arity = 0 });
     try rprop_def.methods.put(a, "isProtectedSet", .{ .name = "isProtectedSet", .arity = 0 });
-    try rprop_def.methods.put(a, "isPublicSet", .{ .name = "isPublicSet", .arity = 0 });
     try rprop_def.methods.put(a, "isFinal", .{ .name = "isFinal", .arity = 0 });
     try rprop_def.methods.put(a, "isAbstract", .{ .name = "isAbstract", .arity = 0 });
     try rprop_def.methods.put(a, "hasHooks", .{ .name = "hasHooks", .arity = 0 });
@@ -560,7 +559,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionProperty::isPrivate", rpropIsPrivate);
     try vm.native_fns.put(a, "ReflectionProperty::isPrivateSet", rpropIsPrivateSet);
     try vm.native_fns.put(a, "ReflectionProperty::isProtectedSet", rpropIsProtectedSet);
-    try vm.native_fns.put(a, "ReflectionProperty::isPublicSet", rpropIsPublicSet);
     try vm.native_fns.put(a, "ReflectionProperty::isFinal", rpropIsFinal);
     try vm.native_fns.put(a, "ReflectionProperty::isAbstract", rpropIsAbstract);
     try vm.native_fns.put(a, "ReflectionProperty::hasHooks", reflectionFalse);
@@ -3449,35 +3447,41 @@ fn rpropIsProtectedSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value
     const this = getThis(ctx) orelse return .{ .bool = false };
     const vis = this.get("_visibility");
     const set_vis = this.get("_set_visibility");
+    const has_set_vis = this.get("_has_set_visibility");
     const ro = this.get("_is_readonly");
     const is_ro = ro == .bool and ro.bool;
+    const has_explicit_set = has_set_vis == .bool and has_set_vis.bool;
     const vis_val = if (vis == .int) vis.int else 0;
     const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
-    return .{ .bool = (set_vis_val == 1 and vis_val == 0) or (is_ro and vis_val == 0) };
-}
 
-fn rpropIsPublicSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const this = getThis(ctx) orelse return .{ .bool = false };
-    const vis = this.get("_visibility");
-    const set_vis = this.get("_set_visibility");
-    const ro = this.get("_is_readonly");
-    const is_ro = ro == .bool and ro.bool;
-    const vis_val = if (vis == .int) vis.int else 0;
-    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
-    if (is_ro) return .{ .bool = false };
-    return .{ .bool = set_vis_val == 0 and vis_val == 0 };
+    return .{
+        .bool = (set_vis_val == 1 and vis_val == 0) or
+            (is_ro and vis_val == 0 and !has_explicit_set),
+    };
 }
-
 fn rpropIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
+
     const final_v = this.get("_is_final");
-    if (final_v == .bool and final_v.bool) return .{ .bool = true };
+    const is_explicit_final = final_v == .bool and final_v.bool;
+    if (is_explicit_final) return .{ .bool = true };
+
     const vis = this.get("_visibility");
     const set_vis = this.get("_set_visibility");
+    const has_set_vis = this.get("_has_set_visibility");
+    const ro = this.get("_is_readonly");
+
     const vis_val = if (vis == .int) vis.int else 0;
     const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
-    if (set_vis_val == 2 and vis_val != 2) return .{ .bool = true };
-    return .{ .bool = false };
+    const has_explicit_set = has_set_vis == .bool and has_set_vis.bool;
+    const is_ro = ro == .bool and ro.bool;
+
+    // PHP 8.4 only treats asymmetric private(set) as implicitly final.
+    // Symmetric `private private(set)` and private readonly remain non-final.
+    const implicit_private_set_final =
+        has_explicit_set and set_vis_val == 2 and vis_val != 2;
+
+    return .{ .bool = implicit_private_set_final };
 }
 
 fn rpropIsAbstract(_: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -3564,30 +3568,40 @@ fn rpropGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .int = 0 };
     const vis = this.get("_visibility");
     const vis_val = if (vis == .int) vis.int else 0;
+
     var mods: i64 = switch (vis_val) {
-        1 => 2, // protected (IS_PROTECTED)
-        2 => 4, // private (IS_PRIVATE)
-        else => 1, // public (IS_PUBLIC)
+        1 => 2, // IS_PROTECTED
+        2 => 4, // IS_PRIVATE
+        else => 1, // IS_PUBLIC
     };
+
     const st = this.get("_is_static");
-    if (st == .bool and st.bool) mods |= 16; // IS_STATIC
+    if (st == .bool and st.bool) mods |= 16;
 
     const ro = this.get("_is_readonly");
     const is_ro = ro == .bool and ro.bool;
-    if (is_ro) mods |= 128; // IS_READONLY
+    if (is_ro) mods |= 128;
 
     const set_vis = this.get("_set_visibility");
+    const has_set_vis = this.get("_has_set_visibility");
     const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    const has_explicit_set = has_set_vis == .bool and has_set_vis.bool;
 
     const final_v = this.get("_is_final");
     const is_explicit_final = final_v == .bool and final_v.bool;
-    const is_asym_private_set = set_vis_val == 2 and vis_val != 2;
-    if (is_explicit_final or is_asym_private_set) mods |= 32; // IS_FINAL
+    // Match PHP 8.4: only asymmetric private(set) contributes IS_FINAL.
+    const implicit_private_set_final =
+        has_explicit_set and set_vis_val == 2 and vis_val != 2;
+    if (is_explicit_final or implicit_private_set_final) mods |= 32;
 
-    const is_asym_prot_set = (set_vis_val == 1 and vis_val == 0) or (is_ro and vis_val == 0);
-    if (is_asym_prot_set) mods |= 2048; // IS_PROTECTED_SET
+    const is_asym_private_set =
+        has_explicit_set and set_vis_val == 2 and vis_val != 2;
+    if (is_asym_private_set) mods |= 4096;
 
-    if (is_asym_private_set) mods |= 4096; // IS_PRIVATE_SET
+    const is_asym_prot_set =
+        (has_explicit_set and set_vis_val == 1 and vis_val == 0) or
+        (is_ro and vis_val == 0 and !has_explicit_set);
+    if (is_asym_prot_set) mods |= 2048;
 
     return .{ .int = mods };
 }

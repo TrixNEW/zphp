@@ -10785,6 +10785,15 @@ pub const VM = struct {
             // The ClassDef owns this default, so retain arrays/objects here.
             retainValue(default_val);
 
+            const effective_readonly = prop_readonly[pi] or def.is_readonly;
+            // PHP 8.4 implicitly finalizes only asymmetric private(set).
+            // Symmetric private private(set) and private readonly are not final.
+            const reflection_final =
+                prop_final[pi] or
+                (prop_has_set_vis[pi] and
+                    prop_set_vis[pi] == .private and
+                    prop_vis[pi] != .private);
+
             try def.properties.append(self.allocator, .{
                 .name = prop_names[pi],
                 .default = default_val,
@@ -10792,8 +10801,8 @@ pub const VM = struct {
                 .visibility = prop_vis[pi],
                 .set_visibility = prop_set_vis[pi],
                 .has_set_visibility = prop_has_set_vis[pi],
-                .is_readonly = prop_readonly[pi] or def.is_readonly,
-                .is_final = prop_final[pi],
+                .is_readonly = effective_readonly,
+                .is_final = reflection_final,
                 .is_promoted = prop_promoted[pi],
                 .type_str = prop_type[pi],
                 .doc_comment = prop_doc[pi],
@@ -10950,6 +10959,30 @@ pub const VM = struct {
 
         if (def.parent) |parent_name| {
             if (!self.classes.contains(parent_name)) try self.tryAutoload(parent_name);
+
+            var current_parent: ?[]const u8 = parent_name;
+            while (current_parent) |parent_class_name| {
+                const parent_cls = self.classes.get(parent_class_name) orelse break;
+
+                for (parent_cls.properties.items) |parent_prop| {
+                    if (!parent_prop.is_final) continue;
+
+                    for (def.properties.items) |child_prop| {
+                        if (!std.mem.eql(u8, parent_prop.name, child_prop.name)) continue;
+
+                        const msg = try std.fmt.allocPrint(
+                            self.allocator,
+                            "Cannot override final property {s}::${s}",
+                            .{ parent_class_name, parent_prop.name },
+                        );
+                        try self.strings.append(self.allocator, msg);
+                        self.error_msg = msg;
+                        return error.RuntimeError;
+                    }
+                }
+
+                current_parent = parent_cls.parent;
+            }
         }
 
         def.slot_layout = try self.buildSlotLayout(&def);
