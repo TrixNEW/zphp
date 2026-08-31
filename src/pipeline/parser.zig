@@ -1245,6 +1245,22 @@ const Parser = struct {
         return self.addNode(.{ .tag = .new_expr, .main_token = name_tok, .data = .{ .lhs = extra, .rhs = name_extra } });
     }
 
+    // allow dereferencing new expressions without wrapping parentheses
+    fn parseNewExprWithSuffix(self: *Parser) Error!u32 {
+        var node = try self.parseNewExpr();
+        while (true) {
+            switch (self.peek()) {
+                .arrow => node = try self.parsePropExpr(node, false),
+                .question_arrow => node = try self.parsePropExpr(node, true),
+                .colon_colon => node = try self.parseStaticAccess(node),
+                .l_bracket => node = try self.parseIndexExpr(node),
+                .l_paren => node = try self.parseCallExpr(node),
+                else => break,
+            }
+        }
+        return node;
+    }
+
     // Property metadata stored in the low byte of class_property rhs.
     // bits 0-1: read visibility, bit 2: readonly, bits 3-4: set visibility,
     // bit 5: explicit asymmetric set visibility, bit 7: final.
@@ -2624,7 +2640,7 @@ const Parser = struct {
                 const operand = try self.parseExprPrec(2);
                 return self.addNode(.{ .tag = .print_expr, .main_token = tok, .data = .{ .lhs = operand } });
             },
-            .kw_new => return self.parseNewExpr(),
+            .kw_new => return self.parseNewExprWithSuffix(),
             .kw_yield => return self.parseYieldExpr(),
             .kw_require, .kw_require_once, .kw_include, .kw_include_once => {
                 const tok = self.advance();

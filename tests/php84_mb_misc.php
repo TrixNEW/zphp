@@ -82,4 +82,4 @@ class Builder {
 }
 echo (new Builder())->name(), "\n";
 echo Builder::make()->name(), "\n";
-echo new Builder()->name(), "\n"; // PHP 8.4 (zphp may not support)
+echo new Builder()->name(), "\n"; // PHP 8.4 new without parentheses
