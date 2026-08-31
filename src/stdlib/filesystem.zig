@@ -409,6 +409,11 @@ const CurlWriteData = struct {
     buffer: std.ArrayListUnmanaged(u8),
 };
 
+const CurlHeaderData = struct {
+    ctx: *NativeContext,
+    headers: *PhpArray,
+};
+
 fn curlWriteCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaque) callconv(.c) usize {
     const total = size * nmemb;
     const wd: *CurlWriteData = @ptrCast(@alignCast(userdata));
@@ -416,7 +421,23 @@ fn curlWriteCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaqu
     return total;
 }
 
+fn curlHeaderCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaque) callconv(.c) usize {
+    const total = size * nmemb;
+    const hd: *CurlHeaderData = @ptrCast(@alignCast(userdata));
+    var raw = data[0..total];
+    while (raw.len > 0 and (raw[raw.len - 1] == '\r' or raw[raw.len - 1] == '\n')) {
+        raw = raw[0 .. raw.len - 1];
+    }
+    if (raw.len > 0) {
+        const owned = hd.ctx.createString(raw) catch return 0;
+        hd.headers.append(hd.ctx.allocator, .{ .string = owned }) catch return 0;
+    }
+    return total;
+}
+
 fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!Value {
+    ctx.vm.last_http_response_headers = null;
+
     if (!curl_global_init_done) {
         _ = c_curl.curl_global_init(c_curl.CURL_GLOBAL_DEFAULT);
         curl_global_init_done = true;
@@ -440,11 +461,21 @@ fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!Value {
     };
     defer wd.buffer.deinit(wd.allocator);
 
+    const headers_arr = ctx.createArray() catch return .{ .bool = false };
+    var hd = CurlHeaderData{
+        .ctx = ctx,
+        .headers = headers_arr,
+    };
+
     _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_WRITEFUNCTION, @as(?*const fn ([*]u8, usize, usize, *anyopaque) callconv(.c) usize, &curlWriteCallback));
     _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_WRITEDATA, @as(*anyopaque, @ptrCast(&wd)));
+    _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_HEADERFUNCTION, @as(?*const fn ([*]u8, usize, usize, *anyopaque) callconv(.c) usize, &curlHeaderCallback));
+    _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_HEADERDATA, @as(*anyopaque, @ptrCast(&hd)));
 
     const result = c_curl.curl_easy_perform(handle);
     if (result != c_curl.CURLE_OK) return .{ .bool = false };
+
+    ctx.vm.last_http_response_headers = headers_arr;
 
     const content = try ctx.createString(wd.buffer.items);
     return .{ .string = content };

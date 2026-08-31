@@ -50,6 +50,8 @@ pub const map = std.StaticStringMap([]const []const u8).initComptime(.{
     .{ "parse_url", &.{ "$url", "$component" } },
     .{ "parse_str", &.{ "$string", "$result" } },
     .{ "http_build_query", &.{ "$data", "$numeric_prefix", "$arg_separator", "$encoding_type" } },
+    .{ "http_get_last_response_headers", &.{} },
+    .{ "http_clear_last_response_headers", &.{} },
     .{ "urlencode", &.{ "$string" } },
     .{ "urldecode", &.{ "$string" } },
     .{ "rawurlencode", &.{ "$string" } },
