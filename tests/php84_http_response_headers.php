@@ -20,6 +20,11 @@ http_clear_last_response_headers();
 http_clear_last_response_headers();
 var_dump(http_get_last_response_headers() === null);
 
+// failed request resets headers to null
+$bad = @file_get_contents("http://127.0.0.1:1/nope");
+var_dump($bad === false);
+var_dump(http_get_last_response_headers() === null);
+
 // reflection parameter counts
 $rf_get = new ReflectionFunction("http_get_last_response_headers");
 var_dump($rf_get->getNumberOfParameters());

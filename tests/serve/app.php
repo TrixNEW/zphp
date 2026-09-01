@@ -97,6 +97,9 @@ if ($path === "/health") {
     }
     setHeaders();
     echo "from-func";
+} elseif ($path === "/redirect") {
+    header("Location: /headers", true, 302);
+    echo "redirecting";
 } else {
     http_response_code(404);
     echo json_encode(["error" => "not found", "path" => $path]);

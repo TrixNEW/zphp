@@ -424,12 +424,10 @@ fn curlWriteCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaqu
 fn curlHeaderCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaque) callconv(.c) usize {
     const total = size * nmemb;
     const hd: *CurlHeaderData = @ptrCast(@alignCast(userdata));
-    var raw = data[0..total];
-    while (raw.len > 0 and (raw[raw.len - 1] == '\r' or raw[raw.len - 1] == '\n')) {
-        raw = raw[0 .. raw.len - 1];
-    }
-    if (raw.len > 0) {
-        const owned = hd.ctx.createString(raw) catch return 0;
+    const raw = data[0..total];
+    const cleaned_raw = std.mem.trimEnd(u8, raw, "\r\n");
+    if (cleaned_raw.len > 0) {
+        const owned = hd.ctx.createString(cleaned_raw) catch return 0;
         hd.headers.append(hd.ctx.allocator, .{ .string = owned }) catch return 0;
     }
     return total;
