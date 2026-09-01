@@ -107,8 +107,34 @@ $fgc = file_get_contents("$base/health");
 test("fgc http body", '{"status":"ok"}', $fgc);
 test("fgc http type", "string", gettype($fgc));
 
-// file_get_contents with bad URL
-$fgc_bad = file_get_contents("http://127.0.0.1:1/nope");
+// http_get_last_response_headers with successful request
+$fgc_headers_body = file_get_contents("$base/headers");
+$hdrs = http_get_last_response_headers();
+test("http_get_last_response_headers is array after request", true, is_array($hdrs));
+test("http_get_last_response_headers status 200", true, isset($hdrs[0]) && str_contains($hdrs[0], "200"));
+test("http_get_last_response_headers contains custom header", true, in_array("X-Custom: hello", $hdrs, true) || in_array("x-custom: hello", $hdrs, true) || str_contains(implode("\n", $hdrs), "X-Custom: hello"));
+
+// http_clear_last_response_headers after real request
+http_clear_last_response_headers();
+test("http_clear_last_response_headers clears headers", null, http_get_last_response_headers());
+
+// http_get_last_response_headers with 404 response
+$fgc_404 = @file_get_contents("$base/nonexistent");
+$hdrs_404 = http_get_last_response_headers();
+test("http_get_last_response_headers on 404 is array", true, is_array($hdrs_404));
+test("http_get_last_response_headers on 404 status", true, isset($hdrs_404[0]) && str_contains($hdrs_404[0], "404"));
+
+// http_get_last_response_headers with redirect chain (302 -> 200)
+$fgc_redir = file_get_contents("$base/redirect");
+$hdrs_redir = http_get_last_response_headers();
+test("http_get_last_response_headers on redirect is array", true, is_array($hdrs_redir));
+$redir_str = implode("\n", $hdrs_redir ?: []);
+test("http_get_last_response_headers contains 302", true, str_contains($redir_str, "302"));
+test("http_get_last_response_headers contains final 200", true, str_contains($redir_str, "200"));
+
+// file_get_contents with bad URL resets headers to null
+$fgc_bad = @file_get_contents("http://127.0.0.1:1/nope");
 test("fgc bad returns false", false, $fgc_bad);
+test("http_get_last_response_headers on failed request is null", null, http_get_last_response_headers());
 
 echo "done\n";
