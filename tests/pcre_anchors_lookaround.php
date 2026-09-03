@@ -12,7 +12,7 @@ preg_match('/a{3}/', "aaab", $m);
 print_r($m);
 preg_match('/a{2,4}/', "aaaaab", $m);
 print_r($m);
-preg_match('/a{,3}/', "aaaaab", $m); // PHP allows lazy {,3}? Actually {,n} means 0-n
+preg_match('/a{0,3}/', "aaaaab", $m);
 print_r($m);
 preg_match_all('/a+/', "aaa b a baaab", $m);
 print_r($m);
