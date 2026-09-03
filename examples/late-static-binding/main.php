@@ -1,9 +1,4 @@
 <?php
-// covers: late static binding - new static(), static:: method dispatch,
-//   static:: on static properties (per-class storage), static::class vs
-//   self::class, parent::, static:: inside trait methods, static:: inside a
-//   closure created in a static method, abstract static methods resolved
-//   through static::, the static return type
 
 require __DIR__ . '/Models.php';
 

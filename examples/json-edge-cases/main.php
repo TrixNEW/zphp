@@ -1,7 +1,4 @@
 <?php
-// covers: json_encode/decode flags, unicode escaping, float precision,
-//   nested depth, object vs array, JsonSerializable, error reporting,
-//   integer overflow handling, big numbers as strings
 
 class Point implements JsonSerializable {
     public function __construct(public float $x, public float $y) {}

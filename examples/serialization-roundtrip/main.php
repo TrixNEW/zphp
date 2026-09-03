@@ -1,10 +1,5 @@
 <?php
-// covers: serialize/unserialize (scalars, arrays, nested arrays, objects,
-//   private/protected properties, class hierarchy), json_encode/json_decode,
-//   INF/NAN edge cases, array_map, implode, is_nan,
-//   is_infinite, gettype, class properties, inheritance, type coercion
 
-// --- scalar roundtrips ---
 
 $scalars = [null, true, false, 0, 1, -42, 3.14, -0.0, '', 'hello', "with\nnewline"];
 
@@ -16,7 +11,6 @@ foreach ($scalars as $val) {
     echo gettype($val) . ': ' . $match . "\n";
 }
 
-// --- special float values ---
 
 echo "\n=== Special Float Values ===\n";
 $inf = INF;
@@ -30,7 +24,6 @@ echo '-INF unserialize match: ' . (unserialize(serialize($ninf)) === -INF ? 'ok'
 echo 'NAN serialize: ' . serialize($nan) . "\n";
 echo 'NAN unserialize is_nan: ' . (is_nan(unserialize(serialize($nan))) ? 'ok' : 'FAIL') . "\n";
 
-// --- array roundtrips ---
 
 echo "\n=== Array Roundtrips ===\n";
 
@@ -48,7 +41,6 @@ foreach ($arrays as $name => $arr) {
     echo $name . ': ' . ($arr === $back ? 'ok' : 'FAIL') . "\n";
 }
 
-// --- serialize format details ---
 
 echo "\n=== Serialize Format ===\n";
 
@@ -61,7 +53,6 @@ echo "string abc: " . serialize('abc') . "\n";
 echo "empty array: " . serialize([]) . "\n";
 echo "array [1,2]: " . serialize([1, 2]) . "\n";
 
-// --- unserialize malformed input ---
 
 echo "\n=== Malformed Input ===\n";
 
@@ -91,7 +82,6 @@ $null_arr = ['val' => null];
 $null_back = unserialize(serialize($null_arr));
 echo "null_val: " . gettype($null_back['val']) . "\n";
 
-// --- object serialization ---
 
 echo "\n=== Object Serialization ===\n";
 
@@ -143,7 +133,6 @@ echo "public: " . $vals[0] . "\n";
 echo "protected: " . $vals[1] . "\n";
 echo "private: " . $vals[2] . "\n";
 
-// --- inheritance serialization ---
 
 echo "\n=== Inheritance Serialization ===\n";
 
@@ -181,7 +170,6 @@ echo "describe: " . $back->describe() . "\n";
 echo "area: " . round($back->area(), 2) . "\n";
 echo "instanceof Shape: " . ($back instanceof Shape ? 'yes' : 'no') . "\n";
 
-// --- array of objects ---
 
 echo "\n=== Array of Objects ===\n";
 
@@ -197,7 +185,6 @@ echo "labels: " . implode(', ', $labels) . "\n";
 echo "count: " . count($back) . "\n";
 echo "B distance to C: " . round($back[1]->distanceTo($back[2]), 2) . "\n";
 
-// --- nested objects ---
 
 echo "\n=== Nested Objects ===\n";
 
@@ -226,7 +213,6 @@ echo "items: " . $back->itemCount() . "\n";
 echo "inner-1 contents: " . $back->contents[0]->contents[0]->label . "\n";
 echo "inner-2 contents: " . $back->contents[1]->contents[0]->label . "\n";
 
-// --- json roundtrips ---
 
 echo "\n=== JSON Roundtrips ===\n";
 
@@ -246,7 +232,6 @@ echo "nested.a: " . ($back['nested']['a'] ? 'true' : 'false') . "\n";
 echo "nested.b is null: " . (is_null($back['nested']['b']) ? 'yes' : 'no') . "\n";
 echo "nested.c: " . $back['nested']['c'] . "\n";
 
-// --- large nested structure ---
 
 echo "\n=== Large Nested Structure ===\n";
 

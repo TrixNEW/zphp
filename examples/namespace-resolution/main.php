@@ -1,8 +1,4 @@
 <?php
-// covers: namespaced names accepting leading-backslash equivalence across
-//   class/function/interface/trait checks, reflection, instanceof, new, is_a,
-//   class_parents, class_implements, get_parent_class, property_exists,
-//   namespaced const resolution + use-const, ReflectionClass::getNamespaceName
 
 namespace App\Models;
 

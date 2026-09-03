@@ -1,10 +1,5 @@
 <?php
-// covers: is_array, is_string, is_numeric, is_int, is_float, is_bool, is_null,
-//         gettype, array_key_exists, array_keys, array_values, in_array, count,
-//         preg_match, strlen, sprintf, implode, json_encode, json_decode,
-//         array_map, array_merge, str_contains, is_callable, call_user_func
 
-// --- schema validator ---
 
 function validate($data, $schema, $path = '$') {
     $errors = [];
@@ -52,7 +47,6 @@ function validate($data, $schema, $path = '$') {
         }
     }
 
-    // string constraints
     if (is_string($data)) {
         if (isset($schema['minLength']) && strlen($data) < $schema['minLength']) {
             $errors[] = "$path: string too short (min {$schema['minLength']})";
@@ -76,7 +70,6 @@ function validate($data, $schema, $path = '$') {
         }
     }
 
-    // numeric constraints
     if (is_int($data) || is_float($data)) {
         if (isset($schema['minimum']) && $data < $schema['minimum']) {
             $errors[] = "$path: value too small (min {$schema['minimum']})";
@@ -86,7 +79,6 @@ function validate($data, $schema, $path = '$') {
         }
     }
 
-    // array constraints (list)
     if (is_array($data) && !isAssoc($data) && $type === 'array') {
         if (isset($schema['minItems']) && count($data) < $schema['minItems']) {
             $errors[] = "$path: too few items (min {$schema['minItems']})";
@@ -102,7 +94,6 @@ function validate($data, $schema, $path = '$') {
         }
     }
 
-    // object constraints
     if (is_array($data) && ($type === 'object' || $type === null) && isset($schema['properties'])) {
         $required = $schema['required'] ?? [];
         foreach ($required as $field) {
@@ -162,7 +153,6 @@ function validateFormat($value, $format, $path) {
     return $errors;
 }
 
-// --- test helpers ---
 
 function assertValid($data, $schema, $label) {
     $errors = validate($data, $schema);
@@ -184,7 +174,6 @@ function assertInvalid($data, $schema, $expectedCount, $label) {
     }
 }
 
-// --- test: basic types ---
 
 echo "--- basic types ---\n";
 assertValid("hello", ['type' => 'string'], "string type");
@@ -196,7 +185,6 @@ assertValid(null, ['type' => 'null'], "null type");
 assertInvalid(42, ['type' => 'string'], 1, "int is not string");
 assertInvalid("42", ['type' => 'integer'], 1, "string is not integer");
 
-// --- test: string constraints ---
 
 echo "--- string constraints ---\n";
 assertValid("hello", ['type' => 'string', 'minLength' => 3, 'maxLength' => 10], "string in range");
@@ -207,7 +195,6 @@ assertInvalid("ABC", ['type' => 'string', 'pattern' => '/^[a-z]+$/'], 1, "patter
 assertValid("red", ['type' => 'string', 'enum' => ['red', 'green', 'blue']], "enum valid");
 assertInvalid("purple", ['type' => 'string', 'enum' => ['red', 'green', 'blue']], 1, "enum invalid");
 
-// --- test: format validation ---
 
 echo "--- format validation ---\n";
 assertValid("user@example.com", ['type' => 'string', 'format' => 'email'], "valid email");
@@ -219,14 +206,12 @@ assertInvalid("Jan 15", ['type' => 'string', 'format' => 'date'], 1, "invalid da
 assertValid("192.168.1.1", ['type' => 'string', 'format' => 'ipv4'], "valid ipv4");
 assertInvalid("999.1.1.1", ['type' => 'string', 'format' => 'ipv4'], 1, "invalid ipv4");
 
-// --- test: numeric constraints ---
 
 echo "--- numeric constraints ---\n";
 assertValid(5, ['type' => 'integer', 'minimum' => 0, 'maximum' => 10], "int in range");
 assertInvalid(-1, ['type' => 'integer', 'minimum' => 0], 1, "int below minimum");
 assertInvalid(100, ['type' => 'integer', 'maximum' => 50], 1, "int above maximum");
 
-// --- test: array validation ---
 
 echo "--- array validation ---\n";
 assertValid([1, 2, 3], ['type' => 'array', 'items' => ['type' => 'integer']], "int array");
@@ -235,7 +220,6 @@ assertInvalid([1, "two", 3], ['type' => 'array', 'items' => ['type' => 'integer'
 assertValid([1, 2, 3], ['type' => 'array', 'minItems' => 2, 'maxItems' => 5], "array size ok");
 assertInvalid([1], ['type' => 'array', 'minItems' => 2], 1, "array too small");
 
-// --- test: object validation ---
 
 echo "--- object validation ---\n";
 
@@ -270,7 +254,6 @@ assertInvalid(
     "multiple field errors"
 );
 
-// --- test: nested objects ---
 
 echo "--- nested objects ---\n";
 

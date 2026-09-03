@@ -68,7 +68,6 @@ const Request = struct {
     }
 };
 
-// connection state machine
 
 const ConnState = enum { tls_handshaking, http_reading, h2_active, ws_idle, closing };
 
@@ -186,7 +185,6 @@ fn WorkQueue(comptime capacity: usize) type {
 
 var queue: WorkQueue(1024) = .{};
 
-// worker state
 
 const MAX_CONNS = 1024;
 
@@ -377,7 +375,6 @@ fn certMtime(path: []const u8) i128 {
     return stat.mtime;
 }
 
-// main serve entry point
 
 pub fn serve(allocator: Allocator, config: ServeConfig) !void {
     env.loadEnvFile(allocator);
@@ -595,7 +592,6 @@ fn eventLoop(w: *Worker) void {
     while (!queue.shutdown) {
         _ = posix.poll(w.poll_fds[0..w.n_fds], 1000) catch continue;
 
-        // check wake pipe
         if (w.poll_fds[0].revents & posix.POLL.IN != 0) {
             var drain: [64]u8 = undefined;
             _ = posix.read(w.wake_pipe[0], &drain) catch {};
@@ -604,7 +600,6 @@ fn eventLoop(w: *Worker) void {
             }
         }
 
-        // process ready connections
         var i: usize = 1;
         while (i < w.n_fds) : (i += 1) {
             const revents = w.poll_fds[i].revents;
@@ -824,7 +819,6 @@ fn processHttpRead(w: *Worker, c: *Connection) void {
     const conn_hdr = req.getHeader("Connection");
     c.keep_alive = if (conn_hdr) |h| !std.ascii.eqlIgnoreCase(h, "close") else true;
 
-    // websocket upgrade
     if (w.ws_enabled) {
         const upgrade_hdr = req.getHeader("Upgrade");
         if (upgrade_hdr != null and std.ascii.eqlIgnoreCase(upgrade_hdr.?, "websocket")) {
@@ -838,7 +832,6 @@ fn processHttpRead(w: *Worker, c: *Connection) void {
         }
     }
 
-    // static file
     if (tryServeStatic(w.allocator, c, w.doc_root, &req, c.keep_alive)) {
         shiftBuffer(c, consumed);
         if (!c.keep_alive) c.state = .closing;
@@ -944,7 +937,6 @@ fn processH2Read(w: *Worker, conn: *Connection) void {
 fn handleH2Request(w: *Worker, conn: *Connection, session: *h2.H2Session, stream: *h2.H2Stream) void {
     const stream_id = stream.stream_id;
 
-    // build Request from h2 stream
     var req = Request{
         .method = stream.method,
         .uri = stream.path,
@@ -963,7 +955,6 @@ fn handleH2Request(w: *Worker, conn: *Connection, session: *h2.H2Session, stream
     req.header_count = stream.header_count;
     req.body = stream.body.items;
 
-    // try static file
     if (w.doc_root.len > 0 and tryServeStaticH2(w.allocator, session, stream_id, w.doc_root, &req)) {
         stream.resetRequest(w.allocator);
         return;
@@ -981,7 +972,6 @@ fn handleH2Request(w: *Worker, conn: *Connection, session: *h2.H2Session, stream
         stream.resetRequest(w.allocator);
         return;
     };
-    // override SERVER_PROTOCOL for h2
     if (w.vm.request_vars.get("$_SERVER")) |sv| {
         if (sv == .array) sv.array.set(w.allocator, .{ .string = "SERVER_PROTOCOL" }, .{ .string = "HTTP/2.0" }) catch {};
     }
@@ -1035,7 +1025,6 @@ fn tryServeStaticH2(allocator: Allocator, session: *h2.H2Session, stream_id: i32
     return true;
 }
 
-// WebSocket processing
 
 fn handleWsUpgrade(w: *Worker, c: *Connection, ws_key: []const u8) void {
     var accept_buf: [28]u8 = undefined;
@@ -1141,7 +1130,6 @@ fn processWsRead(w: *Worker, c: *Connection) void {
     if (consumed_total > 0) shiftBuffer(c, consumed_total);
 }
 
-// unchanged helper functions below
 
 fn parseRequest(raw: []const u8) Request {
     var req = Request{ .raw = raw };
@@ -1360,7 +1348,6 @@ fn parseMultipart(a: Allocator, vm: *VM, body: []const u8, boundary: []const u8,
         const part_end = if (next >= 2) next - 2 else next;
         const part = body[pos..part_end];
 
-        // parse part headers
         const hdr_end_pos = std.mem.indexOf(u8, part, "\r\n\r\n") orelse {
             pos = next + delim.len + 2;
             continue;
@@ -1399,7 +1386,6 @@ fn parseMultipart(a: Allocator, vm: *VM, body: []const u8, boundary: []const u8,
             try file_entry.set(a, .{ .string = "size" }, .{ .int = @intCast(part_body.len) });
             try file_entry.set(a, .{ .string = "error" }, .{ .int = 0 });
 
-            // write to temp file
             const tmp_path = writeTempFile(a, part_body) catch blk: {
                 try file_entry.set(a, .{ .string = "error" }, .{ .int = 6 }); // UPLOAD_ERR_NO_TMP_DIR
                 break :blk try a.dupe(u8, "");
@@ -1414,7 +1400,6 @@ fn parseMultipart(a: Allocator, vm: *VM, body: []const u8, boundary: []const u8,
             try post_arr.set(a, .{ .string = name_owned }, .{ .string = val });
         }
 
-        // advance past delimiter
         pos = next + delim.len;
         if (pos + 2 <= body.len and body[pos] == '-' and body[pos + 1] == '-') break;
         if (pos + 2 <= body.len and body[pos] == '\r' and body[pos + 1] == '\n') pos += 2;
@@ -1431,7 +1416,6 @@ fn findPartHeader(headers: []const u8, name: []const u8) ?[]const u8 {
 }
 
 fn extractParam(header: []const u8, name: []const u8) ?[]const u8 {
-    // look for name="value" pattern
     var search_buf: [64]u8 = undefined;
     const needle = std.fmt.bufPrint(&search_buf, "{s}=\"", .{name}) catch return null;
     const start = (std.mem.indexOf(u8, header, needle) orelse return null) + needle.len;

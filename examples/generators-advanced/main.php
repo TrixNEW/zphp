@@ -1,8 +1,4 @@
 <?php
-// covers: generators, yield, yield from, send, getReturn, generator delegation,
-//   yield from array, generator in class method, generator pipelines,
-//   yield with keys, nested generators, try/catch/finally in generators,
-//   complex control flow in generators, interleaved generators, round-robin
 
 // === test: send and getReturn ===
 echo "=== send and getReturn ===\n";
@@ -113,7 +109,6 @@ foreach ($range->odd() as $n) {
 }
 echo "odds: " . implode(', ', $odds) . "\n";
 
-// === test: generator pipeline ===
 echo "\n=== generator pipeline ===\n";
 
 function integers(int $from, int $to): Generator
@@ -178,7 +173,6 @@ foreach (indexedWords() as $k => $v) {
     echo "$k: $v\n";
 }
 
-// === test: nested generators ===
 echo "\n=== nested generators ===\n";
 
 function matrix(): Generator

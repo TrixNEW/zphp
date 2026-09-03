@@ -1,5 +1,4 @@
 <?php
-// covers: array_merge_recursive, array_walk_recursive, array_replace_recursive, str_contains, str_starts_with, trim, explode, is_numeric, array_key_exists, strtolower, preg_match, array_map, array_filter, array_values, compact, extract
 
 // --- INI parser (manual since parse_ini_string may not be available) ---
 
@@ -28,7 +27,6 @@ function parseIni(string $content): array {
             $key = trim($parts[0]);
             $value = trim($parts[1]);
 
-            // strip quotes
             if (strlen($value) >= 2) {
                 $first = $value[0];
                 $last = $value[strlen($value) - 1];
@@ -37,7 +35,6 @@ function parseIni(string $content): array {
                 }
             }
 
-            // type coercion
             if (strtolower($value) === 'true' || strtolower($value) === 'on' || strtolower($value) === 'yes') {
                 $value = true;
             } elseif (strtolower($value) === 'false' || strtolower($value) === 'off' || strtolower($value) === 'no') {
@@ -139,7 +136,6 @@ echo "  db.name: " . $merged['database']['name'] . "\n";
 echo "  cache.ttl: " . $merged['cache']['ttl'] . "\n";
 echo "  cache.driver: " . $merged['cache']['driver'] . "\n";
 
-// --- config path accessor ---
 
 function configGet(array $config, string $path, $default = null) {
     $keys = explode('.', $path);
@@ -178,7 +174,6 @@ $merged = configSet($merged, 'new.nested.value', 'created');
 echo "  database.pool_size: " . configGet($merged, 'database.pool_size') . "\n";
 echo "  new.nested.value: " . configGet($merged, 'new.nested.value') . "\n";
 
-// --- config validation ---
 
 function validateConfig(array $config, array $schema): array {
     $errors = [];
@@ -250,7 +245,6 @@ foreach ($badErrors as $err) {
     echo "  $err\n";
 }
 
-// --- compact/extract ---
 
 $host = 'localhost';
 $port = 5432;

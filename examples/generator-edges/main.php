@@ -1,7 +1,4 @@
 <?php
-// covers: generator edge cases - throw into generator, partial consumption,
-//   getReturn after exception, valid()/current()/key()/send() interactions,
-//   yield-from with array, multiple generators interleaved
 
 echo "=== throw into generator handled internally ===\n";
 function maybe_throws(): Generator {

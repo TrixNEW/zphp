@@ -1,13 +1,5 @@
 <?php
-// covers: str_replace, str_ireplace, substr, substr_count, substr_replace,
-//   explode, implode, str_split, str_pad, str_repeat, str_word_count,
-//   strpos, stripos, strrpos, strripos, strstr, strrev, ucwords,
-//   addslashes, stripslashes, htmlspecialchars, strip_tags, wordwrap,
-//   base64_encode, base64_decode, urlencode, urldecode, str_getcsv,
-//   preg_match, preg_match_all, preg_replace, preg_replace_callback,
-//   preg_split, sprintf, number_format, first-class callable, (int) cast
 
-// --- text normalization pipeline ---
 
 echo "=== Text Normalization ===\n";
 
@@ -22,7 +14,6 @@ echo "word count: " . str_word_count($step3) . "\n";
 $words = str_word_count($step3, 1);
 echo "words: " . implode(', ', $words) . "\n";
 
-// --- CSV parsing ---
 
 echo "\n=== CSV Processing ===\n";
 
@@ -35,7 +26,6 @@ $tsv = "one\ttwo\tthree";
 $tsv_fields = str_getcsv($tsv, "\t", '"', '');
 echo "tsv: " . implode(', ', $tsv_fields) . "\n";
 
-// --- slug generation ---
 
 echo "\n=== Slug Generation ===\n";
 
@@ -58,7 +48,6 @@ foreach ($titles as $title) {
     echo "'$title' -> '" . slugify($title) . "'\n";
 }
 
-// --- template variable replacement ---
 
 echo "\n=== Template Replacement ===\n";
 
@@ -89,7 +78,6 @@ echo "last case-insensitive 'THE': " . strripos($haystack, 'THE') . "\n";
 $after_fox = strstr($haystack, 'fox');
 echo "from first fox: $after_fox\n";
 
-// --- encoding/decoding ---
 
 echo "\n=== Encoding ===\n";
 
@@ -110,7 +98,6 @@ $url_enc = urlencode($url_data);
 echo "url encoded: $url_enc\n";
 echo "url decoded matches: " . (urldecode($url_enc) === $url_data ? 'yes' : 'no') . "\n";
 
-// --- regex extraction ---
 
 echo "\n=== Regex Extraction ===\n";
 
@@ -196,7 +183,6 @@ $pairs = str_split($hex, 2);
 $chars = array_map(function($h) { return chr(intval($h, 16)); }, $pairs);
 echo "hex decoded: " . implode('', $chars) . "\n";
 
-// --- word manipulation ---
 
 echo "\n=== Word Manipulation ===\n";
 
@@ -207,7 +193,6 @@ echo "strrev: " . strrev("Hello World") . "\n";
 $wrapped = wordwrap("The quick brown fox jumps over the lazy dog and then runs away", 25, "\n", true);
 echo "wrapped:\n$wrapped\n";
 
-// --- substr_replace ---
 
 echo "\n=== Substr Replace ===\n";
 
@@ -216,7 +201,6 @@ echo "replace middle: " . substr_replace($str, "Beautiful ", 6, 0) . "\n";
 echo "replace end: " . substr_replace($str, "PHP", 6, 5) . "\n";
 echo "truncate+append: " . substr_replace($str, "...", 5) . "\n";
 
-// --- sprintf formatting ---
 
 echo "\n=== Sprintf ===\n";
 
@@ -226,7 +210,6 @@ echo sprintf("Hex: %x, Oct: %o, Bin: %b", 255, 255, 255) . "\n";
 echo sprintf("Float: %.4f, Sci: %e", 3.14159, 0.00123) . "\n";
 echo sprintf("Padded: %05d", 42) . "\n";
 
-// --- addslashes/stripslashes ---
 
 echo "\n=== Escape/Unescape ===\n";
 
@@ -236,7 +219,6 @@ echo "escaped: $escaped\n";
 echo "unescaped: " . stripslashes($escaped) . "\n";
 echo "roundtrip: " . (stripslashes(addslashes($dangerous)) === $dangerous ? 'yes' : 'no') . "\n";
 
-// --- preg_split ---
 
 echo "\n=== Preg Split ===\n";
 
@@ -248,7 +230,6 @@ $csv_messy = "one  ,  two  ,  three  ,  four";
 $clean = preg_split('/\s*,\s*/', $csv_messy);
 echo "cleaned csv: " . implode('|', $clean) . "\n";
 
-// --- case-insensitive replace ---
 
 echo "\n=== Case-Insensitive Replace ===\n";
 
@@ -256,7 +237,6 @@ $text = "The CAT sat on the Cat mat near another cat";
 $result = str_ireplace('cat', 'dog', $text);
 echo "$result\n";
 
-// --- first-class callable ---
 
 echo "\n=== First-Class Callable ===\n";
 

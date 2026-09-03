@@ -1,14 +1,10 @@
 <?php
-// covers: pcntl_fork, pcntl_waitpid, pcntl_wexitstatus, pcntl_wifexited,
-//   pcntl_wifsignaled, pcntl_wtermsig, pcntl_signal, pcntl_signal_dispatch,
-//   posix_getpid, posix_kill, SIGUSR1, SIGTERM
 
 echo "=== fork + wait ===\n";
 $children = [];
 for ($i = 1; $i <= 3; $i++) {
     $pid = pcntl_fork();
     if ($pid === 0) {
-        // child
         exit($i * 2);
     }
     $children[] = ['pid' => $pid, 'expected' => $i * 2];

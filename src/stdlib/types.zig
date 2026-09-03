@@ -672,7 +672,6 @@ fn native_setlocale(ctx: *NativeContext, args: []const Value) RuntimeError!Value
             else => continue,
         }
     }
-    // no acceptable locale provided
     return .{ .bool = false };
 }
 
@@ -932,7 +931,6 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Val
         fillName(ctx, args, name);
         if (ctx.vm.native_fns.contains(name)) return .{ .bool = true };
         if (ctx.vm.functions.contains(name)) return .{ .bool = true };
-        // Class::method string form
         if (std.mem.indexOf(u8, name, "::")) |sep| {
             const class_part = name[0..sep];
             const method_part = name[sep + 2 ..];
@@ -2089,7 +2087,6 @@ fn native_iconv_mime_decode_headers(ctx: *NativeContext, args: []const Value) Ru
 }
 
 fn native_iconv_mime_encode(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    // best-effort: emit "Header: value" unencoded
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
     return args[1];
 }
@@ -2283,7 +2280,6 @@ fn native_class_alias(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     }
     if (ctx.vm.classes.get(original)) |cls| {
         var alias_def = ClassDef{ .name = alias, .parent = original };
-        // copy interfaces
         for (cls.interfaces.items) |iface| {
             try alias_def.interfaces.append(ctx.allocator, iface);
         }
@@ -2735,7 +2731,6 @@ fn native_iterator_apply(ctx: *NativeContext, args: []const Value) RuntimeError!
 
     if (args[0] == .object) {
         const obj = args[0].object;
-        // try IteratorAggregate first
         if (ctx.vm.hasMethod(obj.class_name, "getIterator")) {
             const inner = try ctx.vm.callMethod(obj, "getIterator", &.{});
             if (inner == .object) {
@@ -2915,7 +2910,6 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
     if (require_array or force_array) {
         if (value != .array) {
             if (require_array) return fail_default;
-            // force_array wraps scalar
             const out = try _ctx.createArray();
             const single_flags = eff_flags & ~@as(i64, 0x05000000);
             const sub_args = [_]Value{ value, args[1], .{ .int = single_flags } };
@@ -2982,7 +2976,6 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
                 };
                 const trimmed = std.mem.trim(u8, s, " \t\n\r");
                 if (trimmed.len == 0) return fail_default;
-                // optional sign
                 var rest = trimmed;
                 var sign: i64 = 1;
                 if (rest[0] == '+') {
@@ -2992,17 +2985,14 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
                     rest = rest[1..];
                 }
                 if (rest.len == 0) return fail_default;
-                // hex with ALLOW_HEX
                 if (allow_hex and rest.len > 2 and rest[0] == '0' and (rest[1] == 'x' or rest[1] == 'X')) {
                     const v = std.fmt.parseInt(i64, rest[2..], 16) catch return fail_default;
                     break :blk sign * v;
                 }
-                // octal with ALLOW_OCTAL, "0o" prefix
                 if (allow_octal and rest.len > 2 and rest[0] == '0' and (rest[1] == 'o' or rest[1] == 'O')) {
                     const v = std.fmt.parseInt(i64, rest[2..], 8) catch return fail_default;
                     break :blk sign * v;
                 }
-                // octal with ALLOW_OCTAL ("0" prefix)
                 if (allow_octal and rest.len > 1 and rest[0] == '0' and std.ascii.isDigit(rest[1])) {
                     const v = std.fmt.parseInt(i64, rest[1..], 8) catch return fail_default;
                     break :blk sign * v;

@@ -1,9 +1,5 @@
 <?php
-// covers: levenshtein, similar_text, soundex, metaphone, strtolower,
-//   sprintf, str_pad, array_keys, array_values, usort, count, substr,
-//   array_map, array_filter, implode, min, abs
 
-// levenshtein: edit distance between strings
 echo "=== levenshtein basics ===\n";
 $pairs = [
     ['kitten', 'sitting'],
@@ -18,7 +14,6 @@ foreach ($pairs as $pair) {
     echo sprintf("  %-12s -> %-12s distance=%d\n", $pair[0], $pair[1], $dist);
 }
 
-// spell checker using levenshtein
 echo "\n=== spell checker ===\n";
 $dictionary = ['accept', 'except', 'affect', 'effect', 'advice', 'advise',
     'practice', 'practise', 'license', 'licence', 'principal', 'principle'];
@@ -37,7 +32,6 @@ foreach ($misspelled as $word) {
     echo sprintf("  %-12s -> %-12s (distance: %d)\n", $word, $best, $best_dist);
 }
 
-// similar_text: longest common subsequence matching
 echo "\n=== similar_text ===\n";
 $comparisons = [
     ['World', 'Word'],
@@ -52,7 +46,6 @@ foreach ($comparisons as $pair) {
         $pair[0], $pair[1], $common, $percent);
 }
 
-// finding most similar strings
 echo "\n=== find closest match ===\n";
 $target = 'javascript';
 $candidates = ['java', 'typescript', 'coffeescript', 'livescript', 'javafx', 'ecmascript'];
@@ -69,7 +62,6 @@ foreach ($scores as $name => $score) {
     $i++;
 }
 
-// soundex: phonetic algorithm
 echo "\n=== soundex ===\n";
 $names = [
     ['Robert', 'Rupert'],
@@ -85,7 +77,6 @@ foreach ($names as $pair) {
     echo sprintf("  %-12s (%s) vs %-12s (%s) -> %s\n", $pair[0], $s1, $pair[1], $s2, $match);
 }
 
-// phonetic search
 echo "\n=== phonetic search ===\n";
 $people = ['Steven', 'Stephen', 'Stefan', 'Stephan', 'Steve',
     'Stephanie', 'Stewart', 'Stuart'];
@@ -99,14 +90,12 @@ foreach ($people as $name) {
     }
 }
 
-// metaphone
 echo "\n=== metaphone ===\n";
 $words = ['Thompson', 'Thomson', 'Tompson', 'Wright', 'Right', 'Rite'];
 foreach ($words as $word) {
     echo sprintf("  %-12s -> %s\n", $word, metaphone($word));
 }
 
-// combined fuzzy matching score
 echo "\n=== combined fuzzy matching ===\n";
 function fuzzyScore(string $a, string $b): array {
     $lev = levenshtein(strtolower($a), strtolower($b));

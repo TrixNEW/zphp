@@ -14,7 +14,6 @@ pub fn loadEnvFile(allocator: std.mem.Allocator) void {
         while (i < content.len and (content[i] == ' ' or content[i] == '\t' or content[i] == '\r' or content[i] == '\n')) i += 1;
         if (i >= content.len) break;
 
-        // full-line comment
         if (content[i] == '#') {
             while (i < content.len and content[i] != '\n') i += 1;
             continue;

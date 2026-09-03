@@ -98,7 +98,6 @@ fn curlInit(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     try obj.set(ctx.allocator, "__header_out", .{ .bool = false });
     try obj.set(ctx.allocator, "__http_code", .{ .int = 0 });
 
-    // store slist pointers for cleanup
     try obj.set(ctx.allocator, "__slist_ptr", .{ .int = 0 });
 
     if (args.len > 0 and args[0] == .string) {
@@ -119,7 +118,6 @@ fn curlSetopt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i64, value: Value) RuntimeError!Value {
-    // string options
     if (option == c.CURLOPT_URL or
         option == c.CURLOPT_USERAGENT or
         option == c.CURLOPT_REFERER or
@@ -150,7 +148,6 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         return .{ .bool = code == c.CURLE_OK };
     }
 
-    // long options
     if (option == c.CURLOPT_PORT or
         option == c.CURLOPT_TIMEOUT or
         option == c.CURLOPT_TIMEOUT_MS or
@@ -190,7 +187,6 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         return .{ .bool = true };
     }
 
-    // CURLOPT_FOLLOWLOCATION
     if (option == c.CURLOPT_FOLLOWLOCATION) {
         const v: c_long = switch (value) {
             .int => @intCast(value.int),
@@ -201,7 +197,6 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         return .{ .bool = code == c.CURLE_OK };
     }
 
-    // CURLOPT_POST
     if (option == c.CURLOPT_POST) {
         const v: c_long = switch (value) {
             .int => @intCast(value.int),
@@ -212,7 +207,6 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         return .{ .bool = code == c.CURLE_OK };
     }
 
-    // CURLOPT_POSTFIELDS
     if (option == c.CURLOPT_POSTFIELDS) {
         const s = switch (value) {
             .string => value.string,
@@ -225,11 +219,9 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         return .{ .bool = len_code == c.CURLE_OK };
     }
 
-    // CURLOPT_HTTPHEADER
     if (option == c.CURLOPT_HTTPHEADER) {
         if (value != .array) return .{ .bool = false };
 
-        // free previous slist if any
         const prev_v = obj.get("__slist_ptr");
         if (prev_v == .int and prev_v.int != 0) {
             const prev: *c.struct_curl_slist = @ptrFromInt(@as(usize, @intCast(prev_v.int)));
@@ -251,7 +243,6 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         return .{ .bool = true };
     }
 
-    // CURLOPT_PUT
     if (option == c.CURLOPT_PUT) {
         const v: c_long = switch (value) {
             .int => @intCast(value.int),
@@ -273,7 +264,6 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         return .{ .bool = code == c.CURLE_OK };
     }
 
-    // CURLINFO_HEADER_OUT (debug)
     if (option == c.CURLINFO_HEADER_OUT) {
         const v = switch (value) {
             .bool => value.bool,
@@ -352,7 +342,6 @@ fn curlExec(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     const result = c.curl_easy_perform(handle);
 
-    // store error info
     if (result != c.CURLE_OK) {
         const err_msg = c.curl_easy_strerror(result);
         const msg = std.mem.span(err_msg);
@@ -388,7 +377,6 @@ fn curlClose(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 pub fn cleanupHandle(obj: *PhpObject) void {
     if (obj.pooled) return;
-    // free slist
     const slist_v = obj.get("__slist_ptr");
     if (slist_v == .int and slist_v.int != 0) {
         const sl: *c.struct_curl_slist = @ptrFromInt(@as(usize, @intCast(slist_v.int)));
@@ -396,7 +384,6 @@ pub fn cleanupHandle(obj: *PhpObject) void {
         obj.properties.put(std.heap.page_allocator, "__slist_ptr", .{ .int = 0 }) catch {};
     }
 
-    // free curl handle
     if (getHandle(obj)) |handle| {
         c.curl_easy_cleanup(handle);
         obj.properties.put(std.heap.page_allocator, "__curl_ptr", .{ .int = 0 }) catch {};
@@ -431,7 +418,6 @@ fn curlGetinfo(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn getInfoOption(ctx: *NativeContext, handle: *c.CURL, option: i64) RuntimeError!Value {
-    // string info types
     if (option == c.CURLINFO_EFFECTIVE_URL or
         option == c.CURLINFO_CONTENT_TYPE or
         option == c.CURLINFO_REDIRECT_URL or
@@ -447,7 +433,6 @@ fn getInfoOption(ctx: *NativeContext, handle: *c.CURL, option: i64) RuntimeError
         return .{ .string = owned };
     }
 
-    // long info types
     if (option == c.CURLINFO_RESPONSE_CODE or
         option == c.CURLINFO_HTTP_CONNECTCODE or
         option == c.CURLINFO_FILETIME or
@@ -464,7 +449,6 @@ fn getInfoOption(ctx: *NativeContext, handle: *c.CURL, option: i64) RuntimeError
         return .{ .int = @intCast(val) };
     }
 
-    // double info types
     if (option == c.CURLINFO_TOTAL_TIME or
         option == c.CURLINFO_NAMELOOKUP_TIME or
         option == c.CURLINFO_CONNECT_TIME or
@@ -679,7 +663,6 @@ fn curlReset(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     try obj.set(ctx.allocator, "__errno", .{ .int = 0 });
     try obj.set(ctx.allocator, "__http_code", .{ .int = 0 });
 
-    // free slist
     const slist_v = obj.get("__slist_ptr");
     if (slist_v == .int and slist_v.int != 0) {
         const sl: *c.struct_curl_slist = @ptrFromInt(@as(usize, @intCast(slist_v.int)));
@@ -1050,7 +1033,6 @@ pub fn register(vm: *VM, a: std.mem.Allocator) !void {
     try vm.php_constants.put(a, "CURL_LOCK_DATA_DNS", .{ .int = 3 });
     try vm.php_constants.put(a, "CURL_LOCK_DATA_SSL_SESSION", .{ .int = 4 });
 
-    // CURLOPT constants
     try vm.php_constants.put(a, "CURLOPT_URL", .{ .int = c.CURLOPT_URL });
     try vm.php_constants.put(a, "CURLOPT_PORT", .{ .int = c.CURLOPT_PORT });
     try vm.php_constants.put(a, "CURLOPT_RETURNTRANSFER", .{ .int = 19913 });
@@ -1098,7 +1080,6 @@ pub fn register(vm: *VM, a: std.mem.Allocator) !void {
     try vm.php_constants.put(a, "CURLOPT_INTERFACE", .{ .int = c.CURLOPT_INTERFACE });
     try vm.php_constants.put(a, "CURLOPT_UNIX_SOCKET_PATH", .{ .int = c.CURLOPT_UNIX_SOCKET_PATH });
 
-    // CURLINFO constants
     try vm.php_constants.put(a, "CURLINFO_EFFECTIVE_URL", .{ .int = c.CURLINFO_EFFECTIVE_URL });
     try vm.php_constants.put(a, "CURLINFO_HTTP_CODE", .{ .int = c.CURLINFO_RESPONSE_CODE });
     try vm.php_constants.put(a, "CURLINFO_RESPONSE_CODE", .{ .int = c.CURLINFO_RESPONSE_CODE });
@@ -1121,18 +1102,15 @@ pub fn register(vm: *VM, a: std.mem.Allocator) !void {
     try vm.php_constants.put(a, "CURLINFO_SCHEME", .{ .int = c.CURLINFO_SCHEME });
     try vm.php_constants.put(a, "CURLINFO_HEADER_OUT", .{ .int = c.CURLINFO_HEADER_OUT });
 
-    // CURLAUTH constants
     try vm.php_constants.put(a, "CURLAUTH_BASIC", .{ .int = c.CURLAUTH_BASIC });
     try vm.php_constants.put(a, "CURLAUTH_DIGEST", .{ .int = c.CURLAUTH_DIGEST });
     try vm.php_constants.put(a, "CURLAUTH_BEARER", .{ .int = c.CURLAUTH_BEARER });
 
-    // CURL_HTTP_VERSION constants
     try vm.php_constants.put(a, "CURL_HTTP_VERSION_NONE", .{ .int = 0 });
     try vm.php_constants.put(a, "CURL_HTTP_VERSION_1_0", .{ .int = 1 });
     try vm.php_constants.put(a, "CURL_HTTP_VERSION_1_1", .{ .int = 2 });
     try vm.php_constants.put(a, "CURL_HTTP_VERSION_2_0", .{ .int = 3 });
 
-    // error code constants
     try vm.php_constants.put(a, "CURLE_OK", .{ .int = c.CURLE_OK });
     try vm.php_constants.put(a, "CURLE_UNSUPPORTED_PROTOCOL", .{ .int = c.CURLE_UNSUPPORTED_PROTOCOL });
     try vm.php_constants.put(a, "CURLE_URL_MALFORMAT", .{ .int = c.CURLE_URL_MALFORMAT });

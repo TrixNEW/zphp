@@ -313,7 +313,6 @@ pub fn generateAutoloader(allocator: Allocator, entries: []const LockEntry, proj
     try buf.appendSlice(allocator, "spl_autoload_register(function ($class) {\n");
     try buf.appendSlice(allocator, "    $map = [\n");
 
-    // project autoload
     var proj_it = project_psr4.iterator();
     while (proj_it.next()) |entry| {
         try buf.appendSlice(allocator, "        '");
@@ -486,7 +485,6 @@ fn httpGet(allocator: Allocator, url: []const u8) ![]u8 {
     return result.stdout;
 }
 
-// semver
 
 const SemVer = struct {
     major: u32 = 0,
@@ -509,7 +507,6 @@ fn parseSemVer(version: []const u8) SemVer {
     var ver = version;
     if (ver.len > 0 and ver[0] == 'v') ver = ver[1..];
 
-    // reject dev versions
     if (std.mem.startsWith(u8, ver, "dev-")) return .{ .valid = false };
     if (std.mem.endsWith(u8, ver, "-dev")) return .{ .valid = false };
 
@@ -573,7 +570,6 @@ fn parseConstraintPart(raw: []const u8) ConstraintPart {
     var s = std.mem.trim(u8, raw, " ");
     if (s.len == 0 or std.mem.eql(u8, s, "*")) return .{ .kind = .any };
 
-    // caret: ^1.2.3 -> >=1.2.3 <2.0.0
     if (s[0] == '^') {
         const ver = parseSemVer(s[1..]);
         if (!ver.valid) return .{ .kind = .any };
@@ -606,10 +602,8 @@ fn parseConstraintPart(raw: []const u8) ConstraintPart {
         return .{ .kind = .tilde, .min = ver, .max = max };
     }
 
-    // range: >=1.0 <2.0 (space separated)
     if (std.mem.startsWith(u8, s, ">=")) {
         const rest = s[2..];
-        // check for space-separated upper bound
         if (std.mem.indexOf(u8, rest, " <")) |pos| {
             const min_str = std.mem.trim(u8, rest[0..pos], " ");
             const max_str = std.mem.trim(u8, rest[pos + 2 ..], " ");
@@ -627,10 +621,8 @@ fn parseConstraintPart(raw: []const u8) ConstraintPart {
         return .{ .kind = .any };
     }
 
-    // wildcard: 1.0.*, 1.*
     if (std.mem.endsWith(u8, s, ".*")) {
         const prefix = s[0 .. s.len - 2];
-        // could be "1" or "1.0"
         if (std.mem.indexOf(u8, prefix, ".")) |dot| {
             const major = std.fmt.parseInt(u32, prefix[0..dot], 10) catch return .{ .kind = .any };
             const minor = std.fmt.parseInt(u32, prefix[dot + 1 ..], 10) catch return .{ .kind = .any };
@@ -641,7 +633,6 @@ fn parseConstraintPart(raw: []const u8) ConstraintPart {
         }
     }
 
-    // exact version
     const ver = parseSemVer(s);
     if (ver.valid) return .{ .kind = .exact, .min = ver, .max = ver, .max_inclusive = true };
 
@@ -780,7 +771,6 @@ fn resolveAll(
     var queue = std.ArrayListUnmanaged(QueueItem){};
     defer queue.deinit(allocator);
 
-    // seed with direct deps
     var it = direct_deps.iterator();
     while (it.next()) |entry| {
         try queue.append(allocator, .{
@@ -833,7 +823,6 @@ fn resolveAll(
     }
 }
 
-// commands
 
 pub fn install(allocator: Allocator) !void {
     const start = std.time.milliTimestamp();
@@ -1046,7 +1035,6 @@ pub fn add(allocator: Allocator, name: []const u8) !void {
     defer allocator.free(constraint);
     try upsertComposerRequire(allocator, name, constraint);
 
-    // regenerate autoloader from updated composer.json
     const source = std.fs.cwd().readFileAlloc(allocator, "composer.json", 1024 * 1024) catch "";
     defer if (source.len > 0) allocator.free(source);
 
@@ -1082,7 +1070,6 @@ pub fn remove(allocator: Allocator, name: []const u8) !void {
         ComposerJson{ .allocator = allocator };
     defer composer.deinit();
 
-    // read existing lock
     const existing = try readLockFile(allocator) orelse {
         tui.err("no zphp.lock found");
         return;
@@ -1156,7 +1143,6 @@ pub fn remove(allocator: Allocator, name: []const u8) !void {
     tui.blank();
 }
 
-// unit tests
 
 test "parseSemVer basic" {
     const v = parseSemVer("1.2.3");
@@ -1235,7 +1221,6 @@ test "tilde two-part constraint" {
 }
 
 test "tilde single-part constraint" {
-    // ~1 means >=1 <2
     const c = parseConstraint("~1");
     try std.testing.expect(c.parts[0].kind == .tilde);
 

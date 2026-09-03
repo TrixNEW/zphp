@@ -1,7 +1,5 @@
 <?php
-// covers: parse_ini_string, parse_ini_file, array_multisort, array_column, implode, count, is_array, number_format, sprintf, str_pad, arsort, array_keys, array_values, in_array
 
-// --- parse_ini_string: basic ---
 
 $config = "
 ; database settings
@@ -33,14 +31,12 @@ echo "App name: " . $cfg['app']['name'] . "\n";
 echo "Debug: '" . $cfg['app']['debug'] . "'\n";
 echo "Sections: " . implode(", ", array_keys($cfg)) . "\n";
 
-// --- parse_ini_string: RAW mode ---
 
 echo "\n=== RAW mode ===\n";
 $raw = parse_ini_string($config, true, INI_SCANNER_RAW);
 echo "Cache enabled (raw): " . $raw['cache']['enabled'] . "\n";
 echo "Debug (raw): " . $raw['app']['debug'] . "\n";
 
-// --- parse_ini_string: TYPED mode ---
 
 echo "\n=== TYPED mode ===\n";
 $typed = parse_ini_string($config, true, INI_SCANNER_TYPED);
@@ -48,7 +44,6 @@ echo "Cache enabled type: " . gettype($typed['cache']['enabled']) . "\n";
 echo "Cache TTL type: " . gettype($typed['cache']['ttl']) . "\n";
 echo "Version type: " . gettype($typed['app']['version']) . "\n";
 
-// --- parse_ini_string: array keys ---
 
 echo "\n=== Array keys in INI ===\n";
 $ini_arrays = "
@@ -65,7 +60,6 @@ $r = parse_ini_string($ini_arrays, true);
 echo "Extensions: " . implode(", ", $r['extensions']) . "\n";
 echo "Routes: " . implode(", ", array_values($r['routes']['api'])) . "\n";
 
-// --- parse_ini_string: no sections ---
 
 echo "\n=== Flat (no sections) ===\n";
 $flat = parse_ini_string($config, false);
@@ -73,7 +67,6 @@ echo "Keys: " . count($flat) . "\n";
 echo "host: " . $flat['host'] . "\n";
 echo "driver: " . $flat['driver'] . "\n";
 
-// --- parse_ini_file ---
 
 echo "\n=== parse_ini_file ===\n";
 $tmpfile = tempnam(sys_get_temp_dir(), 'ini');
@@ -84,7 +77,6 @@ echo "Server port: " . $srv['server']['port'] . "\n";
 echo "Workers: " . $srv['server']['workers'] . "\n";
 unlink($tmpfile);
 
-// --- array_multisort: basic ---
 
 echo "\n=== Multisort basic ===\n";
 $scores = [85, 92, 78, 95, 88];
@@ -94,7 +86,6 @@ foreach ($names as $i => $name) {
     echo "  " . str_pad($name, 10) . $scores[$i] . "\n";
 }
 
-// --- array_multisort: multi-column ---
 
 echo "\n=== Multisort multi-column ===\n";
 $employees = [
@@ -113,14 +104,12 @@ foreach ($employees as $e) {
     echo "  " . str_pad($e['dept'], 14) . str_pad($e['name'], 10) . "$" . number_format($e['salary']) . "\n";
 }
 
-// --- array_multisort: string sort ---
 
 echo "\n=== Multisort SORT_STRING ===\n";
 $items = ["banana", "Apple", "cherry", "apricot"];
 array_multisort($items, SORT_STRING, SORT_ASC);
 echo implode(", ", $items) . "\n";
 
-// --- combine: config-driven sorting ---
 
 echo "\n=== Config-driven sort ===\n";
 $sort_config = "

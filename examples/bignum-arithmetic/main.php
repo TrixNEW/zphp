@@ -1,7 +1,4 @@
 <?php
-// covers: GMP arbitrary precision (gmp_init, gmp_add/sub/mul/pow, gmp_strval,
-//   gmp_cmp, gmp_mod, gmp_gcd, gmp_invert), bcmath fixed-point math
-//   (bcadd, bcsub, bcmul, bcdiv, bcpow, bccomp, bcscale)
 
 echo "=== GMP: massive factorial ===\n";
 function fact_big(int $n): GMP {

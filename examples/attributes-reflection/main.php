@@ -1,13 +1,4 @@
 <?php
-// covers: ReflectionClass (getName, getMethods, getProperties, getMethod,
-//   getProperty, getParentClass, getInterfaceNames, hasMethod, isInterface,
-//   getAttributes), ReflectionMethod (getName, getParameters, isPublic,
-//   isPrivate, isProtected, isStatic, getAttributes),
-//   ReflectionProperty (getName, isPublic, isPrivate, isProtected, isDefault,
-//   getAttributes), ReflectionParameter (getName, getPosition, isOptional,
-//   hasType, getType), ReflectionAttribute (getName, getArguments,
-//   newInstance), class hierarchy reflection, interface detection,
-//   practical object introspection, PHP 8 attributes
 
 interface Loggable {
     public function logEntry(): string;
@@ -65,7 +56,6 @@ class User extends BaseEntity implements Loggable, Taggable {
     }
 }
 
-// --- ReflectionClass basics ---
 
 echo "=== ReflectionClass ===\n";
 
@@ -85,7 +75,6 @@ echo "Loggable isInterface: " . ($ifRef->isInterface() ? 'true' : 'false') . "\n
 echo "hasMethod greet: " . ($ref->hasMethod('greet') ? 'true' : 'false') . "\n";
 echo "hasMethod nonexistent: " . ($ref->hasMethod('nonexistent') ? 'true' : 'false') . "\n";
 
-// --- methods ---
 
 echo "\n=== Methods ===\n";
 
@@ -98,7 +87,6 @@ sort($methodNames);
 echo "all methods: " . implode(', ', $methodNames) . "\n";
 echo "method count: " . count($methodNames) . "\n";
 
-// --- method visibility ---
 
 echo "\n=== Method Visibility ===\n";
 
@@ -118,7 +106,6 @@ echo "incrementLogin isProtected: " . ($incLogin->isProtected() ? 'true' : 'fals
 $createM = $ref->getMethod('fromArray');
 echo "fromArray isStatic: " . ($createM->isStatic() ? 'true' : 'false') . "\n";
 
-// --- parameters ---
 
 echo "\n=== Parameters ===\n";
 
@@ -140,7 +127,6 @@ foreach ($fromArrayParams as $p) {
     echo $line . "\n";
 }
 
-// --- properties ---
 
 echo "\n=== Properties ===\n";
 
@@ -163,7 +149,6 @@ echo "name isDefault: " . ($nameProp->isDefault() ? 'true' : 'false') . "\n";
 $pwdProp = $ref->getProperty('password');
 echo "password isPrivate: " . ($pwdProp->isPrivate() ? 'true' : 'false') . "\n";
 
-// --- practical: object inspector ---
 
 echo "\n=== Object Inspector ===\n";
 
@@ -203,7 +188,6 @@ function inspect(object $obj): void {
 $user = new User(1, 'Alice', 'alice@example.com');
 inspect($user);
 
-// --- Attributes ---
 
 echo "\n=== Attributes ===\n";
 
@@ -263,7 +247,6 @@ echo "title attr count: " . count($titleAttrs) . "\n";
 echo "title attr 0: " . $titleAttrs[0]->getName() . "\n";
 echo "title attr 0 arg: " . $titleAttrs[0]->getArguments()[0] . "\n";
 
-// newInstance
 $routeAttr = $classAttrs[0];
 $routeInstance = $routeAttr->newInstance();
 echo "route instance class: " . get_class($routeInstance) . "\n";

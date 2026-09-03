@@ -28,12 +28,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
     const std_def = ClassDef{ .name = "stdClass" };
     try vm.classes.put(a, "stdClass", std_def);
 
-    // Countable interface
     var countable = vm_mod.InterfaceDef{ .name = "Countable" };
     try countable.methods.append(a, "count");
     try vm.interfaces.put(a, "Countable", countable);
 
-    // ArrayAccess interface
     var array_access = vm_mod.InterfaceDef{ .name = "ArrayAccess" };
     try array_access.methods.append(a, "offsetGet");
     try array_access.methods.append(a, "offsetSet");
@@ -55,7 +53,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try backed_enum.methods.append(a, "tryFrom");
     try vm.interfaces.put(a, "BackedEnum", backed_enum);
 
-    // Iterator interface
     var iterator = vm_mod.InterfaceDef{ .name = "Iterator" };
     iterator.parent = "Traversable";
     try iterator.methods.append(a, "current");
@@ -65,18 +62,15 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try iterator.methods.append(a, "valid");
     try vm.interfaces.put(a, "Iterator", iterator);
 
-    // IteratorAggregate interface
     var iter_agg = vm_mod.InterfaceDef{ .name = "IteratorAggregate" };
     iter_agg.parent = "Traversable";
     try iter_agg.methods.append(a, "getIterator");
     try vm.interfaces.put(a, "IteratorAggregate", iter_agg);
 
-    // JsonSerializable interface
     var json_ser = vm_mod.InterfaceDef{ .name = "JsonSerializable" };
     try json_ser.methods.append(a, "jsonSerialize");
     try vm.interfaces.put(a, "JsonSerializable", json_ser);
 
-    // Stringable interface
     var stringable = vm_mod.InterfaceDef{ .name = "Stringable" };
     try stringable.methods.append(a, "__toString");
     try vm.interfaces.put(a, "Stringable", stringable);
@@ -109,7 +103,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try serializable.methods.append(a, "unserialize");
     try vm.interfaces.put(a, "Serializable", serializable);
 
-    // SplStack
     var stack_def = ClassDef{ .name = "SplStack", .parent = "SplDoublyLinkedList" };
     try stack_def.interfaces.append(a, "Countable");
     try stack_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
@@ -154,7 +147,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "SplStack::valid", stackValid);
     try vm.native_fns.put(a, "SplStack::toArray", stackToArray);
 
-    // ArrayObject
     var ao_def = ClassDef{ .name = "ArrayObject" };
     // matches PHP's interface order on ArrayObject so getInterfaceNames() lists
     // them the way callers expect
@@ -217,7 +209,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ArrayObject::__isset", aoMagicIsset);
     try vm.native_fns.put(a, "ArrayObject::__unset", aoMagicUnset);
 
-    // ArrayIterator
     var ai_def = ClassDef{ .name = "ArrayIterator" };
     try ai_def.interfaces.append(a, "Iterator");
     try ai_def.interfaces.append(a, "Countable");
@@ -288,7 +279,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "WeakMap::offsetUnset", wmOffsetUnset);
     try vm.native_fns.put(a, "WeakMap::count", wmCount);
 
-    // SplPriorityQueue
     var pq_def = ClassDef{ .name = "SplPriorityQueue" };
     try pq_def.interfaces.append(a, "Countable");
     try pq_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
@@ -349,7 +339,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "SplHeap::rewind", heapRewind);
     try vm.native_fns.put(a, "SplHeap::valid", heapValid);
 
-    // SplMinHeap
     var minh_def = ClassDef{ .name = "SplMinHeap", .parent = "SplHeap" };
     try minh_def.interfaces.append(a, "Countable");
     try minh_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
@@ -377,7 +366,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "SplMinHeap::rewind", heapRewind);
     try vm.native_fns.put(a, "SplMinHeap::valid", heapValid);
 
-    // SplMaxHeap
     var maxh_def = ClassDef{ .name = "SplMaxHeap", .parent = "SplHeap" };
     try maxh_def.interfaces.append(a, "Countable");
     try maxh_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
@@ -405,7 +393,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "SplMaxHeap::rewind", heapRewind);
     try vm.native_fns.put(a, "SplMaxHeap::valid", heapValid);
 
-    // SplFixedArray
     var fa_def = ClassDef{ .name = "SplFixedArray" };
     try fa_def.interfaces.append(a, "Traversable");
     try fa_def.interfaces.append(a, "Countable");
@@ -443,7 +430,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "SplFixedArray::rewind", faRewind);
     try vm.native_fns.put(a, "SplFixedArray::valid", faValid);
 
-    // SplQueue
     var sq_def = ClassDef{ .name = "SplQueue", .parent = "SplDoublyLinkedList" };
     try sq_def.interfaces.append(a, "Countable");
     try sq_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
@@ -473,7 +459,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "SplQueue::rewind", sqRewind);
     try vm.native_fns.put(a, "SplQueue::valid", sqValid);
 
-    // SplDoublyLinkedList
     var dll_def = ClassDef{ .name = "SplDoublyLinkedList" };
     try dll_def.interfaces.append(a, "Iterator");
     try dll_def.interfaces.append(a, "Countable");
@@ -531,7 +516,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "SplDoublyLinkedList::add", dllAdd);
     try vm.native_fns.put(a, "SplDoublyLinkedList::toArray", dllToArray);
 
-    // SplObjectStorage
     var sos_def = ClassDef{ .name = "SplObjectStorage" };
     try sos_def.interfaces.append(a, "Countable");
     try sos_def.interfaces.append(a, "Iterator");
@@ -658,9 +642,7 @@ fn wmiValid(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = cursor >= 0 and cursor < @as(i64, @intCast(objs_v.array.entries.items.len)) };
 }
 
-// =========================================================
 // WeakReference
-// =========================================================
 
 fn weakRefCreate(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .object) return .null;
@@ -681,9 +663,7 @@ fn weakRefConstruct(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return error.RuntimeError;
 }
 
-// =========================================================
 // WeakMap
-// =========================================================
 
 fn weakMapGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -719,7 +699,6 @@ fn ensureData(ctx: *NativeContext, obj: *PhpObject) !*PhpArray {
     return arr;
 }
 
-// --- SplStack ---
 
 fn stackConstruct(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -869,7 +848,6 @@ fn stackToArray(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .array = copy };
 }
 
-// --- ArrayObject ---
 
 fn aoConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1135,7 +1113,6 @@ fn aoGetFlags(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .int = Value.toInt(obj.get("__flags")) };
 }
 
-// --- ArrayIterator ---
 
 fn aiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1283,7 +1260,6 @@ fn aiSetFlags(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .null;
 }
 
-// --- WeakMap ---
 
 fn wmObjKey(arg: Value) ?i64 {
     if (arg == .object) return @intCast(@intFromPtr(arg.object));
@@ -1719,7 +1695,6 @@ fn heapValid(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = arr.entries.items.len > 0 };
 }
 
-// --- SplFixedArray ---
 
 fn faConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1943,7 +1918,6 @@ fn faValid(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = cursor >= 0 and cursor < @as(i64, @intCast(arr.entries.items.len)) };
 }
 
-// --- SplQueue ---
 
 fn sqConstruct(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -2041,7 +2015,6 @@ fn sqValid(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = cursor >= 0 and cursor < @as(i64, @intCast(arr.entries.items.len)) };
 }
 
-// --- SplDoublyLinkedList ---
 
 const DLL_IT_MODE_LIFO: i64 = 2;
 const DLL_IT_MODE_FIFO: i64 = 0;

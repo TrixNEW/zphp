@@ -1,7 +1,4 @@
 <?php
-// covers: closures with use binding, method chaining (return $this),
-//   callable dispatch, global variables, null coalescing (??),
-//   closure pipeline pattern, string interpolation
 
 class Request
 {
@@ -79,7 +76,6 @@ class Pipeline
     }
 }
 
-// middleware: add request ID
 function addRequestId(Request $req, callable $next): Response
 {
     $req->setHeader("X-Request-ID", "req-12345");
@@ -88,7 +84,6 @@ function addRequestId(Request $req, callable $next): Response
     return $response;
 }
 
-// middleware: log
 $log = [];
 function logMiddleware(Request $req, callable $next): Response
 {
@@ -99,7 +94,6 @@ function logMiddleware(Request $req, callable $next): Response
     return $response;
 }
 
-// middleware: auth check
 function authMiddleware(Request $req, callable $next): Response
 {
     $token = $req->getHeader("Authorization");
@@ -110,14 +104,12 @@ function authMiddleware(Request $req, callable $next): Response
     return $next($req);
 }
 
-// final handler
 function handler(Request $req): Response
 {
     $resp = new Response();
     return $resp->setStatus(200)->setBody("Hello from " . $req->path);
 }
 
-// test 1: request with auth
 $pipeline = new Pipeline();
 $pipeline->pipe("addRequestId")
          ->pipe("logMiddleware")
@@ -138,7 +130,6 @@ $resp2 = $pipeline->handle($req2, "handler");
 echo "status: " . $resp2->status . "\n";
 echo "body: " . $resp2->body . "\n";
 
-// log output
 foreach ($log as $entry) {
     echo "log: " . $entry . "\n";
 }

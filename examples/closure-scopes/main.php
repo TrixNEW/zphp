@@ -1,7 +1,4 @@
 <?php
-// covers: Closure::bind / bindTo for scope changes, Closure::call ad-hoc binding,
-//   ReflectionFunction on closures, ReflectionMethod->getClosure(),
-//   static closures, $this-less arrow funcs, closure use vs auto-capture
 
 class Wallet {
     private int $cents = 0;

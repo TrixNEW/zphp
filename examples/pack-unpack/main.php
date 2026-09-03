@@ -1,5 +1,4 @@
 <?php
-// covers: pack, unpack, bin2hex, strlen, implode, array_values
 
 // --- integer packing: big-endian vs little-endian ---
 
@@ -8,41 +7,33 @@ $le = pack("V", 0x01020304);
 echo "Big-endian 0x01020304: " . bin2hex($be) . "\n";
 echo "Little-endian 0x01020304: " . bin2hex($le) . "\n";
 
-// 16-bit
 $be16 = pack("n", 0x0102);
 $le16 = pack("v", 0x0102);
 echo "Big-endian 16-bit 0x0102: " . bin2hex($be16) . "\n";
 echo "Little-endian 16-bit 0x0102: " . bin2hex($le16) . "\n";
 
-// 64-bit
 $be64 = pack("J", 0x0102030405060708);
 $le64 = pack("P", 0x0102030405060708);
 echo "Big-endian 64-bit: " . bin2hex($be64) . "\n";
 echo "Little-endian 64-bit: " . bin2hex($le64) . "\n";
 
-// --- string packing ---
 
 echo "\nString packing:\n";
 
-// NUL-padded
 $a = pack("a10", "Hello");
 echo "a10 'Hello' length: " . strlen($a) . "\n";
 echo "a10 'Hello' hex: " . bin2hex($a) . "\n";
 
-// space-padded
 $A = pack("A10", "Hello");
 echo "A10 'Hello' hex: " . bin2hex($A) . "\n";
 
-// Z (NUL-padded, strips on unpack)
 $z = pack("Z10", "Hello");
 echo "Z10 'Hello' hex: " . bin2hex($z) . "\n";
 
-// star = exact length
 $star = pack("a*", "Hello");
 echo "a* 'Hello' length: " . strlen($star) . "\n";
 echo "a* 'Hello' hex: " . bin2hex($star) . "\n";
 
-// --- hex packing ---
 
 echo "\nHex packing:\n";
 $h = pack("H*", "48656c6c6f");
@@ -50,7 +41,6 @@ echo "H* '48656c6c6f': " . $h . "\n";
 $h4 = pack("H4", "48656c6c6f");
 echo "H4 '48656c6c6f': " . bin2hex($h4) . "\n";
 
-// --- unsigned char packing ---
 
 echo "\nChar packing:\n";
 $chars = pack("C3", 65, 66, 67);
@@ -58,7 +48,6 @@ echo "C3 (65,66,67): " . $chars . "\n";
 $chars2 = pack("C*", 72, 101, 108, 108, 111);
 echo "C* (72,101,108,108,111): " . $chars2 . "\n";
 
-// signed char
 $sc = pack("c", -1);
 echo "c(-1) hex: " . bin2hex($sc) . "\n";
 $sc2 = pack("c", 127);
@@ -72,7 +61,6 @@ $result = unpack("Nlen/a5data", $data);
 echo "len: " . $result['len'] . "\n";
 echo "data: " . $result['data'] . "\n";
 
-// --- round-trip: integers ---
 
 echo "\nRound-trip integers:\n";
 $packed = pack("NnVv", 123456, 789, 987654, 321);
@@ -82,7 +70,6 @@ echo "n: " . $unpacked['b'] . "\n";
 echo "V: " . $unpacked['c'] . "\n";
 echo "v: " . $unpacked['d'] . "\n";
 
-// --- round-trip: 64-bit ---
 
 echo "\nRound-trip 64-bit:\n";
 $packed64 = pack("JP", 1000000000000, 2000000000000);
@@ -90,7 +77,6 @@ $unpacked64 = unpack("Jbig/Plittle", $packed64);
 echo "J: " . $unpacked64['big'] . "\n";
 echo "P: " . $unpacked64['little'] . "\n";
 
-// --- float/double ---
 
 echo "\nFloat/double packing:\n";
 $f = pack("g", 3.14);
@@ -105,12 +91,10 @@ echo "double round-trip ~2.718: ";
 echo ($ud['val'] > 2.718 && $ud['val'] < 2.719) ? "ok" : "fail";
 echo "\n";
 
-// big-endian float
 $gf = pack("G", 1.5);
 $ugf = unpack("Gval", $gf);
 echo "big-endian float 1.5: " . $ugf['val'] . "\n";
 
-// big-endian double
 $gd = pack("E", 2.5);
 $ugd = unpack("Eval", $gd);
 echo "big-endian double 2.5: " . $ugd['val'] . "\n";
@@ -122,16 +106,13 @@ $x = pack("a3x2a3", "ABC", "DEF");
 echo "a3x2a3 hex: " . bin2hex($x) . "\n";
 echo "a3x2a3 length: " . strlen($x) . "\n";
 
-// back up
 $xb = pack("a5X2a2", "ABCDE", "XY");
 echo "a5X2a2: " . $xb . "\n";
 
-// absolute position
 $at = pack("a3@10a3", "ABC", "DEF");
 echo "@10 length: " . strlen($at) . "\n";
 echo "@10 hex: " . bin2hex($at) . "\n";
 
-// --- unpack with offset ---
 
 echo "\nUnpack with offset:\n";
 $data = pack("NNN", 100, 200, 300);

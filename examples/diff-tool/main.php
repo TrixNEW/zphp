@@ -1,8 +1,4 @@
 <?php
-// covers: explode, implode, count, array_slice, array_reverse, array_merge,
-//   sprintf, max, min, str_repeat, str_pad, preg_match, preg_match_all,
-//   preg_replace, str_replace, substr, strlen, intdiv, abs, range,
-//   array_fill, array_map, array_filter, ARRAY_FILTER_USE_BOTH
 
 function lcs_table(array $a, array $b): array {
     $m = count($a);
@@ -59,7 +55,6 @@ function unified_diff(string $a, string $b, int $context = 3): string {
                 $cur['ops'][] = [$tag, $line, $a_pos, $b_pos];
                 $idle++;
                 if ($idle > $context * 2) {
-                    // close hunk, trim trailing context
                     $trim = $idle - $context;
                     $cur['ops'] = array_slice($cur['ops'], 0, count($cur['ops']) - $trim);
                     $hunks[] = $cur;

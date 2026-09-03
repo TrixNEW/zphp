@@ -1,10 +1,4 @@
 <?php
-// covers: fibers (suspend/resume, getReturn), constructor property promotion,
-//   readonly properties, spread operator in calls,
-//   late static binding (static::class), clone with __clone,
-//   array_map, pass-by-reference, json_encode/json_decode,
-//   string interpolation, static properties, abstract classes,
-//   match expressions, inheritance with promoted properties
 
 abstract class Task {
     private static int $nextId = 0;

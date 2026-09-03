@@ -550,7 +550,6 @@ fn mysqliReport(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = true };
 }
 
-// ---------- class constructor ----------
 
 fn mysqliConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const v = ctx.vm.currentFrame().vars.get("$this") orelse return .null;
@@ -576,7 +575,6 @@ fn mysqliConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     return .null;
 }
 
-// ---------- registration ----------
 
 pub const entries = .{
     .{ "mysqli_init", mysqliInit },

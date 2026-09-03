@@ -1,6 +1,4 @@
 <?php
-// covers: debug_backtrace, debug_print_backtrace, stack frame inspection,
-//   class method traces, nested call chains, backtrace limit, ignore args option
 
 function add($a, $b) {
     $trace = debug_backtrace();
@@ -15,7 +13,6 @@ function run() {
     return calculate(5, 10);
 }
 
-// basic trace through nested calls
 $data = run();
 $trace = $data['trace'];
 
@@ -27,7 +24,6 @@ echo "frame 2 function: " . $trace[2]['function'] . "\n";
 echo "has file: " . (isset($trace[0]['file']) ? 'yes' : 'no') . "\n";
 echo "has line: " . (isset($trace[0]['line']) ? 'yes' : 'no') . "\n";
 
-// class method traces
 class Logger {
     public function log($msg) {
         return debug_backtrace();
@@ -61,7 +57,6 @@ echo "frame 1: " . $trace[1]['function'] . "\n";
 echo "frame 1 class: " . ($trace[1]['class'] ?? 'none') . "\n";
 echo "frame 2: " . $trace[2]['function'] . "\n";
 
-// backtrace with limit
 function deep3() { return debug_backtrace(0, 2); }
 function deep2() { return deep3(); }
 function deep1() { return deep2(); }
@@ -80,7 +75,6 @@ echo "\n=== ignore args ===\n";
 $no_args = caller_of_check();
 echo "has args key: " . (array_key_exists('args', $no_args[0]) ? 'yes' : 'no') . "\n";
 
-// debug_print_backtrace
 function print_inner() {
     debug_print_backtrace();
 }
@@ -92,7 +86,6 @@ function print_outer() {
 echo "\n=== print backtrace ===\n";
 print_outer();
 
-// empty trace at top level
 echo "\n=== top level ===\n";
 $top = debug_backtrace();
 echo "top level frames: " . count($top) . "\n";

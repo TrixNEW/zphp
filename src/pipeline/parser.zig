@@ -76,12 +76,9 @@ const Parser = struct {
     found_yield: bool = false,
     pending_top_stmts: std.ArrayListUnmanaged(u32) = .{},
 
-    // ======================================================================
     // root
-    // ======================================================================
 
     fn parseRoot(self: *Parser) Error!void {
-        // reserve root at index 0
         _ = try self.addNode(.{ .tag = .root, .main_token = 0, .data = .{} });
 
         var stmts = std.ArrayListUnmanaged(u32){};
@@ -133,10 +130,6 @@ const Parser = struct {
         const extra = try self.addExtraList(&.{expr});
         return self.addNode(.{ .tag = .echo_stmt, .main_token = echo_tok, .data = .{ .lhs = extra } });
     }
-
-    // ======================================================================
-    // statements
-    // ======================================================================
 
     fn parseStatement(self: *Parser) Error!u32 {
         if (self.peek() == .hash_bracket) {
@@ -634,9 +627,7 @@ const Parser = struct {
         return self.addNode(.{ .tag = .block, .main_token = brace_tok, .data = .{ .lhs = extra } });
     }
 
-    // ======================================================================
     // control flow
-    // ======================================================================
 
     fn parseIfStmt(self: *Parser) Error!u32 {
         return self.parseIfStmtInner(false);
@@ -1085,7 +1076,6 @@ const Parser = struct {
             }
         }
 
-        // optional variable
         var var_tok: u32 = 0;
         if (self.peek() == .variable) {
             var_tok = self.advance();
@@ -1255,10 +1245,26 @@ const Parser = struct {
         return self.addNode(.{ .tag = .new_expr, .main_token = name_tok, .data = .{ .lhs = extra, .rhs = name_extra } });
     }
 
+    // Property metadata stored in the low byte of class_property rhs.
+    // bits 0-1: read visibility, bit 2: readonly, bits 3-4: set visibility,
+    // bit 5: explicit asymmetric set visibility, bit 7: final.
+    inline fn encodePropertyFlags(
+        visibility: u32,
+        set_visibility: u32,
+        has_set_visibility: bool,
+        is_readonly: bool,
+        is_final: bool,
+    ) u32 {
+        return visibility |
+            (if (is_readonly) @as(u32, 1) << 2 else 0) |
+            (set_visibility << 3) |
+            (if (has_set_visibility) @as(u32, 1) << 5 else 0) |
+            (if (is_final) @as(u32, 1) << 7 else 0);
+    }
+
     fn parseAnonymousClass(self: *Parser, new_tok: u32) Error!u32 {
         _ = self.advance(); // class
 
-        // constructor args
         var ctor_args = std.ArrayListUnmanaged(u32){};
         defer ctor_args.deinit(self.allocator);
         if (self.peek() == .l_paren) {
@@ -1341,6 +1347,15 @@ const Parser = struct {
             }
             if (!has_set_vis) set_visibility = visibility;
 
+            // PHP 8.4 asymmetric visibility is only valid on instance
+            // properties, and set visibility may not be wider than read visibility.
+            const starts_property = self.peek() == .variable or self.isTypeName() or
+                self.peek() == .question or self.peek() == .l_paren;
+            if (has_set_vis and (!starts_property or set_visibility < visibility or is_static)) {
+                try self.addError(.unexpected_token);
+                return error.ParseError;
+            }
+
             if (self.peek() == .kw_use) {
                 try members.append(self.allocator, try self.parseTraitUse());
             } else if (self.peek() == .kw_function) {
@@ -1355,11 +1370,16 @@ const Parser = struct {
                     try members.append(self.allocator, method);
                 }
             } else if (self.peek() == .variable) {
+                // Asymmetric set visibility requires an explicit property type.
+                if (has_set_vis) {
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
+                }
                 const prop = try self.parseClassProperty();
                 if (is_static) {
                     self.nodes.items[prop].tag = .static_class_property;
                 }
-                self.nodes.items[prop].data.rhs = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
+                self.nodes.items[prop].data.rhs = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                 try members.append(self.allocator, prop);
             } else if (self.peek() == .kw_const) {
                 const cd = try self.parseConstDecl();
@@ -1374,7 +1394,7 @@ const Parser = struct {
                     if (is_static) {
                         self.nodes.items[prop].tag = .static_class_property;
                     }
-                    var rhs: u32 = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
+                    var rhs: u32 = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                     if (tr[0] != tr[1]) {
                         const ext = try self.addExtra(&tr);
                         rhs |= (ext + 1) << 16;
@@ -1410,7 +1430,6 @@ const Parser = struct {
         self.found_yield = true;
         const tok = self.advance(); // yield
 
-        // yield from $expr
         if (self.peek() == .identifier) {
             const next_tok = self.tokens[self.pos].lexeme(self.source);
             if (std.mem.eql(u8, next_tok, "from")) {
@@ -1420,7 +1439,6 @@ const Parser = struct {
             }
         }
 
-        // bare yield (no value)
         if (self.peek() == .semicolon or self.peek() == .r_paren or
             self.peek() == .r_bracket or self.peek() == .comma or self.peek() == .eof)
         {
@@ -1429,7 +1447,6 @@ const Parser = struct {
 
         const expr = try self.parseExprPrec(1);
 
-        // yield $key => $value
         if (self.peek() == .fat_arrow) {
             _ = self.advance();
             const value = try self.parseExprPrec(1);
@@ -1519,6 +1536,15 @@ const Parser = struct {
             }
             if (!has_set_vis) set_visibility = visibility;
 
+            // PHP 8.4 asymmetric visibility is only valid on instance
+            // properties, and set visibility may not be wider than read visibility.
+            const starts_property = self.peek() == .variable or self.isTypeName() or
+                self.peek() == .question or self.peek() == .l_paren;
+            if (has_set_vis and (!starts_property or set_visibility < visibility or is_static)) {
+                try self.addError(.unexpected_token);
+                return error.ParseError;
+            }
+
             if (self.peek() == .kw_use) {
                 try members.append(self.allocator, try self.parseTraitUse());
             } else if (self.peek() == .kw_function) {
@@ -1537,12 +1563,17 @@ const Parser = struct {
                     try members.append(self.allocator, method);
                 }
             } else if (self.peek() == .variable) {
+                // Asymmetric set visibility requires an explicit property type.
+                if (has_set_vis) {
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
+                }
                 const prop = try self.parseClassProperty();
                 if (is_static) {
                     self.nodes.items[prop].tag = .static_class_property;
                 }
-                // bits 0-1: read visibility, bit 2: readonly, bits 3-4: set visibility, bit 5: has asymmetric set
-                self.nodes.items[prop].data.rhs = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
+                // Property flags are encoded by encodePropertyFlags(); type metadata remains in bits 16+.
+                self.nodes.items[prop].data.rhs = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                 try members.append(self.allocator, prop);
             } else if (self.peek() == .kw_const) {
                 const cd = try self.parseConstDecl();
@@ -1557,7 +1588,7 @@ const Parser = struct {
                     if (is_static) {
                         self.nodes.items[prop].tag = .static_class_property;
                     }
-                    var rhs: u32 = visibility | (if (is_readonly) @as(u32, 4) else 0) | (set_visibility << 3) | (if (has_set_vis) @as(u32, 1) << 5 else 0);
+                    var rhs: u32 = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                     if (tr[0] != tr[1]) {
                         const ext = try self.addExtra(&tr);
                         rhs |= (ext + 1) << 16;
@@ -1694,44 +1725,125 @@ const Parser = struct {
 
         while (self.peek() != .r_brace and self.peek() != .eof) {
             self.skipAttributes();
+
             var is_static = false;
             var is_abstract = false;
+            var is_final = false;
+            var is_readonly = false;
+            var visibility: u32 = 0; // 0=public, 1=protected, 2=private
+            var set_visibility: u32 = 0;
+            var has_set_vis = false;
+
             while (self.peek() == .kw_public or self.peek() == .kw_protected or
                 self.peek() == .kw_private or self.peek() == .kw_static or
-                self.peek() == .kw_abstract or self.peek() == .kw_readonly)
+                self.peek() == .kw_abstract or self.peek() == .kw_final or self.peek() == .kw_readonly)
             {
-                if (self.peek() == .kw_static) is_static = true;
-                if (self.peek() == .kw_abstract) is_abstract = true;
+                if (self.peek() == .kw_static) {
+                    is_static = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_abstract) {
+                    is_abstract = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_final) {
+                    is_final = true;
+                    _ = self.advance();
+                    continue;
+                }
+                if (self.peek() == .kw_readonly) {
+                    is_readonly = true;
+                    _ = self.advance();
+                    continue;
+                }
+
+                const vis_val: u32 =
+                    if (self.peek() == .kw_protected) 1 else if (self.peek() == .kw_private) 2 else 0;
+
                 _ = self.advance();
+
+                if (self.peek() == .l_paren and
+                    self.peekAt(1) == .identifier and
+                    std.mem.eql(u8, self.lexemeAt(1), "set") and
+                    self.peekAt(2) == .r_paren)
+                {
+                    _ = self.advance();
+                    _ = self.advance();
+                    _ = self.advance();
+                    set_visibility = vis_val;
+                    has_set_vis = true;
+                } else {
+                    visibility = vis_val;
+                }
+            }
+
+            if (!has_set_vis) set_visibility = visibility;
+
+            const starts_property = self.peek() == .variable or self.isTypeName() or
+                self.peek() == .question or self.peek() == .l_paren;
+            if (has_set_vis and (!starts_property or set_visibility < visibility or is_static)) {
+                try self.addError(.unexpected_token);
+                return error.ParseError;
             }
 
             if (self.peek() == .kw_function) {
                 if (is_abstract) {
-                    try members.append(self.allocator, try self.parseInterfaceMethod());
+                    const method = try self.parseInterfaceMethod();
+                    self.nodes.items[method].data.rhs |= visibility << 28;
+                    try members.append(self.allocator, method);
                     continue;
                 }
+
                 const method = try self.parseClassMethod();
                 if (is_static) {
                     self.nodes.items[method].tag = .static_class_method;
                 }
+                self.nodes.items[method].data.rhs |=
+                    (visibility << 30) |
+                    (if (is_final) @as(u32, 1) << 28 else 0);
                 try members.append(self.allocator, method);
             } else if (self.peek() == .variable) {
+                if (has_set_vis) {
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
+                }
+
                 const prop = try self.parseClassProperty();
                 if (is_static) {
                     self.nodes.items[prop].tag = .static_class_property;
                 }
+                self.nodes.items[prop].data.rhs = encodePropertyFlags(
+                    visibility,
+                    set_visibility,
+                    has_set_vis,
+                    is_readonly,
+                    is_final,
+                );
                 try members.append(self.allocator, prop);
             } else if (self.isTypeName() or self.peek() == .question or self.peek() == .l_paren) {
                 const tr = self.collectTypeHint();
+
                 if (self.peek() == .variable) {
                     const prop = try self.parseClassProperty();
                     if (is_static) {
                         self.nodes.items[prop].tag = .static_class_property;
                     }
+
+                    var rhs = encodePropertyFlags(
+                        visibility,
+                        set_visibility,
+                        has_set_vis,
+                        is_readonly,
+                        is_final,
+                    );
                     if (tr[0] != tr[1]) {
                         const ext = try self.addExtra(&tr);
-                        self.nodes.items[prop].data.rhs |= (ext + 1) << 16;
+                        rhs |= (ext + 1) << 16;
                     }
+
+                    self.nodes.items[prop].data.rhs = rhs;
                     try members.append(self.allocator, prop);
                 } else {
                     _ = self.advance();
@@ -1744,10 +1856,14 @@ const Parser = struct {
                 _ = self.advance();
             }
         }
-        _ = try self.expect(.r_brace);
 
+        _ = try self.expect(.r_brace);
         const extra = try self.addExtraList(members.items);
-        return self.addNode(.{ .tag = .trait_decl, .main_token = name_tok, .data = .{ .lhs = extra } });
+        return self.addNode(.{
+            .tag = .trait_decl,
+            .main_token = name_tok,
+            .data = .{ .lhs = extra },
+        });
     }
 
     fn parseEnumDecl(self: *Parser) Error!u32 {
@@ -2255,7 +2371,6 @@ const Parser = struct {
             return;
         }
 
-        // DNF: (Foo&Bar)|Baz
         if (self.peek() == .l_paren) {
             _ = self.advance();
             while (self.isTypeName()) {
@@ -2275,12 +2390,10 @@ const Parser = struct {
         if (!self.isTypeName()) return;
         self.skipTypeName();
 
-        // union: int|string|null or intersection: Foo&Bar
         if (self.peek() == .pipe) {
             while (self.peek() == .pipe) {
                 _ = self.advance();
                 if (self.peek() == .l_paren) {
-                    // DNF group mid-union
                     _ = self.advance();
                     while (self.isTypeName()) {
                         self.skipTypeName();
@@ -2360,10 +2473,18 @@ const Parser = struct {
             break;
         }
         const type_range = self.collectTypeHint();
-        // reference: &$param
+
+        // PHP 8.4 asymmetric promoted-property validation.
+        if (set_promotion > 0) {
+            if (promotion == 0) promotion = 1;
+
+            if (set_promotion < promotion or type_range[0] == type_range[1]) {
+                try self.addError(.unexpected_token);
+                return error.ParseError;
+            }
+        }
         const is_ref = self.peek() == .amp;
         if (is_ref) _ = self.advance();
-        // variadic: ...$args
         const is_variadic = self.peek() == .ellipsis;
         if (is_variadic) _ = self.advance();
 
@@ -2388,9 +2509,7 @@ const Parser = struct {
         return self.addNode(.{ .tag = .variable, .main_token = tok, .data = .{ .lhs = default, .rhs = flags } });
     }
 
-    // ======================================================================
     // expressions
-    // ======================================================================
 
     fn parseExpression(self: *Parser) Error!u32 {
         return self.parseExprPrec(0);
@@ -2400,7 +2519,6 @@ const Parser = struct {
         var left = try self.parsePrefixExpr();
 
         while (true) {
-            // postfix: call, index, property, increment/decrement
             switch (self.peek()) {
                 .l_paren => {
                     left = try self.parseCallExpr(left);
@@ -2433,13 +2551,11 @@ const Parser = struct {
                 else => {},
             }
 
-            // ternary
             if (self.peek() == .question and infixPrec(.question) > min_prec) {
                 left = try self.parseTernary(left);
                 continue;
             }
 
-            // infix
             const prec = infixPrec(self.peek());
             if (prec == 0 or prec <= min_prec) {
                 // php allows assignment as rhs of any operator: false === $x = expr
@@ -2814,14 +2930,11 @@ const Parser = struct {
         return self.addNode(.{ .tag = .array_element, .main_token = 0, .data = .{ .lhs = expr } });
     }
 
-    // ======================================================================
     // postfix expressions
-    // ======================================================================
 
     fn parseCallExpr(self: *Parser, callee: u32) Error!u32 {
         const paren_tok = self.advance(); // (
 
-        // first-class callable: foo(...)
         if (self.peek() == .ellipsis and self.peekAt(1) == .r_paren) {
             _ = self.advance(); // ...
             _ = self.advance(); // )
@@ -2864,7 +2977,6 @@ const Parser = struct {
     fn parseIndexExpr(self: *Parser, array: u32) Error!u32 {
         const bracket_tok = self.advance(); // [
         if (self.peek() == .r_bracket) {
-            // $arr[] - array push syntax
             _ = self.advance();
             return self.addNode(.{ .tag = .array_push_target, .main_token = bracket_tok, .data = .{ .lhs = array } });
         }
@@ -2876,7 +2988,6 @@ const Parser = struct {
     fn parsePropExpr(self: *Parser, object: u32, nullsafe: bool) Error!u32 {
         _ = self.advance(); // -> or ?->
 
-        // dynamic property: $obj->{expr}
         if (self.peek() == .l_brace) {
             _ = self.advance();
             const expr = try self.parseExpression();
@@ -2892,11 +3003,9 @@ const Parser = struct {
         }
         const name_tok = self.advance();
 
-        // method call: $obj->method(...) or $obj?->method(...)
         if (self.peek() == .l_paren) {
             _ = self.advance(); // (
 
-            // first-class callable: $obj->method(...)
             if (self.peek() == .ellipsis and self.peekAt(1) == .r_paren) {
                 _ = self.advance(); // ...
                 _ = self.advance(); // )
@@ -2922,7 +3031,6 @@ const Parser = struct {
             return self.addNode(.{ .tag = tag, .main_token = name_tok, .data = .{ .lhs = object, .rhs = extra } });
         }
 
-        // property access: $obj->prop or $obj?->prop
         const prop = try self.addNode(.{ .tag = .identifier, .main_token = name_tok, .data = .{} });
         const tag: Ast.Node.Tag = if (nullsafe) .nullsafe_property_access else .property_access;
         return self.addNode(.{ .tag = tag, .main_token = name_tok, .data = .{ .lhs = object, .rhs = prop } });
@@ -2973,7 +3081,6 @@ const Parser = struct {
             return self.addNode(.{ .tag = .static_prop_access, .main_token = class_tok, .data = .{ .lhs = class_node } });
         }
 
-        // dynamic static call: Class::{expr}()
         if (self.peek() == .l_brace) {
             _ = self.advance(); // {
             const method_expr = try self.parseExpression();
@@ -3007,7 +3114,6 @@ const Parser = struct {
         if (self.peek() == .l_paren) {
             _ = self.advance();
 
-            // first-class callable: ClassName::method(...)
             if (self.peek() == .ellipsis and self.peekAt(1) == .r_paren) {
                 _ = self.advance(); // ...
                 _ = self.advance(); // )
@@ -3051,9 +3157,7 @@ const Parser = struct {
         return self.addNode(.{ .tag = .ternary, .main_token = q_tok, .data = .{ .lhs = cond, .rhs = extra } });
     }
 
-    // ======================================================================
     // precedence
-    // ======================================================================
 
     fn infixPrec(tag: Tag) u8 {
         return switch (tag) {
@@ -3106,10 +3210,6 @@ const Parser = struct {
             else => .binary_op,
         };
     }
-
-    // ======================================================================
-    // utilities
-    // ======================================================================
 
     fn peek(self: *const Parser) Tag {
         if (self.pos >= self.tokens.len) return .eof;

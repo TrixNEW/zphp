@@ -1,5 +1,4 @@
 <?php
-// covers: preg_replace, preg_replace_callback, preg_match, preg_match_all, str_repeat, htmlspecialchars, trim, ltrim, str_starts_with, substr, strlen, explode, implode, array_map, array_pop, count
 
 function parseMarkdown(string $markdown): string {
     $lines = explode("\n", $markdown);
@@ -10,7 +9,6 @@ function parseMarkdown(string $markdown): string {
     $inBlockquote = false;
 
     foreach ($lines as $line) {
-        // code blocks
         if (str_starts_with(trim($line), '```')) {
             if ($inCodeBlock) {
                 $html[] = '</code></pre>';
@@ -28,19 +26,16 @@ function parseMarkdown(string $markdown): string {
             continue;
         }
 
-        // close list if needed
         if ($inList && !preg_match('/^\s*[-*]\s/', $line) && !preg_match('/^\s*\d+\.\s/', $line) && trim($line) !== '') {
             $html[] = $listType === 'ul' ? '</ul>' : '</ol>';
             $inList = false;
         }
 
-        // close blockquote if needed
         if ($inBlockquote && !str_starts_with($line, '>')) {
             $html[] = '</blockquote>';
             $inBlockquote = false;
         }
 
-        // empty line
         if (trim($line) === '') {
             if ($inList) {
                 $html[] = $listType === 'ul' ? '</ul>' : '</ol>';
@@ -49,7 +44,6 @@ function parseMarkdown(string $markdown): string {
             continue;
         }
 
-        // headings
         if (preg_match('/^(#{1,6})\s+(.+)$/', $line, $matches)) {
             $level = strlen($matches[1]);
             $text = parseInline($matches[2]);
@@ -57,13 +51,11 @@ function parseMarkdown(string $markdown): string {
             continue;
         }
 
-        // horizontal rule
         if (preg_match('/^[-*_]{3,}$/', trim($line))) {
             $html[] = '<hr>';
             continue;
         }
 
-        // blockquote
         if (str_starts_with($line, '>')) {
             if (!$inBlockquote) {
                 $html[] = '<blockquote>';
@@ -74,7 +66,6 @@ function parseMarkdown(string $markdown): string {
             continue;
         }
 
-        // unordered list
         if (preg_match('/^\s*[-*]\s+(.+)$/', $line, $matches)) {
             if (!$inList || $listType !== 'ul') {
                 if ($inList) $html[] = '</ol>';
@@ -86,7 +77,6 @@ function parseMarkdown(string $markdown): string {
             continue;
         }
 
-        // ordered list
         if (preg_match('/^\s*\d+\.\s+(.+)$/', $line, $matches)) {
             if (!$inList || $listType !== 'ol') {
                 if ($inList) $html[] = '</ul>';
@@ -98,7 +88,6 @@ function parseMarkdown(string $markdown): string {
             continue;
         }
 
-        // paragraph
         $html[] = '<p>' . parseInline($line) . '</p>';
     }
 
@@ -110,28 +99,21 @@ function parseMarkdown(string $markdown): string {
 }
 
 function parseInline(string $text): string {
-    // bold + italic
     $text = preg_replace('/\*\*\*(.+?)\*\*\*/', '<strong><em>$1</em></strong>', $text);
 
-    // bold
     $text = preg_replace('/\*\*(.+?)\*\*/', '<strong>$1</strong>', $text);
 
-    // italic
     $text = preg_replace('/\*(.+?)\*/', '<em>$1</em>', $text);
 
-    // inline code
     $text = preg_replace('/`([^`]+)`/', '<code>$1</code>', $text);
 
-    // links
     $text = preg_replace('/\[([^\]]+)\]\(([^)]+)\)/', '<a href="$2">$1</a>', $text);
 
-    // images
     $text = preg_replace('/!\[([^\]]*)\]\(([^)]+)\)/', '<img src="$2" alt="$1">', $text);
 
     return $text;
 }
 
-// --- test ---
 
 $markdown = <<<'MD'
 # Markdown Parser
@@ -176,7 +158,6 @@ MD;
 $html = parseMarkdown($markdown);
 echo $html . "\n";
 
-// --- verify specific patterns ---
 
 echo "\nInline parsing:\n";
 $tests = [

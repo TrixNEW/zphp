@@ -1,8 +1,4 @@
 <?php
-// covers: fgetcsv, fputcsv, array_intersect_key, array_diff_assoc,
-//   array_combine, array_column, array_map, array_filter, implode,
-//   fopen, fclose, fwrite, rewind, str_putcsv (via fputcsv to memory),
-//   array_keys, array_values, in_array, count, sprintf, usort
 
 $csvData = "name,age,city,role\n" .
     "Alice,30,Portland,engineer\n" .
@@ -14,7 +10,6 @@ $csvData = "name,age,city,role\n" .
 $tmpFile = tempnam(sys_get_temp_dir(), 'csv_');
 file_put_contents($tmpFile, $csvData);
 
-// parse CSV with fgetcsv
 $handle = fopen($tmpFile, 'r');
 $headers = fgetcsv($handle, 0, ',', '"', '');
 $rows = [];
@@ -37,18 +32,15 @@ foreach ($engineers as $row) {
     echo "  " . $row['name'] . "\n";
 }
 
-// array_column: extract just names
 $names = array_column($rows, 'name');
 echo "\n=== all names ===\n";
 echo "  " . implode(', ', $names) . "\n";
 
-// array_column with index
 $byName = array_column($rows, null, 'name');
 echo "\n=== lookup by name ===\n";
 echo "  Alice's city: " . $byName['Alice']['city'] . "\n";
 echo "  Diana's role: " . $byName['Diana']['role'] . "\n";
 
-// array_intersect_key: pick specific fields
 $allowedKeys = array_flip(['name', 'city']);
 echo "\n=== intersect_key (name+city only) ===\n";
 foreach ($rows as $row) {
@@ -73,7 +65,6 @@ foreach ($rows as $row) {
     }
 }
 
-// write filtered CSV with fputcsv
 $outFile = tempnam(sys_get_temp_dir(), 'csv_out_');
 $out = fopen($outFile, 'w');
 fputcsv($out, ['name', 'city'], ',', '"', '');
@@ -86,7 +77,6 @@ $written = file_get_contents($outFile);
 echo "\n=== written csv ===\n";
 echo $written;
 
-// sort by age descending
 usort($rows, function ($a, $b) {
     return (int)$b['age'] - (int)$a['age'];
 });
@@ -95,6 +85,5 @@ foreach ($rows as $row) {
     echo "  " . $row['name'] . ": " . $row['age'] . "\n";
 }
 
-// cleanup
 unlink($tmpFile);
 unlink($outFile);

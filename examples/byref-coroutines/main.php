@@ -1,7 +1,4 @@
 <?php
-// covers: by-ref params interacting with generators, fibers, and closures.
-//   pre-fix these patterns had subtle ref_slot/cell bugs; this example
-//   pins down the matrix so future ref-handling regressions get caught.
 
 echo "=== generator with by-ref param to outer state ===\n";
 function pump(int &$counter): Generator {

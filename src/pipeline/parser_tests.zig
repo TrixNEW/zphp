@@ -531,85 +531,237 @@ fn renderNode(ast: *const Ast, idx: u32, buf: *Buf) !void {
     }
 }
 
-// ==========================================================================
 // tests
-// ==========================================================================
 
-test "integer literal" { try expectParse("<?php 42;", "42"); }
-test "float literal" { try expectParse("<?php 3.14;", "3.14"); }
-test "string literal" { try expectParse("<?php \"hello\";", "\"hello\""); }
+test "integer literal" {
+    try expectParse("<?php 42;", "42");
+}
+test "float literal" {
+    try expectParse("<?php 3.14;", "3.14");
+}
+test "string literal" {
+    try expectParse("<?php \"hello\";", "\"hello\"");
+}
 test "boolean and null literals" {
     try expectParse("<?php true;", "true");
     try expectParse("<?php false;", "false");
     try expectParse("<?php null;", "null");
 }
-test "variable" { try expectParse("<?php $x;", "$x"); }
-test "binary addition" { try expectParse("<?php 1 + 2;", "(+ 1 2)"); }
-test "binary precedence: add vs mul" { try expectParse("<?php 1 + 2 * 3;", "(+ 1 (* 2 3))"); }
-test "binary precedence: mul vs add" { try expectParse("<?php 1 * 2 + 3;", "(+ (* 1 2) 3)"); }
-test "left associativity" { try expectParse("<?php 1 + 2 + 3;", "(+ (+ 1 2) 3)"); }
-test "right associativity: power" { try expectParse("<?php 2 ** 3 ** 4;", "(** 2 (** 3 4))"); }
-test "parenthesized expression" { try expectParse("<?php (1 + 2) * 3;", "(* (+ 1 2) 3)"); }
-test "pipe operator" { try expectParse("<?php $x |> strlen(...);", "(|> $x (callable_ref strlen))"); }
-test "pipe operator chained" { try expectParse("<?php $x |> trim(...) |> strtoupper(...);", "(|> (|> $x (callable_ref trim)) (callable_ref strtoupper))"); }
-test "pipe precedence vs arithmetic" { try expectParse("<?php 5 + 2 |> sqrt(...);", "(|> (+ 5 2) (callable_ref sqrt))"); }
-test "pipe precedence vs comparison" { try expectParse("<?php $x |> strlen(...) == 4;", "(== (|> $x (callable_ref strlen)) 4)"); }
-test "assignment" { try expectParse("<?php $x = 42;", "(= $x 42)"); }
-test "compound assignment" { try expectParse("<?php $x += 1;", "(+= $x 1)"); }
-test "right-associative assignment" { try expectParse("<?php $a = $b = $c;", "(= $a (= $b $c))"); }
-test "prefix negation" { try expectParse("<?php -$x;", "(-$x)"); }
-test "prefix not" { try expectParse("<?php !$x;", "(!$x)"); }
-test "postfix increment" { try expectParse("<?php $x++;", "($x++)"); }
-test "prefix and postfix" { try expectParse("<?php -$x++;", "(-($x++))"); }
-test "echo statement" { try expectParse("<?php echo \"hello\";", "(echo \"hello\")"); }
-test "echo multiple" { try expectParse("<?php echo $a, $b;", "(echo $a $b)"); }
-test "return statement" { try expectParse("<?php return 42;", "(return 42)"); }
-test "bare return" { try expectParse("<?php return;", "(return)"); }
-test "if simple" { try expectParse("<?php if ($x) $y;", "(if $x $y)"); }
-test "if with block" { try expectParse("<?php if ($x) { $y; }", "(if $x { $y })"); }
-test "if else" { try expectParse("<?php if ($x) { $a; } else { $b; }", "(if $x { $a } else { $b })"); }
-test "while loop" { try expectParse("<?php while ($x) $y;", "(while $x $y)"); }
-test "do while" { try expectParse("<?php do { $x; } while ($y);", "(do { $x } while $y)"); }
-test "for loop" { try expectParse("<?php for ($i = 0; $i < 10; $i++) $x;", "(for)"); }
+test "variable" {
+    try expectParse("<?php $x;", "$x");
+}
+test "binary addition" {
+    try expectParse("<?php 1 + 2;", "(+ 1 2)");
+}
+test "binary precedence: add vs mul" {
+    try expectParse("<?php 1 + 2 * 3;", "(+ 1 (* 2 3))");
+}
+test "binary precedence: mul vs add" {
+    try expectParse("<?php 1 * 2 + 3;", "(+ (* 1 2) 3)");
+}
+test "left associativity" {
+    try expectParse("<?php 1 + 2 + 3;", "(+ (+ 1 2) 3)");
+}
+test "right associativity: power" {
+    try expectParse("<?php 2 ** 3 ** 4;", "(** 2 (** 3 4))");
+}
+test "parenthesized expression" {
+    try expectParse("<?php (1 + 2) * 3;", "(* (+ 1 2) 3)");
+}
+test "pipe operator" {
+    try expectParse("<?php $x |> strlen(...);", "(|> $x (callable_ref strlen))");
+}
+test "pipe operator chained" {
+    try expectParse("<?php $x |> trim(...) |> strtoupper(...);", "(|> (|> $x (callable_ref trim)) (callable_ref strtoupper))");
+}
+test "pipe precedence vs arithmetic" {
+    try expectParse("<?php 5 + 2 |> sqrt(...);", "(|> (+ 5 2) (callable_ref sqrt))");
+}
+test "pipe precedence vs comparison" {
+    try expectParse("<?php $x |> strlen(...) == 4;", "(== (|> $x (callable_ref strlen)) 4)");
+}
+test "assignment" {
+    try expectParse("<?php $x = 42;", "(= $x 42)");
+}
+test "compound assignment" {
+    try expectParse("<?php $x += 1;", "(+= $x 1)");
+}
+test "right-associative assignment" {
+    try expectParse("<?php $a = $b = $c;", "(= $a (= $b $c))");
+}
+test "prefix negation" {
+    try expectParse("<?php -$x;", "(-$x)");
+}
+test "prefix not" {
+    try expectParse("<?php !$x;", "(!$x)");
+}
+test "postfix increment" {
+    try expectParse("<?php $x++;", "($x++)");
+}
+test "prefix and postfix" {
+    try expectParse("<?php -$x++;", "(-($x++))");
+}
+test "echo statement" {
+    try expectParse("<?php echo \"hello\";", "(echo \"hello\")");
+}
+test "echo multiple" {
+    try expectParse("<?php echo $a, $b;", "(echo $a $b)");
+}
+test "return statement" {
+    try expectParse("<?php return 42;", "(return 42)");
+}
+test "bare return" {
+    try expectParse("<?php return;", "(return)");
+}
+test "if simple" {
+    try expectParse("<?php if ($x) $y;", "(if $x $y)");
+}
+test "if with block" {
+    try expectParse("<?php if ($x) { $y; }", "(if $x { $y })");
+}
+test "if else" {
+    try expectParse("<?php if ($x) { $a; } else { $b; }", "(if $x { $a } else { $b })");
+}
+test "while loop" {
+    try expectParse("<?php while ($x) $y;", "(while $x $y)");
+}
+test "do while" {
+    try expectParse("<?php do { $x; } while ($y);", "(do { $x } while $y)");
+}
+test "for loop" {
+    try expectParse("<?php for ($i = 0; $i < 10; $i++) $x;", "(for)");
+}
 test "function declaration" {
     try expectParse(
         "<?php function add($a, $b) { return $a + $b; }",
         "(fn add($a, $b) { (return (+ $a $b)) })",
     );
 }
-test "function call" { try expectParse("<?php foo();", "(call foo)"); }
-test "function call with args" { try expectParse("<?php foo($a, $b);", "(call foo $a $b)"); }
-test "nested calls" { try expectParse("<?php foo(bar($x));", "(call foo (call bar $x))"); }
-test "array access" { try expectParse("<?php $a[0];", "(idx $a 0)"); }
-test "property access" { try expectParse("<?php $a->b;", "(-> $a b)"); }
-test "method call" { try expectParse("<?php $a->b();", "(-> $a b)"); }
-test "chained access" { try expectParse("<?php $a->b->c;", "(-> (-> $a b) c)"); }
-test "ternary" { try expectParse("<?php $a ? $b : $c;", "(? $a $b : $c)"); }
-test "short ternary" { try expectParse("<?php $a ?: $b;", "(? $a : $b)"); }
-test "null coalesce" { try expectParse("<?php $a ?? $b;", "(?? $a $b)"); }
-test "logical and/or" { try expectParse("<?php $a && $b || $c;", "(|| (&& $a $b) $c)"); }
+test "function call" {
+    try expectParse("<?php foo();", "(call foo)");
+}
+test "function call with args" {
+    try expectParse("<?php foo($a, $b);", "(call foo $a $b)");
+}
+test "nested calls" {
+    try expectParse("<?php foo(bar($x));", "(call foo (call bar $x))");
+}
+test "array access" {
+    try expectParse("<?php $a[0];", "(idx $a 0)");
+}
+test "property access" {
+    try expectParse("<?php $a->b;", "(-> $a b)");
+}
+test "method call" {
+    try expectParse("<?php $a->b();", "(-> $a b)");
+}
+test "chained access" {
+    try expectParse("<?php $a->b->c;", "(-> (-> $a b) c)");
+}
+test "ternary" {
+    try expectParse("<?php $a ? $b : $c;", "(? $a $b : $c)");
+}
+test "short ternary" {
+    try expectParse("<?php $a ?: $b;", "(? $a : $b)");
+}
+test "null coalesce" {
+    try expectParse("<?php $a ?? $b;", "(?? $a $b)");
+}
+test "logical and/or" {
+    try expectParse("<?php $a && $b || $c;", "(|| (&& $a $b) $c)");
+}
 test "comparison" {
     try expectParse("<?php $a == $b;", "(== $a $b)");
     try expectParse("<?php $a === $b;", "(=== $a $b)");
     try expectParse("<?php $a <=> $b;", "(<=> $a $b)");
 }
-test "string concat" { try expectParse("<?php $a . $b . $c;", "(. (. $a $b) $c)"); }
-test "array literal" { try expectParse("<?php [1, 2, 3];", "[1, 2, 3]"); }
-test "array with keys" { try expectParse("<?php ['a' => 1, 'b' => 2];", "['a' => 1, 'b' => 2]"); }
-test "empty array" { try expectParse("<?php [];", "[]"); }
-test "break and continue" { try expectParse("<?php while(1) { break; continue; }", "(while 1 { (break) (continue) })"); }
-test "mixed html and php" { try expectParse("<h1>Hi</h1><?php echo $x;", "(html) (echo $x)"); }
-test "multiple php blocks" { try expectParse("A<?php $a; ?>B<?= $b ?>C", "(html) $a (html) (echo $b) (html)"); }
-test "complex precedence" { try expectParse("<?php $a = $b + $c * $d;", "(= $a (+ $b (* $c $d)))"); }
-test "instanceof" { try expectParse("<?php $a instanceof Foo;", "(instanceof $a Foo)"); }
-test "parse error recovery" { try expectError("<?php $x = ;"); }
-test "multiple statements" { try expectParse("<?php $a = 1; $b = 2;", "(= $a 1) (= $b 2)"); }
-test "type hint: simple param" { try expectParse("<?php function f(int $x) { return $x; }", "(fn f($x) { (return $x) })"); }
-test "type hint: keyword type param" { try expectParse("<?php function f(array $x) { return $x; }", "(fn f($x) { (return $x) })"); }
-test "type hint: nullable param" { try expectParse("<?php function f(?string $x) { return $x; }", "(fn f($x) { (return $x) })"); }
-test "type hint: union param" { try expectParse("<?php function f(int|string $x) { return $x; }", "(fn f($x) { (return $x) })"); }
-test "type hint: return type" { try expectParse("<?php function f($x): int { return $x; }", "(fn f($x) { (return $x) })"); }
-test "type hint: nullable return" { try expectParse("<?php function f($x): ?string { return $x; }", "(fn f($x) { (return $x) })"); }
-test "type hint: union return" { try expectParse("<?php function f($x): int|string { return $x; }", "(fn f($x) { (return $x) })"); }
-test "type hint: intersection param" { try expectParse("<?php function f(Foo&Bar $x) { return $x; }", "(fn f($x) { (return $x) })"); }
-test "type hint: multiple typed params" { try expectParse("<?php function f(int $a, string $b) { return $a; }", "(fn f($a, $b) { (return $a) })"); }
+test "string concat" {
+    try expectParse("<?php $a . $b . $c;", "(. (. $a $b) $c)");
+}
+test "array literal" {
+    try expectParse("<?php [1, 2, 3];", "[1, 2, 3]");
+}
+test "array with keys" {
+    try expectParse("<?php ['a' => 1, 'b' => 2];", "['a' => 1, 'b' => 2]");
+}
+test "empty array" {
+    try expectParse("<?php [];", "[]");
+}
+test "break and continue" {
+    try expectParse("<?php while(1) { break; continue; }", "(while 1 { (break) (continue) })");
+}
+test "mixed html and php" {
+    try expectParse("<h1>Hi</h1><?php echo $x;", "(html) (echo $x)");
+}
+test "multiple php blocks" {
+    try expectParse("A<?php $a; ?>B<?= $b ?>C", "(html) $a (html) (echo $b) (html)");
+}
+test "complex precedence" {
+    try expectParse("<?php $a = $b + $c * $d;", "(= $a (+ $b (* $c $d)))");
+}
+test "instanceof" {
+    try expectParse("<?php $a instanceof Foo;", "(instanceof $a Foo)");
+}
+test "parse error recovery" {
+    try expectError("<?php $x = ;");
+}
+test "multiple statements" {
+    try expectParse("<?php $a = 1; $b = 2;", "(= $a 1) (= $b 2)");
+}
+test "type hint: simple param" {
+    try expectParse("<?php function f(int $x) { return $x; }", "(fn f($x) { (return $x) })");
+}
+test "type hint: keyword type param" {
+    try expectParse("<?php function f(array $x) { return $x; }", "(fn f($x) { (return $x) })");
+}
+test "type hint: nullable param" {
+    try expectParse("<?php function f(?string $x) { return $x; }", "(fn f($x) { (return $x) })");
+}
+test "type hint: union param" {
+    try expectParse("<?php function f(int|string $x) { return $x; }", "(fn f($x) { (return $x) })");
+}
+test "type hint: return type" {
+    try expectParse("<?php function f($x): int { return $x; }", "(fn f($x) { (return $x) })");
+}
+test "type hint: nullable return" {
+    try expectParse("<?php function f($x): ?string { return $x; }", "(fn f($x) { (return $x) })");
+}
+test "type hint: union return" {
+    try expectParse("<?php function f($x): int|string { return $x; }", "(fn f($x) { (return $x) })");
+}
+test "type hint: intersection param" {
+    try expectParse("<?php function f(Foo&Bar $x) { return $x; }", "(fn f($x) { (return $x) })");
+}
+test "type hint: multiple typed params" {
+    try expectParse("<?php function f(int $a, string $b) { return $a; }", "(fn f($a, $b) { (return $a) })");
+}
+
+// PHP 8.4 asymmetric visibility validation.
+test "php84 asymmetric visibility rejects wider set visibility" {
+    try expectError("<?php class T { protected public(set) string $x; }");
+}
+
+test "php84 asymmetric visibility requires typed property" {
+    try expectError("<?php class T { public private(set) $x; }");
+}
+
+test "php84 asymmetric visibility rejects static property" {
+    try expectError("<?php class T { public private(set) static string $x; }");
+}
+
+test "php84 trait asymmetric visibility validation" {
+    try expectError("<?php trait T { protected public(set) string $x; }");
+    try expectError("<?php trait T { public private(set) $x; }");
+    try expectError("<?php trait T { public private(set) static string $x; }");
+}
+
+test "php84 promoted asymmetric visibility validation" {
+    try expectError("<?php class T { function __construct(protected public(set) string $x) {} }");
+    try expectError("<?php class T { function __construct(public private(set) $x) {} }");
+}
+
+test "php84 abbreviated promoted asymmetric visibility parses" {
+    var ast = try parse(std.testing.allocator, "<?php class T { function __construct(private(set) string $x) {} }");
+    defer ast.deinit();
+    try std.testing.expectEqual(@as(usize, 0), ast.errors.len);
+}

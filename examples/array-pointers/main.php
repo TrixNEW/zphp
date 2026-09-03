@@ -1,7 +1,5 @@
 <?php
-// covers: current, next, prev, reset, end, key, array internal pointer
 
-// --- basic sequential array ---
 
 $arr = [10, 20, 30, 40, 50];
 
@@ -30,7 +28,6 @@ reset($arr);
 echo "after reset - current: " . current($arr) . "\n";
 echo "after reset - key: " . key($arr) . "\n";
 
-// --- associative array ---
 
 $assoc = ['a' => 'apple', 'b' => 'banana', 'c' => 'cherry', 'd' => 'date'];
 
@@ -50,7 +47,6 @@ prev($assoc);
 echo "after prev - current: " . current($assoc) . "\n";
 echo "after prev - key: " . key($assoc) . "\n";
 
-// --- pointer past end ---
 
 echo "\n=== Pointer past end ===\n";
 $small = [100, 200];
@@ -66,7 +62,6 @@ var_dump(key($small));
 reset($small);
 echo "after reset from past-end: " . current($small) . "\n";
 
-// --- prev before start ---
 
 echo "\n=== Pointer before start ===\n";
 $small2 = [100, 200];
@@ -78,7 +73,6 @@ var_dump(current($small2));
 echo "key before start: ";
 var_dump(key($small2));
 
-// --- empty array ---
 
 echo "\n=== Empty array ===\n";
 $empty = [];
@@ -95,7 +89,6 @@ var_dump(reset($empty));
 echo "end on empty: ";
 var_dump(end($empty));
 
-// --- single element ---
 
 echo "\n=== Single element ===\n";
 $single = ['only' => 42];
@@ -131,7 +124,6 @@ reset($arr1);
 echo "arr1 after reset: " . current($arr1) . "\n";
 echo "arr2 unchanged: " . current($arr2) . "\n";
 
-// --- walking with next ---
 
 echo "\n=== Walking with next ===\n";
 $walk = ['first', 'second', 'third'];
@@ -141,7 +133,6 @@ while ($val !== false) {
     $val = next($walk);
 }
 
-// --- pointer after unset ---
 
 echo "\n=== Pointer after unset ===\n";
 $mod = [10, 20, 30, 40, 50];
@@ -165,7 +156,6 @@ $grow[] = 'c';
 echo "after add - current: " . current($grow) . "\n";
 echo "after add - key: " . key($grow) . "\n";
 
-// --- reset return value ---
 
 echo "\n=== Reset and end return values ===\n";
 $ret = [100, 200, 300];

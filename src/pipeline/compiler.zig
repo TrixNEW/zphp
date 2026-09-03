@@ -272,9 +272,7 @@ pub const Compiler = struct {
         source_offset: usize,
     };
 
-    // ==================================================================
     // node dispatch
-    // ==================================================================
 
     pub fn compileNode(self: *Compiler, idx: u32) Error!void {
         // early-bound class/interface declarations are relocated to a prelude
@@ -364,7 +362,6 @@ pub const Compiler = struct {
                     }
                     self.finally_depth = saved_fd;
                     if (ref_return_emitted) {
-                        // tryCompileRefReturn already emitted return_ref
                     } else if (node.data.lhs != 0) {
                         try self.emitOp(.return_val);
                     } else {
@@ -577,9 +574,7 @@ pub const Compiler = struct {
         }
     }
 
-    // ==================================================================
     // literals
-    // ==================================================================
 
     fn compileInteger(self: *Compiler, node: Ast.Node) Error!void {
         const lexeme = self.ast.tokenSlice(node.main_token);
@@ -595,9 +590,7 @@ pub const Compiler = struct {
         try self.emitConstant(idx);
     }
 
-    // ==================================================================
     // variables
-    // ==================================================================
 
     pub fn compileGetVar(self: *Compiler, node: Ast.Node) Error!void {
         const name = self.ast.tokenSlice(node.main_token);
@@ -717,9 +710,7 @@ pub const Compiler = struct {
         return ".";
     }
 
-    // ==================================================================
     // destructuring
-    // ==================================================================
 
     pub fn compileDestructure(self: *Compiler, target: Ast.Node) Error!void {
         if (target.tag == .list_destructure) {
@@ -868,9 +859,7 @@ pub const Compiler = struct {
         try self.emitU16(name_idx);
     }
 
-    // ==================================================================
     // const expression evaluation
-    // ==================================================================
 
     // stringify a folded constant scalar for compile-time concat. returns null
     // for values that can't be folded here (arrays, deferred-constant /
@@ -1116,7 +1105,6 @@ pub const Compiler = struct {
                     };
                     for (known) |k| if (std.mem.eql(u8, k.n, prop_name)) break :blk Value{ .int = k.v };
                 }
-                // encode as deferred sentinel: "\x00CC\x00ClassName\x00CONST_NAME"
                 const sentinel = std.fmt.allocPrint(self.allocator, "\x00CC\x00{s}\x00{s}", .{ class_name, prop_name }) catch break :blk Value.null;
                 self.string_allocs.append(self.allocator, sentinel) catch break :blk Value.null;
                 break :blk .{ .string = sentinel };
@@ -1163,9 +1151,7 @@ pub const Compiler = struct {
         };
     }
 
-    // ==================================================================
     // name resolution
-    // ==================================================================
 
     pub fn resolveClassName(self: *Compiler, name: []const u8) []const u8 {
         if (name.len > 0 and name[0] == '\\') return name[1..];
@@ -1232,9 +1218,7 @@ pub const Compiler = struct {
         return self.ast.tokens[prop_node.main_token].tag == .variable;
     }
 
-    // ==================================================================
     // loop helpers
-    // ==================================================================
 
     pub fn patchBreaks(self: *Compiler, prev_breaks: *std.ArrayListUnmanaged(LoopJump)) Error!void {
         for (self.break_jumps.items) |bj| {
@@ -1269,9 +1253,7 @@ pub const Compiler = struct {
         self.continue_jumps.deinit(self.allocator);
     }
 
-    // ==================================================================
     // slot management
-    // ==================================================================
 
     pub fn getOrCreateSlot(self: *Compiler, name: []const u8) u16 {
         if (self.local_slots.get(name)) |slot| return slot;
@@ -1296,9 +1278,7 @@ pub const Compiler = struct {
         return names;
     }
 
-    // ==================================================================
     // variable emit helpers
-    // ==================================================================
 
     // for an arrow sub-compiler: is `name` bound in some enclosing scope, so
     // the arrow may capture it? walks the arrow_parent chain and forces every
@@ -1432,9 +1412,7 @@ pub const Compiler = struct {
         return true;
     }
 
-    // ==================================================================
     // bytecode emit helpers
-    // ==================================================================
 
     pub fn emitOp(self: *Compiler, op: OpCode) Error!void {
         try self.chunk.write(self.allocator, @intFromEnum(op), self.current_source_offset);
@@ -1489,9 +1467,7 @@ pub const Compiler = struct {
         return self.chunk.addConstant(self.allocator, value);
     }
 
-    // ==================================================================
     // number parsing
-    // ==================================================================
 
     pub fn parsePhpInt(s: []const u8) i64 {
         return switch (parsePhpIntLiteral(s)) {

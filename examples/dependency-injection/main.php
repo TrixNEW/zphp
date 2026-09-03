@@ -1,10 +1,5 @@
 <?php
-// covers: interface_exists, class_implements, class_exists, is_a, get_class,
-//   get_class_methods, get_object_vars, is_object, is_string, method_exists,
-//   property_exists, array_keys, array_values, in_array, count, sprintf,
-//   implode, is_callable
 
-// define interfaces
 interface Logger {
     public function log(string $level, string $message): void;
 }
@@ -18,7 +13,6 @@ interface EventDispatcher {
     public function dispatch(string $event, array $data): void;
 }
 
-// implementations
 class ConsoleLogger implements Logger {
     private string $prefix;
 
@@ -61,7 +55,6 @@ class SimpleDispatcher implements EventDispatcher {
     }
 }
 
-// service container
 class Container {
     private array $bindings = [];
     private array $instances = [];
@@ -95,13 +88,11 @@ class Container {
     }
 }
 
-// interface checks
 echo "=== interface introspection ===\n";
 echo "Logger exists: " . (interface_exists('Logger') ? 'yes' : 'no') . "\n";
 echo "Cache exists: " . (interface_exists('Cache') ? 'yes' : 'no') . "\n";
 echo "NonExistent exists: " . (interface_exists('NonExistent') ? 'yes' : 'no') . "\n";
 
-// class_implements
 echo "\n=== class_implements ===\n";
 $classes = ['ConsoleLogger', 'MemoryCache', 'SimpleDispatcher', 'Container'];
 foreach ($classes as $cls) {
@@ -110,7 +101,6 @@ foreach ($classes as $cls) {
     echo sprintf("  %-20s implements: %s\n", $cls, $list);
 }
 
-// is_a checks
 echo "\n=== is_a checks ===\n";
 $logger = new ConsoleLogger('[APP]');
 $cache = new MemoryCache();
@@ -118,12 +108,10 @@ echo "logger is_a Logger: " . (is_a($logger, 'Logger') ? 'yes' : 'no') . "\n";
 echo "logger is_a Cache: " . (is_a($logger, 'Cache') ? 'yes' : 'no') . "\n";
 echo "cache is_a Cache: " . (is_a($cache, 'Cache') ? 'yes' : 'no') . "\n";
 
-// class inspection
 echo "\n=== class inspection ===\n";
 echo "ConsoleLogger methods: " . implode(', ', get_class_methods('ConsoleLogger')) . "\n";
 echo "MemoryCache methods: " . implode(', ', get_class_methods('MemoryCache')) . "\n";
 
-// wire up the container
 echo "\n=== container usage ===\n";
 $container = new Container();
 
@@ -144,7 +132,6 @@ $container->bind('EventDispatcher', function ($c) {
     return $dispatcher;
 });
 
-// resolve services
 $log = $container->get('Logger');
 $log->log('INFO', 'Container initialized');
 
@@ -153,20 +140,16 @@ $c1->set('greeting', 'hello from DI');
 $c2 = $container->get('Cache');
 echo "  cache singleton check: " . ($c2->get('greeting') === 'hello from DI' ? 'ok' : 'fail') . "\n";
 
-// verify singleton identity
 echo "  same instance: " . (spl_object_id($c1) === spl_object_id($c2) ? 'yes' : 'no') . "\n";
 
-// dispatch an event
 $dispatcher = $container->get('EventDispatcher');
 $dispatcher->dispatch('user.login', ['user' => 'admin']);
 
-// container has checks
 echo "\n=== container has ===\n";
 echo "has Logger: " . ($container->has('Logger') ? 'yes' : 'no') . "\n";
 echo "has Cache: " . ($container->has('Cache') ? 'yes' : 'no') . "\n";
 echo "has Database: " . ($container->has('Database') ? 'yes' : 'no') . "\n";
 
-// get_class on resolved instances
 echo "\n=== resolved types ===\n";
 $services = ['Logger', 'Cache', 'EventDispatcher'];
 foreach ($services as $name) {
@@ -174,7 +157,6 @@ foreach ($services as $name) {
     echo sprintf("  %-20s -> %s\n", $name, get_class($instance));
 }
 
-// method_exists on resolved instances
 echo "\n=== method checks ===\n";
 echo "Logger->log: " . (method_exists($log, 'log') ? 'yes' : 'no') . "\n";
 echo "Logger->get: " . (method_exists($log, 'get') ? 'yes' : 'no') . "\n";

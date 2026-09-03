@@ -10,7 +10,6 @@ pub const Token = struct {
     }
 
     pub const Tag = enum(u8) {
-        // literals
         integer,
         float,
         string,
@@ -19,7 +18,6 @@ pub const Token = struct {
         identifier,
         variable,
 
-        // keywords
         kw_abstract,
         kw_and,
         kw_array,
@@ -96,7 +94,6 @@ pub const Token = struct {
         kw_xor,
         kw_yield,
 
-        // single-character tokens
         plus,
         minus,
         star,
@@ -125,7 +122,6 @@ pub const Token = struct {
         backslash,
         dollar,
 
-        // multi-character operators
         plus_plus,
         minus_minus,
         star_star,
@@ -149,7 +145,6 @@ pub const Token = struct {
         lt_lt,
         gt_gt,
 
-        // compound assignment
         plus_equal,
         minus_equal,
         star_equal,
@@ -170,7 +165,6 @@ pub const Token = struct {
         close_tag,
         inline_html,
 
-        // special
         hash_bracket,
         eof,
         invalid,

@@ -1,7 +1,4 @@
 <?php
-// covers: SoapClient construction in non-WSDL mode, __setLocation,
-//   SoapHeader/SoapVar/SoapParam shape, SoapFault as Exception,
-//   exception hierarchy, constants
 
 echo "=== SoapClient basics ===\n";
 $c = new SoapClient(null, [

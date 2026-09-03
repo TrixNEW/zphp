@@ -402,10 +402,8 @@ fn encodeValue(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: Valu
                 }
             }
 
-            // dynamic properties (always public)
             var dyn_iter = obj.properties.iterator();
             while (dyn_iter.next()) |entry| {
-                // skip if already in slots
                 var in_slots = false;
                 if (obj.slot_layout) |layout| {
                     for (layout.names) |sn| {
@@ -465,7 +463,6 @@ fn formatJsonScientific(buf: *[64]u8, f: f64) []const u8 {
     if (!has_dot) {
         return std.fmt.bufPrint(buf, "{s}.0e{s}", .{ mant, exp }) catch "0";
     }
-    // has_dot, no sign on exp
     return std.fmt.bufPrint(buf, "{s}e+{s}", .{ mant, exp }) catch "0";
 }
 

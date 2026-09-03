@@ -12,7 +12,6 @@ const Allocator = std.mem.Allocator;
 const MAGIC = "ZPHPC\x00";
 const FORMAT_VERSION: u16 = 7;
 
-// tag bytes for serialized values
 const TAG_NULL: u8 = 0;
 const TAG_BOOL_FALSE: u8 = 1;
 const TAG_BOOL_TRUE: u8 = 2;
@@ -42,16 +41,12 @@ const StringTable = struct {
     }
 };
 
-// =========================================================
-// serialization
-// =========================================================
 
 pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
     var buf = std.ArrayListUnmanaged(u8){};
     var strtab = StringTable{};
     defer strtab.deinit(allocator);
 
-    // first pass: intern all strings
     if (result.file_path.len > 0) _ = try strtab.intern(allocator, result.file_path);
     for (result.slot_names) |sn| _ = try strtab.intern(allocator, sn);
     try internChunkStrings(allocator, &strtab, &result.chunk);
@@ -84,18 +79,15 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
         }
     }
 
-    // header
     try buf.appendSlice(allocator, MAGIC);
     try writeU16(&buf, allocator, FORMAT_VERSION);
 
-    // string table
     try writeU32(&buf, allocator, @intCast(strtab.entries.items.len));
     for (strtab.entries.items) |s| {
         try writeU32(&buf, allocator, @intCast(s.len));
         try buf.appendSlice(allocator, s);
     }
 
-    // top-level metadata
     try writeU16(&buf, allocator, result.local_count);
     try writeU16(&buf, allocator, @intCast(result.slot_names.len));
     for (result.slot_names) |sn| {
@@ -109,16 +101,13 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
     try buf.append(allocator, if (result.strict_types) 1 else 0);
     try writeU32(&buf, allocator, compiler.closureCounter());
 
-    // main chunk
     try serializeChunk(&buf, allocator, &strtab, &result.chunk, result.source);
 
-    // functions
     try writeU32(&buf, allocator, @intCast(result.functions.items.len));
     for (result.functions.items) |*func| {
         try serializeFunction(&buf, allocator, &strtab, func, result.source);
     }
 
-    // type hints
     try writeU32(&buf, allocator, @intCast(result.type_hints.items.len));
     for (result.type_hints.items) |th| {
         try writeU32(&buf, allocator, try strtab.intern(allocator, th.name));
@@ -177,11 +166,9 @@ fn internValueStrings(allocator: Allocator, strtab: *StringTable, val: Value) !v
 }
 
 fn serializeChunk(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab: *StringTable, chunk: *const Chunk, source: []const u8) !void {
-    // code
     try writeU32(buf, allocator, @intCast(chunk.code.items.len));
     try buf.appendSlice(allocator, chunk.code.items);
 
-    // constants
     try writeU16(buf, allocator, @intCast(chunk.constants.items.len));
     for (chunk.constants.items) |val| {
         try serializeValue(buf, allocator, strtab, val);
@@ -318,9 +305,6 @@ fn writeF64(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, val: f64) !v
     try buf.appendSlice(allocator, &bytes);
 }
 
-// =========================================================
-// deserialization
-// =========================================================
 
 const Reader = struct {
     data: []const u8,
@@ -382,13 +366,11 @@ const DeserCtx = struct {
 pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!CompileResult {
     var r = Reader{ .data = data };
 
-    // header
     const magic = r.readSlice(6) catch return error.InvalidFormat;
     if (!std.mem.eql(u8, magic, MAGIC)) return error.InvalidFormat;
     const version = r.readU16() catch return error.InvalidFormat;
     if (version != FORMAT_VERSION) return error.InvalidFormat;
 
-    // string table
     const str_count = r.readU32() catch return error.InvalidFormat;
     var strings = try allocator.alloc([]const u8, str_count);
     var string_allocs = std.ArrayListUnmanaged([]const u8){};
@@ -406,7 +388,6 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
         strings[i] = owned;
     }
 
-    // top-level metadata
     const local_count = r.readU16() catch return error.InvalidFormat;
     const slot_name_count = r.readU16() catch return error.InvalidFormat;
     const slot_names = allocator.alloc([]const u8, slot_name_count) catch return error.OutOfMemory;
@@ -441,11 +422,9 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
         .string_allocs = &string_allocs,
     };
 
-    // main chunk
     var chunk = deserializeChunk(&r, &ctx) catch return error.InvalidFormat;
     errdefer chunk.deinit(allocator);
 
-    // functions
     const func_count = r.readU32() catch return error.InvalidFormat;
     var functions = std.ArrayListUnmanaged(ObjFunction){};
     errdefer {
@@ -464,7 +443,6 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
         try functions.append(allocator, func);
     }
 
-    // type hints
     var type_hints = std.ArrayListUnmanaged(TypeHint){};
     errdefer {
         for (type_hints.items) |th| if (th.param_types.len > 0) allocator.free(th.param_types);
@@ -682,9 +660,7 @@ fn deserializeValue(r: *Reader, ctx: *DeserCtx) !Value {
     };
 }
 
-// =========================================================
 // standalone executable support
-// =========================================================
 
 const TRAILER_MAGIC = "ZPHPEXE\x00";
 const TRAILER_SIZE = 16; // 8 bytes magic + 4 bytes offset + 4 bytes length
@@ -708,7 +684,6 @@ pub fn appendToExecutable(allocator: Allocator, exe_path: []const u8, bc_data: [
     const len_bytes: [4]u8 = @bitCast(bc_length);
     try file.writeAll(&len_bytes);
 
-    // make executable
     const out_z = try allocator.dupeZ(u8, out_path);
     defer allocator.free(out_z);
     _ = std.c.chmod(out_z.ptr, 0o755);

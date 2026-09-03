@@ -1,8 +1,4 @@
 <?php
-// covers: array_replace_recursive, array_intersect_key, array_diff_key,
-//   array_merge_recursive, array_key_exists, is_array, array_walk_recursive,
-//   json_encode, array_map, array_keys, array_values, compact, extract,
-//   ksort, count, implode, sprintf
 
 $defaults = [
     'database' => [
@@ -54,7 +50,6 @@ $overrides = [
     'debug' => true,
 ];
 
-// array_replace_recursive: deep merge configs
 $config = array_replace_recursive($defaults, $environment, $overrides);
 
 echo "=== merged config ===\n";
@@ -81,12 +76,10 @@ $dbOnly = array_intersect_key($config, $dbKeys);
 echo "\n=== database config only ===\n";
 printConfig($dbOnly);
 
-// array_diff_key: everything except database
 $rest = array_diff_key($config, $dbKeys);
 echo "\n=== non-database config ===\n";
 printConfig($rest);
 
-// compact/extract
 $host = $config['database']['host'];
 $port = $config['database']['port'];
 $driver = $config['cache']['driver'];
@@ -98,13 +91,11 @@ foreach ($summary as $k => $v) {
     echo "  $k = $v\n";
 }
 
-// extract into scope
 $data = ['app_name' => 'MyApp', 'version' => '2.1.0', 'env' => 'production'];
 extract($data);
 echo "\n=== extract ===\n";
 echo "  $app_name v$version ($env)\n";
 
-// array_walk_recursive: collect all leaf values
 $leaves = [];
 array_walk_recursive($config, function ($value) use (&$leaves) {
     $leaves[] = $value;
@@ -120,7 +111,6 @@ echo "  tags: " . implode(', ', $merged['tags']) . "\n";
 echo "  author: " . implode(', ', $merged['meta']['author']) . "\n";
 echo "  year: " . $merged['meta']['year'] . "\n";
 
-// verify key preservation through operations
 $original_keys = array_keys($defaults);
 $merged_keys = array_keys($config);
 sort($original_keys);

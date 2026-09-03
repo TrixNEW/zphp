@@ -27,7 +27,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rt_def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
     try vm.classes.put(a, "ReflectionType", rt_def);
 
-    // Attribute class with target constants
     var attr_def = ClassDef{ .name = "Attribute" };
     try attr_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try attr_def.static_props.put(a, "TARGET_CLASS", .{ .int = 1 });
@@ -62,18 +61,15 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try spv_def.methods.put(a, "getValue", .{ .name = "getValue", .arity = 0 });
     try vm.classes.put(a, "SensitiveParameterValue", spv_def);
 
-    // ReflectionException
     var exc_def = ClassDef{ .name = "ReflectionException" };
     exc_def.parent = "Exception";
     try vm.classes.put(a, "ReflectionException", exc_def);
 
-    // Reflection (utility class)
     var refl_def = ClassDef{ .name = "Reflection" };
     try refl_def.methods.put(a, "getModifierNames", .{ .name = "getModifierNames", .arity = 1, .is_static = true });
     try vm.classes.put(a, "Reflection", refl_def);
     try vm.native_fns.put(a, "Reflection::getModifierNames", reflectionGetModifierNames);
 
-    // ReflectionClass
     var rc_def = ClassDef{ .name = "ReflectionClass" };
     try rc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
@@ -203,7 +199,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     const rfa_def = ClassDef{ .name = "ReflectionFunctionAbstract", .is_abstract = true };
     try vm.classes.put(a, "ReflectionFunctionAbstract", rfa_def);
 
-    // ReflectionMethod
     var rm_def = ClassDef{ .name = "ReflectionMethod", .parent = "ReflectionFunctionAbstract" };
     try rm_def.static_props.put(a, "IS_STATIC", .{ .int = 16 });
     try rm_def.static_props.put(a, "IS_PUBLIC", .{ .int = 1 });
@@ -296,7 +291,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionMethod::isUserDefined", rmIsUserDefined);
     try vm.native_fns.put(a, "ReflectionMethod::isDeprecated", reflectionFalse);
 
-    // ReflectionParameter
     var rp_def = ClassDef{ .name = "ReflectionParameter" };
     try rp_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rp_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -340,7 +334,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionParameter::isDefaultValueConstant", rpIsDefaultValueConstant);
     try vm.native_fns.put(a, "ReflectionParameter::getDefaultValueConstantName", rpGetDefaultValueConstantName);
 
-    // ReflectionNamedType
     var rnt_def = ClassDef{ .name = "ReflectionNamedType", .parent = "ReflectionType" };
     try rnt_def.properties.append(a, .{ .name = "type_name", .default = .{ .string = "" } });
     try rnt_def.properties.append(a, .{ .name = "nullable", .default = .{ .bool = false } });
@@ -355,7 +348,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionNamedType::allowsNull", rntAllowsNull);
     try vm.native_fns.put(a, "ReflectionNamedType::__toString", rntToString);
 
-    // ReflectionUnionType
     var rut_def = ClassDef{ .name = "ReflectionUnionType", .parent = "ReflectionType" };
     try rut_def.properties.append(a, .{ .name = "type_str", .default = .{ .string = "" } });
     try rut_def.properties.append(a, .{ .name = "nullable", .default = .{ .bool = false } });
@@ -367,7 +359,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionUnionType::allowsNull", rutAllowsNull);
     try vm.native_fns.put(a, "ReflectionUnionType::__toString", rutToString);
 
-    // ReflectionIntersectionType
     var rit_def = ClassDef{ .name = "ReflectionIntersectionType", .parent = "ReflectionType" };
     try rit_def.properties.append(a, .{ .name = "type_str", .default = .{ .string = "" } });
     try rit_def.methods.put(a, "getTypes", .{ .name = "getTypes", .arity = 0 });
@@ -378,7 +369,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionIntersectionType::allowsNull", ritAllowsNull);
     try vm.native_fns.put(a, "ReflectionIntersectionType::__toString", ritToString);
 
-    // ReflectionEnum (extends ReflectionClass)
     var re_def = ClassDef{ .name = "ReflectionEnum" };
     re_def.parent = "ReflectionClass";
     try re_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
@@ -396,7 +386,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnum::getCase", reGetCase);
     try vm.native_fns.put(a, "ReflectionEnum::hasCase", reHasCase);
 
-    // ReflectionEnumUnitCase
     var reuc_def = ClassDef{ .name = "ReflectionEnumUnitCase" };
     try reuc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try reuc_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
@@ -408,7 +397,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnumUnitCase::getName", reucGetName);
     try vm.native_fns.put(a, "ReflectionEnumUnitCase::getValue", reucGetValue);
 
-    // ReflectionEnumBackedCase (extends ReflectionEnumUnitCase)
     var rebc_def = ClassDef{ .name = "ReflectionEnumBackedCase" };
     rebc_def.parent = "ReflectionEnumUnitCase";
     try rebc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
@@ -423,7 +411,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnumBackedCase::getValue", reucGetValue);
     try vm.native_fns.put(a, "ReflectionEnumBackedCase::getBackingValue", rebcGetBackingValue);
 
-    // ReflectionFunction
     var rf_def = ClassDef{ .name = "ReflectionFunction", .parent = "ReflectionFunctionAbstract" };
     try rf_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rf_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
@@ -495,7 +482,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionFunction::isDeprecated", reflectionFalse);
     try vm.native_fns.put(a, "ReflectionFunction::isDisabled", reflectionFalse);
 
-    // ReflectionProperty
     var rprop_def = ClassDef{ .name = "ReflectionProperty" };
     try rprop_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rprop_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
@@ -526,13 +512,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rprop_def.methods.put(a, "getAttributes", .{ .name = "getAttributes", .arity = 0 });
     try rprop_def.methods.put(a, "getDocComment", .{ .name = "getDocComment", .arity = 0 });
     try rprop_def.methods.put(a, "isVirtual", .{ .name = "isVirtual", .arity = 0 });
-    // PHP 8.4 asymmetric visibility methods. zphp doesn't yet model
-    // separate set visibility but the symfony/property-access component
-    // probes for these unconditionally; return false until we implement
-    // `public(set)` / `protected(set)` / `private(set)` modifiers
+    // php8.4 asymmetric visibility methods
     try rprop_def.methods.put(a, "isPrivateSet", .{ .name = "isPrivateSet", .arity = 0 });
     try rprop_def.methods.put(a, "isProtectedSet", .{ .name = "isProtectedSet", .arity = 0 });
-    try rprop_def.methods.put(a, "isPublicSet", .{ .name = "isPublicSet", .arity = 0 });
     try rprop_def.methods.put(a, "isFinal", .{ .name = "isFinal", .arity = 0 });
     try rprop_def.methods.put(a, "isAbstract", .{ .name = "isAbstract", .arity = 0 });
     try rprop_def.methods.put(a, "hasHooks", .{ .name = "hasHooks", .arity = 0 });
@@ -542,17 +524,25 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rprop_def.methods.put(a, "isLazy", .{ .name = "isLazy", .arity = 1 });
     try rprop_def.methods.put(a, "skipLazyInitialization", .{ .name = "skipLazyInitialization", .arity = 1 });
     try rprop_def.static_props.put(a, "IS_STATIC", .{ .int = 16 });
+    try rprop_def.static_props.put(a, "IS_READONLY", .{ .int = 128 });
     try rprop_def.static_props.put(a, "IS_PUBLIC", .{ .int = 1 });
     try rprop_def.static_props.put(a, "IS_PROTECTED", .{ .int = 2 });
     try rprop_def.static_props.put(a, "IS_PRIVATE", .{ .int = 4 });
-    try rprop_def.static_props.put(a, "IS_READONLY", .{ .int = 128 });
+    try rprop_def.static_props.put(a, "IS_ABSTRACT", .{ .int = 64 });
+    try rprop_def.static_props.put(a, "IS_PROTECTED_SET", .{ .int = 2048 });
+    try rprop_def.static_props.put(a, "IS_PRIVATE_SET", .{ .int = 4096 });
     try rprop_def.static_props.put(a, "IS_VIRTUAL", .{ .int = 512 });
+    try rprop_def.static_props.put(a, "IS_FINAL", .{ .int = 32 });
     try rprop_def.constant_names.put(a, "IS_STATIC", {});
+    try rprop_def.constant_names.put(a, "IS_READONLY", {});
     try rprop_def.constant_names.put(a, "IS_PUBLIC", {});
     try rprop_def.constant_names.put(a, "IS_PROTECTED", {});
     try rprop_def.constant_names.put(a, "IS_PRIVATE", {});
-    try rprop_def.constant_names.put(a, "IS_READONLY", {});
+    try rprop_def.constant_names.put(a, "IS_ABSTRACT", {});
+    try rprop_def.constant_names.put(a, "IS_PROTECTED_SET", {});
+    try rprop_def.constant_names.put(a, "IS_PRIVATE_SET", {});
     try rprop_def.constant_names.put(a, "IS_VIRTUAL", {});
+    try rprop_def.constant_names.put(a, "IS_FINAL", {});
     try vm.classes.put(a, "ReflectionProperty", rprop_def);
 
     try vm.native_fns.put(a, "ReflectionProperty::__construct", rpConstruct);
@@ -567,11 +557,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionProperty::isPublic", rpropIsPublic);
     try vm.native_fns.put(a, "ReflectionProperty::isProtected", rpropIsProtected);
     try vm.native_fns.put(a, "ReflectionProperty::isPrivate", rpropIsPrivate);
-    try vm.native_fns.put(a, "ReflectionProperty::isPrivateSet", reflectionFalse);
-    try vm.native_fns.put(a, "ReflectionProperty::isProtectedSet", reflectionFalse);
-    try vm.native_fns.put(a, "ReflectionProperty::isPublicSet", reflectionFalse);
-    try vm.native_fns.put(a, "ReflectionProperty::isFinal", reflectionFalse);
-    try vm.native_fns.put(a, "ReflectionProperty::isAbstract", reflectionFalse);
+    try vm.native_fns.put(a, "ReflectionProperty::isPrivateSet", rpropIsPrivateSet);
+    try vm.native_fns.put(a, "ReflectionProperty::isProtectedSet", rpropIsProtectedSet);
+    try vm.native_fns.put(a, "ReflectionProperty::isFinal", rpropIsFinal);
+    try vm.native_fns.put(a, "ReflectionProperty::isAbstract", rpropIsAbstract);
     try vm.native_fns.put(a, "ReflectionProperty::hasHooks", reflectionFalse);
     try vm.native_fns.put(a, "ReflectionProperty::hasHook", reflectionFalse);
     try vm.native_fns.put(a, "ReflectionProperty::getHooks", rpropGetHooks);
@@ -593,7 +582,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionProperty::getDocComment", rpropGetDocComment);
     try vm.native_fns.put(a, "ReflectionProperty::isVirtual", rpropIsVirtual);
 
-    // ReflectionAttribute
     var ra_def = ClassDef{ .name = "ReflectionAttribute" };
     try ra_def.static_props.put(a, "IS_INSTANCEOF", .{ .int = 2 });
     try ra_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -609,7 +597,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionAttribute::getTarget", raGetTarget);
     try vm.native_fns.put(a, "ReflectionAttribute::isRepeated", raIsRepeated);
 
-    // ReflectionClassConstant
     var rcc_def = ClassDef{ .name = "ReflectionClassConstant" };
     try rcc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     try rcc_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
@@ -654,9 +641,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
     var rext_def = ClassDef{ .name = "ReflectionExtension" };
     try rext_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
     for ([_][]const u8{
-        "__construct", "getName", "getVersion", "getFunctions", "getConstants",
-        "getINIEntries", "getClasses", "getClassNames", "getDependencies",
-        "info", "isPersistent", "isTemporary", "__toString",
+        "__construct",   "getName",     "getVersion",    "getFunctions",    "getConstants",
+        "getINIEntries", "getClasses",  "getClassNames", "getDependencies", "info",
+        "isPersistent",  "isTemporary", "__toString",
     }) |method| try rext_def.methods.put(a, method, .{ .name = method, .arity = if (std.mem.eql(u8, method, "__construct")) 1 else 0 });
     try vm.classes.put(a, "ReflectionExtension", rext_def);
     try vm.native_fns.put(a, "ReflectionExtension::__construct", rextConstruct);
@@ -779,8 +766,9 @@ fn throwReflection(ctx: *NativeContext, msg: []const u8) RuntimeError {
 
 fn isBuiltinType(name: []const u8) bool {
     const builtins = [_][]const u8{
-        "int", "string", "bool", "float", "array", "callable",
-        "null", "void", "never", "mixed", "object", "iterable", "false", "true",
+        "int",   "string", "bool",  "float", "array",  "callable",
+        "null",  "void",   "never", "mixed", "object", "iterable",
+        "false", "true",
     };
     for (builtins) |b| {
         if (std.mem.eql(u8, name, b)) return true;
@@ -925,20 +913,48 @@ fn buildPropertyObj(ctx: *NativeContext, class_name: []const u8, prop: ClassDef.
     return try buildPropertyObjStatic(ctx, class_name, prop, declaring_class, false);
 }
 
-fn buildPropertyObjStatic(ctx: *NativeContext, class_name: []const u8, prop: ClassDef.PropertyDef, declaring_class: []const u8, is_static: bool) !*PhpObject {
+fn buildPropertyObjStatic(
+    ctx: *NativeContext,
+    class_name: []const u8,
+    prop: ClassDef.PropertyDef,
+    declaring_class: []const u8,
+    is_static: bool,
+) !*PhpObject {
     const obj = try ctx.createObject("ReflectionProperty");
+
     try obj.set(ctx.allocator, "name", .{ .string = prop.name });
     try obj.set(ctx.allocator, "class", .{ .string = class_name });
     try obj.set(ctx.allocator, "_visibility", .{ .int = @intFromEnum(prop.visibility) });
+
     // PHP's ReflectionProperty::hasDefaultValue() always returns false for
-    // constructor-promoted properties, regardless of whether the promoted param
-    // has a default in the constructor signature
+    // constructor-promoted properties, even if the promoted parameter has
+    // a default in the constructor signature.
     const effective_has_default = prop.has_default and !prop.is_promoted;
+
     try obj.set(ctx.allocator, "_has_default", .{ .bool = effective_has_default });
-    try obj.set(ctx.allocator, "_default_value", if (effective_has_default) prop.default else .null);
+    try obj.set(
+        ctx.allocator,
+        "_default_value",
+        if (effective_has_default) prop.default else .null,
+    );
+
     try obj.set(ctx.allocator, "_declaring_class", .{ .string = declaring_class });
+
+    try obj.set(
+        ctx.allocator,
+        "_set_visibility",
+        .{ .int = @intFromEnum(prop.set_visibility) },
+    );
+    try obj.set(
+        ctx.allocator,
+        "_has_set_visibility",
+        .{ .bool = prop.has_set_visibility },
+    );
+
     try obj.set(ctx.allocator, "_is_readonly", .{ .bool = prop.is_readonly });
+    try obj.set(ctx.allocator, "_is_final", .{ .bool = prop.is_final });
     try obj.set(ctx.allocator, "_is_static", .{ .bool = is_static });
+
     return obj;
 }
 
@@ -947,7 +963,10 @@ fn hasAbstractMethodInChain(vm: *VM, class_name: []const u8, method_name: []cons
     while (true) {
         const cls = vm.classes.get(current) orelse return false;
         if (cls.methods.get(method_name)) |_| return true;
-        if (cls.parent) |p| { current = p; continue; }
+        if (cls.parent) |p| {
+            current = p;
+            continue;
+        }
         return false;
     }
 }
@@ -962,8 +981,6 @@ fn hasInterfaceMethod(vm: *VM, iface_name: []const u8, method_name: []const u8) 
     }
     return false;
 }
-
-// --- ReflectionClass ---
 
 fn rcConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionClass::__construct() expects a class name");
@@ -2138,9 +2155,6 @@ fn rcSetStaticPropertyValue(ctx: *NativeContext, args: []const Value) RuntimeErr
     return throwReflection(ctx, "Static property does not exist");
 }
 
-
-// --- ReflectionMethod ---
-
 fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionMethod::__construct() expects parameters");
     const this = getThis(ctx) orelse return .null;
@@ -2158,7 +2172,6 @@ fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             return throwReflection(ctx, "ReflectionMethod::__construct() expects a class name or object");
         }
     } else if (args[0] == .string) {
-        // "Class::method" string form
         const s = args[0].string;
         if (std.mem.indexOf(u8, s, "::")) |sep| {
             class_name = s[0..sep];
@@ -2169,7 +2182,6 @@ fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     } else {
         return throwReflection(ctx, "ReflectionMethod::__construct() expects a class name or object");
     }
-    // accept FQN with leading backslash
     if (class_name.len > 0 and class_name[0] == '\\') class_name = class_name[1..];
 
     if (!ctx.vm.hasMethod(class_name, method_name)) {
@@ -2360,8 +2372,6 @@ fn rmGetNumberOfRequiredParameters(ctx: *NativeContext, _: []const Value) Runtim
     return if (req == .int) req else .{ .int = 0 };
 }
 
-// --- ReflectionParameter ---
-
 fn rpGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     return this.get("name");
@@ -2403,7 +2413,6 @@ fn rpIsOptional(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const has_default = this.get("_has_default");
     if (has_default == .bool and has_default.bool) return .{ .bool = true };
-    // variadic params are always optional
     const is_var = this.get("_is_variadic");
     return .{ .bool = is_var == .bool and is_var.bool };
 }
@@ -2522,8 +2531,6 @@ fn rpGetDeclaringFunction(ctx: *NativeContext, _: []const Value) RuntimeError!Va
     return .{ .object = obj };
 }
 
-// --- ReflectionNamedType ---
-
 fn rntGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     return this.get("type_name");
@@ -2562,8 +2569,6 @@ fn rntAllowsNull(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = false };
 }
 
-// --- ReflectionUnionType ---
-
 fn rutGetTypes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
     const ts_v = this.get("type_str");
@@ -2597,8 +2602,6 @@ fn rutToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return ts_v;
 }
 
-// --- ReflectionIntersectionType ---
-
 fn ritGetTypes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
     const ts_v = this.get("type_str");
@@ -2622,8 +2625,6 @@ fn ritToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const ts_v = this.get("type_str");
     return ts_v;
 }
-
-// --- ReflectionFunction ---
 
 fn rfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionFunction::__construct() expects a function name");
@@ -2911,8 +2912,6 @@ fn rfIsStatic(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = false };
 }
 
-// --- shared helpers ---
-
 /// populate fields on a ReflectionParameter `this` object from a function +
 /// param index. shared between buildParamArray (constructing the full set for
 /// getParameters) and the public ReflectionParameter::__construct
@@ -3040,12 +3039,10 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
     for (func.params, 0..) |param_name, i| {
         const obj = try ctx.createObject("ReflectionParameter");
 
-        // strip $ prefix
         const clean_name = if (param_name.len > 0 and param_name[0] == '$') param_name[1..] else param_name;
         try obj.set(ctx.allocator, "name", .{ .string = clean_name });
         try obj.set(ctx.allocator, "_position", .{ .int = @intCast(i) });
 
-        // type info
         if (type_info) |ti| {
             if (i < ti.param_types.len and ti.param_types[i].len > 0) {
                 const raw_type = ti.param_types[i];
@@ -3065,7 +3062,6 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
             try obj.set(ctx.allocator, "_nullable", .{ .bool = false });
         }
 
-        // variadic
         const is_variadic = func.is_variadic and i == func.arity - 1;
         try obj.set(ctx.allocator, "_is_variadic", .{ .bool = is_variadic });
 
@@ -3081,7 +3077,6 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
             }
         }
 
-        // by-reference
         const by_ref = if (i < func.ref_params.len) func.ref_params[i] else false;
         try obj.set(ctx.allocator, "_by_reference", .{ .bool = by_ref });
 
@@ -3104,8 +3099,6 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
     }
     return .{ .array = arr };
 }
-
-// --- Closure ---
 
 fn closureBind(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return .null;
@@ -3205,34 +3198,111 @@ fn rrefGetId(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
 }
 
-// --- ReflectionProperty ---
-
 fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2) return throwReflection(ctx, "ReflectionProperty::__construct() expects class and property name");
+    if (args.len < 2) {
+        return throwReflection(
+            ctx,
+            "ReflectionProperty::__construct() expects class and property name",
+        );
+    }
+
     const this = getThis(ctx) orelse return .null;
 
-    const raw_class = if (args[0] == .string) args[0].string else if (args[0] == .object) args[0].object.class_name else return throwReflection(ctx, "ReflectionProperty::__construct() expects a class name");
-    const class_name = if (raw_class.len > 0 and raw_class[0] == '\\') raw_class[1..] else raw_class;
-    const prop_name = if (args[1] == .string) args[1].string else return throwReflection(ctx, "ReflectionProperty::__construct() expects a property name");
+    const raw_class = if (args[0] == .string)
+        args[0].string
+    else if (args[0] == .object)
+        args[0].object.class_name
+    else
+        return throwReflection(
+            ctx,
+            "ReflectionProperty::__construct() expects a class name",
+        );
+
+    const class_name = if (raw_class.len > 0 and raw_class[0] == '\\')
+        raw_class[1..]
+    else
+        raw_class;
+
+    const prop_name = if (args[1] == .string)
+        args[1].string
+    else
+        return throwReflection(
+            ctx,
+            "ReflectionProperty::__construct() expects a property name",
+        );
 
     try this.set(ctx.allocator, "name", .{ .string = prop_name });
     try this.set(ctx.allocator, "class", .{ .string = class_name });
 
     if (findPropertyDef(ctx.vm, class_name, prop_name)) |result| {
-        try this.set(ctx.allocator, "_visibility", .{ .int = @intFromEnum(result.prop.visibility) });
-        const effective_has_default = result.prop.has_default and !result.prop.is_promoted;
-        try this.set(ctx.allocator, "_has_default", .{ .bool = effective_has_default });
-        try this.set(ctx.allocator, "_default_value", if (effective_has_default) result.prop.default else .null);
-        try this.set(ctx.allocator, "_declaring_class", .{ .string = result.declaring_class });
-        try this.set(ctx.allocator, "_is_readonly", .{ .bool = result.prop.is_readonly });
+        try this.set(
+            ctx.allocator,
+            "_visibility",
+            .{ .int = @intFromEnum(result.prop.visibility) },
+        );
+
+        const effective_has_default =
+            result.prop.has_default and !result.prop.is_promoted;
+
+        try this.set(
+            ctx.allocator,
+            "_has_default",
+            .{ .bool = effective_has_default },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_default_value",
+            if (effective_has_default) result.prop.default else .null,
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_declaring_class",
+            .{ .string = result.declaring_class },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_set_visibility",
+            .{ .int = @intFromEnum(result.prop.set_visibility) },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_has_set_visibility",
+            .{ .bool = result.prop.has_set_visibility },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_is_readonly",
+            .{ .bool = result.prop.is_readonly },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_is_final",
+            .{ .bool = result.prop.is_final },
+        );
+
+        try this.set(
+            ctx.allocator,
+            "_is_static",
+            .{ .bool = result.is_static },
+        );
     } else {
-        // PHP throws when the property is not declared on the class (or any
-        // ancestor) - a non-existent / dynamic-only property has no
-        // ReflectionProperty. matches "Property C::$x does not exist"
-        const msg = try std.fmt.allocPrint(ctx.allocator, "Property {s}::${s} does not exist", .{ class_name, prop_name });
+        const msg = try std.fmt.allocPrint(
+            ctx.allocator,
+            "Property {s}::${s} does not exist",
+            .{ class_name, prop_name },
+        );
+
         try ctx.vm.strings.append(ctx.allocator, msg);
+
         return throwReflection(ctx, msg);
     }
+
     return .null;
 }
 
@@ -3364,6 +3434,57 @@ fn rpropIsPrivate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = vis == .int and vis.int == 2 };
 }
 
+fn rpropIsPrivateSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .{ .bool = false };
+    const vis = this.get("_visibility");
+    const set_vis = this.get("_set_visibility");
+    const vis_val = if (vis == .int) vis.int else 0;
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    return .{ .bool = set_vis_val == 2 and vis_val != 2 };
+}
+
+fn rpropIsProtectedSet(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .{ .bool = false };
+    const vis = this.get("_visibility");
+    const set_vis = this.get("_set_visibility");
+    const has_set_vis = this.get("_has_set_visibility");
+    const ro = this.get("_is_readonly");
+    const is_ro = ro == .bool and ro.bool;
+    const has_explicit_set = has_set_vis == .bool and has_set_vis.bool;
+    const vis_val = if (vis == .int) vis.int else 0;
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+
+    return .{
+        .bool = (set_vis_val == 1 and vis_val == 0) or
+            (is_ro and vis_val == 0 and !has_explicit_set),
+    };
+}
+fn rpropIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .{ .bool = false };
+
+    const final_v = this.get("_is_final");
+    const is_explicit_final = final_v == .bool and final_v.bool;
+    if (is_explicit_final) return .{ .bool = true };
+
+    const vis = this.get("_visibility");
+    const set_vis = this.get("_set_visibility");
+    const has_set_vis = this.get("_has_set_visibility");
+    const vis_val = if (vis == .int) vis.int else 0;
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    const has_explicit_set = has_set_vis == .bool and has_set_vis.bool;
+
+    // PHP 8.4 only treats asymmetric private(set) as implicitly final.
+    // Symmetric `private private(set)` and private readonly remain non-final.
+    const implicit_private_set_final =
+        has_explicit_set and set_vis_val == 2 and vis_val != 2;
+
+    return .{ .bool = implicit_private_set_final };
+}
+
+fn rpropIsAbstract(_: *NativeContext, _: []const Value) RuntimeError!Value {
+    return .{ .bool = false };
+}
+
 fn rpropGetDefaultValue(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const has_default = this.get("_has_default");
@@ -3443,15 +3564,42 @@ fn rpropHasType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn rpropGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .int = 0 };
     const vis = this.get("_visibility");
-    var mods: i64 = switch (if (vis == .int) vis.int else -1) {
-        1 => 2, // protected
-        2 => 4, // private
-        else => 1, // public (0) / fallback
+    const vis_val = if (vis == .int) vis.int else 0;
+
+    var mods: i64 = switch (vis_val) {
+        1 => 2, // IS_PROTECTED
+        2 => 4, // IS_PRIVATE
+        else => 1, // IS_PUBLIC
     };
-    // a readonly property carries IS_READONLY (128) plus an internal readonly
-    // flag (2048); php 8.4 and 8.5 both report 2177 for a public readonly prop
+
+    const st = this.get("_is_static");
+    if (st == .bool and st.bool) mods |= 16;
+
     const ro = this.get("_is_readonly");
-    if (ro == .bool and ro.bool) mods |= 128 | 2048;
+    const is_ro = ro == .bool and ro.bool;
+    if (is_ro) mods |= 128;
+
+    const set_vis = this.get("_set_visibility");
+    const has_set_vis = this.get("_has_set_visibility");
+    const set_vis_val = if (set_vis == .int) set_vis.int else vis_val;
+    const has_explicit_set = has_set_vis == .bool and has_set_vis.bool;
+
+    const final_v = this.get("_is_final");
+    const is_explicit_final = final_v == .bool and final_v.bool;
+    // Match PHP 8.4: only asymmetric private(set) contributes IS_FINAL.
+    const implicit_private_set_final =
+        has_explicit_set and set_vis_val == 2 and vis_val != 2;
+    if (is_explicit_final or implicit_private_set_final) mods |= 32;
+
+    const is_asym_private_set =
+        has_explicit_set and set_vis_val == 2 and vis_val != 2;
+    if (is_asym_private_set) mods |= 4096;
+
+    const is_asym_prot_set =
+        (has_explicit_set and set_vis_val == 1 and vis_val == 0) or
+        (is_ro and vis_val == 0 and !has_explicit_set);
+    if (is_asym_prot_set) mods |= 2048;
+
     return .{ .int = mods };
 }
 
@@ -3491,8 +3639,6 @@ fn rpropIsVirtual(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = false };
 }
 
-// --- ReflectionMethod::invoke ---
-
 fn rmInvoke(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const method_name = if (this.get("name") == .string) this.get("name").string else return .null;
@@ -3524,7 +3670,6 @@ fn rmInvokeArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (target == .object) {
         return ctx.callMethod(target.object, method_name, call_args[0..count]) catch .null;
     }
-    // static call: null target
     const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .null;
     var buf: [256]u8 = undefined;
     const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return .null;
@@ -3661,8 +3806,6 @@ fn rpGetClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
 }
 
-// --- ReflectionAttribute ---
-
 fn attributeConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const flags = if (args.len > 0 and args[0] == .int) args[0] else Value{ .int = 127 };
@@ -3738,7 +3881,6 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         return error.RuntimeError;
     }
 
-    // target enforcement
     const target_val = this.get("_target");
     if (target_val == .int) {
         const target = target_val.int;
@@ -3761,7 +3903,6 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         }
     }
 
-    // repeatability enforcement
     const is_repeated_val = this.get("_is_repeated");
     if (is_repeated_val == .bool and is_repeated_val.bool) {
         const flags = getAttributeFlags(ctx.vm, attr_name);
@@ -3787,7 +3928,10 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         const arr = args_val.array;
         var has_named = false;
         for (arr.entries.items) |entry| {
-            if (entry.key == .string) { has_named = true; break; }
+            if (entry.key == .string) {
+                has_named = true;
+                break;
+            }
         }
 
         if (has_named) {
@@ -3845,8 +3989,6 @@ fn raIsRepeated(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const repeated = this.get("_is_repeated");
     return if (repeated == .bool) repeated else .{ .bool = false };
 }
-
-// --- ReflectionEnum ---
 
 fn reConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionEnum::__construct() expects an enum name");
@@ -3978,8 +4120,6 @@ fn rebcGetBackingValue(ctx: *NativeContext, _: []const Value) RuntimeError!Value
     return case_obj_v.object.get("value");
 }
 
-// ---------------- ReflectionGenerator ----------------
-
 fn rgConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .generator) return throwReflection(ctx, "ReflectionGenerator::__construct expects a Generator");
     const obj = getThis(ctx) orelse return .null;
@@ -4051,8 +4191,6 @@ fn rgGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     try arr.append(ctx.allocator, .{ .array = frame });
     return .{ .array = arr };
 }
-
-// ---------------- ReflectionFiber ----------------
 
 fn rfibConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .fiber) return throwReflection(ctx, "ReflectionFiber::__construct expects a Fiber");

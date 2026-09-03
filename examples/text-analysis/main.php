@@ -1,10 +1,5 @@
 <?php
-// covers: count_chars, str_increment, str_decrement, levenshtein,
-//   similar_text, soundex, preg_grep, preg_match_all, array_intersect_assoc,
-//   array_keys, array_values, arsort, implode, count, sprintf, strtolower,
-//   substr, str_repeat, chr, ord, strlen, array_map, array_filter
 
-// count_chars: character frequency analysis
 echo "=== character frequency ===\n";
 $text = "the quick brown fox jumps over the lazy dog";
 $freq = count_chars($text, 1);
@@ -32,7 +27,6 @@ foreach ($missing as $byte => $count) {
 }
 echo "letters not in 'abcxyz': " . implode('', array_slice($missing_letters, 0, 10)) . "...\n";
 
-// str_increment / str_decrement: version-like sequences
 echo "\n=== string increment/decrement ===\n";
 $labels = ['A', 'Z', 'Az', 'Zz', 'a1', 'z9', 'abc', 'ZZZ'];
 foreach ($labels as $label) {
@@ -57,7 +51,6 @@ for ($i = 0; $i < 30; $i++) {
 }
 echo implode(' ', $cols) . "\n";
 
-// text similarity analysis
 echo "\n=== document similarity ===\n";
 $documents = [
     'doc1' => 'the quick brown fox jumps over the lazy dog',
@@ -77,7 +70,6 @@ function wordFrequency(string $text): array {
     return $freq;
 }
 
-// compare documents pairwise
 $names = array_keys($documents);
 for ($i = 0; $i < count($names); $i++) {
     for ($j = $i + 1; $j < count($names); $j++) {
@@ -95,7 +87,6 @@ for ($i = 0; $i < count($names); $i++) {
     }
 }
 
-// find near-duplicate entries using levenshtein
 echo "\n=== near-duplicate detection ===\n";
 $entries = [
     'John Smith',
@@ -129,7 +120,6 @@ foreach ($groups as $idx => $group) {
     echo "  group " . ($idx + 1) . ": " . implode(', ', $group) . "\n";
 }
 
-// password strength analysis using count_chars
 echo "\n=== password analysis ===\n";
 $passwords = ['abc123', 'P@ssw0rd!', 'correcthorsebatterystaple', 'aaa', 'Tr0ub4dor&3'];
 

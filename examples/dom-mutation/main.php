@@ -1,7 +1,4 @@
 <?php
-// covers: DOMDocument mutation - createElement/Text, appendChild, insertBefore,
-//   removeChild, replaceChild, attribute manipulation, normalizing whitespace,
-//   saveXML/HTML, cloning, walk-and-edit pattern
 
 $dom = new DOMDocument('1.0', 'UTF-8');
 $dom->formatOutput = false;

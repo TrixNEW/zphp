@@ -1,7 +1,4 @@
 <?php
-// covers: readonly properties (PHP 8.1), readonly classes (PHP 8.2),
-//   first-class callable syntax (PHP 8.1), named arguments, new in initializer,
-//   constructor property promotion, enum-flavor traits
 
 echo "=== readonly property ===\n";
 class Point {

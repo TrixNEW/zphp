@@ -1,7 +1,5 @@
 <?php
-// covers: try, finally, return, nested try-finally, catch-finally
 
-// return from try with finally
 function returnFromTry() {
     $log = [];
     try {
@@ -14,7 +12,6 @@ function returnFromTry() {
 $r = returnFromTry();
 echo "returnFromTry: " . implode(",", $r) . "\n";
 
-// return from catch with finally
 function returnFromCatch() {
     try {
         throw new Exception("err");
@@ -26,7 +23,6 @@ function returnFromCatch() {
 }
 echo "returnFromCatch: " . returnFromCatch() . "\n";
 
-// nested try-finally with return
 function nestedReturn() {
     try {
         try {
@@ -61,7 +57,6 @@ function returnBeforeFinally() {
 }
 echo "returnBeforeFinally: " . returnBeforeFinally() . "\n";
 
-// normal flow still triggers finally
 function normalFlow() {
     try {
         $val = "normal";
@@ -72,7 +67,6 @@ function normalFlow() {
 }
 echo "normalFlow: " . normalFlow() . "\n";
 
-// exception flow still triggers finally
 function exceptionFlow() {
     try {
         throw new Exception("boom");

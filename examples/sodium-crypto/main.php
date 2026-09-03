@@ -1,7 +1,4 @@
 <?php
-// covers: sodium_crypto_secretbox, sodium_crypto_box (anonymous + authenticated),
-//   sodium_crypto_sign, sodium_crypto_generichash, sodium_crypto_pwhash_str,
-//   sodium_crypto_aead_xchacha20poly1305_ietf_*, sodium_bin2hex, sodium_compare
 
 echo "=== symmetric: secretbox round-trip ===\n";
 $key = str_repeat("\x42", SODIUM_CRYPTO_SECRETBOX_KEYBYTES);
@@ -11,7 +8,6 @@ $cipher = sodium_crypto_secretbox($message, $nonce, $key);
 echo "cipher length: " . strlen($cipher) . " bytes\n";
 echo "decrypts to: " . sodium_crypto_secretbox_open($cipher, $nonce, $key) . "\n";
 
-// tampering detection
 $tampered = $cipher;
 $tampered[0] = chr(ord($tampered[0]) ^ 0x01);
 $result = sodium_crypto_secretbox_open($tampered, $nonce, $key);

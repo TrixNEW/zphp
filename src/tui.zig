@@ -3,7 +3,6 @@ const posix = std.posix;
 
 const STDERR = posix.STDERR_FILENO;
 
-// colors
 const reset = "\x1b[0m";
 const bold = "\x1b[1m";
 const dim = "\x1b[2m";
@@ -94,7 +93,6 @@ pub fn progress(current: usize, total: usize, name: []const u8) void {
     write(reset);
     write(" ");
     write(name);
-    // clear rest of line
     write("\x1b[K");
 }
 
@@ -144,7 +142,6 @@ pub fn tableRow(col1: []const u8, col2: []const u8, col3: []const u8) void {
     write(cyan);
     write(col1);
     write(reset);
-    // pad to 40 chars
     var pad: usize = if (col1.len < 38) 38 - col1.len else 2;
     while (pad > 0) : (pad -= 1) write(" ");
     write(dim);

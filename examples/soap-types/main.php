@@ -1,7 +1,4 @@
 <?php
-// covers: SoapClient lifecycle in non-WSDL mode, SoapHeader / SoapVar / SoapParam
-//   shapes, SoapFault exception hierarchy, SOAP/XSD/WSDL_CACHE constants,
-//   __setLocation/__setSoapHeaders/__setCookie return values
 
 echo "=== SoapClient non-WSDL setup ===\n";
 $client = new SoapClient(null, [

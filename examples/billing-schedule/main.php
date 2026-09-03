@@ -1,8 +1,4 @@
 <?php
-// covers: DatePeriod iteration (recurrence count, end-date bound,
-//   EXCLUDE_START_DATE), DateInterval (spec construction, format,
-//   createFromDateString), DateTime add / diff, DateTimeImmutable
-//   immutability, and PHP's month-overflow date arithmetic
 
 function plans(): array
 {

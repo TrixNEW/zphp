@@ -1,5 +1,4 @@
 <?php
-// covers: explode, intval, in_array, range, array_merge, array_unique, sort, str_contains, preg_match, substr, strpos, date, mktime, checkdate, sprintf
 
 function parseCronField(string $field, int $min, int $max): array {
     if ($field === '*') {
@@ -12,7 +11,6 @@ function parseCronField(string $field, int $min, int $max): array {
     foreach ($parts as $part) {
         $part = trim($part);
 
-        // handle step: */5 or 1-10/2
         $step = 1;
         if (str_contains($part, '/')) {
             $stepParts = explode('/', $part);
@@ -103,7 +101,6 @@ function describeCron(string $expr): string {
     return empty($parts) ? "every minute" : implode(', ', $parts);
 }
 
-// --- tests ---
 
 echo "Cron Field Parsing:\n";
 echo "  '*' (0-59): " . implode(',', parseCronField('*', 0, 59)) . " (" . count(parseCronField('*', 0, 59)) . " values)\n";
@@ -143,7 +140,6 @@ foreach ($tests as $t) {
     echo "  " . $t['label'] . ": " . ($matches ? 'match' : 'no match') . "\n";
 }
 
-// --- date formatting ---
 
 echo "\nDate Formatting:\n";
 $ts = mktime(14, 30, 0, 6, 15, 2024);

@@ -1,7 +1,4 @@
 <?php
-// covers: trait method composition, conflict resolution (insteadof/as),
-//   visibility aliasing, abstract methods in traits, trait constants (PHP 8.2),
-//   trait static properties, traits that use other traits
 
 trait Timestamped {
     private ?int $created_at = null;

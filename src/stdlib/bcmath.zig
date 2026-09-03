@@ -123,7 +123,6 @@ fn copyAndPadRight(allocator: Allocator, n: BcNum, new_scale: usize) !BcNum {
         var i: usize = n.scale;
         while (i < new_scale) : (i += 1) try out.digits.append(allocator, 0);
     } else {
-        // shrinking scale: truncate fractional tail
         const drop = n.scale - new_scale;
         try out.digits.appendSlice(allocator, n.digits.items[0 .. n.digits.items.len - drop]);
     }
@@ -143,7 +142,6 @@ fn copyAndPadBoth(allocator: Allocator, n: BcNum, target_int_len: usize, target_
     return out;
 }
 
-// compare absolute values, returning -1/0/1
 fn cmpAbs(a: BcNum, b: BcNum) i32 {
     const al = a.integerLen();
     const bl = b.integerLen();
@@ -234,7 +232,6 @@ fn subAbs(allocator: Allocator, a: BcNum, b: BcNum) !BcNum {
         }
         out.digits.items[i] = @intCast(diff);
     }
-    // strip leading zeros
     var lead: usize = 0;
     const int_len = out.digits.items.len - out.scale;
     while (lead + 1 < int_len and out.digits.items[lead] == 0) lead += 1;
@@ -338,10 +335,8 @@ fn bcDivInternal(allocator: Allocator, a: BcNum, b: BcNum, target_scale: usize) 
     defer div_digits.deinit(allocator);
     try div_digits.appendSlice(allocator, b.digits.items);
 
-    // strip leading zeros from divisor
     while (div_digits.items.len > 1 and div_digits.items[0] == 0) _ = div_digits.orderedRemove(0);
 
-    // long division: produce quotient digit-by-digit
     var quot = std.ArrayListUnmanaged(u8){};
     errdefer quot.deinit(allocator);
     var rem = std.ArrayListUnmanaged(u8){};
@@ -368,7 +363,6 @@ fn bcDivInternal(allocator: Allocator, a: BcNum, b: BcNum, target_scale: usize) 
                 carry = v / 10;
             }
             if (carry > 0) try prod.insert(allocator, 0, carry);
-            // compare prod to rem
             const cmp = cmpDigits(prod.items, rem.items);
             if (cmp > 0) break;
             q = test_q;
@@ -376,7 +370,6 @@ fn bcDivInternal(allocator: Allocator, a: BcNum, b: BcNum, target_scale: usize) 
         try quot.append(allocator, q);
 
         if (q > 0) {
-            // subtract q*div from rem
             var prod = std.ArrayListUnmanaged(u8){};
             defer prod.deinit(allocator);
             var carry: u8 = 0;
@@ -390,7 +383,6 @@ fn bcDivInternal(allocator: Allocator, a: BcNum, b: BcNum, target_scale: usize) 
             }
             if (carry > 0) try prod.insert(allocator, 0, carry);
 
-            // subtract prod from rem
             const diff_len = rem.items.len;
             var pad: usize = 0;
             if (prod.items.len < diff_len) pad = diff_len - prod.items.len;
@@ -424,7 +416,6 @@ fn bcDivInternal(allocator: Allocator, a: BcNum, b: BcNum, target_scale: usize) 
     out.scale = wanted;
     quot.deinit(allocator);
 
-    // strip leading zeros
     var lead: usize = 0;
     const int_len_out = out.digits.items.len - out.scale;
     while (lead + 1 < int_len_out and out.digits.items[lead] == 0) lead += 1;
@@ -442,7 +433,6 @@ fn cmpDigits(a: []const u8, b: []const u8) i32 {
     return 0;
 }
 
-// ---------------- bcscale state ----------------
 
 var global_scale_lock = std.Thread.Mutex{};
 var global_scale: usize = 0;
@@ -466,7 +456,6 @@ fn resolveScale(args: []const Value, scale_idx: usize) usize {
     return currentScale();
 }
 
-// ---------------- top-level functions ----------------
 
 fn argToString(args: []const Value, idx: usize) ?[]const u8 {
     if (args.len <= idx) return null;
@@ -629,7 +618,6 @@ fn bcPow(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         exp = -exp;
     }
 
-    // result = 1
     var r = try parseBc(ctx.allocator, "1");
     errdefer r.deinit(ctx.allocator);
     var base = try parseBc(ctx.allocator, "0");
@@ -704,7 +692,6 @@ fn bcPowmod(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return .null;
     }
 
-    // result = 1
     var result = try parseBc(ctx.allocator, "1");
     errdefer result.deinit(ctx.allocator);
 
@@ -719,7 +706,6 @@ fn bcPowmod(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         base = new_base;
     }
 
-    // square-and-multiply with bcnum-sized exponent
     var two = try parseBc(ctx.allocator, "2");
     defer two.deinit(ctx.allocator);
 
@@ -751,7 +737,6 @@ fn bcPowmod(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             result = new_r;
         }
 
-        // exp = exp / 2
         {
             const new_exp = (try bcDivInternal(ctx.allocator, exp, two, 0)) orelse return .null;
             exp.deinit(ctx.allocator);
@@ -1051,7 +1036,6 @@ fn bcRound(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return try returnStr(ctx, out);
 }
 
-// ---------------- registration ----------------
 
 pub const entries = .{
     .{ "bcadd", bcAdd },

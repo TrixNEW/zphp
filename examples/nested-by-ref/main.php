@@ -1,6 +1,4 @@
 <?php
-// covers: nested foreach with by-ref binding, in-place matrix mutation,
-//   3D structure mutation, by-ref + key iteration
 
 echo "=== 2D matrix in-place mutation ===\n";
 $m = [

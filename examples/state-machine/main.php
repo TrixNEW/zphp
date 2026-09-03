@@ -1,11 +1,5 @@
 <?php
-// covers: enums with instance methods, backed enums (string), match expressions,
-//   try/catch/finally, custom exception hierarchy, static properties/methods,
-//   fibers (suspend/resume), output buffering (ob_start/ob_get_clean),
-//   array_map, array_keys, in_array, implode, is_scalar, ctype_alpha,
-//   closures as transition guards, SplStack, constructor property promotion
 
-// --- custom exception hierarchy ---
 
 class StateMachineException extends RuntimeException {}
 class InvalidTransitionException extends StateMachineException {}
@@ -51,7 +45,6 @@ enum OrderStatus: string
     }
 }
 
-// --- transition log entry ---
 
 class TransitionEntry
 {
@@ -67,7 +60,6 @@ class TransitionEntry
     }
 }
 
-// --- the state machine ---
 
 class StateMachine
 {
@@ -151,7 +143,6 @@ class StateMachine
     }
 }
 
-// --- build the machine ---
 
 function buildOrderMachine(): StateMachine
 {
@@ -172,7 +163,6 @@ function buildOrderMachine(): StateMachine
     return $sm;
 }
 
-// === test: basic transitions ===
 
 $order = buildOrderMachine();
 echo "initial: " . $order->getState()->label() . "\n";
@@ -196,7 +186,6 @@ try {
     echo "caught: " . $e->getMessage() . "\n";
 }
 
-// === test: try/catch/finally ===
 
 $order2 = buildOrderMachine();
 $cleanupRan = false;
@@ -212,7 +201,6 @@ try {
 echo "finally ran: " . ($cleanupRan ? "yes" : "no") . "\n";
 echo "state after error: " . $order2->getState()->label() . "\n";
 
-// === test: guard rejection ===
 
 $order3 = buildOrderMachine();
 $order3->addGuard(OrderStatus::Pending, OrderStatus::Paid, function ($from, $to) {
@@ -225,7 +213,6 @@ try {
     echo "guard: " . $e->getMessage() . "\n";
 }
 
-// === test: enum methods ===
 
 $statuses = OrderStatus::cases();
 $labels = array_map(function ($s) { return $s->label(); }, $statuses);
@@ -239,7 +226,6 @@ $cancellable = array_filter($statuses, function ($s) { return $s->allowsCancel()
 $cancelNames = array_map(function ($s) { return $s->value; }, array_values($cancellable));
 echo "cancellable: " . implode(", ", $cancelNames) . "\n";
 
-// === test: from/tryFrom ===
 
 $found = OrderStatus::from("shipped");
 echo "from: " . $found->label() . "\n";
@@ -258,11 +244,9 @@ echo "history count: " . $order4->getHistory()->count() . "\n";
 $top = $order4->getHistory()->top();
 echo "last transition to: " . $top->to . "\n";
 
-// === test: static property ===
 
 echo "machines created: " . StateMachine::getInstanceCount() . "\n";
 
-// === test: output buffering ===
 
 ob_start();
 echo "buffered content";

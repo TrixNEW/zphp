@@ -188,7 +188,6 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
     if (sql_val != .string) return .{ .bool = false };
     const sql_z = try pdo.dupeZ(ctx, sql_val.string);
 
-    // free previous result
     if (getRes(obj)) |old_res| {
         pg.PQclear(old_res);
         try obj.set(ctx.allocator, "__res_ptr", .{ .int = 0 });
@@ -202,13 +201,11 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
         const param_map_val = obj.get("__param_map");
         const param_map = if (param_map_val == .array) param_map_val.array else null;
 
-        // build param values array
         var param_values = try ctx.allocator.alloc(?[*:0]const u8, param_count);
         defer ctx.allocator.free(param_values);
         @memset(param_values, null);
 
         if (param_map) |pm| {
-            // named params
             for (params.entries.items) |entry| {
                 var name = if (entry.key == .string) entry.key.string else continue;
                 if (name.len > 0 and name[0] == ':') name = name[1..];
@@ -225,7 +222,6 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
                 }
             }
         } else {
-            // positional params
             for (params.entries.items, 0..) |entry, idx| {
                 if (idx >= param_count) break;
                 if (entry.value == .null) {

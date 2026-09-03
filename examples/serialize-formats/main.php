@@ -1,7 +1,4 @@
 <?php
-// covers: PHP serialize/unserialize for nested arrays/objects,
-//   __serialize/__unserialize hooks, options whitelist, var_export round-trip,
-//   json fallback comparison
 
 class Address {
     public function __construct(public string $street, public string $city) {}

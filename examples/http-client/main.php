@@ -1,8 +1,4 @@
 <?php
-// covers: curl_init, curl_setopt, curl_setopt_array, curl_getinfo, curl_error,
-//   curl_errno, curl_reset, curl_version, CURLOPT constants, CURLINFO constants,
-//   classes, constructor property promotion, match expressions, enums,
-//   named arguments, method chaining, json_encode
 
 enum HttpMethod: string {
     case GET = 'GET';
@@ -106,7 +102,6 @@ class RequestInspector {
     }
 }
 
-// build and inspect requests
 echo "--- GET request ---\n";
 $get = new HttpRequest(HttpMethod::GET, "https://api.example.com/users");
 $get->withHeader("Accept", "application/json")
@@ -137,20 +132,17 @@ echo $delete->describe() . "\n";
 $ch3 = $delete->toCurl();
 RequestInspector::report($ch3);
 
-// test curl_reset
 echo "\n--- reset ---\n";
 curl_reset($ch);
 $info = curl_getinfo($ch);
 echo "after reset url: '" . ($info['url'] ?? '') . "'\n";
 echo "after reset error: '" . curl_error($ch) . "'\n";
 
-// test version info
 echo "\n--- version ---\n";
 $ver = curl_version();
 echo "has version: " . (isset($ver['version']) ? 'yes' : 'no') . "\n";
 echo "has ssl: " . (isset($ver['ssl_version']) ? 'yes' : 'no') . "\n";
 
-// test method routing with match
 echo "\n--- method routing ---\n";
 $methods = [HttpMethod::GET, HttpMethod::POST, HttpMethod::PUT, HttpMethod::DELETE, HttpMethod::PATCH];
 foreach ($methods as $method) {

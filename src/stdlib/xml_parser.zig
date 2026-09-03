@@ -251,7 +251,6 @@ fn xmlParse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 try invokeEnd(ctx, &st, folded);
                 continue;
             }
-            // start tag
             _ = st.advance(); // <
             const name_start = st.pos;
             while (st.pos < st.src.len) {

@@ -1,10 +1,4 @@
 <?php
-// covers: attributes on enums, attributes on interfaces, attributes on traits,
-//   method attributes on enums/interfaces/traits, property attributes on traits,
-//   ReflectionClass::getAttributes for enums/interfaces/traits,
-//   ReflectionMethod::getAttributes for enum/trait methods,
-//   ReflectionAttribute::getName, ReflectionAttribute::getArguments,
-//   ReflectionAttribute::newInstance, attribute filtering by class name
 
 #[Attribute]
 class Description {
@@ -26,7 +20,6 @@ class PropertyMeta {
     public function __construct(public string $label = '') {}
 }
 
-// --- Enum with attributes ---
 
 #[Description('HTTP status codes')]
 #[Version(major: 2, minor: 1)]
@@ -50,7 +43,6 @@ enum Status: int {
     }
 }
 
-// --- Interface with attributes ---
 
 #[Description('cacheable resource')]
 #[Version(major: 1, minor: 0)]
@@ -62,7 +54,6 @@ interface Cacheable {
     public function ttl(): int;
 }
 
-// --- Trait with attributes ---
 
 #[Description('adds timestamp tracking')]
 trait Timestamped {
@@ -79,7 +70,6 @@ trait Timestamped {
     }
 }
 
-// --- Enum attributes ---
 
 echo "=== Enum Attributes ===\n";
 
@@ -115,7 +105,6 @@ $slAttrs = $statusLineMethod->getAttributes();
 echo "statusLine attr count: " . count($slAttrs) . "\n";
 echo "statusLine attr name: " . $slAttrs[0]->getName() . "\n";
 
-// --- Interface attributes ---
 
 echo "\n=== Interface Attributes ===\n";
 
@@ -133,7 +122,6 @@ echo "desc instance text: " . $descInst->text . "\n";
 // note: getMethod on interfaces requires interface methods in ClassDef.methods
 // which is tracked separately - test class-level attrs here
 
-// --- Trait attributes ---
 
 echo "\n=== Trait Attributes ===\n";
 

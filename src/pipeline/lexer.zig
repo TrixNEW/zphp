@@ -26,7 +26,6 @@ pub const Lexer = struct {
         };
     }
 
-    // -- html mode ---------------------------------------------------------
 
     fn lexHtml(self: *Lexer) Token {
         const start = self.pos;
@@ -132,7 +131,6 @@ pub const Lexer = struct {
         };
     }
 
-    // -- operator lexers ---------------------------------------------------
 
     fn lexDot(self: *Lexer, start: usize) Token {
         if (self.pos < self.source.len and isDigit(self.source[self.pos])) {
@@ -237,15 +235,12 @@ pub const Lexer = struct {
             }
         }
 
-        // skip to end of line
         while (self.pos < self.source.len and self.source[self.pos] != '\n') self.pos += 1;
         if (self.pos < self.source.len) self.pos += 1; // skip \n
 
-        // scan for closing label
         while (self.pos < self.source.len) {
             const line_start = self.pos;
 
-            // skip leading whitespace
             while (self.pos < self.source.len and (self.source[self.pos] == ' ' or self.source[self.pos] == '\t')) {
                 self.pos += 1;
             }
@@ -264,7 +259,6 @@ pub const Lexer = struct {
                 }
             }
 
-            // skip to next line
             _ = line_start;
             while (self.pos < self.source.len and self.source[self.pos] != '\n') self.pos += 1;
             if (self.pos < self.source.len) self.pos += 1;
@@ -316,7 +310,6 @@ pub const Lexer = struct {
         return self.makeToken(.question, start);
     }
 
-    // -- identifiers and keywords ------------------------------------------
 
     fn lexIdentifier(self: *Lexer, start: usize) Token {
         while (self.pos < self.source.len and isIdentChar(self.source[self.pos])) self.pos += 1;
@@ -325,7 +318,6 @@ pub const Lexer = struct {
         return self.makeToken(.identifier, start);
     }
 
-    // -- numbers -----------------------------------------------------------
 
     fn lexNumber(self: *Lexer, start: usize) Token {
         const first = self.source[start];
@@ -430,7 +422,6 @@ pub const Lexer = struct {
         return true;
     }
 
-    // -- strings -----------------------------------------------------------
 
     fn lexStringBody(self: *Lexer, quote: u8, start: usize) Token {
         var brace_depth: u32 = 0;
@@ -521,7 +512,6 @@ pub const Lexer = struct {
         self.pos = self.source.len;
     }
 
-    // -- primitives --------------------------------------------------------
 
     fn advance(self: *Lexer) u8 {
         const c = self.source[self.pos];
@@ -546,7 +536,6 @@ pub const Lexer = struct {
         return .{ .tag = .eof, .start = p, .end = p };
     }
 
-    // -- character classification ------------------------------------------
 
     fn isWhitespace(c: u8) bool {
         return c == ' ' or c == '\t' or c == '\n' or c == '\r';
@@ -569,9 +558,7 @@ pub const Lexer = struct {
     }
 };
 
-// ==========================================================================
 // tests
-// ==========================================================================
 
 fn expectTokens(source: []const u8, expected: []const Tag) !void {
     var lexer = Lexer.init(source);

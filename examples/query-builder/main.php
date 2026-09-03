@@ -1,8 +1,4 @@
 <?php
-// covers: static methods and factory pattern, match expressions,
-//   spaceship operator (<=>), array_map/array_filter/array_column/array_slice,
-//   method chaining with self return, usort with callable comparator,
-//   fluent collection API, variadic params
 
 class Collection
 {
@@ -230,7 +226,6 @@ class QueryBuilder
     }
 }
 
-// seed test data
 QueryBuilder::seed("users", [
     ["id" => 1, "name" => "Alice", "email" => "alice@test.com", "age" => 30, "role" => "admin"],
     ["id" => 2, "name" => "Bob", "email" => "bob@test.com", "age" => 25, "role" => "user"],
@@ -239,44 +234,35 @@ QueryBuilder::seed("users", [
     ["id" => 5, "name" => "Eve", "email" => "eve@test.com", "age" => 22, "role" => "user"],
 ]);
 
-// basic query
 $users = QueryBuilder::table("users")->get();
 echo "total: " . $users->count() . "\n";
 
-// where clause
 $admins = QueryBuilder::table("users")->where("role", "=", "admin")->get();
 echo "admins: " . $admins->count() . "\n";
 echo "names: " . $admins->pluck("name")->implode(", ") . "\n";
 
-// chained wheres
 $youngUsers = QueryBuilder::table("users")
     ->where("role", "=", "user")
     ->where("age", "<", 30)
     ->get();
 echo "young users: " . $youngUsers->pluck("name")->implode(", ") . "\n";
 
-// order by
 $byAge = QueryBuilder::table("users")->orderBy("age", "DESC")->get();
 echo "oldest first: " . $byAge->pluck("name")->implode(", ") . "\n";
 
-// limit/offset
 $page = QueryBuilder::table("users")->orderBy("id")->limit(2)->offset(2)->get();
 echo "page: " . $page->pluck("name")->implode(", ") . "\n";
 
-// select specific columns
 $emails = QueryBuilder::table("users")->select("name", "email")->get();
 $first = $emails->first();
 echo "first: {$first['name']} <{$first['email']}>\n";
 
-// first()
 $alice = QueryBuilder::table("users")->where("name", "=", "Alice")->first();
 echo "found: {$alice['name']} age {$alice['age']}\n";
 
-// count
 $userCount = QueryBuilder::table("users")->where("role", "=", "user")->count();
 echo "user count: $userCount\n";
 
-// toSql
 $sql = QueryBuilder::table("users")
     ->select("name", "email")
     ->where("role", "=", "admin")
@@ -286,27 +272,22 @@ $sql = QueryBuilder::table("users")
     ->toSql();
 echo "sql: $sql\n";
 
-// collection operations
 $names = $users->pluck("name");
 echo "all: " . $names->implode(", ") . "\n";
 echo "contains Alice: " . var_export($names->contains("Alice"), true) . "\n";
 echo "contains Zara: " . var_export($names->contains("Zara"), true) . "\n";
 
-// map + filter
 $ages = $users->map(function ($u) { return $u["age"]; });
 $over25 = $ages->filter(function ($a) { return $a > 25; });
 echo "ages over 25: " . $over25->implode(", ") . "\n";
 
-// reduce
 $totalAge = $ages->reduce(function ($carry, $age) { return $carry + $age; }, 0);
 echo "total age: $totalAge\n";
 
-// groupBy
 $grouped = $users->groupBy("role");
 echo "admin group: " . count($grouped["admin"]) . "\n";
 echo "user group: " . count($grouped["user"]) . "\n";
 
-// sortBy
 $sorted = $users->sortBy(function ($a, $b) { return $a["age"] <=> $b["age"]; });
 echo "youngest: " . $sorted->first()["name"] . "\n";
 

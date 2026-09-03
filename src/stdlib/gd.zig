@@ -76,7 +76,6 @@ fn argImg(args: []const Value, idx: usize) ?*c.gdImageStruct {
     return getImg(obj);
 }
 
-// ---------------- create / destroy ----------------
 
 fn imgCreate(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const w = argInt(args, 0) orelse return .{ .bool = false };
@@ -149,7 +148,6 @@ fn imgCreateFromString(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     return .{ .bool = false };
 }
 
-// ---------------- output ----------------
 
 fn writeImageTo(ctx: *NativeContext, im: *c.gdImageStruct, args: []const Value, kind: enum { png, jpeg, gif }, quality: c_int) !Value {
     if (args.len > 1 and args[1] == .string) {
@@ -196,7 +194,6 @@ fn imgGif(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return writeImageTo(ctx, im, args, .gif, 0);
 }
 
-// ---------------- colors ----------------
 
 fn imgColorAllocate(_: *NativeContext, args: []const Value) RuntimeError!Value {
     const im = argImg(args, 0) orelse return .{ .bool = false };
@@ -267,7 +264,6 @@ fn imgColorsForIndex(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     return .{ .array = arr };
 }
 
-// ---------------- drawing ----------------
 
 fn imgSetPixel(_: *NativeContext, args: []const Value) RuntimeError!Value {
     const im = argImg(args, 0) orelse return .{ .bool = false };
@@ -355,7 +351,6 @@ fn imgFill(_: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .bool = true };
 }
 
-// ---------------- text ----------------
 
 fn imgString(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const im = argImg(args, 0) orelse return .{ .bool = false };
@@ -406,7 +401,6 @@ fn imgTtfText(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .array = arr };
 }
 
-// ---------------- copy ----------------
 
 fn imgCopy(_: *NativeContext, args: []const Value) RuntimeError!Value {
     const dst = argImg(args, 0) orelse return .{ .bool = false };
@@ -527,7 +521,6 @@ fn imgCrop(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return wrapImg(ctx, dst);
 }
 
-// ---------------- dimensions ----------------
 
 fn imgSx(_: *NativeContext, args: []const Value) RuntimeError!Value {
     const im = argImg(args, 0) orelse return .{ .bool = false };
@@ -539,7 +532,6 @@ fn imgSy(_: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .int = @intCast(im.sy) };
 }
 
-// ---------------- alpha / interlace ----------------
 
 fn imgAlphaBlending(_: *NativeContext, args: []const Value) RuntimeError!Value {
     const im = argImg(args, 0) orelse return .{ .bool = false };
@@ -562,7 +554,6 @@ fn imgInterlace(_: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .bool = true };
 }
 
-// ---------------- info ----------------
 
 fn imgGetSize(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
@@ -677,7 +668,6 @@ fn gdInfo(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .array = arr };
 }
 
-// ---------------- registration ----------------
 
 pub const entries = .{
     .{ "image_type_to_mime_type", imageTypeToMimeType },
@@ -733,7 +723,6 @@ pub fn register(vm: *VM, a: Allocator) !void {
     const def = ClassDef{ .name = "GdImage", .native_cleanup = cleanupImage };
     try vm.classes.put(a, "GdImage", def);
 
-    // font size constants
     try vm.php_constants.put(a, "IMG_PNG", .{ .int = 3 });
     try vm.php_constants.put(a, "IMG_JPG", .{ .int = 2 });
     try vm.php_constants.put(a, "IMG_JPEG", .{ .int = 2 });

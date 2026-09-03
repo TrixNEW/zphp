@@ -858,7 +858,6 @@ pub fn compileCall(self: *Compiler, node: Ast.Node) Error!void {
                         const prop_idx = try self.addConstant(.{ .string = prop_name });
                         try self.emitOp(.isset_prop);
                         try self.emitU16(prop_idx);
-                        // stack: [obj, bool]
                         const false_jump = try self.emitJump(.jump_if_false);
                         try self.emitOp(.pop); // drop true bool → [obj]
                         try self.emitOp(.get_prop);
@@ -1131,7 +1130,6 @@ pub fn compileCallableRef(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitOp(.constant);
         try self.emitU16(idx);
     } else if (callee.tag == .method_call) {
-        // $obj->method(...) => [$obj, 'method']
         try self.emitOp(.array_new);
         try self.compileNode(callee.data.lhs);
         try self.emitOp(.array_push);
@@ -1141,7 +1139,6 @@ pub fn compileCallableRef(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitU16(method_idx);
         try self.emitOp(.array_push);
     } else if (callee.tag == .static_call) {
-        // ClassName::method(...) => ['ClassName', 'method']
         const class_node = self.ast.nodes[callee.data.lhs];
         const class_name = try resolveNodeClassName(self, class_node);
         const method_name = self.ast.tokenSlice(callee.main_token);

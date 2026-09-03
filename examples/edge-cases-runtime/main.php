@@ -1,9 +1,5 @@
 <?php
-// covers: explode limit, array_search strict, loose comparison php8,
-//   float casting inf/nan, intdiv division by zero exception,
-//   fiber exception propagation, mb string case conversion
 
-// --- explode with limit ---
 echo "=== Explode Limit ===\n";
 $parts = explode(",", "a,b,c,d", 3);
 echo implode("|", $parts) . "\n"; // a|b|c,d
@@ -15,7 +11,6 @@ echo implode("|", $parts2) . "\n"; // a,b,c,d
 $parts3 = explode(",", "a,b,c,d", 10);
 echo implode("|", $parts3) . "\n"; // a|b|c|d
 
-// --- array_search strict ---
 echo "=== Array Search Strict ===\n";
 $arr = [0, false, null, '', 'hello'];
 echo array_search(false, $arr, true) . "\n"; // 1
@@ -24,7 +19,6 @@ echo array_search('', $arr, true) . "\n"; // 3
 echo array_search('hello', $arr, true) . "\n"; // 4
 echo var_export(array_search('missing', $arr, true), true) . "\n"; // false
 
-// non-strict should still work
 echo array_search(0, $arr) . "\n"; // 0
 
 // --- PHP 8 loose comparison ---
@@ -35,7 +29,6 @@ echo var_export(0 == null, true) . "\n"; // true
 echo var_export(false == null, true) . "\n"; // true
 echo var_export(0 == "foo", true) . "\n"; // false (changed in PHP 8)
 
-// --- float casting ---
 echo "=== Float Casting ===\n";
 // php does not parse "inf"/"nan" as special floats in string cast
 echo var_export(is_infinite((float)"inf"), true) . "\n"; // false
@@ -44,7 +37,6 @@ echo var_export(is_nan((float)"nan"), true) . "\n"; // false
 echo var_export(is_nan((float)"NAN"), true) . "\n"; // false
 echo (float)"3.14" . "\n"; // 3.14
 
-// --- intdiv exception ---
 echo "=== IntDiv Exception ===\n";
 echo intdiv(7, 2) . "\n"; // 3
 try {
@@ -55,7 +47,6 @@ try {
 }
 echo intdiv(10, 3) . "\n"; // 3
 
-// --- fiber exception propagation ---
 echo "=== Fiber Exceptions ===\n";
 $fiber = new Fiber(function() {
     throw new RuntimeException("fiber error");
@@ -85,4 +76,3 @@ echo mb_strtoupper("café") . "\n"; // CAFÉ
 echo mb_strtolower("HÉLLO") . "\n"; // héllo
 echo mb_strtoupper("über") . "\n"; // ÜBER
 echo mb_strtolower("MÜNCHEN") . "\n"; // münchen
-

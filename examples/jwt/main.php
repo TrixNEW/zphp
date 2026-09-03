@@ -1,8 +1,4 @@
 <?php
-// covers: base64_encode, base64_decode, str_replace, rtrim, strtr, hash_hmac,
-//   hash_equals, json_encode, json_decode, explode, implode, array_map,
-//   strlen, substr, time, sprintf, in_array, array_keys, array_merge,
-//   throw, try/catch, RuntimeException, DateTimeImmutable
 
 function b64url_encode(string $bin): string {
     return rtrim(strtr(base64_encode($bin), '+/', '-_'), '=');

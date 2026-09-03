@@ -1,9 +1,4 @@
 <?php
-// covers: json_encode, json_decode, json_last_error, json_last_error_msg,
-//   JSON_PRETTY_PRINT, JSON_UNESCAPED_SLASHES, JSON_UNESCAPED_UNICODE,
-//   JSON_THROW_ON_ERROR, JSON_FORCE_OBJECT, JSON_PRESERVE_ZERO_FRACTION,
-//   JsonException, var_export, gettype, is_array, is_object, is_string,
-//   is_int, is_float, is_bool, is_null, str_repeat, strlen
 
 function show(string $label, $val): void {
     $enc = json_encode($val);

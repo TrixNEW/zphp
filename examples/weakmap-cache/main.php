@@ -1,8 +1,4 @@
 <?php
-// covers: WeakMap as a per-object cache, WeakReference, count/iteration,
-//   offset access via objects as keys. (zphp note: weak GC semantics are
-//   approximated - dropping references doesn't auto-evict; tests against
-//   PHP only cover the parts that don't depend on refcount-driven cleanup.)
 
 class Article {
     public function __construct(public string $title) {}

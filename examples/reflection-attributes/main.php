@@ -1,7 +1,4 @@
 <?php
-// covers: PHP attributes with Reflection - declaration on class/method/property/
-//   parameter/constant, argument extraction, repeatability, IS_INSTANCEOF flag,
-//   #[Override] enforcement (best-effort), attribute on enum cases
 
 #[Attribute(Attribute::TARGET_CLASS)]
 class Route {
