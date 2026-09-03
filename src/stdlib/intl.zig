@@ -2119,8 +2119,14 @@ fn registerMessageFormatterClass(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "MessageFormatter::getLocale", intlWrap(mfGetLocale));
 }
 
+fn cleanupDateFormatter(obj: *PhpObject) bool {
+    if (getDateFmt(obj)) |f| zphp_udat_close(f);
+    if (obj.properties.getPtr("__dfmt")) |slot| slot.* = .{ .int = 0 };
+    return true;
+}
+
 fn registerDateFormatterClass(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "IntlDateFormatter" };
+    var def = ClassDef{ .name = "IntlDateFormatter", .native_cleanup = cleanupDateFormatter };
     try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
     try def.methods.put(a, "create", .{ .name = "create", .arity = 3, .is_static = true });
     try def.methods.put(a, "format", .{ .name = "format", .arity = 1 });
@@ -2479,6 +2485,7 @@ fn registerConstants(vm: *VM, a: Allocator) !void {
 
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
     for (objects.items) |obj| {
+        if (obj.pooled) continue;
         if (std.mem.eql(u8, obj.class_name, "Collator")) {
             if (getCollator(obj)) |c| zphp_ucol_close(c);
         } else if (std.mem.eql(u8, obj.class_name, "NumberFormatter")) {
@@ -2486,7 +2493,7 @@ pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
         } else if (std.mem.eql(u8, obj.class_name, "Transliterator")) {
             if (getTranslit(obj)) |t| zphp_utrans_close(t);
         } else if (std.mem.eql(u8, obj.class_name, "IntlDateFormatter")) {
-            if (getDateFmt(obj)) |f| zphp_udat_close(f);
+            _ = cleanupDateFormatter(obj);
         } else if (std.mem.eql(u8, obj.class_name, "IntlCalendar") or std.mem.eql(u8, obj.class_name, "IntlGregorianCalendar")) {
             if (getCal(obj)) |c| zphp_ucal_close(c);
         } else if (std.mem.eql(u8, obj.class_name, "IntlBreakIterator") or
