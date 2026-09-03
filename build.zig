@@ -34,13 +34,19 @@ pub fn build(b: *std.Build) void {
     exe_mod.linkSystemLibrary("crypto", .{ .preferred_link_mode = .static, .use_pkg_config = .no });
     exe_mod.linkSystemLibrary("nghttp2", .{ .preferred_link_mode = .static });
     exe_mod.linkSystemLibrary("curl", .{});
-    addLibxml2(b, exe_mod);
-    addLibicu(b, exe_mod);
-    addIcuShim(b, exe_mod);
-    addLibgmp(b, exe_mod);
-    addLibgd(b, exe_mod);
-    addLibsodium(b, exe_mod);
-    addLibldap(b, exe_mod);
+
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
+    const io = threaded.io();
+
+    addLibxml2(io, b, exe_mod);
+    addLibicu(io, b, exe_mod);
+    addIcuShim(io, b, exe_mod);
+    addLibgmp(io, b, exe_mod);
+    addLibgd(io, b, exe_mod);
+    addLibsodium(io, b, exe_mod);
+    addLibldap(io, b, exe_mod);
     addXxhashShim(b, exe_mod);
     addFsSpaceShim(b, exe_mod);
     exe_mod.link_libc = true;
@@ -84,13 +90,13 @@ pub fn build(b: *std.Build) void {
     test_mod.linkSystemLibrary("crypto", .{ .preferred_link_mode = .static, .use_pkg_config = .no });
     test_mod.linkSystemLibrary("nghttp2", .{ .preferred_link_mode = .static });
     test_mod.linkSystemLibrary("curl", .{});
-    addLibxml2(b, test_mod);
-    addLibicu(b, test_mod);
-    addIcuShim(b, test_mod);
-    addLibgmp(b, test_mod);
-    addLibgd(b, test_mod);
-    addLibsodium(b, test_mod);
-    addLibldap(b, test_mod);
+    addLibxml2(io, b, test_mod);
+    addLibicu(io, b, test_mod);
+    addIcuShim(io, b, test_mod);
+    addLibgmp(io, b, test_mod);
+    addLibgd(io, b, test_mod);
+    addLibsodium(io, b, test_mod);
+    addLibldap(io, b, test_mod);
     addXxhashShim(b, test_mod);
     addFsSpaceShim(b, test_mod);
     test_mod.link_libc = true;
@@ -111,40 +117,47 @@ pub fn build(b: *std.Build) void {
 // libxml-2.0 (not "xml2"), and on macos pkg-config returns the parent include
 // dir without the libxml2/ suffix that the headers actually live in. resolve
 // the includedir via pkg-config / xml2-config and append libxml2/ explicitly
-fn addLibxml2(b: *std.Build, mod: *std.Build.Module) void {
+fn addLibxml2(io: std.Io, b: *std.Build, mod: *std.Build.Module) void {
     mod.linkSystemLibrary("xml2", .{ .use_pkg_config = .no });
 
-    if (pkgConfigVariable(b, "libxml-2.0", "includedir")) |inc| {
+    if (pkgConfigVariable(io, b, "libxml-2.0", "includedir")) |inc| {
         const sub = std.fs.path.join(b.allocator, &.{ inc, "libxml2" }) catch return;
         mod.addSystemIncludePath(.{ .cwd_relative = sub });
         mod.addSystemIncludePath(.{ .cwd_relative = inc });
         return;
     }
-    if (xml2ConfigIncludeDir(b)) |inc| {
+    if (xml2ConfigIncludeDir(io, b)) |inc| {
         const sub = std.fs.path.join(b.allocator, &.{ inc, "libxml2" }) catch return;
         mod.addSystemIncludePath(.{ .cwd_relative = sub });
         mod.addSystemIncludePath(.{ .cwd_relative = inc });
     }
 }
 
-fn pkgConfigVariable(b: *std.Build, pkg: []const u8, name: []const u8) ?[]const u8 {
+fn pkgConfigVariable(io: std.Io, b: *std.Build, pkg: []const u8, name: []const u8) ?[]const u8 {
     const arg = std.fmt.allocPrint(b.allocator, "--variable={s}", .{name}) catch return null;
-    const r = std.process.Child.run(.{
-        .allocator = b.allocator,
+    var child = std.process.spawn(io, .{
         .argv = &.{ "pkg-config", arg, pkg },
     }) catch return null;
-    if (r.term != .Exited or r.term.Exited != 0) return null;
-    return std.mem.trim(u8, r.stdout, " \t\r\n");
+
+    const term = child.wait(io) catch return null;
+    if (term != .exited or term.exited != 0) return null;
+
+    const stdout_file = child.stdout orelse return null;
+    var reader_buf: [1024]u8 = undefined;
+    var reader = stdout_file.reader(io, &reader_buf).interface;
+
+    const stdout = reader.allocRemaining(b.allocator, .limited(4096)) catch return null;
+    return std.mem.trim(u8, stdout, " \t\r\n");
 }
 
 // libicu is split across three libraries (icuuc, icui18n, icudata) with pkg-config
 // names icu-uc, icu-i18n. on macos it's keg-only (brew install icu4c) so its
 // pkg-config dir must be on PKG_CONFIG_PATH. on alpine, icu-dev / icu-static
-fn addLibicu(b: *std.Build, mod: *std.Build.Module) void {
+fn addLibicu(io: std.Io, b: *std.Build, mod: *std.Build.Module) void {
     mod.linkSystemLibrary("icui18n", .{ .use_pkg_config = .no });
     mod.linkSystemLibrary("icuuc", .{ .use_pkg_config = .no });
     mod.linkSystemLibrary("icudata", .{ .use_pkg_config = .no });
-    if (pkgConfigVariable(b, "icu-i18n", "libdir")) |lib| {
+    if (pkgConfigVariable(io, b, "icu-i18n", "libdir")) |lib| {
         mod.addLibraryPath(.{ .cwd_relative = lib });
     }
 }
@@ -171,11 +184,11 @@ fn addXxhashShim(b: *std.Build, mod: *std.Build.Module) void {
     });
 }
 
-fn addIcuShim(b: *std.Build, mod: *std.Build.Module) void {
-    var flags = std.ArrayList([]const u8){};
+fn addIcuShim(io: std.Io, b: *std.Build, mod: *std.Build.Module) void {
+    var flags = std.ArrayList([]const u8).empty;
     defer flags.deinit(b.allocator);
     flags.append(b.allocator, "-std=c11") catch return;
-    if (pkgConfigCflagsIncludes(b, "icu-i18n")) |inc| {
+    if (pkgConfigCflagsIncludes(io, b, "icu-i18n")) |inc| {
         const flag = std.fmt.allocPrint(b.allocator, "-I{s}", .{inc}) catch return;
         flags.append(b.allocator, flag) catch return;
     }
@@ -186,10 +199,10 @@ fn addIcuShim(b: *std.Build, mod: *std.Build.Module) void {
 
     // MessageFormat shim is C++ since ICU's named-arg MessageFormat is only
     // exposed in the C++ API. link libc++ once for the whole module
-    var cpp_flags = std.ArrayList([]const u8){};
+    var cpp_flags = std.ArrayList([]const u8).empty;
     defer cpp_flags.deinit(b.allocator);
     cpp_flags.append(b.allocator, "-std=c++17") catch return;
-    if (pkgConfigCflagsIncludes(b, "icu-i18n")) |inc| {
+    if (pkgConfigCflagsIncludes(io, b, "icu-i18n")) |inc| {
         const flag = std.fmt.allocPrint(b.allocator, "-I{s}", .{inc}) catch return;
         cpp_flags.append(b.allocator, flag) catch return;
     }
@@ -202,21 +215,21 @@ fn addIcuShim(b: *std.Build, mod: *std.Build.Module) void {
 
 // libgmp ships a clean pkg-config and uses static `mpz_*` -> `__gmpz_*` macros
 // (no per-version renaming). zig's translate-c handles simple macro renames
-fn addLibgmp(b: *std.Build, mod: *std.Build.Module) void {
+fn addLibgmp(io: std.Io, b: *std.Build, mod: *std.Build.Module) void {
     mod.linkSystemLibrary("gmp", .{ .use_pkg_config = .no });
-    if (pkgConfigCflagsIncludes(b, "gmp")) |inc| {
+    if (pkgConfigCflagsIncludes(io, b, "gmp")) |inc| {
         mod.addSystemIncludePath(.{ .cwd_relative = inc });
     }
-    if (pkgConfigVariable(b, "gmp", "libdir")) |lib| {
+    if (pkgConfigVariable(io, b, "gmp", "libdir")) |lib| {
         mod.addLibraryPath(.{ .cwd_relative = lib });
     }
 
     // shim file: compiled by C compiler so the `mpz_*` -> `__gmpz_*` macros
     // resolve correctly. zig then links against the unversioned zphp_mpz_*
-    var flags = std.ArrayList([]const u8){};
+    var flags = std.ArrayList([]const u8).empty;
     defer flags.deinit(b.allocator);
     flags.append(b.allocator, "-std=c11") catch return;
-    if (pkgConfigCflagsIncludes(b, "gmp")) |inc| {
+    if (pkgConfigCflagsIncludes(io, b, "gmp")) |inc| {
         const f = std.fmt.allocPrint(b.allocator, "-I{s}", .{inc}) catch return;
         flags.append(b.allocator, f) catch return;
     }
@@ -227,59 +240,76 @@ fn addLibgmp(b: *std.Build, mod: *std.Build.Module) void {
 }
 
 // libgd uses simple unversioned symbols. pkg-config name is "gdlib"
-fn addLibgd(b: *std.Build, mod: *std.Build.Module) void {
+fn addLibgd(io: std.Io, b: *std.Build, mod: *std.Build.Module) void {
     mod.linkSystemLibrary("gd", .{ .use_pkg_config = .no });
-    if (pkgConfigCflagsIncludes(b, "gdlib")) |inc| {
+    if (pkgConfigCflagsIncludes(io, b, "gdlib")) |inc| {
         mod.addSystemIncludePath(.{ .cwd_relative = inc });
     }
-    if (pkgConfigVariable(b, "gdlib", "libdir")) |lib| {
+    if (pkgConfigVariable(io, b, "gdlib", "libdir")) |lib| {
         mod.addLibraryPath(.{ .cwd_relative = lib });
     }
 }
 
-fn addLibsodium(b: *std.Build, mod: *std.Build.Module) void {
+fn addLibsodium(io: std.Io, b: *std.Build, mod: *std.Build.Module) void {
     mod.linkSystemLibrary("sodium", .{ .use_pkg_config = .no });
-    if (pkgConfigCflagsIncludes(b, "libsodium")) |inc| {
+    if (pkgConfigCflagsIncludes(io, b, "libsodium")) |inc| {
         mod.addSystemIncludePath(.{ .cwd_relative = inc });
     }
-    if (pkgConfigVariable(b, "libsodium", "libdir")) |lib| {
+    if (pkgConfigVariable(io, b, "libsodium", "libdir")) |lib| {
         mod.addLibraryPath(.{ .cwd_relative = lib });
     }
 }
 
-fn addLibldap(b: *std.Build, mod: *std.Build.Module) void {
+fn addLibldap(io: std.Io, b: *std.Build, mod: *std.Build.Module) void {
     mod.linkSystemLibrary("ldap", .{ .use_pkg_config = .no });
     mod.linkSystemLibrary("lber", .{ .use_pkg_config = .no });
-    if (pkgConfigCflagsIncludes(b, "ldap")) |inc| {
+    if (pkgConfigCflagsIncludes(io, b, "ldap")) |inc| {
         mod.addSystemIncludePath(.{ .cwd_relative = inc });
     }
-    if (pkgConfigVariable(b, "ldap", "libdir")) |lib| {
+    if (pkgConfigVariable(io, b, "ldap", "libdir")) |lib| {
         mod.addLibraryPath(.{ .cwd_relative = lib });
     }
 }
 
-fn pkgConfigCflagsIncludes(b: *std.Build, pkg: []const u8) ?[]const u8 {
-    const r = std.process.Child.run(.{
-        .allocator = b.allocator,
+fn pkgConfigCflagsIncludes(io: std.Io, b: *std.Build, pkg: []const u8) ?[]const u8 {
+    var child = std.process.spawn(io, .{
         .argv = &.{ "pkg-config", "--cflags-only-I", pkg },
     }) catch return null;
-    if (r.term != .Exited or r.term.Exited != 0) return null;
-    var it = std.mem.tokenizeAny(u8, r.stdout, " \t\r\n");
+
+    const term = child.wait(io) catch return null;
+    if (term != .exited or term.exited != 0) return null;
+
+    const stdout_file = child.stdout orelse return null;
+    var reader_buf: [1024]u8 = undefined;
+    var reader = stdout_file.reader(io, &reader_buf).interface;
+
+    const stdout = reader.allocRemaining(b.allocator, .limited(4096)) catch return null;
+
+    var it = std.mem.tokenizeAny(u8, stdout, " \t\r\n");
     while (it.next()) |tok| {
         if (std.mem.startsWith(u8, tok, "-I")) return tok[2..];
     }
     return null;
 }
 
-fn xml2ConfigIncludeDir(b: *std.Build) ?[]const u8 {
-    const r = std.process.Child.run(.{
-        .allocator = b.allocator,
+fn xml2ConfigIncludeDir(io: std.Io, b: *std.Build) ?[]const u8 {
+    var child = std.process.spawn(io, .{
         .argv = &.{ "xml2-config", "--cflags" },
     }) catch return null;
-    if (r.term != .Exited or r.term.Exited != 0) return null;
-    var it = std.mem.tokenizeAny(u8, r.stdout, " \t\r\n");
+
+    const term = child.wait(io) catch return null;
+    if (term != .exited or term.exited != 0) return null;
+
+    const stdout_file = child.stdout orelse return null;
+    var reader_buf: [1024]u8 = undefined;
+    var reader = stdout_file.reader(io, &reader_buf).interface;
+
+    const stdout = reader.allocRemaining(b.allocator, .limited(4096)) catch return null;
+
+    var it = std.mem.tokenizeAny(u8, stdout, " \t\r\n");
     while (it.next()) |tok| {
         if (std.mem.startsWith(u8, tok, "-I")) return tok[2..];
     }
+
     return null;
 }
