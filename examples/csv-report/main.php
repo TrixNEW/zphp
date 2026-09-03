@@ -1,4 +1,5 @@
 <?php
+// covers: str_getcsv, array_column, array_sum, array_map, number_format, str_pad, max, min, round, count, usort, array_slice, sprintf
 
 $csvData = "name,department,salary,years
 Alice,Engineering,95000,5
@@ -27,6 +28,7 @@ foreach ($lines as $line) {
 echo "Employee Report\n";
 echo str_repeat('=', 50) . "\n\n";
 
+// department summary
 $departments = [];
 foreach ($rows as $row) {
     $dept = $row['department'];
@@ -53,6 +55,7 @@ foreach ($departments as $name => $data) {
         . "\n";
 }
 
+// top earners
 echo "\nTop 3 Earners:\n";
 usort($rows, function($a, $b) {
     return $b['salary'] - $a['salary'];
@@ -63,6 +66,7 @@ foreach ($top3 as $i => $row) {
     echo "  " . ($i + 1) . ". " . $row['name'] . " - $" . number_format($row['salary'], 0) . " (" . $row['department'] . ")\n";
 }
 
+// salary stats
 $salaries = array_column($rows, 'salary');
 $total = array_sum($salaries);
 $avg = $total / count($salaries);
@@ -76,6 +80,7 @@ echo "  Highest: $" . number_format($maxSalary, 0) . "\n";
 echo "  Lowest: $" . number_format($minSalary, 0) . "\n";
 echo "  Range: $" . number_format($maxSalary - $minSalary, 0) . "\n";
 
+// salary bands
 echo "\nSalary Bands:\n";
 $bands = ['Under $75K' => 0, '$75K-$100K' => 0, 'Over $100K' => 0];
 foreach ($rows as $row) {
@@ -93,6 +98,7 @@ foreach ($bands as $band => $count) {
     echo "  " . str_pad($band, 12) . " $bar ($count)\n";
 }
 
+// formatted table
 echo "\nFull Roster:\n";
 echo sprintf("  %-10s %-14s %10s %6s\n", 'Name', 'Department', 'Salary', 'Years');
 echo "  " . str_repeat('-', 42) . "\n";

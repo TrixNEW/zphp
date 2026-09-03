@@ -1,4 +1,10 @@
 <?php
+// covers: ArrayAccess/Countable (custom collection), DateTime/strtotime (TTL expiry),
+//   serialize/unserialize (value storage), named arguments, generators (yield iteration),
+//   nullsafe operator (?->), foreach references (&$entry), first-class callable syntax,
+//   compact(), constructor property promotion, enums (eviction policy),
+//   array destructuring with keys, match expressions, spread operator,
+//   pass-by-reference (&$stats), heredoc, static methods
 
 enum EvictionPolicy: string {
     case LRU = 'lru';
@@ -130,6 +136,7 @@ class Cache implements ArrayAccess, Countable {
         }
     }
 
+    // ArrayAccess
     public function offsetExists(mixed $offset): bool {
         return $this->has($offset);
     }
@@ -146,6 +153,7 @@ class Cache implements ArrayAccess, Countable {
         $this->delete($offset);
     }
 
+    // Countable
     public function count(): int {
         return count($this->entries);
     }
@@ -205,6 +213,7 @@ class CacheGroup {
     }
 }
 
+// --- basic set/get ---
 
 $cache = new Cache(maxSize: 5, policy: EvictionPolicy::LRU, defaultTtl: 3600);
 
@@ -218,6 +227,7 @@ echo implode(',', $cache->get('scores')) . "\n";
 echo $cache->get('missing', 'default') . "\n";
 echo "count: " . count($cache) . "\n";
 
+// --- ArrayAccess ---
 
 $cache['color'] = 'blue';
 echo $cache['color'] . "\n";
@@ -226,6 +236,7 @@ unset($cache['color']);
 echo "after unset: " . (isset($cache['color']) ? 'yes' : 'no') . "\n";
 echo "count: " . count($cache) . "\n";
 
+// --- serialize complex values ---
 
 $data = ['nested' => ['a' => 1, 'b' => [2, 3]], 'flag' => true, 'nothing' => null];
 $cache->set('complex', $data);
@@ -235,6 +246,7 @@ echo "nested.b: " . implode(',', $retrieved['nested']['b']) . "\n";
 echo "flag: " . ($retrieved['flag'] ? 'true' : 'false') . "\n";
 echo "nothing: " . ($retrieved['nothing'] === null ? 'null' : 'other') . "\n";
 
+// --- eviction (LRU) ---
 
 $lru = new Cache(maxSize: 3, policy: EvictionPolicy::LRU);
 $lru->set('a', 1);
@@ -247,6 +259,7 @@ echo "a survived: " . ($lru->has('a') ? 'yes' : 'no') . "\n";
 echo "b evicted: " . ($lru->has('b') ? 'no' : 'yes') . "\n";
 echo "d exists: " . ($lru->has('d') ? 'yes' : 'no') . "\n";
 
+// --- eviction (FIFO) ---
 
 $fifo = new Cache(maxSize: 3, policy: EvictionPolicy::FIFO);
 $fifo->set('x', 10);
@@ -258,6 +271,7 @@ $fifo->set('w', 40);
 echo "x evicted fifo: " . ($fifo->has('x') ? 'no' : 'yes') . "\n";
 echo "z survived fifo: " . ($fifo->has('z') ? 'yes' : 'no') . "\n";
 
+// --- generator iteration ---
 
 $cache->set('g1', 'alpha');
 $cache->set('g2', 'beta');
@@ -270,12 +284,14 @@ foreach ($cache->entries() as $k => $v) {
 sort($items);
 echo "entries: " . implode(', ', $items) . "\n";
 
+// --- pass-by-reference stats ---
 
 $h = 0;
 $m = 0;
 $cache->stats($h, $m);
 echo "hits: $h, misses: $m\n";
 
+// --- nullsafe operator ---
 
 $group = new CacheGroup();
 $group->add('main', $cache);
@@ -285,6 +301,7 @@ echo "policy: " . $policy->value . "\n";
 $nope = $group->find('nonexistent')?->getPolicy();
 echo "null policy: " . ($nope === null ? 'null' : 'other') . "\n";
 
+// --- enum features ---
 
 echo EvictionPolicy::LRU->value . "\n";
 echo EvictionPolicy::FIFO->label() . "\n";
@@ -306,6 +323,7 @@ foreach ($stats as $stat) {
     echo "group $name: $cnt items, $pol\n";
 }
 
+// --- heredoc ---
 
 $cacheName = 'main';
 $cacheCount = count($cache);
@@ -316,6 +334,7 @@ status: active
 REPORT;
 echo $report . "\n";
 
+// --- DateTime/strtotime ---
 
 $base = 1750000000;
 $expiry = strtotime("+1 hour", $base);
@@ -326,6 +345,7 @@ $dt = new DateTime('2025-06-15 12:00:00');
 $dt->modify('+30 minutes');
 echo "modified: " . $dt->format('H:i') . "\n";
 
+// --- compact ---
 
 $status = 'active';
 $size = 5;

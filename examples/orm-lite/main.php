@@ -1,5 +1,11 @@
 <?php
+// covers: class inheritance, __construct, __get, __set, __toString, __call,
+//         static methods, abstract classes, array_column, usort, array_map,
+//         array_filter, array_values, implode, sprintf, json_encode, json_decode,
+//         in_array, array_key_exists, count, is_array, is_string, array_merge,
+//         array_keys, strtolower, ucfirst, str_replace, compact, extract
 
+// --- base model ---
 
 class Model {
     protected $attributes = [];
@@ -54,6 +60,7 @@ class Model {
     }
 }
 
+// --- user model ---
 
 class User extends Model {
     public function __toString() {
@@ -69,6 +76,7 @@ class User extends Model {
     }
 }
 
+// --- collection ---
 
 class Collection {
     private $items = [];
@@ -157,6 +165,7 @@ class Collection {
     }
 }
 
+// --- test: basic model ---
 
 echo "--- model ---\n";
 
@@ -174,6 +183,7 @@ echo "dirty email: " . ($user->isDirty('email') ? 'yes' : 'no') . "\n";
 $changes = $user->getDirty();
 echo "changes: " . json_encode($changes) . "\n";
 
+// --- test: __toString ---
 
 echo "--- toString ---\n";
 echo "$user\n";
@@ -182,12 +192,14 @@ echo "$user2\n";
 $user3 = new User([]);
 echo "$user3\n";
 
+// --- test: json ---
 
 echo "--- json ---\n";
 echo $user2->toJson() . "\n";
 $arr = $user2->toArray();
 echo "keys: " . implode(', ', array_keys($arr)) . "\n";
 
+// --- test: collection basics ---
 
 echo "--- collection ---\n";
 
@@ -203,11 +215,13 @@ echo "count: " . $users->count() . "\n";
 echo "first: " . $users->first() . "\n";
 echo "last: " . $users->last() . "\n";
 
+// --- test: pluck ---
 
 echo "--- pluck ---\n";
 $names = $users->pluck('name');
 echo "names: " . implode(', ', $names) . "\n";
 
+// --- test: where ---
 
 echo "--- where ---\n";
 $admins = $users->where('role', 'admin');
@@ -215,6 +229,7 @@ echo "admins: " . $admins->count() . "\n";
 $adminNames = $admins->pluck('name');
 echo "admin names: " . implode(', ', $adminNames) . "\n";
 
+// --- test: sortBy ---
 
 echo "--- sort ---\n";
 $byAge = $users->sortBy('age');
@@ -229,11 +244,13 @@ $byName = $users->sortBy('name');
 $sortedNames = $byName->pluck('name');
 echo "by name: " . implode(', ', $sortedNames) . "\n";
 
+// --- test: sum ---
 
 echo "--- sum ---\n";
 echo "total score: " . $users->sum('score') . "\n";
 echo "total age: " . $users->sum('age') . "\n";
 
+// --- test: groupBy ---
 
 echo "--- groupBy ---\n";
 $byRole = $users->groupBy('role');
@@ -242,6 +259,7 @@ foreach ($byRole as $role => $group) {
     echo "$role: " . implode(', ', $groupNames) . "\n";
 }
 
+// --- test: chaining ---
 
 echo "--- chaining ---\n";
 $result = $users

@@ -146,6 +146,7 @@ pub const H2Session = struct {
             while (sent < ulen) {
                 const n = tls.write(self.io.ssl, data[sent..ulen]) catch |err| {
                     if (err == error.WouldBlock) {
+                        // buffer remaining for later
                         try self.send_buf.appendSlice(self.allocator, data[sent..ulen]);
                         return;
                     }
@@ -162,6 +163,7 @@ pub const H2Session = struct {
         while (sent < self.send_buf.items.len) {
             const n = tls.write(self.io.ssl, self.send_buf.items[sent..]) catch |err| {
                 if (err == error.WouldBlock) {
+                    // shift remaining to front
                     const remaining = self.send_buf.items.len - sent;
                     std.mem.copyForwards(u8, self.send_buf.items[0..remaining], self.send_buf.items[sent..]);
                     self.send_buf.items.len = remaining;

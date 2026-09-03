@@ -127,6 +127,7 @@ fn native_bin2base64(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     const out = try ctx.allocator.alloc(u8, out_max);
     defer ctx.allocator.free(out);
     _ = c.sodium_bin2base64(out.ptr, out.len, bin.ptr, bin.len, variant);
+    // result is NUL-terminated; trim
     var end = out.len;
     while (end > 0 and out[end - 1] == 0) end -= 1;
     return try allocStr(ctx, out[0..end]);

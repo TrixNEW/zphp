@@ -1,5 +1,9 @@
 <?php
+// covers: hash, hash_hmac, hash_equals, hash_algos, bin2hex, hex2bin,
+//   substr, strlen, strtolower, sprintf, str_repeat, explode, implode,
+//   array_map, in_array, str_pad, md5, sha1, crc32
 
+// available algorithms
 echo "=== supported algorithms ===\n";
 $algos = hash_algos();
 $required = ['md5', 'sha1', 'sha256', 'sha384', 'sha512'];
@@ -7,6 +11,7 @@ foreach ($required as $algo) {
     echo "$algo: " . (in_array($algo, $algos) ? 'available' : 'missing') . "\n";
 }
 
+// basic hashing across algorithms
 echo "\n=== hash comparison ===\n";
 $message = "hello world";
 $interesting_algos = ['md5', 'sha1', 'sha256', 'sha512'];
@@ -15,6 +20,7 @@ foreach ($interesting_algos as $algo) {
     echo sprintf("  %-8s (%2d bytes) %s\n", $algo, strlen(hex2bin($digest)), $digest);
 }
 
+// verify hex2bin/bin2hex roundtrip
 echo "\n=== hex encoding roundtrip ===\n";
 $original = "The quick brown fox";
 $hex = bin2hex($original);
@@ -28,6 +34,7 @@ $raw_hex = "deadbeef0102030405";
 $binary = hex2bin($raw_hex);
 echo "raw hex '$raw_hex' -> " . strlen($binary) . " bytes -> " . bin2hex($binary) . "\n";
 
+// hmac signing
 echo "\n=== HMAC signing ===\n";
 $secret = "my-secret-key-2024";
 $payloads = [
@@ -52,6 +59,7 @@ foreach ($keys as $key) {
 echo "key1 vs key2: " . ($sigs[0] === $sigs[1] ? 'same' : 'different') . "\n";
 echo "key1 vs key1: " . ($sigs[0] === $sigs[2] ? 'same' : 'different') . "\n";
 
+// hash_equals: timing-safe comparison
 echo "\n=== hash_equals (timing-safe) ===\n";
 $known_hash = hash('sha256', 'correct-password');
 
@@ -72,8 +80,10 @@ foreach ($test_cases as $case) {
         $label, $expected ? 'true' : 'false', $result ? 'true' : 'false', $status);
 }
 
+// different lengths always return false
 echo "  length mismatch: " . (hash_equals("abc", "ab") ? 'true' : 'false') . "\n";
 
+// webhook signature verification pattern
 echo "\n=== webhook verification ===\n";
 function verifyWebhook(string $payload, string $signature, string $secret): bool {
     $expected = hash_hmac('sha256', $payload, $secret);
@@ -118,10 +128,12 @@ $check = validateToken($token, $secret);
 echo "valid: " . ($check['valid'] ? 'yes' : 'no') . "\n";
 echo "user: " . $check['user'] . "\n";
 
+// tamper with token
 $tampered = str_replace("user_42", "user_99", $token);
 $check2 = validateToken($tampered, $secret);
 echo "tampered valid: " . ($check2['valid'] ? 'yes' : 'no') . "\n";
 
+// checksum verification
 echo "\n=== data integrity ===\n";
 $files = [
     'config.json' => '{"db":"localhost","port":5432}',

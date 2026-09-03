@@ -1,5 +1,7 @@
 <?php
+// covers: ord, chr, bin2hex, hex2bin, str_split, array_map, implode, sprintf, substr, strlen, str_pad, intval, dechex, base_convert
 
+// --- hex encoding/decoding ---
 
 function hexEncode(string $data): string {
     return bin2hex($data);
@@ -17,6 +19,7 @@ echo "Hex: $hex\n";
 echo "Decoded: $decoded\n";
 echo "Match: " . ($original === $decoded ? "yes" : "no") . "\n";
 
+// --- byte-level operations ---
 
 echo "\nByte values of 'ABC':\n";
 for ($i = 0; $i < strlen("ABC"); $i++) {
@@ -33,6 +36,7 @@ foreach ($bytes as $b) {
 }
 echo "\nFrom bytes: $str\n";
 
+// --- simple checksum ---
 
 function checksum(string $data): int {
     $sum = 0;
@@ -46,6 +50,7 @@ $msg = "test message";
 $cs = checksum($msg);
 echo "\nChecksum of '$msg': $cs\n";
 
+// --- XOR cipher ---
 
 function xorCipher(string $data, string $key): string {
     $result = '';
@@ -64,6 +69,7 @@ echo "\nPlaintext: $plaintext\n";
 echo "Encrypted (hex): " . bin2hex($encrypted) . "\n";
 echo "Decrypted: $decrypted\n";
 
+// --- base conversion ---
 
 echo "\nBase conversions:\n";
 echo "  255 in hex: " . dechex(255) . "\n";
@@ -124,6 +130,7 @@ foreach ($fields as $f) {
     echo "  type=" . $f['type'] . " len=" . $f['length'] . " value=\"" . $f['value'] . "\"\n";
 }
 
+// --- hex dump ---
 
 function hexDump(string $data, int $width = 16): string {
     $lines = [];
@@ -147,6 +154,7 @@ function hexDump(string $data, int $width = 16): string {
 echo "\nHex dump of 'Hello, World!123':\n";
 echo hexDump("Hello, World!123") . "\n";
 
+// --- ROT13 via ord/chr ---
 
 function rot13Manual(string $str): string {
     $result = '';

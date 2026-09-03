@@ -1,4 +1,10 @@
 <?php
+// covers: curl_init, curl_setopt, curl_setopt_array, curl_exec, curl_getinfo,
+//   curl_error, curl_errno, curl_close, curl_reset, CURLOPT constants,
+//   file_get_contents (http), json_encode, json_decode, date_default_timezone_set,
+//   date, DateTime, DateTimeZone, ob_start, ob_get_clean, classes, interfaces,
+//   enums, match, named arguments, constructor property promotion, generators,
+//   closures, array_map, array_filter, implode, sprintf, $argv, $argc
 
 interface Exportable {
     public function toArray(): array;
@@ -193,6 +199,7 @@ function renderSummary(array $responses): string {
     return ob_get_clean();
 }
 
+// generator: yield stats from responses
 function responseStats(array $responses): Generator {
     foreach ($responses as $name => $resp) {
         yield $name => $resp->toArray();
@@ -213,6 +220,7 @@ $client->setDefaultHeaders([
 // simulate responses (connection will fail but that exercises error handling)
 $responses = [];
 
+// test error handling path
 $r1 = $client->get("http://127.0.0.1:1/api/users");
 $responses['users'] = $r1;
 echo "users ok: " . ($r1->ok() ? 'true' : 'false') . "\n";
@@ -228,30 +236,38 @@ echo "create ok: " . ($r2->ok() ? 'true' : 'false') . "\n";
 $r3 = $client->get("http://127.0.0.1:1/api/users");
 $responses['users_cached'] = $r3;
 
+// render summary
 echo renderSummary($responses);
 
+// generator stats
 foreach (responseStats($responses) as $name => $stats) {
     echo "$name: status={$stats['status']} ok=" . ($stats['ok'] ? 'true' : 'false') . "\n";
 }
 
+// logger output
 $log = $logger->format();
 $lines = explode("\n", trim($log));
 echo "log entries: " . count($lines) . "\n";
 
+// verify timezone in log entries
 $first = $lines[0];
 echo "log has timezone: " . (strpos($first, 'EST') !== false || strpos($first, 'EDT') !== false ? 'true' : 'false') . "\n";
 
+// cache state
 echo "cache keys: " . count($cache->keys()) . "\n";
 
+// datetime with timezone
 $dt = new DateTime("now", new DateTimeZone("America/New_York"));
 $tz = $dt->getTimezone();
 echo "tz: " . $tz->getName() . "\n";
 
+// serializable interface
 echo "r1 serializable: " . ($r1 instanceof Exportable ? 'true' : 'false') . "\n";
 $arr = $r1->toArray();
 echo "toArray has status: " . (isset($arr['status']) ? 'true' : 'false') . "\n";
 echo "toArray has ok: " . (isset($arr['ok']) ? 'true' : 'false') . "\n";
 
+// enum match
 $levels = [LogLevel::DEBUG, LogLevel::INFO, LogLevel::WARN, LogLevel::ERROR];
 foreach ($levels as $l) {
     $icon = match($l) {
@@ -264,6 +280,7 @@ foreach ($levels as $l) {
 }
 echo "\n";
 
+// $argv / $argc
 echo "argv type: " . gettype($argv) . "\n";
 echo "argc type: " . gettype($argc) . "\n";
 

@@ -1,4 +1,11 @@
 <?php
+// covers: require with __DIR__, require_once, multi-file class loading,
+//   singleton pattern (static::$instance, new self), static properties/methods
+//   across files, constants defined in required files, function defined in
+//   required file, cross-file class dependencies (UserRepository requires
+//   Database.php and uses Logger from another require), is_bool, str_pad,
+//   str_repeat, preg_replace, array_keys, null coalescing, string interpolation,
+//   static method calls, private constructor
 
 require __DIR__ . "/helpers.php";
 require __DIR__ . "/Logger.php";
@@ -13,6 +20,7 @@ echo APP_NAME . " v" . APP_VERSION . "\n";
 echo slugify("Hello World Example") . "\n";
 echo slugify("  PHP is GREAT!  ") . "\n";
 
+// === test: cross-file singleton ===
 
 $logger = new Logger("app");
 $repo = new UserRepository($logger);

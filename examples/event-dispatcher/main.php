@@ -1,4 +1,7 @@
 <?php
+// covers: interfaces, class implements interface, closures with use(&$ref),
+//   array_splice, json_encode, priority sorting, callable dispatch,
+//   method chaining, event data mutation across listeners
 
 interface EventInterface
 {
@@ -147,23 +150,28 @@ class AuditLogger implements ListenerInterface
     }
 }
 
+// set up dispatcher
 $dispatcher = new EventDispatcher();
 $auditLogger = new AuditLogger();
 $userHandler = new UserCreatedHandler();
 
+// register class-based listeners
 $dispatcher->listen("user.created", $userHandler, 10);
 $dispatcher->listen("user.created", $auditLogger, 5);
 
+// register closure listener
 $createdNames = [];
 $dispatcher->listen("user.created", function (EventInterface $event) use (&$createdNames) {
     $createdNames[] = $event->get("name");
 }, 1);
 
+// register listener for different event
 $deletedLog = [];
 $dispatcher->listen("user.deleted", function (EventInterface $event) use (&$deletedLog) {
     $deletedLog[] = $event->get("name") . " was deleted";
 });
 
+// dispatch events
 $event1 = new Event("user.created", ["name" => "Alice", "email" => "alice@test.com"]);
 $dispatcher->dispatch($event1);
 
@@ -173,6 +181,7 @@ $dispatcher->dispatch($event2);
 $event3 = new Event("user.deleted", ["name" => "Charlie"]);
 $dispatcher->dispatch($event3);
 
+// check results
 echo "notifications:\n";
 foreach ($userHandler->getNotifications() as $n) echo "  $n\n";
 
@@ -182,6 +191,7 @@ foreach ($auditLogger->getEntries() as $e) echo "  $e\n";
 echo "created: " . implode(", ", $createdNames) . "\n";
 echo "deleted: " . implode(", ", $deletedLog) . "\n";
 
+// test priority ordering
 $order = [];
 $d2 = new EventDispatcher();
 $d2->listen("test", function ($e) use (&$order) { $order[] = "low"; }, 1);
@@ -190,6 +200,7 @@ $d2->listen("test", function ($e) use (&$order) { $order[] = "medium"; }, 50);
 $d2->dispatch(new Event("test"));
 echo "priority order: " . implode(", ", $order) . "\n";
 
+// test propagation stopping
 $stopped = [];
 $d3 = new EventDispatcher();
 $d3->listen("stop.test", function (EventInterface $e) use (&$stopped) {
@@ -202,9 +213,11 @@ $d3->listen("stop.test", function (EventInterface $e) use (&$stopped) {
 $d3->dispatch(new Event("stop.test"));
 echo "stopped after: " . implode(", ", $stopped) . "\n";
 
+// test hasListeners
 echo "has user.created: " . var_export($dispatcher->hasListeners("user.created"), true) . "\n";
 echo "has unknown: " . var_export($dispatcher->hasListeners("unknown"), true) . "\n";
 
+// test event data mutation
 $mutator = new EventDispatcher();
 $mutator->listen("transform", function (EventInterface $e) {
     $val = $e->get("value");
@@ -219,10 +232,12 @@ $te = new Event("transform", ["value" => 5]);
 $mutator->dispatch($te);
 echo "transformed: " . $te->get("value") . "\n";
 
+// test dispatch log
 $log = $dispatcher->getLog();
 echo "dispatched events: " . count($log) . "\n";
 foreach ($log as $entry) echo "  $entry\n";
 
+// test try/catch in listener
 $errorDispatcher = new EventDispatcher();
 $errorResults = [];
 $errorDispatcher->listen("risky", function ($e) use (&$errorResults) {

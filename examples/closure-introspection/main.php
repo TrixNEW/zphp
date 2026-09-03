@@ -1,4 +1,7 @@
 <?php
+// covers: Closure inspection via ReflectionFunction, getClosureScopeClass,
+//   getClosureThis, getClosureUsedVariables, static-closure detection,
+//   binding round-trips
 
 class Counter {
     private int $n = 0;

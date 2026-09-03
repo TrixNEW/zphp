@@ -584,6 +584,7 @@ pub const SortField = enum { value, key };
 pub fn mergeSort(comptime T: type, items: []T, ctx: *NativeContext, callback: Value, comptime field: SortField) RuntimeError!void {
     if (items.len <= 1) return;
     if (items.len <= 16) {
+        // insertion sort for small slices
         for (1..items.len) |i| {
             const tmp = items[i];
             var j: usize = i;
@@ -745,8 +746,10 @@ fn array_filter(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 .string => |s| .{ .string = s },
             };
             const keep = if (flag == 1)
+                // ARRAY_FILTER_USE_BOTH
                 try ctx.invokeCallable(args[1], &.{ entry.value, key_val })
             else if (flag == 2)
+                // ARRAY_FILTER_USE_KEY
                 try ctx.invokeCallable(args[1], &.{key_val})
             else
                 try ctx.invokeCallable(args[1], &.{entry.value});
@@ -769,6 +772,7 @@ fn native_usort(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_range(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .null;
 
+    // character range: single-char strings
     if (args[0] == .string and args[0].string.len == 1 and args[1] == .string and args[1].string.len == 1) {
         const lo = args[0].string[0];
         const hi = args[1].string[0];
@@ -911,6 +915,7 @@ fn array_splice(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         }
     }
 
+    // re-index numeric keys
     var next_int: i64 = 0;
     for (arr.entries.items) |*entry| {
         if (entry.key == .int) {
@@ -1390,6 +1395,7 @@ fn array_rand(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return error.RuntimeError;
     }
     if (num == 1 and (args.len < 2 or Value.toInt(args[1]) == 1 and args.len == 1)) {
+        // single-arg form returns scalar
         const idx = std.crypto.random.intRangeAtMost(usize, 0, arr.entries.items.len - 1);
         return switch (arr.entries.items[idx].key) {
             .int => |i| .{ .int = i },

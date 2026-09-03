@@ -1,4 +1,7 @@
 <?php
+// covers: PDO with sqlite :memory:, prepared statements (named and positional),
+//   FETCH_ASSOC, execute/fetch/fetchAll, transactions (begin/commit/rollback),
+//   exec for DDL, query for SELECT, lastInsertId, repository pattern
 
 class Database
 {
@@ -84,34 +87,42 @@ class UserRepository
     }
 }
 
+// setup
 $db = new Database("sqlite::memory:");
 $repo = new UserRepository($db);
 $repo->createTable();
 
+// insert users
 $repo->insert("Alice", "alice@example.com", 30);
 $repo->insert("Bob", "bob@example.com", 25);
 $repo->insert("Charlie", "charlie@example.com", 35);
 echo "inserted 3 users\n";
 echo "count: " . $repo->count() . "\n";
 
+// find by id
 $user = $repo->findById(1);
 echo "by id: " . $user["name"] . " " . $user["email"] . "\n";
 
+// find by email
 $user = $repo->findByEmail("bob@example.com");
 echo "by email: " . $user["name"] . " age " . $user["age"] . "\n";
 
+// list all
 $all = $repo->all();
 foreach ($all as $u) {
     echo "  " . $u["name"] . " (" . $u["email"] . ")\n";
 }
 
+// update
 $repo->updateAge(2, 26);
 $updated = $repo->findById(2);
 echo "updated age: " . $updated["age"] . "\n";
 
+// delete
 $repo->delete(3);
 echo "after delete: " . $repo->count() . "\n";
 
+// transaction test
 $db->getPdo()->beginTransaction();
 $repo->insert("Dave", "dave@example.com", 40);
 $db->getPdo()->rollBack();

@@ -1,5 +1,8 @@
 <?php
+// covers: func_get_args, func_num_args, func_get_arg, compact, extract, named arguments,
+// nullsafe operator, type hints, spread in calls, static:: in inheritance
 
+// --- func_get_args family ---
 
 function log_call($level, $message) {
     $args = func_get_args();
@@ -22,11 +25,13 @@ echo "defaults1: " . implode(",", with_defaults(1)) . "\n";
 echo "defaults2: " . implode(",", with_defaults(1, 2)) . "\n";
 echo "defaults3: " . implode(",", with_defaults(1, 2, 3)) . "\n";
 
+// func_get_args in closure
 $closure_args = function($x, $y) {
     return func_get_args();
 };
 echo "closure: " . implode(",", $closure_args(42, 99)) . "\n";
 
+// --- compact/extract ---
 
 function build_context($name, $age, $role) {
     return compact('name', 'age', 'role');
@@ -37,6 +42,7 @@ echo "compact: name={$ctx['name']} age={$ctx['age']} role={$ctx['role']}\n";
 extract($ctx);
 echo "extract: name=$name age=$age role=$role\n";
 
+// nested compact
 function make_pair($key, $value) {
     $pair = compact('key', 'value');
     return $pair;
@@ -44,6 +50,7 @@ function make_pair($key, $value) {
 $p = make_pair("color", "blue");
 echo "pair: {$p['key']}={$p['value']}\n";
 
+// --- named arguments ---
 
 function create_user(string $name, int $age = 25, string $role = "user") {
     return "$name ($age, $role)";
@@ -52,10 +59,12 @@ echo "named1: " . create_user(name: "Bob", age: 35) . "\n";
 echo "named2: " . create_user(name: "Eve", role: "admin") . "\n";
 echo "named3: " . create_user("Dan", role: "mod", age: 28) . "\n";
 
+// named args with array functions
 $numbers = [3, 1, 4, 1, 5];
 echo "implode: " . implode(separator: ",", array: $numbers) . "\n";
 echo "join: " . implode(separator: "-", array: [10, 20, 30]) . "\n";
 
+// --- nullsafe operator ---
 
 class Address {
     public function __construct(
@@ -89,6 +98,7 @@ echo "nullsafe1: " . ($alice?->getAddress()?->getFormatted() ?? "none") . "\n";
 echo "nullsafe2: " . ($bob?->getAddress()?->getFormatted() ?? "none") . "\n";
 echo "nullsafe3: " . ($bob?->address?->city ?? "none") . "\n";
 
+// --- type hints ---
 
 function add_ints(int $a, int $b): int {
     return $a + $b;
@@ -101,12 +111,14 @@ function nullable_str(?string $s): string {
 echo "nullable1: " . nullable_str("hello") . "\n";
 echo "nullable2: " . nullable_str(null) . "\n";
 
+// type error catching
 try {
     add_ints("not", "ints");
 } catch (TypeError $e) {
     echo "type_error: caught\n";
 }
 
+// --- spread in calls ---
 
 function sum3(int $a, int $b, int $c): int {
     return $a + $b + $c;
@@ -120,6 +132,7 @@ $second = [3, 4, 5];
 $merged = [...$first, ...$second];
 echo "array_spread: " . implode(",", $merged) . "\n";
 
+// --- static:: in inheritance ---
 
 class Base {
     protected static string $type = "base";

@@ -1,8 +1,14 @@
 <?php
+// covers: fopen, fclose, fputcsv, fgetcsv, fwrite, fread, fseek, ftell,
+//   rewind, feof, fgets, stat, filesize, file_put_contents, file_get_contents,
+//   unlink, number_format, array_keys, array_values, array_sum, array_map,
+//   array_column, usort, arsort, count, sprintf, implode, explode,
+//   str_pad, strtoupper, round, min, max, str_repeat
 
 $tmp = sys_get_temp_dir() . '/zphp_export_' . uniqid();
 mkdir($tmp, 0755, true);
 
+// generate sample data
 $employees = [
     ['id' => 1, 'name' => 'Alice Chen', 'department' => 'Engineering', 'salary' => 125000, 'start_date' => '2020-03-15'],
     ['id' => 2, 'name' => 'Bob Kumar', 'department' => 'Marketing', 'salary' => 95000, 'start_date' => '2021-07-01'],
@@ -14,6 +20,7 @@ $employees = [
     ['id' => 8, 'name' => 'Hank Brown', 'department' => 'Engineering', 'salary' => 118000, 'start_date' => '2022-08-01'],
 ];
 
+// write CSV
 echo "=== CSV export ===\n";
 $csv_file = "$tmp/employees.csv";
 $fp = fopen($csv_file, 'w');
@@ -28,6 +35,7 @@ echo "wrote " . basename($csv_file) . "\n";
 echo "size: " . $info['size'] . " bytes\n";
 echo "rows: " . count($employees) . " data + 1 header\n";
 
+// read CSV back and verify
 echo "\n=== CSV import ===\n";
 $fp = fopen($csv_file, 'r');
 $headers = fgetcsv($fp);
@@ -47,6 +55,7 @@ fclose($fp);
 echo "imported " . count($imported) . " rows\n";
 echo "roundtrip match: " . (count($imported) === count($employees) ? 'yes' : 'no') . "\n";
 
+// department summary report
 echo "\n=== department summary ===\n";
 $dept_stats = [];
 foreach ($employees as $emp) {
@@ -75,6 +84,7 @@ foreach ($dept_stats as $dept => $stats) {
         number_format($stats['max_salary'], 0, '.', ','));
 }
 
+// total
 $total_salary = array_sum(array_column($employees, 'salary'));
 $avg_salary = round($total_salary / count($employees));
 echo "  " . str_repeat("-", 72) . "\n";
@@ -101,6 +111,7 @@ foreach ($sorted as $i => $emp) {
 }
 fclose($fp);
 
+// multi-file export report
 echo "\n=== export summary ===\n";
 $files = [$csv_file, $rank_file];
 foreach ($files as $f) {
@@ -108,6 +119,7 @@ foreach ($files as $f) {
     echo sprintf("  %-30s %6d bytes\n", basename($f), $s['size']);
 }
 
+// generate a fixed-width report
 echo "\n=== fixed-width report ===\n";
 $report_file = "$tmp/report.txt";
 $fp = fopen($report_file, 'w');
@@ -130,6 +142,7 @@ fclose($fp);
 
 echo file_get_contents($report_file);
 
+// cleanup
 foreach ($files as $f) unlink($f);
 unlink($report_file);
 rmdir($tmp);

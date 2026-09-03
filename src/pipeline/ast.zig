@@ -47,6 +47,7 @@ pub const Ast = struct {
             // root node: lhs = extra index -> {count, stmt...}
             root,
 
+            // statements
             expression_stmt, // lhs = expression
             echo_stmt, // main_token = echo, lhs = extra index -> {count, expr...}
             return_stmt, // lhs = expression (0 = bare return)
@@ -69,6 +70,7 @@ pub const Ast = struct {
             inline_html, // main_token = inline_html token
             empty_stmt,  // no-op (e.g. __HALT_COMPILER terminator)
 
+            // literals
             integer_literal,
             float_literal,
             string_literal,
@@ -79,19 +81,24 @@ pub const Ast = struct {
             variable_variable, // lhs = inner expression ($$var, ${expr})
             identifier,
 
+            // binary (non-short-circuit, main_token = operator)
             binary_op, // lhs = left, rhs = right
             pipe_expr, // lhs = value, rhs = callable
 
+            // assignment (main_token = assignment operator)
             assign, // lhs = target, rhs = value
 
+            // unary
             prefix_op, // main_token = operator, lhs = operand
             postfix_op, // main_token = operator, lhs = operand
 
+            // short-circuit (main_token = operator)
             logical_and, // lhs, rhs
             logical_or, // lhs, rhs
             null_coalesce, // lhs, rhs
             ternary, // lhs = condition, rhs = extra index -> {then, else}. then=0 means short ternary
 
+            // postfix expressions
             call, // lhs = callee, rhs = extra index -> {count, arg...}
             array_access, // lhs = array, rhs = index expr
             array_push_target, // lhs = array ($arr[] push target)
@@ -102,16 +109,20 @@ pub const Ast = struct {
             nullsafe_property_access, // main_token = ?->, lhs = object, rhs = property node
             nullsafe_method_call, // main_token = method name, lhs = object, rhs = extra index -> {count, arg...}
 
+            // casts
             cast_expr, // main_token = type identifier (int/string/etc), lhs = operand
 
+            // closures
             closure_expr, // main_token = function, lhs = extra index -> {count, param...}, rhs = extra index -> {body, use_count, use_vars...}
 
+            // exceptions
             throw_expr, // lhs = expression to throw
             print_expr, // lhs = expression to print; pushes int 1
 
             try_catch, // lhs = try body, rhs = extra index -> {catch_count, catch_nodes..., finally_node_or_0}
             catch_clause, // main_token = variable, lhs = type name node (0 = catch all), rhs = body block
 
+            // classes
             class_decl, // main_token = class name, lhs = extra index -> {count, member_nodes...}, rhs = extra index -> {parent_node, implements_count, implements_nodes...}
             class_method, // main_token = method name, lhs = extra index -> {count, param...}, rhs = body block
             class_property, // main_token = property variable, lhs = default value (0 = none)
@@ -133,22 +144,28 @@ pub const Ast = struct {
             dynamic_static_call, // main_token = 0, lhs = class name node, rhs = extra index -> {method_expr, count, arg...}
             static_prop_access, // main_token = $variable, lhs = class name node
 
+            // compound
             array_literal, // main_token = [, lhs = extra index -> {count, element...}
             array_element, // lhs = value, rhs = key (0 = no key)
             array_spread, // lhs = expression to spread
             grouped_expr, // lhs = inner expression
 
+            // multi-expression (for loop init/update)
             expr_list, // lhs = extra index -> {count, expr...}
 
+            // scope
             global_stmt, // lhs = extra index -> {count, variable_nodes...}
             static_var, // main_token = variable, lhs = default expression (0 = none)
 
+            // generators
             yield_expr, // lhs = value expression (0 = yield null)
             yield_pair_expr, // lhs = key expression, rhs = value expression
             yield_from_expr, // lhs = iterable expression
 
+            // variadic
             splat_expr, // lhs = expression to spread (used in function call args)
 
+            // first-class callable
             callable_ref, // lhs = callee expression (function name identifier node)
 
             // file inclusion
@@ -156,9 +173,11 @@ pub const Ast = struct {
             // lhs = path expression
             require_expr,
 
+            // enums
             enum_decl, // main_token = enum name, lhs = extra index -> {count, member_nodes...}, rhs = extra index -> {backed_type_token_or_0, implements_count, impl_nodes...}
             enum_case, // main_token = case name, lhs = backing value expression (0 = none)
 
+            // namespaces
             namespace_decl, // main_token = namespace keyword, lhs = extra index -> {count, name_token_indices...}
             use_stmt, // main_token = use keyword, lhs = extra index -> {count, name_token_indices...}, rhs = alias token (0 = no alias)
             use_fn_stmt, // same layout as use_stmt but for 'use function'

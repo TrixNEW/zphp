@@ -1,5 +1,11 @@
 <?php
+// covers: closures with use/use(&$ref), first-class callables, array_map,
+//   array_filter, array_reduce, usort, array_walk, call_user_func,
+//   call_user_func_array, compact, extract, named arguments,
+//   (int)/(string)/(float) casts in closures, arrow functions (fn =>),
+//   recursive closures, closure as return value, closure composition
 
+// --- higher-order functions ---
 
 echo "=== Higher-Order Functions ===\n";
 
@@ -19,6 +25,7 @@ $result = pipe(
 );
 echo "piped: $result\n";
 
+// --- closure factories ---
 
 echo "\n=== Closure Factories ===\n";
 
@@ -57,6 +64,7 @@ echo "count: " . $counter['get']() . "\n";
 $counter['reset']();
 echo "after reset: " . $counter['get']() . "\n";
 
+// --- map/filter/reduce pipeline ---
 
 echo "\n=== Pipeline ===\n";
 
@@ -89,6 +97,7 @@ $grand = array_reduce($totals, function($carry, $o) {
 }, 0);
 echo "grand total: \$" . number_format($grand, 2) . "\n";
 
+// --- compact/extract ---
 
 echo "\n=== Compact/Extract ===\n";
 
@@ -105,6 +114,7 @@ $other = ['color' => 'blue', 'food' => 'pizza'];
 extract($other);
 echo "extracted: color=$color, food=$food\n";
 
+// --- call_user_func ---
 
 echo "\n=== Call User Func ===\n";
 
@@ -124,6 +134,7 @@ echo call_user_func(['Formatter', 'upper'], 'hello') . "\n";
 $fmt = new Formatter();
 echo call_user_func([$fmt, 'lower'], 'WORLD') . "\n";
 
+// --- recursive closure ---
 
 echo "\n=== Recursive Closure ===\n";
 
@@ -138,6 +149,7 @@ for ($i = 0; $i < 10; $i++) {
 }
 echo "fibonacci: " . implode(', ', $fibs) . "\n";
 
+// --- array_walk with ref ---
 
 echo "\n=== Array Walk ===\n";
 
@@ -163,6 +175,7 @@ echo "floats: " . implode(', ', $floats) . "\n";
 $strings = array_map(function($v) { return (string)((int)$v * 2); }, $values);
 echo "doubled strings: " . implode(', ', $strings) . "\n";
 
+// --- named arguments ---
 
 echo "\n=== Named Arguments ===\n";
 
@@ -177,6 +190,7 @@ echo createTag('div', 'Hello') . "\n";
 echo createTag('p', 'World', class: 'highlight') . "\n";
 echo createTag('span', 'Test', id: 'main', class: 'bold') . "\n";
 
+// --- memoize pattern ---
 
 echo "\n=== Memoize ===\n";
 

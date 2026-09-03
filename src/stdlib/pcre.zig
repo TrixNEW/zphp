@@ -290,6 +290,7 @@ test "normalizeOpenBoundQuantifier" {
     try t.expectEqual(@as(?[]u8, null), normalizeOpenBoundQuantifier("[{,3}]a"));
     try t.expectEqual(@as(?[]u8, null), normalizeOpenBoundQuantifier("[]{,3}]a"));
     try t.expectEqual(@as(?[]u8, null), normalizeOpenBoundQuantifier("[^]{,3}]a"));
+    // \Q...\E quotes everything
     try t.expectEqual(@as(?[]u8, null), normalizeOpenBoundQuantifier("\\Qa{,3}\\Eb"));
     {
         const r = normalizeOpenBoundQuantifier("\\Qa{,3}\\Eb{,2}").?;
@@ -1007,6 +1008,7 @@ fn pregReplaceLimited(ctx: *NativeContext, code: *pcre2.Code, match_data: *pcre2
 
         try parts.appendSlice(ctx.allocator, subject[offset..ms]);
 
+        // handle backreferences in replacement
         var ri: usize = 0;
         while (ri < replacement.len) {
             if (replacement[ri] == '$' and ri + 1 < replacement.len and replacement[ri + 1] >= '0' and replacement[ri + 1] <= '9') {
@@ -1104,6 +1106,7 @@ fn preg_replace_callback(ctx: *NativeContext, args: []const Value) RuntimeError!
     _ = pcre2.pcre2_pattern_info_8(code, pcre2.INFO_CAPTURECOUNT, @ptrCast(&capture_count));
     const group_count: usize = capture_count + 1;
 
+    // collect named-group info once
     var name_count: u32 = 0;
     _ = pcre2.pcre2_pattern_info_8(code, pcre2.INFO_NAMECOUNT, @ptrCast(&name_count));
     var name_entry_size: u32 = 0;

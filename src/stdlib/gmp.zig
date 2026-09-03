@@ -57,6 +57,7 @@ extern fn zphp_mpz_legendre(a: *const ZphpMpz, p: *const ZphpMpz) c_int;
 extern fn zphp_mpz_jacobi(a: *const ZphpMpz, b: *const ZphpMpz) c_int;
 extern fn zphp_mpz_perfect_square_p(a: *const ZphpMpz) c_int;
 
+// ---------------- helpers ----------------
 
 fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
     const owned = try ctx.allocator.dupe(u8, s);
@@ -136,6 +137,7 @@ fn coerceArgToMpz(ctx: *NativeContext, v: Value) !?*ZphpMpz {
     }
 }
 
+// ---------------- top-level functions ----------------
 
 fn gmpInit(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return .{ .bool = false };
@@ -431,6 +433,7 @@ fn gmpRoot(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .object = obj };
 }
 
+// ---------------- registration ----------------
 
 pub const entries = .{
     .{ "gmp_init", gmpInit },

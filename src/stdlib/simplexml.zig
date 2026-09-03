@@ -255,6 +255,7 @@ fn isSequentialList(arr: *const PhpArray) bool {
     return true;
 }
 
+// ---------------- top-level functions ----------------
 
 fn sxmlLoadString(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
@@ -303,6 +304,7 @@ fn sxmlImportDom(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .object = wrapper };
 }
 
+// ---------------- SimpleXMLElement::__construct ----------------
 
 fn sxmlConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
@@ -331,6 +333,7 @@ fn sxmlConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .null;
 }
 
+// ---------------- methods ----------------
 
 fn sxmlGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -770,6 +773,7 @@ fn sxmlOffsetGet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         }
         return .null;
     }
+    // string offset: attribute access
     if (args[0] == .string) {
         const attr_z = try dupZ(ctx, args[0].string);
         if (c.xmlHasProp(node, @ptrCast(attr_z.ptr)) == null) return .null;
@@ -962,6 +966,7 @@ fn sxmlGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .object = iter_obj };
 }
 
+// ---------------- registration ----------------
 
 pub fn register(vm: *VM, a: Allocator) !void {
     var def = ClassDef{ .name = "SimpleXMLElement" };

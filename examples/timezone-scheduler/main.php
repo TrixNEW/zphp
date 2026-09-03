@@ -1,4 +1,10 @@
 <?php
+// covers: date_default_timezone_set, date_default_timezone_get, DateTime,
+//   DateTimeZone, DateInterval, date, mktime, strtotime, ob_start,
+//   ob_get_clean, ob_get_level, classes, enums, match, array_map,
+//   array_filter, usort, implode, sprintf, json_encode, constructor
+//   property promotion, readonly properties, named arguments, generators,
+//   nullsafe operator
 
 enum Priority: int {
     case LOW = 1;
@@ -82,6 +88,7 @@ $base = 1704067200; // 2024-01-01 00:00:00 UTC
 
 $schedule = new Schedule();
 
+// events created in different timezones
 date_default_timezone_set("America/New_York");
 $schedule->add(new Event(
     name: "Team standup",
@@ -114,12 +121,14 @@ $schedule->add(new Event(
     priority: Priority::CRITICAL,
 ));
 
+// render from different viewer perspectives
 echo $schedule->render("UTC");
 echo "\n";
 echo $schedule->render("America/New_York");
 echo "\n";
 echo $schedule->render("Asia/Tokyo");
 
+// test timezone conversions
 echo "\n--- timezone math ---\n";
 date_default_timezone_set("UTC");
 $dt = new DateTime("2024-07-01 12:00:00", new DateTimeZone("UTC"));
@@ -137,6 +146,7 @@ echo "Tokyo:    " . $dt->format("H:i T") . "\n";
 $dt->setTimezone(new DateTimeZone("Asia/Kolkata"));
 echo "Kolkata:  " . $dt->format("H:i T") . "\n";
 
+// test DateTimeZone::getOffset with summer/winter
 echo "\n--- DST offsets ---\n";
 $tz_ny = new DateTimeZone("America/New_York");
 
@@ -152,6 +162,7 @@ echo "Paris summer offset: " . $tz_paris->getOffset($summer) . "\n";
 $tz_tokyo = new DateTimeZone("Asia/Tokyo");
 echo "Tokyo offset: " . $tz_tokyo->getOffset($winter) . "\n";
 
+// test date format specifiers
 echo "\n--- format specifiers ---\n";
 date_default_timezone_set("America/New_York");
 echo date("e", $base) . "\n";
@@ -159,8 +170,10 @@ echo date("T", $base) . "\n";
 echo date("P", $base) . "\n";
 echo date("O", $base) . "\n";
 
+// ISO 8601
 echo date("c", $base) . "\n";
 
+// filter by priority
 $critical = $schedule->byPriority(Priority::CRITICAL);
 echo "\ncritical events: " . count($critical) . "\n";
 echo "name: " . $critical[array_key_first($critical)]->name . "\n";

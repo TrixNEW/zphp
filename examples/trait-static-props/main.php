@@ -1,4 +1,6 @@
 <?php
+// covers: trait static properties, static::{expr}() dynamic method calls,
+//   trait static property inheritance, dynamic static dispatch
 
 trait HasUnits {
     protected static $units = ['year', 'month', 'day', 'hour', 'minute', 'second'];
@@ -25,6 +27,7 @@ class DateHelper {
     use HasConfig;
 }
 
+// trait static properties
 $units = DateHelper::getUnits();
 echo count($units) . "\n";
 echo $units[0] . "\n";
@@ -38,6 +41,7 @@ echo count($config) . "\n";
 echo $config['strict'] ? "strict" : "relaxed";
 echo "\n";
 
+// dynamic static method call: Class::{expr}()
 class Router {
     public static function getRoutes() {
         return "all-routes";
@@ -54,6 +58,7 @@ foreach ($methods as $m) {
     echo $result . "\n";
 }
 
+// dynamic static with variable
 $methodName = 'getUnits';
 $result = DateHelper::{$methodName}();
 echo count($result) . "\n";

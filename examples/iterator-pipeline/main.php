@@ -1,5 +1,11 @@
 <?php
+// covers: generators (yield, yield from, send, return, key=>value yield),
+//   generator methods (current, key, valid, next, getReturn), Fiber (start,
+//   resume, suspend, getReturn, isTerminated), iterator chaining, generator
+//   delegation, generator exception handling, closures as generator factories,
+//   foreach on generators, generator state lifecycle
 
+// --- fiber basics ---
 
 echo "=== Fiber Basics ===\n";
 
@@ -17,6 +23,7 @@ $fiber->resume('world');
 echo "return: " . $fiber->getReturn() . "\n";
 echo "terminated: " . ($fiber->isTerminated() ? 'yes' : 'no') . "\n";
 
+// --- fiber as coroutine ---
 
 echo "\n=== Fiber Coroutine ===\n";
 
@@ -44,6 +51,7 @@ echo "dec: " . $counter->resume('dec') . "\n";
 $counter->resume('stop');
 echo "terminated: " . ($counter->isTerminated() ? 'yes' : 'no') . "\n";
 
+// --- multiple fibers interleaved ---
 
 echo "\n=== Interleaved Fibers ===\n";
 
@@ -91,6 +99,7 @@ foreach ($log as $entry) {
     echo "$entry\n";
 }
 
+// --- basic generator pipeline ---
 
 echo "\n=== Generator Pipeline ===\n";
 
@@ -134,6 +143,7 @@ foreach ($first5 as $val) {
 }
 echo "pipeline: " . implode(', ', $results) . "\n";
 
+// --- key-value yield ---
 
 echo "\n=== Key-Value Yield ===\n";
 
@@ -168,6 +178,7 @@ foreach ($gen as $partial) {
 echo "running sums: " . implode(', ', $running) . "\n";
 echo "final return: " . $gen->getReturn() . "\n";
 
+// --- generator send ---
 
 echo "\n=== Generator Send ===\n";
 
@@ -189,6 +200,7 @@ $acc->send(15);
 $result = $acc->send(null);
 echo "accumulated: " . $acc->getReturn() . "\n";
 
+// --- generator state methods ---
 
 echo "\n=== Generator State ===\n";
 
@@ -209,6 +221,7 @@ $gen->next();
 $gen->next();
 echo "exhausted valid: " . ($gen->valid() ? 'yes' : 'no') . "\n";
 
+// --- generator factory closures ---
 
 echo "\n=== Generator Factory ===\n";
 
@@ -228,6 +241,7 @@ foreach ($gen as $item) {
 }
 echo "repeated: " . implode(', ', $items) . "\n";
 
+// --- chained generator transforms ---
 
 echo "\n=== Chained Transforms ===\n";
 
@@ -264,6 +278,7 @@ foreach ($doubled as $val) {
 }
 echo "chunk-flatten-double: " . implode(', ', $results) . "\n";
 
+// --- generator with exception ---
 
 echo "\n=== Generator Exception ===\n";
 
@@ -287,6 +302,7 @@ foreach (safe_divide_gen($pairs) as $r) {
 }
 echo implode(', ', $results) . "\n";
 
+// --- yield from delegation ---
 
 echo "\n=== Yield From ===\n";
 
@@ -309,6 +325,7 @@ foreach (outer_gen() as $val) {
 }
 echo "all items: " . implode(', ', $items) . "\n";
 
+// --- nested yield from ---
 
 echo "\n=== Nested Yield From ===\n";
 
@@ -377,6 +394,7 @@ foreach ($names as $name) {
 }
 echo "engineering: " . implode(', ', $eng) . "\n";
 
+// --- fiber with generator ---
 
 echo "\n=== Fiber With Generator ===\n";
 

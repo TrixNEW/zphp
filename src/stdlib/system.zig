@@ -424,6 +424,7 @@ fn native_getopt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         }
         if (arg.len < 2 or arg[0] != '-') break;
         if (arg[1] == '-') {
+            // long
             const eq_idx = std.mem.indexOfScalar(u8, arg[2..], '=');
             const name = if (eq_idx) |e| arg[2 .. 2 + e] else arg[2..];
             const inline_val: ?[]const u8 = if (eq_idx) |e| arg[2 + e + 1 ..] else null;
@@ -899,6 +900,7 @@ fn native_get_defined_vars(ctx: *NativeContext, _: []const Value) RuntimeError!V
         try result.set(alloc, .{ .string = name }, frame.locals[i]);
     }
 
+    // dynamic vars (extract'd, etc.)
     var iter = frame.vars.iterator();
     while (iter.next()) |entry| {
         const raw = entry.key_ptr.*;
@@ -1015,6 +1017,7 @@ fn native_exec(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         }
         if (args[1] != .array) ctx.setCallerVar(1, args.len, .{ .array = arr });
     }
+    // optional result_code (param 3, by-ref)
     const exit_code: i64 = switch (result.term) {
         .Exited => |c| @intCast(c),
         .Signal => |c| @as(i64, @intCast(c)) + 128,
@@ -1044,6 +1047,7 @@ fn native_system(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     };
     if (args.len >= 2) ctx.setCallerVar(1, args.len, .{ .int = exit_code });
 
+    // last line of output
     var last_line: []const u8 = "";
     if (result.stdout.len > 0) {
         var end = result.stdout.len;

@@ -1,4 +1,7 @@
 <?php
+// covers: Closure::bind, Closure::bindTo, Closure::call,
+//   Closure::fromCallable, closures with $this, captured variables,
+//   closure parameters, method-defined closures, rebinding
 
 class RouteGroup {
     public string $prefix;
@@ -51,6 +54,7 @@ $router->group("/admin", function() {
 
 $router->dump();
 
+// macro system using Closure::bind
 class Collection {
     public array $items;
     public static array $macros = [];
@@ -101,6 +105,7 @@ echo "avg: " . $nums->avg() . "\n";
 echo "has 20: " . ($nums->contains(20) ? "yes" : "no") . "\n";
 echo "has 99: " . ($nums->contains(99) ? "yes" : "no") . "\n";
 
+// bindTo for middleware-style pattern
 class Request {
     public string $method;
     public string $path;
@@ -165,11 +170,13 @@ echo $reader->call($config, "host") . "\n";
 echo $reader->call($config, "port") . "\n";
 echo $reader->call($config, "missing") . "\n";
 
+// Closure::fromCallable
 function double(int $n): int { return $n * 2; }
 
 $fn = Closure::fromCallable('double');
 echo $fn(21) . "\n";
 
+// captured vars preserved across rebinding
 $multiplier = 3;
 $multiply = function(int $n) use ($multiplier) {
     return $n * $multiplier + count($this->items);

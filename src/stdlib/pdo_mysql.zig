@@ -183,6 +183,7 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
         sql = try interpolateParams(ctx, conn, sql, params, if (param_map_val == .array) param_map_val.array else null);
     }
 
+    // free previous result if any
     if (getRes(obj)) |old_res| {
         mysql.mysql_free_result(old_res);
         try obj.set(ctx.allocator, "__res_ptr", .{ .int = 0 });
@@ -231,6 +232,7 @@ fn interpolateParams(ctx: *NativeContext, conn: *mysql.MYSQL, sql: []const u8, p
             }
         }
     } else {
+        // positional params
         for (params.entries.items) |entry| {
             try positional.append(ctx.allocator, try valueToSqlString(ctx, conn, entry.value));
         }
@@ -267,6 +269,7 @@ fn valueToSqlString(ctx: *NativeContext, conn: *mysql.MYSQL, val: Value) ![]cons
             return try ctx.createString(s);
         },
         .string => |s| {
+            // escape and quote
             const escaped = try ctx.allocator.alloc(u8, s.len * 2 + 3);
             escaped[0] = '\'';
             const elen = mysql.mysql_real_escape_string(conn, escaped[1..].ptr, s.ptr, @intCast(s.len));

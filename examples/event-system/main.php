@@ -1,4 +1,5 @@
 <?php
+// covers: closures, array_key_exists, usort, array_filter, array_map, array_values, is_callable, call_user_func_array, spl_object_id, get_class
 
 class EventEmitter {
     private array $listeners = [];
@@ -95,6 +96,7 @@ class Logger {
     }
 }
 
+// --- test event emitter ---
 
 $emitter = new EventEmitter();
 $log = [];
@@ -114,6 +116,7 @@ foreach ($log as $entry) {
     echo "  $entry\n";
 }
 
+// once listeners
 $onceLog = [];
 $emitter->once('notify', function(string $msg) use (&$onceLog) {
     $onceLog[] = $msg;
@@ -125,6 +128,7 @@ $emitter->emit('notify', ['second']);
 echo "Once listener fired: " . count($onceLog) . " time(s)\n";
 echo "Once value: " . $onceLog[0] . "\n";
 
+// listener count
 $emitter->on('data', function() {});
 $emitter->on('data', function() {});
 echo "Data listeners: " . $emitter->listenerCount('data') . "\n";
@@ -151,6 +155,7 @@ $errors = $logger->filter('error');
 echo "  Count: " . count($errors) . "\n";
 echo "  Message: " . $errors[0]['message'] . "\n";
 
+// --- middleware pipeline ---
 
 function pipeline(array $middlewares, $input) {
     $next = function($value) { return $value; };
@@ -226,6 +231,7 @@ $subject->setState('idle');
 echo "\nObserver A received: " . implode(', ', $obs1->received) . "\n";
 echo "Observer B received: " . implode(', ', $obs2->received) . "\n";
 
+// --- closure composition ---
 
 function compose(callable ...$fns): callable {
     return function($x) use ($fns) {
@@ -244,6 +250,7 @@ $square = function($x) { return $x * $x; };
 $transform = compose($square, $addOne, $double);
 echo "\nCompose (5): " . $transform(5) . "\n";
 
+// --- currying ---
 
 function curry(callable $fn, ...$initial): callable {
     return function() use ($fn, $initial) {

@@ -1,4 +1,8 @@
 <?php
+// covers: Fiber-based task pool with cooperative cancellation,
+//   exception propagation across suspend points, mixed throw/resume,
+//   isStarted/isSuspended/isTerminated state probing,
+//   selective awaiting based on task tags
 
 final class CancelException extends RuntimeException {}
 

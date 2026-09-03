@@ -75,6 +75,7 @@ pub const OpCode = enum(u8) {
     echo,
     halt,
 
+    // arrays
     array_new, // push new empty array
     array_push, // pop value, append to array at stack top
     array_set_elem, // pop value, pop key, set on array at stack top
@@ -92,11 +93,13 @@ pub const OpCode = enum(u8) {
     cow_separate_local, // u16: slot - if the local holds a shared array, separate it in place (write unshared copy back to slot). non-vivifying, non-throwing, pushes NOTHING. emitted before by-ref native args / unset bases
     ensure_array_static_prop, // u16 class-name const, u16 prop-name const - read Class::$prop, vivify, COW-separate if shared + write back, push (for Class::$prop[]=/[k] op= writes)
 
+    // exceptions
     throw,
     push_handler, // u16: catch offset
     pop_handler,
     instance_check, // pop class name string, pop object, push bool
 
+    // classes
     class_decl, // u16: class name, u8: method count, then method_count * (u16 name, u8 arity)
     new_obj, // u16: class name constant, u8: arg count
     new_obj_dynamic, // class name on stack, u8: arg count
@@ -122,15 +125,19 @@ pub const OpCode = enum(u8) {
     get_static_prop_dyn_both, // no operand: class name then property name on stack
     set_static_prop_dyn, // no operand: class name, property name, value on stack
 
+    // scope
     get_global, // u16: var name constant (copy from frame 0)
     get_static, // u16: var name constant, u16: func name constant (get persistent static)
     set_static, // u16: var name constant, u16: func name constant (save persistent static)
 
+    // variadic
     array_spread, // pop array, push each element onto the array below it
     splat_call, // pop array, spread as args to function call
 
+    // file inclusion
     require, // u8: 0=require, 1=require_once, 2=include, 3=include_once (path string on stack)
 
+    // foreach iteration
     iter_begin, // push index 0 (array already on stack)
     iter_check, // u16: exit offset. peek array+index, push key+value or jump
     iter_advance, // pop index, push index+1
@@ -164,13 +171,16 @@ pub const OpCode = enum(u8) {
     // only when something else still references it
     foreach_ref_bind,
 
+    // generators
     yield_value, // pop value, suspend generator, push received value on resume
     yield_pair, // pop value, pop key, suspend generator
     generator_return, // pop value, mark generator completed
     yield_from, // pop iterable, delegate yield, push return value
 
+    // object
     clone_obj, // shallow copy object on top of stack
 
+    // unset
     unset_var, // u16: name constant index - remove variable from current scope
     unset_prop, // u16: prop name - pop object, remove property
     unset_prop_dynamic, // pop prop name, pop object, remove property
@@ -330,6 +340,7 @@ pub const OpCode = enum(u8) {
     // net stack effect: +1 = pushes a value, 0 = neutral, -1 = consumes one net
     pub fn stackEffect(self: OpCode) i8 {
         return switch (self) {
+            // push a value
             .constant, .op_null, .op_true, .op_false, .dup, .get_var, .get_local,
             .get_global, .get_static,
             .get_static_prop, .get_class_const, .array_new, .clone_obj, .isset_prop, .isset_index,

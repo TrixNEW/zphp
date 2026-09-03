@@ -194,6 +194,7 @@ fn native_password_verify(ctx: *NativeContext, args: []const Value) RuntimeError
     const password = args[0].string;
     const hash = args[1].string;
 
+    // argon2 family: delegate to libsodium
     if (std.mem.startsWith(u8, hash, "$argon2")) {
         const r = ctx.vm.callByName("sodium_crypto_pwhash_str_verify", &.{
             .{ .string = hash },
@@ -249,6 +250,7 @@ fn native_password_get_info(ctx: *NativeContext, args: []const Value) RuntimeErr
     if (hash.len >= 7 and hash[0] == '$' and hash[1] == '2' and (hash[2] == 'y' or hash[2] == 'b' or hash[2] == 'a')) {
         algo = .{ .string = try ctx.createString("2y") };
         algo_name = "bcrypt";
+        // parse cost: $2y$XX$
         const cost_start: usize = 4;
         if (hash.len >= 6 and hash[cost_start - 1] == '$') {
             const dollar_after = std.mem.indexOfScalarPos(u8, hash, cost_start, '$') orelse hash.len;
@@ -617,11 +619,13 @@ fn native_hash_hkdf(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     const out_len: usize = if (length > 0) @intCast(length) else hlen;
     if (out_len > 255 * hlen) return .{ .bool = false };
 
+    // Extract: PRK = HMAC(salt, IKM)
     const zero_salt = [_]u8{0} ** 64;
     const effective_salt: []const u8 = if (salt.len > 0) salt else zero_salt[0..hlen];
     var prk: [64]u8 = undefined;
     computeHmac(algo, ikm, effective_salt, prk[0..hlen]);
 
+    // Expand
     const out = try ctx.allocator.alloc(u8, out_len);
     var t_prev: [64]u8 = undefined;
     var t_prev_len: usize = 0;
@@ -811,6 +815,7 @@ fn native_hash_pbkdf2(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     };
     const out = try ctx.allocator.alloc(u8, out_bytes);
 
+    // basic PBKDF2-HMAC implementation
     var block_index: u32 = 1;
     var written: usize = 0;
     while (written < out_bytes) : (block_index += 1) {

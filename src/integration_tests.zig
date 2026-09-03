@@ -21,7 +21,9 @@ fn expectOutput(source: []const u8, expected: []const u8) !void {
     try std.testing.expectEqualStrings(expected, vm.output.items);
 }
 
+// ==========================================================================
 // basic operations
+// ==========================================================================
 
 test "echo integer" {
     try expectOutput("<?php echo 42;", "42");
@@ -170,7 +172,9 @@ test "fizzbuzz" {
     , "12Fizz4BuzzFizz78FizzBuzz11Fizz1314FizzBuzz");
 }
 
+// ==========================================================================
 // arrays
+// ==========================================================================
 
 test "array literal" {
     try expectOutput("<?php $a = [1, 2, 3]; echo count($a);", "3");
@@ -211,7 +215,9 @@ test "is_array" {
     try expectOutput("<?php echo is_array(42) ? 'y' : 'n';", "n");
 }
 
+// ==========================================================================
 // closures
+// ==========================================================================
 
 test "closure assigned to variable" {
     try expectOutput("<?php $add = function($a, $b) { return $a + $b; }; echo $add(3, 4);", "7");
@@ -316,7 +322,9 @@ test "closure use with array_map" {
     , "3 6 9 ");
 }
 
+// ==========================================================================
 // string interpolation
+// ==========================================================================
 
 test "string interpolation simple" {
     try expectOutput("<?php $name = 'World'; echo \"Hello $name\";", "Hello World");
@@ -396,6 +404,9 @@ test "string interpolation curly array then property" {
     , "ok");
 }
 
+// ==========================================================================
+// constants
+// ==========================================================================
 
 test "predefined constant PHP_EOL" {
     try expectOutput("<?php echo 'a' . PHP_EOL . 'b';", "a\nb");
@@ -432,7 +443,9 @@ test "constant function" {
     try expectOutput("<?php define('VAL', 99); echo constant('VAL');", "99");
 }
 
+// ==========================================================================
 // type casting
+// ==========================================================================
 
 test "cast int" {
     try expectOutput("<?php echo (int)'42';", "42");
@@ -464,7 +477,9 @@ test "cast array" {
     try expectOutput("<?php $a = (array)42; echo count($a); echo $a[0];", "142");
 }
 
+// ==========================================================================
 // switch / match
+// ==========================================================================
 
 test "switch basic" {
     try expectOutput(
@@ -574,6 +589,9 @@ test "match assigned to variable" {
     , "2");
 }
 
+// ==========================================================================
+// classes
+// ==========================================================================
 
 test "class basic instantiation" {
     try expectOutput(
@@ -733,7 +751,9 @@ test "class constants with static props" {
     , "cfg cfg");
 }
 
+// ==========================================================================
 // inheritance
+// ==========================================================================
 
 test "inherited method" {
     try expectOutput(
@@ -838,7 +858,9 @@ test "inherited property defaults" {
     , "0 app");
 }
 
+// ==========================================================================
 // exceptions
+// ==========================================================================
 
 test "basic throw catch" {
     try expectOutput(
@@ -1087,7 +1109,9 @@ test "throw in method caught by caller" {
     , "fail");
 }
 
+// ==========================================================================
 // parse_url / parse_str / strstr
+// ==========================================================================
 
 test "parse_url full" {
     try expectOutput(
@@ -1145,7 +1169,9 @@ test "strchr alias" {
     , "@bar.com");
 }
 
+// ==========================================================================
 // crypto / security
+// ==========================================================================
 
 test "hash sha256" {
     try expectOutput(
@@ -1194,7 +1220,9 @@ test "hash_algos returns array" {
     , "yes");
 }
 
+// ==========================================================================
 // serialize / unserialize
+// ==========================================================================
 
 test "serialize scalars" {
     try expectOutput(
@@ -1219,7 +1247,9 @@ test "unserialize bool" {
     , "true");
 }
 
+// ==========================================================================
 // array pointer functions
+// ==========================================================================
 
 test "current next prev reset end" {
     try expectOutput(
@@ -1250,7 +1280,9 @@ test "sizeof alias for count" {
     , "3");
 }
 
+// ==========================================================================
 // object introspection
+// ==========================================================================
 
 test "get_object_vars" {
     try expectOutput(
@@ -1290,7 +1322,9 @@ test "exit halts execution" {
     , "ab");
 }
 
+// ==========================================================================
 // version_compare / misc
+// ==========================================================================
 
 test "version_compare numeric" {
     try expectOutput(
@@ -1346,7 +1380,9 @@ test "extension_loaded" {
     , "yn");
 }
 
+// ==========================================================================
 // edge case hardening
+// ==========================================================================
 
 test "array pointer on empty array" {
     try expectOutput(

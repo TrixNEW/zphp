@@ -1,4 +1,6 @@
 <?php
+// covers: DatePeriod iteration (start/interval/end + start/interval/count),
+//   DateInterval::createFromDateString, business-day calc, range building
 
 echo "=== weekly cadence by count ===\n";
 $start = new DateTimeImmutable('2026-01-05'); // a Monday

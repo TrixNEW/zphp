@@ -1,4 +1,5 @@
 <?php
+// covers: hexdec, dechex, str_pad, substr, round, max, min, abs, fmod, floor, intval, sprintf, number_format, array_map
 
 function hexToRgb(string $hex): array {
     $hex = ltrim($hex, '#');
@@ -111,6 +112,7 @@ function blendColors(string $hex1, string $hex2, float $ratio = 0.5): string {
     return rgbToHex($r, $g, $b);
 }
 
+// --- tests ---
 
 echo "Hex to RGB:\n";
 $colors = ['#ff0000', '#00ff00', '#0000ff', '#ffffff', '#000000', '#ff8c00'];

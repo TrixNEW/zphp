@@ -1,4 +1,6 @@
 <?php
+// covers: PDO FETCH_KEY_PAIR, FETCH_GROUP, FETCH_UNIQUE, FETCH_COLUMN, FETCH_FUNC,
+//   FETCH_OBJ + iteration, prepared statement reuse with rebind
 
 $db = new PDO('sqlite::memory:');
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);

@@ -1,4 +1,7 @@
 <?php
+// covers: AEAD encrypt/decrypt round-trips with associated-data binding,
+//   binary-safe storage via base64, replay detection via nonce bookkeeping,
+//   tampered ciphertext detection. realistic "encrypted message bus" pattern.
 
 class MessageBus {
     private string $key;

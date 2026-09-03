@@ -1,4 +1,7 @@
 <?php
+// covers: signed/authenticated session cookies using ed25519 + base64url,
+//   constant-time signature verification, expiry handling, JSON serialization.
+//   "stateless server" pattern - all session data lives in the cookie.
 
 function b64u_encode(string $bin): string {
     return rtrim(strtr(base64_encode($bin), '+/', '-_'), '=');

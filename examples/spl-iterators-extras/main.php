@@ -1,4 +1,5 @@
 <?php
+// covers: IteratorIterator, LimitIterator, CallbackFilterIterator, RegexIterator, AppendIterator, EmptyIterator, NoRewindIterator, InfiniteIterator, CachingIterator, MultipleIterator, RecursiveCallbackFilterIterator, RecursiveArrayIterator, RecursiveRegexIterator
 
 echo "=== IteratorIterator ===\n";
 $src = new ArrayIterator(['alpha', 'beta', 'gamma']);

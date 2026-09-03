@@ -1,4 +1,7 @@
 <?php
+// covers: ReflectionClass methods, ReflectionMethod parameter/type inspection,
+//   ReflectionProperty default values + types, ReflectionFunction,
+//   isInternal/isUserDefined, class hierarchy walks
 
 interface Shape {
     public function area(): float;

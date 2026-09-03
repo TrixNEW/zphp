@@ -1,4 +1,7 @@
 <?php
+// covers: autowiring DI container using reflection on promoted ctor params,
+//   typed-property hydration, interface binding, ReflectionNamedType::isBuiltin,
+//   ReflectionParameter::isPromoted - the heart of Symfony/Laravel container code
 
 interface Logger { public function info(string $msg): void; }
 interface Mailer { public function send(string $to, string $body): void; }

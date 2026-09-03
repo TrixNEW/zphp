@@ -8,10 +8,13 @@ for ($i = 0; $i < $n; $i++) {
     $s .= "item" . $i . ",";
 }
 
+// count occurrences
 $count = substr_count($s, "item1");
 
+// replace
 $replaced = str_replace("item", "elem", $s);
 
+// split and rejoin
 $parts = explode(",", $s);
 $joined = implode(";", $parts);
 

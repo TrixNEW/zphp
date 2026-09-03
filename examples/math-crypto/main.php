@@ -1,5 +1,11 @@
 <?php
+// covers: abs, ceil, floor, round, max, min, pow, sqrt, log, fmod,
+//   intdiv, number_format, base_convert, bindec, octdec, hexdec, decbin,
+//   decoct, dechex, pi, M_PI, M_E, hash (md5, sha1, sha256), hash_hmac,
+//   crc32, password_hash, password_verify, random_int, random_bytes,
+//   is_numeric, intval, floatval, sprintf, array_sum, array_product
 
+// --- basic math ---
 
 echo "=== Basic Math ===\n";
 
@@ -13,6 +19,7 @@ echo "round(2.5): " . round(2.5) . "\n";
 echo "round(2.55, 1): " . round(2.55, 1) . "\n";
 echo "round(-1.5): " . round(-1.5) . "\n";
 
+// --- min/max ---
 
 echo "\n=== Min/Max ===\n";
 
@@ -21,6 +28,7 @@ echo "min(1,2,3): " . min(1, 2, 3) . "\n";
 echo "max(-5, 0, 5): " . max(-5, 0, 5) . "\n";
 echo "min(-5, 0, 5): " . min(-5, 0, 5) . "\n";
 
+// --- powers and roots ---
 
 echo "\n=== Powers/Roots ===\n";
 
@@ -39,6 +47,7 @@ echo "intdiv(-7, 2): " . intdiv(-7, 2) . "\n";
 echo "fmod(10.5, 3.2): " . round(fmod(10.5, 3.2), 1) . "\n";
 echo "fmod(-10.5, 3): " . fmod(-10.5, 3) . "\n";
 
+// --- number formatting ---
 
 echo "\n=== Number Format ===\n";
 
@@ -49,6 +58,7 @@ echo "number_format(1234567.891, 2, ',', '.'): " . number_format(1234567.891, 2,
 echo "number_format(0.5, 0): " . number_format(0.5, 0) . "\n";
 echo "number_format(1000, 0, '.', ''): " . number_format(1000, 0, '.', '') . "\n";
 
+// --- base conversion ---
 
 echo "\n=== Base Conversion ===\n";
 
@@ -61,6 +71,7 @@ echo "hexdec('ff'): " . hexdec('ff') . "\n";
 echo "base_convert('ff', 16, 2): " . base_convert('ff', 16, 2) . "\n";
 echo "base_convert('11111111', 2, 16): " . base_convert('11111111', 2, 16) . "\n";
 
+// --- constants ---
 
 echo "\n=== Constants ===\n";
 
@@ -70,6 +81,7 @@ echo "PHP_INT_MAX: " . PHP_INT_MAX . "\n";
 echo "PHP_INT_MIN: " . PHP_INT_MIN . "\n";
 echo "PHP_FLOAT_MAX > 1e308: " . (PHP_FLOAT_MAX > 1e308 ? 'yes' : 'no') . "\n";
 
+// --- hash functions ---
 
 echo "\n=== Hash Functions ===\n";
 
@@ -79,6 +91,7 @@ echo "hash('sha256', 'hello'): " . hash('sha256', 'hello') . "\n";
 echo "hash('md5', 'hello'): " . hash('md5', 'hello') . "\n";
 echo "crc32('hello'): " . crc32('hello') . "\n";
 
+// --- hmac ---
 
 echo "\n=== HMAC ===\n";
 
@@ -86,6 +99,7 @@ echo "hash_hmac('sha256', 'data', 'key'): " . hash_hmac('sha256', 'data', 'key')
 echo "hash_hmac('md5', 'data', 'key'): " . hash_hmac('md5', 'data', 'key') . "\n";
 echo "hash_hmac('sha1', 'data', 'key'): " . hash_hmac('sha1', 'data', 'key') . "\n";
 
+// --- password hashing ---
 
 echo "\n=== Password Hashing ===\n";
 
@@ -95,6 +109,7 @@ echo "hash length: " . strlen($hash) . "\n";
 echo "verify correct: " . (password_verify('secret123', $hash) ? 'yes' : 'no') . "\n";
 echo "verify wrong: " . (password_verify('wrong', $hash) ? 'yes' : 'no') . "\n";
 
+// --- random ---
 
 echo "\n=== Random ===\n";
 
@@ -104,6 +119,7 @@ $bytes = random_bytes(16);
 echo "random_bytes length: " . strlen($bytes) . "\n";
 echo "random_bytes hex length: " . strlen(bin2hex($bytes)) . "\n";
 
+// --- numeric checks ---
 
 echo "\n=== Numeric Checks ===\n";
 
@@ -118,6 +134,7 @@ echo "is_numeric(''): " . (is_numeric('') ? 'yes' : 'no') . "\n";
 echo "is_numeric(true): " . (is_numeric(true) ? 'yes' : 'no') . "\n";
 echo "is_numeric(null): " . (is_numeric(null) ? 'yes' : 'no') . "\n";
 
+// --- type conversion ---
 
 echo "\n=== Type Conversion ===\n";
 
@@ -128,6 +145,7 @@ echo "intval('077', 8): " . intval('077', 8) . "\n";
 echo "floatval('3.14'): " . floatval('3.14') . "\n";
 echo "floatval('1.2e3'): " . floatval('1.2e3') . "\n";
 
+// --- sprintf with numbers ---
 
 echo "\n=== Sprintf ===\n";
 
@@ -141,6 +159,7 @@ echo sprintf("string: %s", 'hello') . "\n";
 echo sprintf("percent: %%") . "\n";
 echo sprintf("multiple: %d + %d = %d", 2, 3, 5) . "\n";
 
+// --- array math ---
 
 echo "\n=== Array Math ===\n";
 

@@ -1,4 +1,7 @@
 <?php
+// covers: fputcsv / fgetcsv round-trips, escape character behavior,
+//   custom delimiters/enclosures, SplFileObject CSV iteration,
+//   embedded quotes and newlines, BOM handling
 
 $tmp = tempnam(sys_get_temp_dir(), 'csv');
 

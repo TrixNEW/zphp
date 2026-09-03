@@ -1,4 +1,7 @@
 <?php
+// covers: __callStatic, static properties, late static binding (static::),
+//   inheritance, interface implementation, array methods, string interpolation,
+//   abstract-like patterns, service container integration with reflection
 
 class Container {
     private static array $bindings = [];
@@ -22,6 +25,7 @@ class Facade {
     }
 }
 
+// concrete implementations
 class QueryBuilder {
     private string $table = '';
     private array $wheres = [];
@@ -99,6 +103,7 @@ class EventDispatcher {
     }
 }
 
+// facades
 class DB extends Facade {
     protected static string $accessor = 'db';
 }
@@ -111,6 +116,7 @@ class Event extends Facade {
     protected static string $accessor = 'events';
 }
 
+// wire up container
 Container::bind('db', new QueryBuilder());
 Container::bind('cache', new CacheStore());
 Container::bind('events', new EventDispatcher());
@@ -146,6 +152,7 @@ foreach ($log as $entry) {
     echo $entry . "\n";
 }
 
+// dynamic class resolution
 $facades = ['DB', 'Cache'];
 foreach ($facades as $f) {
     $rc = new ReflectionClass($f);

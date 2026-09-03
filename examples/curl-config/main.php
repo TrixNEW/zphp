@@ -1,4 +1,7 @@
 <?php
+// covers: curl handle lifecycle, curl_setopt + curl_setopt_array,
+//   constants, curl_version, curl_strerror, error/errno on bad URLs.
+//   no live network calls so the example is hermetic.
 
 echo "=== handle lifecycle ===\n";
 $ch = curl_init();
@@ -45,6 +48,7 @@ echo "errno > 0: " . ($err > 0 ? "yes" : "no") . "\n";
 unset($ch);
 
 echo "\n=== curl_strerror string coverage ===\n";
+// CURLE_OK=0, CURLE_COULDNT_RESOLVE_HOST=6, CURLE_OPERATION_TIMEDOUT=28
 foreach ([0, 6, 28] as $code) {
     $s = curl_strerror($code);
     echo sprintf("  code %d: %s\n", $code, is_string($s) && strlen($s) > 0 ? "string" : "missing");

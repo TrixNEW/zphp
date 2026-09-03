@@ -132,6 +132,7 @@ fn varDumpValue(ctx: *NativeContext, val: Value, depth: usize) !void {
                 }
             }
 
+            // honor __debugInfo if defined
             var debug_arr: ?*@import("../runtime/value.zig").PhpArray = null;
             if (ctx.vm.hasMethod(obj.class_name, "__debugInfo")) {
                 const result = try ctx.vm.callMethod(obj, "__debugInfo", &.{});

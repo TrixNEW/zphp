@@ -77,6 +77,7 @@ fn readReply(allocator: std.mem.Allocator, fd: posix.socket_t) !Reply {
     const code_str = line[0..3];
     const code = std.fmt.parseInt(u16, code_str, 10) catch return error.BadReply;
     if (line[3] == '-') {
+        // multi-line
         while (true) {
             const n = try readLine(fd, &line);
             if (n == 0) break;
@@ -252,6 +253,7 @@ fn native_ftp_size(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     const r = runCmd(ctx.allocator, fd, line) catch return .{ .int = -1 };
     defer ctx.allocator.free(r.body);
     if (r.code != 213) return .{ .int = -1 };
+    // 213 NNN\r\n
     var iter = std.mem.tokenizeAny(u8, r.body, " \r\n");
     _ = iter.next(); // code
     const num_str = iter.next() orelse return .{ .int = -1 };
@@ -272,6 +274,7 @@ fn native_ftp_mdtm(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     _ = iter.next();
     const ts = iter.next() orelse return .{ .int = -1 };
     if (ts.len < 14) return .{ .int = -1 };
+    // YYYYMMDDHHMMSS UTC
     const year = std.fmt.parseInt(i32, ts[0..4], 10) catch return .{ .int = -1 };
     const mon = std.fmt.parseInt(u8, ts[4..6], 10) catch return .{ .int = -1 };
     const day = std.fmt.parseInt(u8, ts[6..8], 10) catch return .{ .int = -1 };
@@ -284,6 +287,7 @@ fn native_ftp_mdtm(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 }
 
 fn daysFromCivil(y_in: i32, m: u8, d: u8) i64 {
+    // Howard Hinnant algorithm
     var y: i32 = y_in;
     if (m <= 2) y -= 1;
     const era: i32 = @divFloor(if (y >= 0) y else y - 399, 400);

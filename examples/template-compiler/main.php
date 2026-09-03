@@ -1,5 +1,11 @@
 <?php
+// covers: preg_replace_callback, preg_replace, preg_match_all, preg_split,
+//         str_replace, substr, strpos, strlen, trim, ltrim, rtrim, explode, implode,
+//         array_map, array_merge, array_key_exists, in_array, count,
+//         sprintf, str_repeat, str_pad, strtoupper, strtolower, ucfirst,
+//         is_array, is_string, is_numeric, json_encode, extract, compact
 
+// --- simple template engine ---
 
 function compile($template, $data) {
     $output = $template;
@@ -26,6 +32,7 @@ function compile($template, $data) {
         return $result;
     }, $output);
 
+    // conditionals
     $output = preg_replace_callback('/\{%\s*if\s+(\w+)\s*%\}(.*?)\{%\s*endif\s*%\}/s', function($matches) use ($data) {
         $key = $matches[1];
         $body = $matches[2];
@@ -60,6 +67,7 @@ function resolve($data, $path) {
     return (string)$current;
 }
 
+// --- test: variable interpolation ---
 
 echo "--- variables ---\n";
 $result = compile("Hello, {{ name }}!", ['name' => 'World']);
@@ -72,6 +80,7 @@ $result = compile("{{ greeting }}, {{ name }}! You have {{ count }} messages.", 
 ]);
 echo $result . "\n";
 
+// --- test: nested access ---
 
 echo "--- nested ---\n";
 $result = compile("{{ user.name }} ({{ user.email }})", [
@@ -84,6 +93,7 @@ $result = compile("City: {{ address.city }}, Zip: {{ address.zip }}", [
 ]);
 echo $result . "\n";
 
+// --- test: conditionals ---
 
 echo "--- conditionals ---\n";
 $result = compile("{% if admin %}[ADMIN] {% endif %}{{ name }}", [
@@ -98,6 +108,7 @@ $result = compile("{% if admin %}[ADMIN] {% endif %}{{ name }}", [
 ]);
 echo $result . "\n";
 
+// --- test: loops ---
 
 echo "--- loops ---\n";
 $result = compile("{% for item in items %}* {{ item }}\n{% endfor %}", [
@@ -114,6 +125,7 @@ $result = compile("{% for user in users %}{{ loop.index }}. {{ user.name }} <{{ 
 ]);
 echo $result;
 
+// --- test: filter pipeline ---
 
 function applyFilter($value, $filter) {
     switch ($filter) {
@@ -148,6 +160,7 @@ echo compileWithFilters("{{ name | ucfirst }}", ['name' => 'hello world']) . "\n
 echo compileWithFilters("{{ name | upper | reverse }}", ['name' => 'hello']) . "\n";
 echo compileWithFilters("{{ name | length }}", ['name' => 'hello']) . "\n";
 
+// --- test: HTML escaping ---
 
 function escapeHtml($str) {
     return str_replace(
@@ -162,6 +175,7 @@ $unsafe = '<script>alert("xss")</script>';
 echo escapeHtml($unsafe) . "\n";
 echo escapeHtml('Tom & Jerry "friends" <forever>') . "\n";
 
+// --- test: indentation helper ---
 
 function indent($text, $level, $char = '  ') {
     $prefix = str_repeat($char, $level);
@@ -197,6 +211,7 @@ preg_match_all('/<(\w+)(?:\s+[^>]*)?>/', $html, $matches);
 echo "tags: " . implode(', ', $matches[1]) . "\n";
 echo "count: " . count($matches[1]) . "\n";
 
+// --- test: token splitting ---
 
 echo "--- token split ---\n";
 $expr = "  hello +  world  - foo * bar  ";

@@ -1,4 +1,7 @@
 <?php
+// covers: array callables ([$obj, "method"], ["Class", "static"]),
+//   string function callables, closure callables, pattern matching,
+//   multi-level parameter extraction, string manipulation (explode, trim)
 
 class Router
 {
@@ -79,20 +82,25 @@ class UserController
 
 $router = new Router();
 
+// closure handler
 $router->get("/", function ($params) {
     return "home";
 });
 
+// string callable
 $router->get("/about", function ($params) {
     return "about page";
 });
 
+// static method via array callable
 $router->get("/users", ["UserController", "index"]);
 $router->get("/users/:id", ["UserController", "show"]);
 
+// instance method via array callable
 $ctrl = new UserController();
 $router->get("/profile/:id", [$ctrl, "profile"]);
 
+// route with multiple params
 $router->get("/posts/:year/:slug", function ($params) {
     return "post:" . $params["year"] . "/" . $params["slug"];
 });

@@ -69,6 +69,7 @@ pub const entries = .{
 };
 
 pub fn register(vm: *VM, a: Allocator) !void {
+    // DateTimeInterface
     var iface = vm_mod.InterfaceDef{ .name = "DateTimeInterface" };
     try iface.methods.append(a, "format");
     try iface.methods.append(a, "getTimestamp");
@@ -81,6 +82,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     }
     try vm.classes.put(a, "DateTimeInterface", dti_const);
 
+    // DateTime class
     var dt_def = ClassDef{ .name = "DateTime" };
     try dt_def.properties.append(a, .{ .name = "timestamp", .default = .{ .int = 0 }, .visibility = .private });
     try dt_def.interfaces.append(a, "DateTimeInterface");
@@ -131,6 +133,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "DateTime::getOffset", dtGetOffset);
     try vm.native_fns.put(a, "DateTimeImmutable::getOffset", dtGetOffset);
 
+    // DateTimeImmutable
     var dti_def = ClassDef{ .name = "DateTimeImmutable" };
     try dti_def.properties.append(a, .{ .name = "timestamp", .default = .{ .int = 0 }, .visibility = .private });
     try dti_def.interfaces.append(a, "DateTimeInterface");
@@ -178,6 +181,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "DateTime::createFromInterface", dtCreateFromInterface);
     try vm.native_fns.put(a, "DateTimeImmutable::createFromInterface", dtiCreateFromInterface);
 
+    // DateTimeZone class
     var dtz_def = ClassDef{ .name = "DateTimeZone" };
     try dtz_def.properties.append(a, .{ .name = "timezone", .default = .{ .string = "UTC" }, .visibility = .private });
     try dtz_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
@@ -199,6 +203,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "DateTimeZone::getLocation", dtzGetLocation);
     try vm.native_fns.put(a, "DateTimeZone::getTransitions", dtzGetTransitions);
 
+    // DateInterval
     var di_def = ClassDef{ .name = "DateInterval" };
     try di_def.properties.append(a, .{ .name = "y", .default = .{ .int = 0 } });
     try di_def.properties.append(a, .{ .name = "m", .default = .{ .int = 0 } });
@@ -218,6 +223,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "DateInterval::createFromDateString", diCreateFromDateString);
     try vm.native_fns.put(a, "DateInterval::format", diFormat);
 
+    // DatePeriod
     var dp_def = ClassDef{ .name = "DatePeriod" };
     try dp_def.static_props.put(a, "EXCLUDE_START_DATE", .{ .int = 1 });
     try dp_def.static_props.put(a, "INCLUDE_END_DATE", .{ .int = 2 });
@@ -467,6 +473,7 @@ fn dtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     var ts: i64 = std.time.timestamp();
 
+    // extract timezone from second arg
     var tz_name = ctx.vm.default_tz_name;
     if (args.len >= 2) {
         tz_name = extractTimezoneName(args[1..]);
@@ -497,11 +504,13 @@ fn dtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 min = std.fmt.parseInt(i64, s[14..16], 10) catch 0;
                 pos = 16;
             }
+            // skip fractional seconds
             if (pos < s.len and s[pos] == '.') {
                 pos += 1;
                 while (pos < s.len and s[pos] >= '0' and s[pos] <= '9') pos += 1;
             }
             while (pos < s.len and s[pos] == ' ') pos += 1;
+            // try trailing timezone
             var explicit_offset: ?i64 = null;
             var explicit_name: ?[]const u8 = null;
             if (pos < s.len) {
@@ -729,6 +738,7 @@ pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []co
                 try buf.appendSlice(a, s);
             },
             'c' => {
+                // ISO 8601: YYYY-MM-DDTHH:MM:SS+00:00
                 var tmp: [32]u8 = undefined;
                 const s = std.fmt.bufPrint(&tmp, "{d}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
                     year_day.year,
@@ -962,6 +972,7 @@ fn applyIntervalTz(ts: i64, interval: *PhpObject, sign: i64, tz_name: []const u8
     const day: i64 = c.day + direction * d;
 
     var local_ts = dateToTimestamp(year, month, day, c.hour, c.min, c.sec);
+    // convert local back to UTC
     if (tz) |t| {
         const off_out: i64 = @as(i64, tzOffsetAt(t, local_ts));
         local_ts -= off_out;
@@ -1276,6 +1287,7 @@ fn createBareDt(ctx: *NativeContext, class_name: []const u8, args: []const Value
     if (args.len >= 1 and args[0] == .string) {
         const s = args[0].string;
         if (s.len == 0 or std.mem.eql(u8, s, "now")) {
+            // current
         } else if (s.len >= 2 and s[0] == '@') {
             ts = std.fmt.parseInt(i64, s[1..], 10) catch ts;
         } else if (s.len >= 10 and s[4] == '-' and s[7] == '-') {
@@ -1330,10 +1342,12 @@ fn native_date_format(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     return formatTimestampTz(ctx, ts, args[1].string, offset, tz_name);
 }
 
+// procedural alias for DateInterval::createFromDateString
 fn native_date_interval_create_from_date_string(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return diCreateFromDateString(ctx, args);
 }
 
+// procedural alias for DateInterval::format($interval, $format)
 fn native_date_interval_format(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .object or args[1] != .string) return .{ .bool = false };
     const saved = ctx.vm.currentFrame().vars.get("$this");
@@ -1685,11 +1699,13 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
                 di += len;
             },
             'e', 'T' => {
+                // timezone name: consume identifier-ish chars
                 const start = di;
                 while (di < datetime.len and (isAlpha(datetime[di]) or datetime[di] == '/' or datetime[di] == '_' or datetime[di] == '+' or datetime[di] == '-' or (datetime[di] >= '0' and datetime[di] <= '9'))) : (di += 1) {}
                 if (di == start) return null;
             },
             'O', 'P' => {
+                // +0200 or +02:00
                 if (di >= datetime.len) return null;
                 const sign: i64 = if (datetime[di] == '+') 1 else if (datetime[di] == '-') -1 else return null;
                 di += 1;
@@ -2041,6 +2057,7 @@ fn dtzListAbbreviations(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
         // the lowercased table name). reusing the tz_table entry's name as
         // lowercase is fine — PHP accepts case-insensitive zone names
         var key_buf: [16]u8 = undefined;
+        // emit std side
         if (z.std_abbrev.len > 0 and z.std_abbrev.len < key_buf.len) {
             for (z.std_abbrev, 0..) |c, i| key_buf[i] = std.ascii.toLower(c);
             const key = try ctx.allocator.dupe(u8, key_buf[0..z.std_abbrev.len]);
@@ -2092,6 +2109,7 @@ fn dtzListAbbreviations(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
 }
 
 fn canonicalizeZoneName(ctx: *NativeContext, lower_name: []const u8) ![]const u8 {
+    // turn "america/new_york" into "America/New_York"
     const out = try ctx.allocator.dupe(u8, lower_name);
     var capitalize_next = true;
     for (out, 0..) |c, i| {
@@ -2227,6 +2245,7 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!Value {
     const input = args[0].string;
     const base: i64 = if (args.len >= 2) Value.toInt(args[1]) else std.time.timestamp();
 
+    // @timestamp - unix timestamp literal
     if (input.len >= 2 and input[0] == '@') {
         const ts = std.fmt.parseInt(i64, input[1..], 10) catch return Value{ .bool = false };
         return .{ .int = ts };
@@ -2333,6 +2352,7 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!Value {
         return .{ .int = dateToTimestamp(year, month, day, hour, min, sec) - tz_offset };
     }
 
+    // DD.MM.YYYY EU date format
     if (input.len >= 10 and input[2] == '.' and input[5] == '.') {
         const day = std.fmt.parseInt(i64, input[0..2], 10) catch null;
         const month = std.fmt.parseInt(i64, input[3..5], 10) catch null;
@@ -2398,6 +2418,7 @@ fn tryParseBareTime(input: []const u8) ?TimeOfDay {
     var i: usize = 0;
     while (i < s.len and s[i] >= '0' and s[i] <= '9') i += 1;
     if (i == 0 or i > 2 or i >= s.len or s[i] != ':') return null;
+    // walk minutes (and optional seconds)
     i += 1;
     var d: usize = 0;
     while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) d += 1;
@@ -2457,6 +2478,7 @@ fn tryParseTextualDate(input: []const u8) ?i64 {
     s = s[match_len..];
 
     if (leading_day) |dd| {
+        // DD Month YYYY [HH:MM[:SS]]
         while (s.len > 0 and (s[0] == ' ' or s[0] == ',')) s = s[1..];
         var yend: usize = 0;
         while (yend < s.len and s[yend] >= '0' and s[yend] <= '9') yend += 1;
@@ -2467,6 +2489,7 @@ fn tryParseTextualDate(input: []const u8) ?i64 {
         return dateToTimestamp(year, month_num.?, dd, tod.hour, tod.min, tod.sec);
     }
 
+    // Month DD[,] YYYY [HH:MM[:SS]]
     while (s.len > 0 and s[0] == ' ') s = s[1..];
     var dend: usize = 0;
     while (dend < s.len and s[dend] >= '0' and s[dend] <= '9') dend += 1;
@@ -2652,6 +2675,7 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
                 }
             },
             'u' => {
+                // microseconds, variable digits
                 var end = di;
                 while (end < datetime.len and datetime[end] >= '0' and datetime[end] <= '9') end += 1;
                 if (end > di) {
@@ -2665,6 +2689,7 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
                 }
             },
             'v' => {
+                // milliseconds 3 digits
                 if (di + 3 <= datetime.len) {
                     if (std.fmt.parseInt(i64, datetime[di..di+3], 10)) |ms| {
                         fraction = @as(f64, @floatFromInt(ms)) / 1000.0;
@@ -2680,9 +2705,11 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
                 }
             },
             'D', 'l' => {
+                // skip alphabetic day name
                 while (di < datetime.len and std.ascii.isAlphabetic(datetime[di])) di += 1;
             },
             'M', 'F' => {
+                // month name - look up
                 var end = di;
                 while (end < datetime.len and std.ascii.isAlphabetic(datetime[end])) end += 1;
                 if (end > di) {
@@ -2841,6 +2868,7 @@ fn native_microtime(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     return .{ .string = result };
 }
 
+// date/time utilities
 
 pub fn dateToTimestamp(year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64) i64 {
     // normalize month overflow/underflow (e.g. month 13 -> january next year)
@@ -2863,6 +2891,7 @@ pub fn parseRelativeTime(input: []const u8, base: i64) Value {
     while (s.len > 0 and s[s.len - 1] == ' ') s = s[0 .. s.len - 1];
     if (s.len == 0) return .{ .bool = false };
 
+    // "now"
     if (eqlLower(s, "now")) return .{ .int = base };
     if (startsWithLower(s, "now ")) {
         var rest = s[4..];
@@ -2897,8 +2926,10 @@ pub fn parseRelativeTime(input: []const u8, base: i64) Value {
     // RFC 2822 / 7231 - "Mon, 15 Jan 2024 10:30:00 GMT"
     if (tryParseRfc2822(s)) |ts| return .{ .int = ts };
 
+    // textual month dates
     if (tryParseTextualDate(s)) |ts| return .{ .int = ts };
 
+    // "today", "yesterday", "tomorrow", "midnight", "noon"
     if (tryParseKeyword(s, base)) |ts| return .{ .int = ts };
 
     // ordinal weekday: "first Monday of March 2025", "second Tuesday of next month", "last Friday of December"
@@ -2907,6 +2938,7 @@ pub fn parseRelativeTime(input: []const u8, base: i64) Value {
     // "first day of ..." / "last day of ..."
     if (tryParseFirstLastDay(s, base)) |ts| return .{ .int = ts };
 
+    // "next/last <weekday>" or "next/last month/year"
     if (tryParseNextLast(s, base)) |ts| return .{ .int = ts };
 
     // "<weekday> this|next|last week" - the named weekday within the ISO
@@ -2999,6 +3031,7 @@ fn tryParseFirstLastDay(input: []const u8, base: i64) ?i64 {
     var sec = comps.sec;
 
     if (eqlLower(s, "this month")) {
+        // use current month
     } else if (eqlLower(s, "next month")) {
         month += 1;
         if (month > 12) { month = 1; year += 1; }
@@ -3049,6 +3082,7 @@ fn tryParseNextLast(input: []const u8, base: i64) ?i64 {
     }
     while (s.len > 0 and s[0] == ' ') s = s[1..];
 
+    // next/last month or year
     if (eqlLower(s, "month") or eqlLower(s, "year")) {
         const comps = baseComponents(base);
         var year = comps.year;
@@ -3077,6 +3111,7 @@ fn tryParseNextLast(input: []const u8, base: i64) ?i64 {
         return target_monday + comps.hour * 3600 + comps.min * 60 + comps.sec;
     }
 
+    // next/last <weekday> [time-of-day]
     if (parseWeekdayName(s)) |target_dow| {
         const wname_len = weekdayNameLen(s) orelse s.len;
         var rest = s[wname_len..];
@@ -3166,6 +3201,7 @@ fn parseNumericRelative(input: []const u8, base: i64) Value {
         s = s[unit.consumed..];
         while (s.len > 0 and s[0] == ' ') s = s[1..];
 
+        // check for "ago" suffix
         var effective_sign = sign;
         if (startsWithLower(s, "ago")) {
             effective_sign = -effective_sign;
@@ -3409,6 +3445,7 @@ const TzEntry = struct {
 // us dst: second sunday of march 2:00 -> first sunday of november 2:00
 // eu dst: last sunday of march 1:00 utc -> last sunday of october 1:00 utc
 const tz_table = [_]TzEntry{
+    // north america
     .{ .name = "america/new_york", .std_offset = -5 * 3600, .dst_offset = -4 * 3600, .dst_rule = .us, .std_abbrev = "EST", .dst_abbrev = "EDT" },
     .{ .name = "america/chicago", .std_offset = -6 * 3600, .dst_offset = -5 * 3600, .dst_rule = .us, .std_abbrev = "CST", .dst_abbrev = "CDT" },
     .{ .name = "america/denver", .std_offset = -7 * 3600, .dst_offset = -6 * 3600, .dst_rule = .us, .std_abbrev = "MST", .dst_abbrev = "MDT" },
@@ -3421,6 +3458,7 @@ const tz_table = [_]TzEntry{
     .{ .name = "america/sao_paulo", .std_offset = -3 * 3600, .dst_offset = -3 * 3600, .dst_rule = .none, .std_abbrev = "-03", .dst_abbrev = "-03" },
     .{ .name = "america/argentina/buenos_aires", .std_offset = -3 * 3600, .dst_offset = -3 * 3600, .dst_rule = .none, .std_abbrev = "-03", .dst_abbrev = "-03" },
     .{ .name = "pacific/honolulu", .std_offset = -10 * 3600, .dst_offset = -10 * 3600, .dst_rule = .none, .std_abbrev = "HST", .dst_abbrev = "HST" },
+    // europe
     .{ .name = "europe/london", .std_offset = 0, .dst_offset = 3600, .dst_rule = .eu, .std_abbrev = "GMT", .dst_abbrev = "BST" },
     .{ .name = "europe/paris", .std_offset = 3600, .dst_offset = 2 * 3600, .dst_rule = .eu, .std_abbrev = "CET", .dst_abbrev = "CEST" },
     .{ .name = "europe/berlin", .std_offset = 3600, .dst_offset = 2 * 3600, .dst_rule = .eu, .std_abbrev = "CET", .dst_abbrev = "CEST" },
@@ -3437,6 +3475,7 @@ const tz_table = [_]TzEntry{
     .{ .name = "europe/bucharest", .std_offset = 2 * 3600, .dst_offset = 3 * 3600, .dst_rule = .eu, .std_abbrev = "EET", .dst_abbrev = "EEST" },
     .{ .name = "europe/lisbon", .std_offset = 0, .dst_offset = 3600, .dst_rule = .eu, .std_abbrev = "WET", .dst_abbrev = "WEST" },
     .{ .name = "europe/warsaw", .std_offset = 3600, .dst_offset = 2 * 3600, .dst_rule = .eu, .std_abbrev = "CET", .dst_abbrev = "CEST" },
+    // asia
     .{ .name = "asia/tokyo", .std_offset = 9 * 3600, .dst_offset = 9 * 3600, .dst_rule = .none, .std_abbrev = "JST", .dst_abbrev = "JST" },
     .{ .name = "asia/shanghai", .std_offset = 8 * 3600, .dst_offset = 8 * 3600, .dst_rule = .none, .std_abbrev = "CST", .dst_abbrev = "CST" },
     .{ .name = "asia/hong_kong", .std_offset = 8 * 3600, .dst_offset = 8 * 3600, .dst_rule = .none, .std_abbrev = "HKT", .dst_abbrev = "HKT" },
@@ -3450,6 +3489,7 @@ const tz_table = [_]TzEntry{
     .{ .name = "asia/karachi", .std_offset = 5 * 3600, .dst_offset = 5 * 3600, .dst_rule = .none, .std_abbrev = "PKT", .dst_abbrev = "PKT" },
     .{ .name = "asia/dhaka", .std_offset = 6 * 3600, .dst_offset = 6 * 3600, .dst_rule = .none, .std_abbrev = "+06", .dst_abbrev = "+06" },
     .{ .name = "asia/kathmandu", .std_offset = 5 * 3600 + 2700, .dst_offset = 5 * 3600 + 2700, .dst_rule = .none, .std_abbrev = "+0545", .dst_abbrev = "+0545" },
+    // oceania
     .{ .name = "australia/sydney", .std_offset = 10 * 3600, .dst_offset = 11 * 3600, .dst_rule = .au, .std_abbrev = "AEST", .dst_abbrev = "AEDT" },
     .{ .name = "australia/melbourne", .std_offset = 10 * 3600, .dst_offset = 11 * 3600, .dst_rule = .au, .std_abbrev = "AEST", .dst_abbrev = "AEDT" },
     .{ .name = "australia/hobart", .std_offset = 10 * 3600, .dst_offset = 11 * 3600, .dst_rule = .au, .std_abbrev = "AEST", .dst_abbrev = "AEDT" },
@@ -3463,6 +3503,7 @@ const tz_table = [_]TzEntry{
     .{ .name = "africa/lagos", .std_offset = 3600, .dst_offset = 3600, .dst_rule = .none, .std_abbrev = "WAT", .dst_abbrev = "WAT" },
     .{ .name = "africa/johannesburg", .std_offset = 2 * 3600, .dst_offset = 2 * 3600, .dst_rule = .none, .std_abbrev = "SAST", .dst_abbrev = "SAST" },
     .{ .name = "africa/nairobi", .std_offset = 3 * 3600, .dst_offset = 3 * 3600, .dst_rule = .none, .std_abbrev = "EAT", .dst_abbrev = "EAT" },
+    // aliases
     .{ .name = "utc", .std_offset = 0, .dst_offset = 0, .dst_rule = .none, .std_abbrev = "UTC", .dst_abbrev = "UTC" },
     .{ .name = "gmt", .std_offset = 0, .dst_offset = 0, .dst_rule = .none, .std_abbrev = "GMT", .dst_abbrev = "GMT" },
     .{ .name = "us/eastern", .std_offset = -5 * 3600, .dst_offset = -4 * 3600, .dst_rule = .us, .std_abbrev = "EST", .dst_abbrev = "EDT" },
@@ -3640,6 +3681,7 @@ test "embedded tzdata resolves non-table zones without system zoneinfo" {
     const nyr = tzifLookupUtc(ny, ts) orelse return error.TzifParseFailed;
     try std.testing.expectEqual(@as(i32, -5 * 3600), nyr.offset); // EST in January
 
+    // bogus names resolve to nothing
     try std.testing.expect(embeddedZoneInfo("Not/AReal_Zone") == null);
 }
 
@@ -3698,6 +3740,7 @@ fn tzifLookupUtc(bytes: []const u8, utc_ts: i64) ?TzifRes {
         }
     }.f;
 
+    // largest transition <= utc_ts
     var lo: usize = 0;
     var hi: usize = timecnt;
     while (lo < hi) {
@@ -3837,6 +3880,7 @@ fn parseFixedOffset(s: []const u8) ?i32 {
 // find nth occurrence of target_dow (0=sun) in given month/year, or last if n=5
 fn nthWeekday(year: i64, month: i64, n: u8, target_dow: u8) i64 {
     if (n == 5) {
+        // last occurrence
         const last_day = daysInMonth(month, year);
         var day = last_day;
         while (day >= 1) : (day -= 1) {
@@ -3950,6 +3994,7 @@ fn parseTimezoneOffset(s: []const u8) ?i64 {
     if (s.len > 3 and std.mem.eql(u8, s[0..3], "GMT") and (s[3] == '+' or s[3] == '-')) {
         return parseTimezoneOffset(s[3..]);
     }
+    // named: look up in table
     if (lookupTimezone(s)) |tz| {
         return @intCast(tz.std_offset);
     }
@@ -3983,12 +4028,14 @@ fn tryParseRfc2822(input: []const u8) ?i64 {
         while (s.len > 0 and s[0] == ' ') s = s[1..];
     }
 
+    // DD Mon YYYY HH:MM:SS
     var dend: usize = 0;
     while (dend < s.len and s[dend] >= '0' and s[dend] <= '9') dend += 1;
     if (dend == 0 or dend > 2 or dend >= s.len or s[dend] != ' ') return null;
     const day = std.fmt.parseInt(i64, s[0..dend], 10) catch return null;
     s = s[dend + 1 ..];
 
+    // month abbreviation
     const short_months = [_][]const u8{ "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec" };
     var month: i64 = 0;
     for (short_months, 1..) |name, i| {
@@ -4002,6 +4049,7 @@ fn tryParseRfc2822(input: []const u8) ?i64 {
     if (s.len == 0 or s[0] != ' ') return null;
     s = s[1..];
 
+    // YYYY
     if (s.len < 4) return null;
     const year = std.fmt.parseInt(i64, s[0..4], 10) catch return null;
     s = s[4..];
@@ -4029,6 +4077,7 @@ fn tryParseOrdinalWeekday(input: []const u8, base: i64) ?i64 {
     var s = input;
     while (s.len > 0 and s[0] == ' ') s = s[1..];
 
+    // parse ordinal: first/second/third/fourth/fifth/last or 1st/2nd/3rd/4th/5th
     const ordinals = [_]struct { name: []const u8, val: i64 }{
         .{ .name = "first", .val = 1 },
         .{ .name = "second", .val = 2 },
@@ -4052,8 +4101,10 @@ fn tryParseOrdinalWeekday(input: []const u8, base: i64) ?i64 {
         if (ordinal == 0) return null;
     }
 
+    // parse weekday name
     while (s.len > 0 and s[0] == ' ') s = s[1..];
     const target_dow = parseWeekdayName(s) orelse return null;
+    // advance past weekday name
     const full_days = [_][]const u8{ "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday" };
     const short_days = [_][]const u8{ "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
     var consumed: usize = 0;
@@ -4074,6 +4125,7 @@ fn tryParseOrdinalWeekday(input: []const u8, base: i64) ?i64 {
     s = s[consumed..];
     while (s.len > 0 and s[0] == ' ') s = s[1..];
 
+    // expect "of"
     if (!startsWithLower(s, "of ")) return null;
     s = s[3..];
     while (s.len > 0 and s[0] == ' ') s = s[1..];
@@ -4090,6 +4142,7 @@ fn tryParseOrdinalWeekday(input: []const u8, base: i64) ?i64 {
         month -= 1;
         if (month < 1) { month = 12; year -= 1; }
     } else if (startsWithLower(s, "this month")) {
+        // use current
     } else if (parseMonthName(s)) |m| {
         month = m;
         const mlen = monthNameLen(s);
@@ -4385,12 +4438,14 @@ fn parseRelativeDuration(input: []const u8) RelDuration {
         while (i < input.len and (input[i] == ' ' or input[i] == '\t')) : (i += 1) {}
         if (i >= input.len) break;
 
+        // optional sign
         var sign: i64 = 1;
         if (input[i] == '+' or input[i] == '-') {
             if (input[i] == '-') sign = -1;
             i += 1;
         }
 
+        // digits
         const num_start = i;
         while (i < input.len and isDigit(input[i])) : (i += 1) {}
         if (i == num_start) {
@@ -4400,8 +4455,10 @@ fn parseRelativeDuration(input: []const u8) RelDuration {
         }
         const value = sign * (std.fmt.parseInt(i64, input[num_start..i], 10) catch 0);
 
+        // optional whitespace before unit
         while (i < input.len and (input[i] == ' ' or input[i] == '\t')) : (i += 1) {}
 
+        // unit
         const unit_start = i;
         while (i < input.len and isAlpha(input[i])) : (i += 1) {}
         const unit = input[unit_start..i];

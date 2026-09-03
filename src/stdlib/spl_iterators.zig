@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
 pub fn register(vm: *VM, a: Allocator) !void {
+    // RecursiveIterator interface
     var rec_iter = vm_mod.InterfaceDef{ .name = "RecursiveIterator" };
     rec_iter.parent = "Iterator";
     try rec_iter.methods.append(a, "hasChildren");
@@ -34,6 +35,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "GeneratorWrapper::next", gwNext);
     try vm.native_fns.put(a, "GeneratorWrapper::valid", gwValid);
 
+    // SplFileInfo
     var fi_def = ClassDef{ .name = "SplFileInfo" };
     for ([_][]const u8{
         "__construct", "getFilename", "getExtension", "getBasename",
@@ -67,6 +69,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "SplFileInfo::__toString", fiToString);
     try vm.native_fns.put(a, "SplFileInfo::openFile", fiOpenFile);
 
+    // DirectoryIterator
     var di_def = ClassDef{ .name = "DirectoryIterator" };
     di_def.parent = "SplFileInfo";
     try di_def.interfaces.append(a, "Iterator");
@@ -112,6 +115,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "FilesystemIterator::next", diNext);
     try vm.native_fns.put(a, "FilesystemIterator::valid", diValid);
 
+    // RecursiveDirectoryIterator
     var rdi_def = ClassDef{ .name = "RecursiveDirectoryIterator" };
     rdi_def.parent = "DirectoryIterator";
     try rdi_def.interfaces.append(a, "RecursiveIterator");
@@ -162,6 +166,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "FilterIterator::getFilename", filterGetFilename);
     try vm.native_fns.put(a, "FilterIterator::isDir", filterIsDir);
 
+    // RecursiveIteratorIterator
     var rii_def = ClassDef{ .name = "RecursiveIteratorIterator" };
     try rii_def.interfaces.append(a, "Iterator");
     for ([_][]const u8{
@@ -206,6 +211,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "IteratorIterator::next", iiNext);
     try vm.native_fns.put(a, "IteratorIterator::getInnerIterator", iiGetInner);
 
+    // EmptyIterator
     var empty_def = ClassDef{ .name = "EmptyIterator" };
     try empty_def.interfaces.append(a, "Iterator");
     for ([_][]const u8{ "rewind", "valid", "current", "key", "next" }) |m| {
@@ -218,6 +224,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "EmptyIterator::key", emptyCurrent);
     try vm.native_fns.put(a, "EmptyIterator::next", emptyNoop);
 
+    // LimitIterator (extends IteratorIterator behaviorally)
     var limit_def = ClassDef{ .name = "LimitIterator" };
     limit_def.parent = "IteratorIterator";
     for ([_][]const u8{ "__construct", "rewind", "valid", "current", "key", "next", "getPosition", "seek" }) |m| {
@@ -234,6 +241,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "LimitIterator::getPosition", limitGetPosition);
     try vm.native_fns.put(a, "LimitIterator::seek", limitSeek);
 
+    // NoRewindIterator
     var nri_def = ClassDef{ .name = "NoRewindIterator" };
     nri_def.parent = "IteratorIterator";
     for ([_][]const u8{ "__construct", "rewind", "valid", "current", "key", "next" }) |m| {
@@ -243,6 +251,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.classes.put(a, "NoRewindIterator", nri_def);
     try vm.native_fns.put(a, "NoRewindIterator::rewind", emptyNoop);
 
+    // InfiniteIterator
     var inf_def = ClassDef{ .name = "InfiniteIterator" };
     inf_def.parent = "IteratorIterator";
     for ([_][]const u8{ "__construct", "rewind", "valid", "current", "key", "next" }) |m| {
@@ -252,6 +261,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.classes.put(a, "InfiniteIterator", inf_def);
     try vm.native_fns.put(a, "InfiniteIterator::next", infiniteNext);
 
+    // AppendIterator
     var app_def = ClassDef{ .name = "AppendIterator" };
     try app_def.interfaces.append(a, "Iterator");
     for ([_][]const u8{ "__construct", "append", "rewind", "valid", "current", "key", "next", "getInnerIterator", "getIteratorIndex", "getArrayIterator" }) |m| {
@@ -270,6 +280,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "AppendIterator::getIteratorIndex", appGetIndex);
     try vm.native_fns.put(a, "AppendIterator::getArrayIterator", appGetArrayIterator);
 
+    // CallbackFilterIterator
     var cbf_def = ClassDef{ .name = "CallbackFilterIterator" };
     cbf_def.parent = "FilterIterator";
     try cbf_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -278,6 +289,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "CallbackFilterIterator::__construct", cbfConstruct);
     try vm.native_fns.put(a, "CallbackFilterIterator::accept", cbfAccept);
 
+    // RegexIterator
     var rx_def = ClassDef{ .name = "RegexIterator" };
     rx_def.parent = "FilterIterator";
     for ([_][]const u8{ "__construct", "accept", "current", "getRegex", "getMode", "setMode", "getFlags", "setFlags", "getPregFlags", "setPregFlags" }) |m| {
@@ -303,6 +315,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "RegexIterator::getPregFlags", rxGetPregFlags);
     try vm.native_fns.put(a, "RegexIterator::setPregFlags", rxSetPregFlags);
 
+    // CachingIterator
     var ci_def = ClassDef{ .name = "CachingIterator" };
     ci_def.parent = "IteratorIterator";
     for ([_][]const u8{ "__construct", "rewind", "valid", "current", "key", "next", "hasNext", "__toString", "getCache", "getFlags", "setFlags" }) |m| {
@@ -328,6 +341,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "CachingIterator::getFlags", ciGetFlags);
     try vm.native_fns.put(a, "CachingIterator::setFlags", ciSetFlags);
 
+    // MultipleIterator
     var mi_def = ClassDef{ .name = "MultipleIterator" };
     try mi_def.interfaces.append(a, "Iterator");
     for ([_][]const u8{ "__construct", "attachIterator", "detachIterator", "containsIterator", "countIterators", "rewind", "valid", "current", "key", "next", "getFlags", "setFlags" }) |m| {
@@ -363,6 +377,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "RecursiveFilterIterator::hasChildren", rfiHasChildren);
     try vm.native_fns.put(a, "RecursiveFilterIterator::getChildren", rfiGetChildren);
 
+    // RecursiveCallbackFilterIterator
     var rcbf_def = ClassDef{ .name = "RecursiveCallbackFilterIterator" };
     rcbf_def.parent = "RecursiveFilterIterator";
     try rcbf_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -374,6 +389,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "RecursiveCallbackFilterIterator::accept", cbfAccept);
     try vm.native_fns.put(a, "RecursiveCallbackFilterIterator::getChildren", rcbfGetChildren);
 
+    // RecursiveRegexIterator
     var rrx_def = ClassDef{ .name = "RecursiveRegexIterator" };
     rrx_def.parent = "RegexIterator";
     try rrx_def.interfaces.append(a, "RecursiveIterator");
@@ -384,6 +400,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "RecursiveRegexIterator::hasChildren", rfiHasChildren);
     try vm.native_fns.put(a, "RecursiveRegexIterator::getChildren", rrxGetChildren);
 
+    // RecursiveArrayIterator (extends ArrayIterator, adds hasChildren/getChildren)
     var rai_def = ClassDef{ .name = "RecursiveArrayIterator" };
     rai_def.parent = "ArrayIterator";
     try rai_def.interfaces.append(a, "RecursiveIterator");
@@ -393,6 +410,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "RecursiveArrayIterator::hasChildren", raiHasChildren);
     try vm.native_fns.put(a, "RecursiveArrayIterator::getChildren", raiGetChildren);
 
+    // RecursiveTreeIterator
     var rti_def = ClassDef{ .name = "RecursiveTreeIterator" };
     rti_def.parent = "RecursiveIteratorIterator";
     for ([_][]const u8{ "__construct", "current", "key", "getPrefix", "setPrefixPart", "getEntry", "getPostfix" }) |m| {
@@ -433,6 +451,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "GlobIterator::count", giCount);
 }
 
+// ==========================================
+// helpers
+// ==========================================
 
 fn getThis(ctx: *NativeContext) ?*PhpObject {
     const v = ctx.vm.currentFrame().vars.get("$this") orelse return null;
@@ -492,7 +513,9 @@ fn statPath(path: []const u8) ?std.fs.File.Stat {
     return file.stat() catch null;
 }
 
+// ==========================================
 // SplFileInfo
+// ==========================================
 
 fn fiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -628,7 +651,9 @@ fn fiOpenFile(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .object = obj };
 }
 
+// ==========================================
 // DirectoryIterator
+// ==========================================
 
 fn diConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -706,6 +731,7 @@ fn fsiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const path = args[0].string;
     try obj.set(ctx.allocator, "__di_path", .{ .string = try createString(ctx, path) });
     try obj.set(ctx.allocator, "__di_idx", .{ .int = 0 });
+    // FilesystemIterator skips dots by default
     const entries = try loadDirectoryEntries(ctx, path, SKIP_DOTS);
     try obj.set(ctx.allocator, "__di_entries", .{ .array = entries });
     try syncCurrentEntry(ctx, obj);
@@ -761,7 +787,9 @@ fn diIsDot(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = std.mem.eql(u8, name.string, ".") or std.mem.eql(u8, name.string, "..") };
 }
 
+// ==========================================
 // RecursiveDirectoryIterator
+// ==========================================
 
 fn rdiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -879,7 +907,9 @@ fn rdiValid(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return diValid(ctx, args);
 }
 
+// ==========================================
 // FilterIterator
+// ==========================================
 
 /// wrap a value into an iterator-protocol object. generators get wrapped in
 /// GeneratorWrapper so the rest of the iterator infra can call rewind/current
@@ -957,6 +987,7 @@ fn filterRewind(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const inner = filterGetInnerIterator(obj) orelse return .null;
     _ = try ctx.vm.callMethod(inner, "rewind", &.{});
+    // advance to first accepted element
     try filterAdvanceToAccepted(ctx, obj, inner);
     return .null;
 }
@@ -1019,7 +1050,9 @@ fn filterIsDir(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return if (current == .object) ctx.vm.callMethod(current.object, "isDir", &.{}) else .{ .bool = false };
 }
 
+// ==========================================
 // RecursiveIteratorIterator
+// ==========================================
 
 // stores a stack of iterators to flatten recursive iteration
 // mode: 0=LEAVES_ONLY, 1=SELF_FIRST, 2=CHILD_FIRST
@@ -1102,6 +1135,7 @@ fn riiDescend(ctx: *NativeContext, obj: *PhpObject) !void {
         const has_children = ctx.vm.callMethod(iter_obj, "hasChildren", &.{}) catch Value{ .bool = false };
         if (!has_children.isTruthy()) {
             if (mode == 1) {
+                // SELF_FIRST: already yielding this item
             }
             return;
         }
@@ -1252,7 +1286,9 @@ fn riiGetSubIterator(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     return stack.get(.{ .int = @intCast(depth) });
 }
 
+// ==========================================
 // IteratorIterator
+// ==========================================
 
 fn iiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1315,7 +1351,9 @@ fn iiGetInner(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .object = inner };
 }
 
+// ==========================================
 // EmptyIterator
+// ==========================================
 
 fn emptyNoop(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
@@ -1329,7 +1367,9 @@ fn emptyCurrent(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
 }
 
+// ==========================================
 // LimitIterator
+// ==========================================
 
 fn limitConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1404,7 +1444,9 @@ fn limitSeek(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .null;
 }
 
+// ==========================================
 // InfiniteIterator
+// ==========================================
 
 fn infiniteNext(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1417,7 +1459,9 @@ fn infiniteNext(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .null;
 }
 
+// ==========================================
 // AppendIterator
+// ==========================================
 
 fn appConstruct(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1522,7 +1566,9 @@ fn appGetArrayIterator(ctx: *NativeContext, _: []const Value) RuntimeError!Value
     return .{ .array = iters };
 }
 
+// ==========================================
 // CallbackFilterIterator
+// ==========================================
 
 fn cbfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1546,7 +1592,9 @@ fn cbfAccept(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .bool = result.isTruthy() };
 }
 
+// ==========================================
 // RegexIterator
+// ==========================================
 
 fn rxConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1681,7 +1729,9 @@ fn rxSetPregFlags(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .null;
 }
 
+// ==========================================
 // CachingIterator
+// ==========================================
 
 fn ciConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1789,7 +1839,9 @@ fn ciSetFlags(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .null;
 }
 
+// ==========================================
 // MultipleIterator
+// ==========================================
 
 fn miConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -1992,7 +2044,9 @@ fn miSetFlags(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .null;
 }
 
+// ==========================================
 // RecursiveFilterIterator / RecursiveCallbackFilterIterator / RecursiveRegexIterator
+// ==========================================
 
 fn rfiHasChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
@@ -2048,7 +2102,9 @@ fn rrxGetChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .object = new_obj };
 }
 
+// ==========================================
 // RecursiveArrayIterator
+// ==========================================
 
 fn raiHasChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
@@ -2068,7 +2124,9 @@ fn raiGetChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .object = new_obj };
 }
 
+// ==========================================
 // RecursiveTreeIterator
+// ==========================================
 
 fn rtiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return .null;
@@ -2110,6 +2168,7 @@ fn rtiGetPrefix(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rtiGetEntry(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .string = "" };
+    // delegate to inner current
     const inner = riiCurrentIterator(obj) orelse return .{ .string = "" };
     const cur = try ctx.vm.callMethod(inner, "current", &.{});
     if (cur == .string) return cur;
@@ -2125,7 +2184,9 @@ fn rtiGetPostfix(_: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .string = "" };
 }
 
+// ==========================================
 // GlobIterator
+// ==========================================
 
 fn giConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;

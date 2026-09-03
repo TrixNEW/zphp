@@ -1,4 +1,7 @@
 <?php
+// covers: newline-delimited JSON streaming with generators,
+//   incremental encode/decode, fopen + fread + fgets, JSON_THROW_ON_ERROR,
+//   transform pipelines (filter, map, group)
 
 $tmp = tempnam(sys_get_temp_dir(), 'ndjson');
 

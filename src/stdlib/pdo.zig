@@ -272,6 +272,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try pdo_def.methods.put(a, "sqliteCreateAggregate", .{ .name = "sqliteCreateAggregate", .arity = 3 });
     try pdo_def.methods.put(a, "sqliteCreateCollation", .{ .name = "sqliteCreateCollation", .arity = 2 });
 
+    // PDO constants as static properties
     try pdo_def.static_props.put(a, "FETCH_BOTH", .{ .int = 4 });
     try pdo_def.static_props.put(a, "FETCH_ASSOC", .{ .int = 2 });
     try pdo_def.static_props.put(a, "FETCH_NUM", .{ .int = 3 });
@@ -454,6 +455,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
 fn stmtIterRewind(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     try obj.set(ctx.allocator, "__iter_key", .{ .int = 0 });
+    // fetch the first row
     const row = try stmtFetch(ctx, &.{});
     try obj.set(ctx.allocator, "__iter_current", row);
     return .null;
@@ -562,6 +564,7 @@ pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
     }
 }
 
+// PDO methods
 
 const pdo_mysql = @import("pdo_mysql.zig");
 const pdo_pgsql = @import("pdo_pgsql.zig");
@@ -900,6 +903,7 @@ fn pdoGetAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     return .null;
 }
 
+// PDOStatement methods
 
 fn stmtExecute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
@@ -910,6 +914,7 @@ fn stmtExecute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     _ = sqlite.sqlite3_reset(stmt);
 
+    // bind parameters if provided
     if (args.len >= 1 and args[0] == .array) {
         try bindParams(ctx, stmt, args[0].array);
     }
@@ -928,6 +933,7 @@ fn stmtExecute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return .{ .bool = false };
     }
 
+    // store affected rows
     const db_val = obj.get("__db_ptr");
     if (db_val == .int and db_val.int != 0) {
         const db: *sqlite.Db = @ptrFromInt(@as(usize, @intCast(db_val.int)));
@@ -990,6 +996,7 @@ fn stmtFetch(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     const row = try fetchRow(ctx, stmt, mode);
 
+    // advance to next row
     const next_rc = sqlite.sqlite3_step(stmt);
     try obj.set(ctx.allocator, "__has_row", .{ .bool = next_rc == sqlite.ROW });
 
@@ -1485,6 +1492,7 @@ fn getDefaultFetchMode(obj: *PhpObject) i64 {
     return 4; // FETCH_BOTH
 }
 
+// helpers
 
 fn fetchRowAsObject(ctx: *NativeContext, stmt: *sqlite.Stmt) !Value {
     const obj = try ctx.vm.allocator.create(PhpObject);

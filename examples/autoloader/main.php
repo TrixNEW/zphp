@@ -1,4 +1,6 @@
 <?php
+// covers: spl_autoload_register, closures, file_exists, require,
+//   __DIR__ resolution, class_exists, dynamic class loading
 
 spl_autoload_register(function ($class) {
     $file = __DIR__ . "/Models/" . $class . ".php";

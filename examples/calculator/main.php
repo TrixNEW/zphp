@@ -1,5 +1,13 @@
 <?php
+// covers: recursive functions, recursive closures, nested closures (closures
+//   returning closures), complex string interpolation ("{$obj->prop}",
+//   "{$arr['key']}"), multi-level inheritance (grandparent->parent->child),
+//   type juggling (string to number, loose comparison), switch with fallthrough,
+//   nested ternary, str_split, substr, ctype_digit, ctype_alpha, ctype_space,
+//   is_numeric, intval, floatval, number_format, abs, pow, sqrt, max, min,
+//   array_reverse, array_key_exists, sprintf, compact, recursive array processing
 
+// --- token types ---
 
 class Token
 {
@@ -18,6 +26,7 @@ class Token
     }
 }
 
+// --- lexer ---
 
 class Lexer
 {
@@ -251,6 +260,7 @@ class CallNode extends AstNode
     }
 }
 
+// --- recursive descent parser ---
 
 class Parser
 {
@@ -283,6 +293,7 @@ class Parser
         return $tok;
     }
 
+    // expression: term ((+|-) term)*
     private function parseExpression(): AstNode
     {
         $node = $this->parseTerm();
@@ -294,6 +305,7 @@ class Parser
         return $node;
     }
 
+    // term: power ((*|/|%) power)*
     private function parseTerm(): AstNode
     {
         $node = $this->parsePower();
@@ -305,6 +317,7 @@ class Parser
         return $node;
     }
 
+    // power: unary (^ unary)*
     private function parsePower(): AstNode
     {
         $node = $this->parseUnary();
@@ -316,6 +329,7 @@ class Parser
         return $node;
     }
 
+    // unary: -unary | primary
     private function parseUnary(): AstNode
     {
         if ($this->current()->type === "op" && $this->current()->value === "-") {
@@ -369,6 +383,7 @@ class Parser
     }
 }
 
+// --- evaluator helper ---
 
 function calc(string $expr, array $env = []): string
 {
@@ -383,6 +398,7 @@ function calc(string $expr, array $env = []): string
     return number_format($result, 6, ".", "");
 }
 
+// --- recursive helpers ---
 
 function factorial(int $n): int
 {
@@ -403,6 +419,7 @@ function flattenArray(array $arr): array
     return $result;
 }
 
+// === test: basic arithmetic ===
 
 echo "1+2: " . calc("1 + 2") . "\n";
 echo "10-3*2: " . calc("10 - 3 * 2") . "\n";
@@ -411,6 +428,7 @@ echo "(1+2)*3: " . calc("(1 + 2) * 3") . "\n";
 echo "10%3: " . calc("10 % 3") . "\n";
 echo "-5+3: " . calc("-5 + 3") . "\n";
 
+// === test: function calls ===
 
 echo "sqrt(144): " . calc("sqrt(144)") . "\n";
 echo "abs(-42): " . calc("abs(-42)") . "\n";
@@ -428,6 +446,7 @@ echo "2*pi: " . calc("2 * pi") . "\n";
 echo "x+y: " . calc("x + y", ["x" => 10, "y" => 20]) . "\n";
 echo "x^2+1: " . calc("x ^ 2 + 1", ["x" => 5]) . "\n";
 
+// === test: complex expressions ===
 
 echo "nested: " . calc("(1 + 2) * (3 + 4) / (5 - 3)") . "\n";
 echo "deep: " . calc("sqrt(pow(3, 2) + pow(4, 2))") . "\n";
@@ -445,6 +464,7 @@ $tokens = (new Lexer("sqrt(x + 1)"))->tokenize();
 $strs = array_map(function ($t) { return (string) $t; }, $tokens);
 echo "tokens: " . implode(" ", $strs) . "\n";
 
+// === test: error handling ===
 
 try {
     calc("1 + + 2");
@@ -458,6 +478,7 @@ try {
     echo "error: " . $e->getMessage() . "\n";
 }
 
+// === test: recursive functions ===
 
 echo "5!: " . factorial(5) . "\n";
 echo "10!: " . factorial(10) . "\n";
@@ -468,6 +489,7 @@ $nested = [1, [2, 3], [4, [5, 6]], 7];
 $flat = flattenArray($nested);
 echo "flat: " . implode(", ", $flat) . "\n";
 
+// === test: nested closures ===
 
 function makeAdder(int $n): Closure
 {
@@ -481,6 +503,7 @@ $add10 = makeAdder(10);
 echo "add5(3): " . $add5(3) . "\n";
 echo "add10(3): " . $add10(3) . "\n";
 
+// closure returning closure
 function multiplierFactory(): Closure
 {
     return function (int $factor) {
@@ -495,6 +518,7 @@ $triple = multiplierFactory()(3);
 echo "double(7): " . $double(7) . "\n";
 echo "triple(7): " . $triple(7) . "\n";
 
+// === test: type juggling ===
 
 echo "str+num: " . ("5" + 3) . "\n";
 echo "str*num: " . ("4" * "3") . "\n";

@@ -1,4 +1,7 @@
 <?php
+// covers: pcntl_fork + pcntl_waitpid worker pool, graceful shutdown via
+//   pcntl_signal + signal_dispatch, exit-code based result collection.
+//   "fork-per-task" pattern - parent dispatches work, children compute and exit.
 
 function compute_task(int $n): int {
     // deterministic, side-effect-free: sum 1..n squared mod 256 so it fits in exit code

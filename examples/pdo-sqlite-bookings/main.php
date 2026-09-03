@@ -1,4 +1,7 @@
 <?php
+// covers: PDO sqlite in-memory, prepared statements with named + positional
+//   placeholders, transactions, rowCount, lastInsertId, fetch modes,
+//   exception mode, parameter binding types
 
 $db = new PDO('sqlite::memory:');
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);

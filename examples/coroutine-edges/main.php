@@ -1,4 +1,7 @@
 <?php
+// covers: fiber+generator interactions, exception across suspends,
+//   nested fibers, generator with by-ref param, fiber-throw semantics,
+//   fiber + by-ref param across suspend
 
 echo "=== generator with by-ref param mutates caller across yields ===\n";
 function progressLog(array &$log): Generator {

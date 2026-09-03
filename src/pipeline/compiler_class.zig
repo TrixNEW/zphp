@@ -458,6 +458,7 @@ fn buildTypeString(self: *Compiler, start_tok: u32, end_tok: u32) Error![]const 
         const tag = self.ast.tokens[i].tag;
         const lexeme = self.ast.tokens[i].lexeme(self.ast.source);
 
+        // separators reset the per-segment state
         const is_separator = std.mem.eql(u8, lexeme, "|") or std.mem.eql(u8, lexeme, "&") or
             std.mem.eql(u8, lexeme, "(") or std.mem.eql(u8, lexeme, ")");
 
@@ -734,6 +735,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         param_names[i] = self.ast.tokenSlice(pnode.main_token);
         ref_flags[i] = (pnode.data.rhs & 2) != 0;
         if ((pnode.data.rhs & 1) != 0) {
+            // variadic param - always last
             is_variadic = true;
             try defaults.append(self.allocator, .null);
         } else if (pnode.data.lhs != 0) {
@@ -853,6 +855,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         if (return_type.len > 0) self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
     }
 
+    // function-level attributes
     if (!std.mem.startsWith(u8, name, "__closure_")) {
         const func_attrs = extractAttributes(self, node.main_token);
         if (func_attrs.len > 0) {
@@ -1017,6 +1020,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         break :blk rp;
     } else &[_]bool{};
 
+    // check for ref captures
     var has_ref_capture = false;
     for (use_vars) |use_var_node| {
         if (self.ast.nodes[use_var_node].data.rhs != 0) {
@@ -1061,6 +1065,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         try self.type_hints.append(self.allocator, .{ .name = owned_name, .param_types = param_types, .return_type = return_type });
     }
 
+    // closure-level attributes
     const closure_attrs = extractAttributes(self, node.main_token);
     if (closure_attrs.len > 0) {
         const attr_defs = try self.allocator.alloc(AttributeDef, closure_attrs.len);
@@ -1331,6 +1336,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
+    // count promoted constructor params
     var promoted_count: u16 = 0;
     var constructor_params: []const u32 = &.{};
     for (members) |member_idx| {
@@ -1568,6 +1574,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitU16(try propertyTypeConst(self, tmember.data.rhs));
         try self.emitU16(try docCommentConst(self, tmember.main_token));
     }
+    // promoted constructor params as properties
     for (constructor_params) |p| {
         const pnode = self.ast.nodes[p];
         const promotion = (pnode.data.rhs >> 2) & 3;
@@ -1700,6 +1707,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
+    // class-level attributes
     const class_attrs = extractAttributes(self, node.main_token);
     try emitAttributeData(self, class_attrs);
     freeAttrSlice(self.allocator, class_attrs);
@@ -1767,6 +1775,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     for (props_with_attrs.items) |pa| freeAttrSlice(self.allocator, pa.attrs);
 
+    // constant attributes
     var consts_with_attrs = std.ArrayListUnmanaged(MemberAttr){};
     defer consts_with_attrs.deinit(self.allocator);
     for (members) |member_idx| {
@@ -2167,6 +2176,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
     try self.emitByte(0); // constant attrs
     try self.emitByte(0); // param attrs
 
+    // now instantiate with constructor args
     const ctor_args_slice = self.ast.extra_data[ctor_args_start .. ctor_args_start + ctor_arg_count];
     if (@import("compiler_expr.zig").hasSplatOrNamed(self.ast, ctor_args_slice)) {
         try @import("compiler_expr.zig").emitSpreadArgs(self, ctor_args_slice);
@@ -2243,10 +2253,12 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
+    // interface-level attributes
     const iface_attrs = extractAttributes(self, node.main_token);
     try emitAttributeData(self, iface_attrs);
     freeAttrSlice(self.allocator, iface_attrs);
 
+    // method attributes
     const MemberAttr = struct { name: []const u8, attrs: []const ParsedAttr };
     var methods_with_attrs = std.ArrayListUnmanaged(MemberAttr){};
     defer methods_with_attrs.deinit(self.allocator);
@@ -2351,6 +2363,7 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
+    // collect static property members
     var static_props = std.ArrayListUnmanaged(u32){};
     defer static_props.deinit(self.allocator);
     for (members) |member_idx| {
@@ -2429,10 +2442,12 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitByte(if (pmember.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
     }
 
+    // trait-level attributes
     const trait_attrs = extractAttributes(self, node.main_token);
     try emitAttributeData(self, trait_attrs);
     freeAttrSlice(self.allocator, trait_attrs);
 
+    // method attributes
     const MemberAttr = struct { name: []const u8, attrs: []const ParsedAttr };
     var methods_with_attrs = std.ArrayListUnmanaged(MemberAttr){};
     defer methods_with_attrs.deinit(self.allocator);
@@ -2456,6 +2471,7 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     for (methods_with_attrs.items) |ma| freeAttrSlice(self.allocator, ma.attrs);
 
+    // property attributes
     var props_with_attrs = std.ArrayListUnmanaged(MemberAttr){};
     defer props_with_attrs.deinit(self.allocator);
     for (members) |member_idx| {
@@ -2559,6 +2575,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitU16(iname_idx);
     }
 
+    // trait names
     var enum_traits = std.ArrayListUnmanaged([]const u8){};
     defer enum_traits.deinit(self.allocator);
     for (members) |member_idx| {
@@ -2580,10 +2597,12 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitU16(tname_idx);
     }
 
+    // enum-level attributes
     const enum_attrs = extractAttributes(self, node.main_token);
     try emitAttributeData(self, enum_attrs);
     freeAttrSlice(self.allocator, enum_attrs);
 
+    // method attributes
     const MemberAttr = struct { name: []const u8, attrs: []const ParsedAttr };
     var methods_with_attrs = std.ArrayListUnmanaged(MemberAttr){};
     defer methods_with_attrs.deinit(self.allocator);
@@ -3081,6 +3100,7 @@ fn opcodeWidth(b: u8) usize {
         .less_local_local_jif => 7,
         // 1 + u8 = 2 bytes
         .require, .call_indirect, .call_indirect_spread, .method_call_dynamic, .static_call_dyn_both => 2,
+        // variable-length: scan past inline operands
         .class_decl, .interface_decl, .enum_decl => 1,
         // all other opcodes are 1 byte (no operands)
         else => 1,

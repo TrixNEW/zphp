@@ -228,6 +228,7 @@ const Formatter = struct {
         }
     }
 
+    // walk nodes
 
     fn formatRoot(self: *Formatter) void {
         const root = self.ast.nodes[0];
@@ -262,6 +263,7 @@ const Formatter = struct {
             prev_tag = node.tag;
         }
 
+        // trailing newline
         if (self.out.items.len > 0 and self.out.items[self.out.items.len - 1] != '\n') {
             self.newline();
         }
@@ -550,6 +552,7 @@ const Formatter = struct {
         }
     }
 
+    // statements
 
     fn formatEcho(self: *Formatter, node: Ast.Node) void {
         const tok_lex = self.ast.tokens[node.main_token].lexeme(self.source);
@@ -993,6 +996,7 @@ const Formatter = struct {
         self.write(";");
     }
 
+    // classes
 
     fn formatClassDecl(self: *Formatter, node: Ast.Node) void {
         const name_tok = node.main_token;
@@ -1143,7 +1147,9 @@ const Formatter = struct {
         var result = TokenModifiers{};
         if (name_tok == 0) return result;
         var i: i64 = @as(i64, name_tok) - 1;
+        // skip `&` if present (return-by-reference)
         if (i >= 0 and self.ast.tokens[@intCast(i)].tag == .amp) i -= 1;
+        // skip `function` keyword
         if (i >= 0 and self.ast.tokens[@intCast(i)].tag == .kw_function) i -= 1 else return result;
         while (i >= 0) {
             const tag = self.ast.tokens[@intCast(i)].tag;
@@ -1170,6 +1176,7 @@ const Formatter = struct {
             else => self.write("public "),
         }
         if (node.tag == .static_class_property) self.write("static ");
+        // emit type hint if present
         self.emitPropertyTypeHint(node.main_token);
         self.write(self.ast.tokens[node.main_token].lexeme(self.source));
         if (node.data.lhs != 0) {
@@ -1357,6 +1364,7 @@ const Formatter = struct {
         }
     }
 
+    // expressions
 
     fn formatBinaryOp(self: *Formatter, node: Ast.Node) void {
         self.formatNode(node.data.lhs);

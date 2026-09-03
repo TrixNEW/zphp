@@ -1,4 +1,11 @@
 <?php
+// covers: heredoc/nowdoc, array destructuring (list, [...] = ..., keyed),
+//   spread operator ([...$a, ...$b], fn(...$args)), named arguments,
+//   pass-by-reference (&$param), first-class callable syntax (strlen(...)),
+//   null coalescing assignment (??=), clone, type casting ((int), (string), (array)),
+//   serialize/unserialize, preg_replace_callback, preg_split, switch/case,
+//   static variables in functions, class constants, readonly properties,
+//   date/time (date, time), sprintf, array_key_exists, array_merge
 
 // --- config value with readonly ---
 
@@ -103,6 +110,7 @@ function generateId(): string
     return sprintf("cfg_%04d", $counter);
 }
 
+// --- interpolation using preg_replace_callback ---
 
 function interpolate(string $template, array $vars): string
 {
@@ -173,6 +181,7 @@ Built on {$name}
 BANNER;
 echo $banner . "\n";
 
+// === test: array destructuring ===
 
 $pair = ["host", "localhost"];
 [$dKey, $dVal] = $pair;
@@ -189,6 +198,7 @@ echo "nested: $a1,$a2,$b1,$b2\n";
 list($x, , $z) = [10, 20, 30];
 echo "list skip: $x,$z\n";
 
+// === test: spread operator ===
 
 $base = ["app" => "myapp", "debug" => false];
 $override = ["debug" => true, "version" => "1.0"];
@@ -203,6 +213,7 @@ function joinAll(string $sep, string ...$parts): string
 $items = ["a", "b", "c"];
 echo "spread call: " . joinAll("-", ...$items) . "\n";
 
+// === test: named arguments ---
 
 function formatEntry(string $key, string $value, string $separator = ": "): string
 {
@@ -228,6 +239,7 @@ $settings["theme"] ??= "dark";
 $settings["theme"] ??= "light";
 echo "nullish: " . $settings["theme"] . "\n";
 
+// === test: clone ===
 
 $original = new Config();
 $original->set("key1", "val1");
@@ -239,6 +251,7 @@ $cloned->set("key1", "modified");
 echo "original: " . $original->get("key1") . "\n";
 echo "cloned: " . $cloned->get("key1") . "\n";
 
+// === test: type casting ===
 
 $cv = new ConfigValue("port", "8080");
 echo "readonly: " . $cv->key . " type=" . $cv->type . "\n";
@@ -248,6 +261,7 @@ echo "cast float: " . $cv->cast("float") . "\n";
 $cv2 = new ConfigValue("flag", "1");
 echo "cast bool: " . ($cv2->cast("bool") ? "true" : "false") . "\n";
 
+// === test: serialize/unserialize ===
 
 $data = ["host" => "localhost", "port" => 5432, "debug" => true];
 $serialized = serialize($data);
@@ -261,11 +275,13 @@ $template = "Hello {{name}}, welcome to {{place}}!";
 $vars = ["name" => "World", "place" => "zphp"];
 echo interpolate($template, $vars) . "\n";
 
+// === test: static variables ===
 
 echo generateId() . "\n";
 echo generateId() . "\n";
 echo generateId() . "\n";
 
+// === test: class constants ===
 
 echo "separator: " . Config::SEPARATOR . "\n";
 echo "max depth: " . Config::MAX_DEPTH . "\n";
@@ -281,11 +297,13 @@ $config2->merge(
 $resolved = $config2->resolve();
 echo "resolved: host=" . $resolved["host"] . " port=" . $resolved["port"] . " timeout=" . $resolved["timeout"] . " debug=" . ($resolved["debug"] ? "yes" : "no") . "\n";
 
+// === test: date/time ===
 
 $ts = mktime(14, 30, 0, 6, 15, 2025);
 echo "date: " . date("Y-m-d", $ts) . "\n";
 echo "time: " . date("H:i:s", $ts) . "\n";
 
+// === test: sprintf ===
 
 echo sprintf("config has %d entries, version %s\n", 7, "1.0");
 

@@ -1,4 +1,10 @@
 <?php
+// covers: fibers, Fiber::start, Fiber::resume, Fiber::suspend, Fiber::getReturn,
+//   Fiber::isTerminated, Fiber::isSuspended, exceptions, try/catch/finally,
+//   set_error_handler, trigger_error, spl_autoload_register, __toString,
+//   Stringable, ArrayAccess, Countable, Iterator, json_encode, json_decode,
+//   array_map, array_filter, array_reduce, closures, match, enums,
+//   readonly, constructor property promotion, static methods, str_pad
 
 enum TaskState: string {
     case PENDING = 'pending';
@@ -65,6 +71,7 @@ class TaskQueue implements Countable {
     }
 }
 
+// retry with backoff
 function retry(callable $fn, int $maxAttempts = 3): mixed {
     $lastException = null;
     for ($i = 1; $i <= $maxAttempts; $i++) {
@@ -77,6 +84,7 @@ function retry(callable $fn, int $maxAttempts = 3): mixed {
     throw $lastException;
 }
 
+// fiber-based cooperative task runner
 function fiberRunner(array $jobs): array {
     $fibers = [];
     $results = [];
@@ -85,6 +93,7 @@ function fiberRunner(array $jobs): array {
         $fibers[$name] = new Fiber($fn);
     }
 
+    // start all fibers
     foreach ($fibers as $name => $fiber) {
         $result = $fiber->start();
         if ($fiber->isSuspended()) {
@@ -92,6 +101,7 @@ function fiberRunner(array $jobs): array {
         }
     }
 
+    // resume suspended fibers
     $rounds = 0;
     while (true) {
         $any_suspended = false;
@@ -108,6 +118,7 @@ function fiberRunner(array $jobs): array {
         if (!$any_suspended || $rounds > 10) break;
     }
 
+    // collect final results
     foreach ($fibers as $name => $fiber) {
         if ($fiber->isTerminated()) {
             $results[$name] = ['status' => 'done', 'value' => $fiber->getReturn()];
@@ -117,6 +128,7 @@ function fiberRunner(array $jobs): array {
     return $results;
 }
 
+// --- task queue ---
 $queue = new TaskQueue();
 
 $queue->add('compute', function() {
@@ -161,6 +173,7 @@ foreach ($queue->getResults() as $name => $result) {
     echo str_pad($name, 15) . (string)$result . "\n";
 }
 
+// --- fibers ---
 echo "\n--- fiber runner ---\n";
 $results = fiberRunner([
     'counter' => function() {
@@ -187,6 +200,7 @@ foreach ($results as $name => $result) {
     echo "\n";
 }
 
+// --- error handling ---
 echo "\n--- error handling ---\n";
 $errors = [];
 set_error_handler(function($errno, $errstr) use (&$errors) {
@@ -204,6 +218,7 @@ foreach ($errors as $e) {
 
 restore_error_handler();
 
+// --- exception chaining ---
 echo "\n--- exception chain ---\n";
 try {
     try {
@@ -217,6 +232,7 @@ try {
     echo "caused by: " . ($prev ? $prev->getMessage() : "none") . "\n";
 }
 
+// --- finally ---
 echo "\n--- finally ---\n";
 $log = [];
 try {

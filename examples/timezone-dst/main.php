@@ -1,4 +1,6 @@
 <?php
+// covers: DateTimeZone offsets across DST transitions, setTimezone() arithmetic,
+//   format specifiers e/T/P/O/Z, mktime in local time, timezone_offset_get
 
 date_default_timezone_set('UTC');
 

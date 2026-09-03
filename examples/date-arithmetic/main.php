@@ -1,4 +1,7 @@
 <?php
+// covers: DateTime arithmetic with DateInterval (add/sub/modify),
+//   diff() with %a/%d/%h/%i/%s, immutable variants, comparison operators,
+//   format specifiers, fromFormat parsing
 
 echo "=== fixed reference dates ===\n";
 $start = new DateTimeImmutable('2026-01-15 10:00:00');
@@ -9,6 +12,7 @@ echo "days: $diff->days\n";
 echo "y/m/d/h/i/s: $diff->y/$diff->m/$diff->d/$diff->h/$diff->i/$diff->s\n";
 echo "invert (start>end): " . $diff->invert . "\n";
 
+// reverse should invert
 $diff2 = $end->diff($start);
 echo "reverse invert: " . $diff2->invert . "\n";
 

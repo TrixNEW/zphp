@@ -1,4 +1,7 @@
 <?php
+// covers: FQN (leading-backslash) usage across all PHP language positions -
+//   type hints, union types, return types, catch, instanceof, static calls,
+//   const access, new, multi-catch, throw, getPrevious chain.
 
 namespace App\Models;
 class User { public function __construct(public string $name = 'u') {} }

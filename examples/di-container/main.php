@@ -1,4 +1,10 @@
 <?php
+// covers: ReflectionClass, ReflectionMethod, ReflectionParameter,
+//   ReflectionNamedType, isBuiltin, getConstructor, getParameters,
+//   getType, getName, isDefaultValueAvailable, getDefaultValue,
+//   newInstanceArgs, isInstantiable, getParentClass, implementsInterface,
+//   hasMethod, getMethods, isSubclassOf, isStatic, getDeclaringClass,
+//   ReflectionFunction, getNumberOfParameters, getNumberOfRequiredParameters
 
 interface Logger {
     public function log(string $message): void;
@@ -99,17 +105,21 @@ class Container {
     }
 }
 
+// wire up the container
 $container = new Container();
 $container->bind('Logger', 'ConsoleLogger');
 $container->singleton('Database', 'Database');
 
+// resolve a complex dependency tree
 $repo = $container->make('UserRepository');
 echo $repo->find(42) . "\n";
 
+// singleton check - same instance
 $db1 = $container->make('Database');
 $db2 = $container->make('Database');
 echo ($db1 === $db2 ? "same" : "different") . " instance\n";
 
+// reflection introspection
 $rc = new ReflectionClass('UserRepository');
 echo "class: " . $rc->getName() . "\n";
 echo "methods: " . count($rc->getMethods()) . "\n";
@@ -124,6 +134,7 @@ $ctor = $rc->getConstructor();
 echo "constructor declaring class: " . $ctor->getDeclaringClass()->getName() . "\n";
 echo "constructor required params: " . $ctor->getNumberOfRequiredParameters() . "\n";
 
+// ReflectionFunction
 function greet(string $name, string $greeting = "Hello"): string {
     return "$greeting, $name!";
 }
@@ -145,6 +156,7 @@ foreach ($params as $p) {
     echo "\n";
 }
 
+// parent class and interface checks
 $drc = new ReflectionClass('Database');
 echo "Database parent: " . ($drc->getParentClass() === false ? "none" : $drc->getParentClass()->getName()) . "\n";
 

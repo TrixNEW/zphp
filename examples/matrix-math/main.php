@@ -1,4 +1,5 @@
 <?php
+// covers: array_fill, count, array_map, array_sum, array_keys, number_format, str_pad, sprintf, abs, sqrt, round, pow
 
 function matrixCreate(int $rows, int $cols, float $fill = 0.0): array {
     $m = [];
@@ -128,6 +129,7 @@ function printMatrix(string $name, array $m): void {
     }
 }
 
+// --- tests ---
 
 $a = [[1, 2], [3, 4]];
 $b = [[5, 6], [7, 8]];
@@ -150,6 +152,7 @@ printMatrix("A^T", $transposed);
 echo "\nTrace(A): " . number_format(matrixTrace($a), 1) . "\n";
 echo "Det(A): " . number_format(det2x2($a), 1) . "\n";
 
+// 3x3
 $c = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
 printMatrix("\nC (3x3)", $c);
 echo "Det(C): " . number_format(det3x3($c), 1) . "\n";
@@ -158,10 +161,12 @@ echo "Trace(C): " . number_format(matrixTrace($c), 1) . "\n";
 $d = [[2, 1, 1], [1, 3, 2], [1, 0, 0]];
 echo "Det([[2,1,1],[1,3,2],[1,0,0]]): " . number_format(det3x3($d), 1) . "\n";
 
+// identity
 $i3 = matrixIdentity(3);
 $ci = matrixMultiply($c, $i3);
 printMatrix("\nC * I", $ci);
 
+// vectors
 echo "\nVectors:\n";
 $v1 = [3, 4, 0];
 $v2 = [1, 0, 0];
@@ -179,6 +184,7 @@ echo "  |normalize(v1)|: " . number_format(vectorMagnitude($norm), 4) . "\n";
 $cross = vectorCross([1, 0, 0], [0, 1, 0]);
 echo "  cross([1,0,0], [0,1,0]): [" . implode(', ', $cross) . "]\n";
 
+// rotation matrix
 echo "\n2D Rotation (90 degrees):\n";
 $angle = M_PI / 2;
 $rot = [

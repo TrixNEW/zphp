@@ -1,4 +1,7 @@
 <?php
+// covers: ob_start, ob_get_clean, ob_end_clean, ob_get_contents, ob_get_level,
+//   ob_end_flush, ob_clean, ob_get_length, ob_list_handlers, closures,
+//   array_map, implode, compact, named arguments, match expressions
 
 class View {
     private array $sections = [];
@@ -90,6 +93,7 @@ class Component {
     }
 }
 
+// layout template
 $layout = function(View $view, string $content) {
     echo "<html>\n<head><title>" . $view->yieldSection('title', 'Default') . "</title></head>\n";
     echo "<body>\n";
@@ -99,6 +103,7 @@ $layout = function(View $view, string $content) {
     echo "</body>\n</html>";
 };
 
+// page template
 $page = function(View $view) use ($layout) {
     $view->extend($layout);
 
@@ -128,6 +133,7 @@ $page = function(View $view) use ($layout) {
     });
 };
 
+// render
 $view = new View();
 $view->assign('users', [
     ['name' => 'Alice', 'role' => 'admin'],
@@ -139,6 +145,7 @@ $view->assign('showAdmin', true);
 $html = $view->render($page);
 echo $html . "\n";
 
+// demonstrate ob_get_level tracking
 echo "\n--- level tracking ---\n";
 echo "level: " . ob_get_level() . "\n";
 ob_start();
@@ -150,6 +157,7 @@ $outer = ob_get_clean();
 echo "captured inner: " . trim($inner) . "\n";
 echo "captured outer: " . trim($outer) . "\n";
 
+// demonstrate ob_get_length
 ob_start();
 echo "hello";
 echo " length: " . ob_get_length();

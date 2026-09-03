@@ -1,4 +1,6 @@
 <?php
+// covers: SplStack/SplQueue LIFO+FIFO, SplDoublyLinkedList, SplPriorityQueue,
+//   SplHeap (min/max), SplFixedArray, ArrayObject
 
 echo "=== SplStack LIFO ===\n";
 $s = new SplStack();

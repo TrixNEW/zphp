@@ -1,5 +1,9 @@
 <?php
+// covers: multiple traits, trait conflict resolution (insteadof/as),
+// visibility changes via as, abstract trait methods, trait with interface,
+// trait properties, trait constants, nested trait use, trait method aliasing
 
+// test 1: basic multiple traits
 echo "=== Test 1: Multiple Traits ===\n";
 trait Greetable {
     public function greet(): string {
@@ -44,6 +48,7 @@ $app = new App();
 echo $app->log("test") . "\n";
 echo $app->fileLog("test") . "\n";
 
+// test 3: trait-qualified alias
 echo "\n=== Test 3: Trait Alias ===\n";
 trait Secret {
     public function reveal(): string {
@@ -85,6 +90,7 @@ class User {
 $u = new User("Bob", 25);
 echo $u->serialize() . "\n";
 
+// test 5: trait with interface
 echo "\n=== Test 5: Trait + Interface ===\n";
 interface Displayable {
     public function toString(): string;
@@ -101,6 +107,7 @@ $w = new Widget();
 echo $w->toString() . "\n";
 echo ($w instanceof Displayable ? "implements Displayable" : "no") . "\n";
 
+// test 6: trait properties
 echo "\n=== Test 6: Trait Properties ===\n";
 trait HasCounter {
     private int $count = 0;
@@ -164,6 +171,7 @@ $svc->process('b', '2');
 echo "Cached: " . $svc->cacheGet('a') . ", " . $svc->cacheGet('b') . "\n";
 echo "Events: " . implode(', ', $log) . "\n";
 
+// test 8: three-way conflict
 echo "\n=== Test 8: Three-way Conflict ===\n";
 trait A {
     public function hello(): string { return "A"; }

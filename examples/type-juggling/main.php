@@ -1,4 +1,11 @@
 <?php
+// covers: numeric string coercion, loose vs strict comparison, abstract class
+//   instantiation guard, interface method enforcement, __call magic method,
+//   __isset magic method, nested array spread, string-to-number conversion,
+//   truthiness rules, spaceship with mixed types, array_walk with reference,
+//   compact/extract, list() in foreach, ternary edge cases (short ternary,
+//   nested ternary), null propagation, negative array indices, implode with
+//   non-string values, intval/floatval edge cases, settype
 
 // === test: numeric string coercion ===
 
@@ -12,6 +19,7 @@ echo null + 5 . "\n";
 echo "100" * 2 . "\n";
 echo "3" ** 2 . "\n";
 
+// === test: loose comparison ===
 
 echo "--- loose comparison ---\n";
 echo (0 == false) ? "y" : "n"; echo "\n";
@@ -25,6 +33,7 @@ echo ("php" == 0) ? "y" : "n"; echo "\n";
 echo ([] == false) ? "y" : "n"; echo "\n";
 echo (0 == "0") ? "y" : "n"; echo "\n";
 
+// === test: strict comparison ===
 
 echo "--- strict comparison ---\n";
 echo (0 === false) ? "y" : "n"; echo "\n";
@@ -35,6 +44,7 @@ echo ("1" === 1) ? "y" : "n"; echo "\n";
 echo (0 === 0) ? "y" : "n"; echo "\n";
 echo ("" === "") ? "y" : "n"; echo "\n";
 
+// === test: truthiness ===
 
 echo "--- truthiness ---\n";
 $truthy = [1, -1, "hello", "0.0", [1], 3.14, true];
@@ -66,6 +76,7 @@ echo intval("077", 8) . "\n";
 echo floatval("1.2e3") . "\n";
 echo floatval("  -3.14  ") . "\n";
 
+// === test: explicit casting ===
 
 echo "--- casting ---\n";
 echo gettype((int) "42") . ": " . (int) "42" . "\n";
@@ -74,6 +85,7 @@ echo gettype((bool) 1) . ": " . ((bool) 1 ? "true" : "false") . "\n";
 echo gettype((float) "2.5") . ": " . (float) "2.5" . "\n";
 echo gettype((array) "hello") . "\n";
 
+// === test: compact/extract ===
 
 echo "--- compact/extract ---\n";
 $name = "Alice";
@@ -172,6 +184,7 @@ foreach ($pairs as list($n, $w)) {
 }
 echo "\n";
 
+// === test: array_walk ===
 
 echo "--- array_walk ---\n";
 $items = ["apple", "banana", "cherry"];

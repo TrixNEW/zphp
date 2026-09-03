@@ -1,5 +1,9 @@
 <?php
+// covers: time, date, mktime, strtotime, checkdate, getdate,
+//   date arithmetic, relative dates, timestamp formatting, date format specifiers,
+//   backslash escape in date format, day of year (z), ISO week (W), mktime month overflow
 
+// --- basic timestamp ---
 
 echo "=== Basic Timestamp ===\n";
 
@@ -9,6 +13,7 @@ echo "date('Y-m-d H:i:s', ts): " . date('Y-m-d H:i:s', $ts) . "\n";
 echo "date('D, d M Y', ts): " . date('D, d M Y', $ts) . "\n";
 echo "date('U', ts) == ts: " . (date('U', $ts) == $ts ? 'yes' : 'no') . "\n";
 
+// --- date format specifiers ---
 
 echo "\n=== Date Format ===\n";
 
@@ -30,6 +35,7 @@ echo "w: " . date('w', $fixed) . "\n";
 echo "t: " . date('t', $fixed) . "\n";
 echo "L: " . date('L', $fixed) . "\n";
 
+// --- checkdate ---
 
 echo "\n=== Checkdate ===\n";
 
@@ -39,6 +45,7 @@ echo "checkdate(2, 29, 2023): " . (checkdate(2, 29, 2023) ? 'valid' : 'invalid')
 echo "checkdate(13, 1, 2024): " . (checkdate(13, 1, 2024) ? 'valid' : 'invalid') . "\n";
 echo "checkdate(4, 31, 2024): " . (checkdate(4, 31, 2024) ? 'valid' : 'invalid') . "\n";
 
+// --- getdate ---
 
 echo "\n=== Getdate ===\n";
 
@@ -51,6 +58,7 @@ echo "minutes: " . $info['minutes'] . "\n";
 echo "seconds: " . $info['seconds'] . "\n";
 echo "wday: " . $info['wday'] . "\n";
 
+// --- strtotime absolute ---
 
 echo "\n=== Strtotime Absolute ===\n";
 
@@ -75,6 +83,7 @@ echo "-2 months: " . date('Y-m-d', strtotime('-2 months', $base)) . "\n";
 echo "+1 year: " . date('Y-m-d', strtotime('+1 year', $base)) . "\n";
 echo "+1 week: " . date('Y-m-d', strtotime('+1 week', $base)) . "\n";
 
+// --- strtotime keywords ---
 
 echo "\n=== Strtotime Keywords ===\n";
 
@@ -84,6 +93,7 @@ echo "tomorrow from base: " . date('Y-m-d', strtotime('tomorrow', $base)) . "\n"
 echo "midnight from base: " . date('H:i:s', strtotime('midnight', $base)) . "\n";
 echo "noon from base: " . date('H:i:s', strtotime('noon', $base)) . "\n";
 
+// --- mktime edge cases ---
 
 echo "\n=== Mktime Edge Cases ===\n";
 
@@ -98,6 +108,7 @@ echo "Feb 29 2024 (leap): " . date('Y-m-d', $leap) . "\n";
 $dec = mktime(0, 0, 0, 12, 1, 2024);
 echo "Dec 1: " . date('Y-m-d', $dec) . "\n";
 
+// --- date arithmetic ---
 
 echo "\n=== Date Arithmetic ===\n";
 
@@ -112,6 +123,7 @@ echo "hour later: " . date('H:i', $hour_later) . "\n";
 $week_seconds = 7 * 24 * 60 * 60;
 echo "week from base: " . date('Y-m-d', $base + $week_seconds) . "\n";
 
+// --- formatting patterns ---
 
 echo "\n=== Format Patterns ===\n";
 
@@ -121,6 +133,7 @@ echo "EU format: " . date('d.m.Y', $sample) . "\n";
 echo "12-hour: " . date('g:i A', $sample) . "\n";
 echo "full: " . date('Y-m-d H:i:s', $sample) . "\n";
 
+// --- backslash escape ---
 
 echo "\n=== Backslash Escape ===\n";
 
@@ -130,6 +143,7 @@ echo "literal Y: " . date('\Y', $esc) . "\n";
 echo "ISO format: " . date('Y-m-d\TH:i:s', $esc) . "\n";
 echo "escaped D: " . date('\D\a\y: l', $esc) . "\n";
 
+// --- day of year ---
 
 echo "\n=== Day of Year (z) ===\n";
 
@@ -138,6 +152,7 @@ echo "Feb 1: " . date('z', mktime(0, 0, 0, 2, 1, 2024)) . "\n";
 echo "Mar 1 (leap): " . date('z', mktime(0, 0, 0, 3, 1, 2024)) . "\n";
 echo "Dec 31 (leap): " . date('z', mktime(0, 0, 0, 12, 31, 2024)) . "\n";
 
+// --- ISO week number ---
 
 echo "\n=== ISO Week (W) ===\n";
 

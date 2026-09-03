@@ -1,4 +1,7 @@
 <?php
+// covers: generators, yield from, recursive generators, nested arrays,
+//   foreach with yield from, generator delegation in loops,
+//   deep recursion with generators, mixed scalar and array values
 
 // === test: recursive yield from with nested arrays ===
 echo "=== recursive walk ===\n";
@@ -37,6 +40,7 @@ foreach (walk([10, 20, 30]) as $v) {
 }
 echo implode(',', $result) . "\n";
 
+// === test: maximum depth ===
 echo "=== max depth ===\n";
 
 $result = [];
@@ -45,6 +49,7 @@ foreach (walk([[[[[42]]]]]) as $v) {
 }
 echo implode(',', $result) . "\n";
 
+// === test: empty sub-arrays ===
 echo "=== empty sub-arrays ===\n";
 
 $result = [];

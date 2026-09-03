@@ -1,4 +1,6 @@
 <?php
+// covers: parse_url, http_build_query, urlencode/urldecode, rawurlencode/decode,
+//   parse_str, query-string round-trips, URL component recomposition
 
 echo "=== parse_url anatomy ===\n";
 $urls = [

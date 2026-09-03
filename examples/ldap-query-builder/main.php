@@ -1,4 +1,6 @@
 <?php
+// covers: a fluent LDAP filter builder that defends against injection,
+//   ldap_escape across modes, ldap_explode_dn for parsing returned DNs
 
 final class Filter {
     private function __construct(private string $f) {}

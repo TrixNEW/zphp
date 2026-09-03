@@ -1,5 +1,7 @@
 <?php
+// covers: base64_encode, base64_decode, wordwrap, str_word_count, array_combine, array_flip, array_pad, chunk_split, quoted_printable_encode, quoted_printable_decode, str_split, implode, explode, strtolower, strtoupper, substr, strlen, str_replace, trim, rtrim, sprintf, array_map, array_keys, array_values, array_merge, in_array, preg_match, ord
 
+// --- base64 encoding/decoding ---
 
 echo "Base64 encoding:\n";
 $text = "Hello, World!";
@@ -10,6 +12,7 @@ $decoded = base64_decode($encoded);
 echo "Decoded: $decoded\n";
 echo "Match: " . ($text === $decoded ? "yes" : "no") . "\n";
 
+// binary data
 $binary = "";
 for ($i = 0; $i < 256; $i++) {
     $binary .= chr($i);
@@ -18,15 +21,18 @@ $b64 = base64_encode($binary);
 $back = base64_decode($b64);
 echo "Binary round-trip (256 bytes): " . (strlen($back) === 256 ? "ok" : "fail") . "\n";
 
+// empty string
 echo "Empty base64: '" . base64_encode("") . "'\n";
 echo "Empty decode: '" . base64_decode("") . "'\n";
 
+// padding cases
 echo "\nBase64 padding:\n";
 echo "1 byte: " . base64_encode("A") . "\n";
 echo "2 bytes: " . base64_encode("AB") . "\n";
 echo "3 bytes: " . base64_encode("ABC") . "\n";
 echo "4 bytes: " . base64_encode("ABCD") . "\n";
 
+// --- wordwrap ---
 
 echo "\nWordwrap:\n";
 $long = "The quick brown fox jumped over the lazy dog on a sunny afternoon";
@@ -35,11 +41,14 @@ echo "---\n";
 echo wordwrap($long, 20, "\n", true) . "\n";
 echo "---\n";
 
+// single long word with cut
 echo wordwrap("Supercalifragilisticexpialidocious", 10, "\n", true) . "\n";
 echo "---\n";
 
+// custom break
 echo wordwrap("one two three four five", 10, "<br>", false) . "\n";
 
+// --- str_word_count ---
 
 echo "\nWord count:\n";
 $sentence = "Hello beautiful world";
@@ -55,11 +64,13 @@ echo "Single word: " . str_word_count("hello") . "\n";
 $words = str_word_count("The quick brown fox", 1);
 echo "Word list: " . implode(", ", $words) . "\n";
 
+// mode 2: return positions
 $positions = str_word_count("Hello world test", 2);
 foreach ($positions as $pos => $word) {
     echo "  Position $pos: $word\n";
 }
 
+// --- array_combine ---
 
 echo "\nArray combine:\n";
 $keys = ['name', 'age', 'city'];
@@ -69,6 +80,7 @@ foreach ($combined as $k => $v) {
     echo "  $k: $v\n";
 }
 
+// --- array_flip ---
 
 echo "\nArray flip:\n";
 $colors = ['red' => 1, 'green' => 2, 'blue' => 3];
@@ -77,10 +89,12 @@ foreach ($flipped as $k => $v) {
     echo "  $k => $v\n";
 }
 
+// flip indexed array
 $fruits = ['apple', 'banana', 'cherry'];
 $fruit_index = array_flip($fruits);
 echo "Index of banana: " . $fruit_index['banana'] . "\n";
 
+// --- array_pad ---
 
 echo "\nArray pad:\n";
 $arr = [1, 2, 3];
@@ -93,6 +107,7 @@ echo "Pad left to -6: " . implode(",", $padded_left) . "\n";
 $no_pad = array_pad($arr, 2, 0);
 echo "Pad to 2 (no change): " . implode(",", $no_pad) . "\n";
 
+// --- MIME header encoding ---
 
 echo "\nMIME header encoding:\n";
 
@@ -178,6 +193,7 @@ echo "Has MIME-Version: " . (str_contains($message, "MIME-Version: 1.0") ? "yes"
 echo "Has boundary: " . (str_contains($message, "----boundary_12345") ? "yes" : "no") . "\n";
 echo "Has base64: " . (str_contains($message, "Content-Transfer-Encoding: base64") ? "yes" : "no") . "\n";
 
+// decode the attachment back
 preg_match('/Content-Transfer-Encoding: base64\r\n.+?\r\n\r\n(.+?)(?:\r\n\r\n--|\z)/s', $message, $matches);
 if (isset($matches[1])) {
     $decoded_attachment = base64_decode(trim($matches[1]));
@@ -252,6 +268,7 @@ formatTable([
     ['Size'],
 ], 2);
 
+// --- word frequency analysis ---
 
 echo "\nWord frequency:\n";
 $text = "the cat sat on the mat the cat";

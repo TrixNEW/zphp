@@ -277,6 +277,7 @@ pub fn compileForeach(self: *Compiler, node: Ast.Node) Error!void {
             try self.string_allocs.append(self.allocator, synth);
             break :blk synth;
         };
+        // stack: [key, value]
         try self.emitOp(.pop); // discard the value copy - we bind instead
         try self.emitSetVar(key_name); // $key = key (peek; key still on stack)
         try self.emitOp(.pop); // -> []
@@ -573,12 +574,14 @@ pub fn compileTryCatch(self: *Compiler, node: Ast.Node) Error!void {
     const handler_offset_pos = self.chunk.offset();
     try self.emitU16(0xffff);
 
+    // compile try body
     try self.compileNode(node.data.lhs);
 
     // normal exit: pop handler and jump past catches
     try self.emitOp(.pop_handler);
     const skip_catches = try self.emitJump(.jump);
 
+    // patch catch offset to here
     self.patchJump(handler_offset_pos);
 
     // exception is on the stack when we arrive here
@@ -627,6 +630,7 @@ pub fn compileTryCatch(self: *Compiler, node: Ast.Node) Error!void {
             // none matched, stack: [exc] - skip to next catch
             const skip = try self.emitJump(.jump);
 
+            // match: stack: [exc, bool(true)]
             for (match_jumps.items) |mj| self.patchJump(mj);
             try self.emitOp(.pop); // remove bool -> [exc]
 
@@ -643,6 +647,7 @@ pub fn compileTryCatch(self: *Compiler, node: Ast.Node) Error!void {
             // skip lands here, stack: [exc] (preserved for next catch)
             self.patchJump(skip);
         } else {
+            // untyped catch-all
             if (catch_node.main_token != 0) {
                 const var_name = self.ast.tokenSlice(catch_node.main_token);
                 try self.emitSetVar(var_name);
@@ -683,6 +688,7 @@ pub fn compileTryCatch(self: *Compiler, node: Ast.Node) Error!void {
         self.patchJump(skip_to_normal);
         try self.compileNode(finally_node);
     } else {
+        // no finally: just re-throw
         try self.emitOp(.throw);
 
         self.patchJump(skip_catches);

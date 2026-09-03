@@ -1,4 +1,7 @@
 <?php
+// covers: array_merge_recursive vs array_replace_recursive, array_walk_recursive,
+//   array_diff_key/assoc, array_intersect variants, array_combine, array_column,
+//   array_chunk, array_fill_keys, array_flip with edge cases
 
 echo "=== array_merge_recursive: collisions become arrays ===\n";
 $a = ['user' => ['name' => 'Alice', 'tags' => ['admin']]];

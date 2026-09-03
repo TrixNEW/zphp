@@ -1,4 +1,7 @@
 <?php
+// covers: generators with yield + yield-from delegation, generator return values,
+//   sending values back into a generator, two-way coroutine pattern,
+//   iterator_to_array with associative keys
 
 echo "=== basic generator ===\n";
 function counter(int $start, int $end): Generator {

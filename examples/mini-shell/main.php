@@ -1,5 +1,12 @@
 <?php
+// covers: preg_split, str_getcsv, array_shift, array_pop, array_push, array_unshift,
+//         array_slice, array_splice, trim, ltrim, rtrim, substr, strpos, strlen,
+//         str_starts_with, str_ends_with, str_contains, str_replace, explode, implode,
+//         array_map, array_filter, array_values, array_reverse, array_unique,
+//         in_array, count, sprintf, str_pad, number_format, is_numeric,
+//         array_fill, range, array_combine, array_chunk
 
+// --- command tokenizer ---
 
 function tokenize($input) {
     $tokens = [];
@@ -59,6 +66,7 @@ echo implode('|', tokenize('echo "hello \\"world\\""')) . "\n";
 echo implode('|', tokenize('  spaces   between   words  ')) . "\n";
 echo implode('|', tokenize('mixed "quoted arg" plain \'single quoted\'')) . "\n";
 
+// --- command parser ---
 
 function parseCommand($input) {
     $tokens = tokenize(trim($input));
@@ -114,6 +122,7 @@ echo "args: " . implode(', ', $cmd['args']) . "\n";
 echo "flags: " . implode(', ', $cmd['flags']) . "\n";
 echo "color: {$cmd['options']['color']}\n";
 
+// --- pipeline parser ---
 
 function parsePipeline($input) {
     $segments = array_map('trim', explode('|', $input));
@@ -137,6 +146,7 @@ foreach ($pipeline as $i => $stage) {
     echo "\n";
 }
 
+// --- variable expansion ---
 
 function expandVars($input, $env) {
     $result = preg_replace_callback('/\$(\w+)|\$\{(\w+)\}/', function($m) use ($env) {
@@ -176,6 +186,7 @@ $filtered = array_filter($history, function($cmd) {
 });
 echo "ls/cat commands: " . count($filtered) . "\n";
 
+// --- table formatting ---
 
 function formatTable($headers, $rows) {
     $widths = array_map('strlen', $headers);
@@ -190,18 +201,21 @@ function formatTable($headers, $rows) {
 
     $lines = [];
 
+    // header
     $headerCells = [];
     foreach ($headers as $i => $h) {
         $headerCells[] = str_pad($h, $widths[$i]);
     }
     $lines[] = implode(' | ', $headerCells);
 
+    // separator
     $sepCells = [];
     foreach ($widths as $w) {
         $sepCells[] = str_repeat('-', $w);
     }
     $lines[] = implode('-+-', $sepCells);
 
+    // rows
     foreach ($rows as $row) {
         $cells = [];
         foreach ($row as $i => $cell) {
@@ -223,6 +237,7 @@ echo formatTable(
     ]
 ) . "\n";
 
+// --- glob pattern matching ---
 
 function globMatch($pattern, $string) {
     $regex = '/^';
@@ -254,6 +269,7 @@ echo "test?.log matches test1.log: " . (globMatch('test?.log', 'test1.log') ? 'y
 echo "test?.log matches test12.log: " . (globMatch('test?.log', 'test12.log') ? 'yes' : 'no') . "\n";
 echo "*.* matches any.file: " . (globMatch('*.*', 'any.file') ? 'yes' : 'no') . "\n";
 
+// --- number formatting ---
 
 echo "--- numbers ---\n";
 echo number_format(1234567.89, 2) . "\n";
@@ -261,6 +277,7 @@ echo number_format(42, 0) . "\n";
 echo number_format(1000000, 0, '.', ',') . "\n";
 echo number_format(0.5, 4) . "\n";
 
+// --- array operations ---
 
 echo "--- array ops ---\n";
 

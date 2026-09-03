@@ -1,4 +1,6 @@
 <?php
+// covers: sodium_crypto_kdf_*, sodium_crypto_auth, sodium_pad/unpad,
+//   sodium_crypto_scalarmult, sodium_increment, sodium_bin2base64
 
 echo "=== KDF: derive subkeys from a master ===\n";
 $master = str_repeat("\xA5", SODIUM_CRYPTO_KDF_KEYBYTES);

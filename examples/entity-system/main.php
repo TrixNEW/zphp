@@ -1,5 +1,12 @@
 <?php
+// covers: magic methods (__get, __set, __isset, __unset, __invoke, __toString),
+//   ArrayAccess + Countable on user classes, late static binding (static::,
+//   static::class), trait conflict resolution (insteadof, as), multiple catch
+//   clauses, nested try/catch with re-throw, abstract method enforcement,
+//   bitwise operations (flags), do-while, break N / continue N, for loops,
+//   multiple interfaces per class, clone with deep copy
 
+// --- interfaces ---
 
 interface Identifiable
 {
@@ -12,6 +19,7 @@ interface Validatable
     public function getErrors(): array;
 }
 
+// --- traits with conflict ---
 
 trait HasTimestamps
 {
@@ -128,12 +136,14 @@ abstract class Entity implements Identifiable, Validatable
         return static::class . "#" . $this->id;
     }
 
+    // late static binding for factory
     public static function create(array $attrs = []): static
     {
         return new static($attrs);
     }
 }
 
+// --- concrete entities ---
 
 class User extends Entity
 {
@@ -261,6 +271,7 @@ class Collection implements ArrayAccess, Countable
     }
 }
 
+// --- bitwise flags ---
 
 const PERM_READ    = 1;
 const PERM_WRITE   = 2;
@@ -283,6 +294,7 @@ function describePermissions(int $perms): string
     return implode(", ", $names);
 }
 
+// --- custom exceptions ---
 
 class ValidationException extends RuntimeException
 {
@@ -313,7 +325,9 @@ function saveEntity(Entity $entity, int $permissions): void
     }
 }
 
+// ============================================================
 // tests
+// ============================================================
 
 // === test: entity creation with late static binding ===
 
@@ -359,6 +373,7 @@ $numbers = new Collection([1, 2, 3, 4, 5, 6, 7, 8]);
 $evens = $numbers(function ($n) { return $n % 2 === 0; });
 echo "evens: " . implode(", ", $evens->toArray()) . "\n";
 
+// === test: collection methods ===
 
 $users = new Collection([
     ["name" => "Alice", "age" => 30],
@@ -368,6 +383,7 @@ $users = new Collection([
 $names = $users->pluck("name");
 echo "names: " . implode(", ", $names->toArray()) . "\n";
 
+// === test: bitwise operations ===
 
 $perms = PERM_READ | PERM_WRITE;
 echo "perms: " . describePermissions($perms) . "\n";
@@ -415,6 +431,7 @@ function riskyOperation(): void
 }
 riskyOperation();
 
+// === test: do-while ===
 
 $i = 1;
 $sum = 0;
@@ -446,6 +463,7 @@ for ($i = 0; $i < 3; $i++) {
 }
 echo "continue 2: " . implode(" ", $result) . "\n";
 
+// === test: __clone magic ===
 
 $original = User::create(["name" => "CloneMe", "email" => "clone@test.com"]);
 $original->setMeta("source", "original");

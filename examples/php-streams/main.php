@@ -1,4 +1,7 @@
 <?php
+// covers: fopen, fwrite, fread, fgets, fseek, ftell, rewind, feof, fclose,
+//   file_put_contents, file_get_contents, stream_get_wrappers,
+//   php://stdout, php://output, php://stderr, php://memory, php://temp, php://input
 
 // stream wrappers should at minimum include the built-in ones
 $wrappers = stream_get_wrappers();

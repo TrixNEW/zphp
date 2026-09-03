@@ -1,4 +1,7 @@
 <?php
+// covers: file_get_contents, fopen, fread, fgets, rewind, feof, fclose,
+//   bin2hex, json_decode, base64_encode, in_array, stream_get_wrappers,
+//   data:// stream wrapper
 
 // inline JSON config bundled into a script via a data URI
 $configUri = 'data://application/json;base64,' . base64_encode(json_encode([
@@ -21,14 +24,17 @@ while (!feof($f)) {
 }
 fclose($f);
 
+// embed binary asset bytes
 $pngHeader = file_get_contents('data://application/octet-stream;base64,iVBORw0KGgo=');
 echo "header bytes: " . bin2hex($pngHeader) . "\n";
 
+// rewind a data stream
 $f = fopen('data://text/plain;base64,aGVsbG8=', 'r');
 echo "first read: " . fread($f, 100) . "\n";
 rewind($f);
 echo "after rewind: " . fread($f, 100) . "\n";
 fclose($f);
 
+// confirm wrapper is registered
 $wrappers = stream_get_wrappers();
 echo "data wrapper registered: " . (in_array('data', $wrappers) ? "yes" : "no") . "\n";

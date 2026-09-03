@@ -1,5 +1,20 @@
 <?php
+// covers: sprintf, printf, number_format, str_pad, str_repeat, str_contains,
+//   str_starts_with, str_ends_with, substr_replace, wordwrap, nl2br, chunk_split,
+//   str_word_count, str_getcsv, strip_tags, html_entity_decode,
+//   array_column, array_combine, array_unique, array_chunk, array_splice,
+//   array_pad, array_product, array_sum, array_count_values, array_intersect,
+//   array_diff_key, array_flip, array_fill, array_fill_keys, range,
+//   array_replace, array_key_first, array_key_last,
+//   preg_match_all, preg_replace_callback, preg_split, preg_match,
+//   abs, ceil, floor, round, max, min, pow, sqrt, log, fmod, intdiv,
+//   base_convert, bindec, decoct, hexdec, octdec,
+//   intval, floatval, strval, settype, is_numeric, is_scalar,
+//   compact, extract, usort, array_map, array_filter, array_reduce,
+//   array_walk, ksort, arsort, array_rand, shuffle,
+//   checkdate, date, time, strtotime, microtime
 
+// --- string formatting ---
 
 echo "=== String Formatting ===\n";
 
@@ -19,6 +34,7 @@ echo str_pad("Title", 20, "=-", STR_PAD_BOTH) . "\n";
 echo str_pad("42", 8, "0", STR_PAD_LEFT) . "\n";
 echo str_repeat("ab", 4) . "\n";
 
+// --- string inspection ---
 
 echo "\n=== String Inspection ===\n";
 
@@ -34,6 +50,7 @@ echo substr_replace("hello world", "PHP", 6, 5) . "\n";
 $wrapped = wordwrap("The quick brown fox jumped over the lazy dog", 15, "\n", true);
 echo $wrapped . "\n";
 
+// --- string escaping ---
 
 echo "\n=== String Escaping ===\n";
 
@@ -41,6 +58,7 @@ echo strip_tags("<p>Hello <b>World</b></p>") . "\n";
 echo strip_tags("<p>Hello <b>World</b></p>", "<b>") . "\n";
 echo html_entity_decode("&lt;div&gt;test&lt;/div&gt;") . "\n";
 
+// --- csv parsing ---
 
 echo "\n=== CSV Parsing ===\n";
 
@@ -67,6 +85,7 @@ $ages = array_column($rows, 'age');
 $avg_age = array_sum($ages) / count($ages);
 echo sprintf("Average age: %.1f\n", $avg_age);
 
+// --- array operations ---
 
 echo "\n=== Array Operations ===\n";
 
@@ -115,6 +134,7 @@ $flipped = array_flip(['a' => 1, 'b' => 2, 'c' => 3]);
 echo "Flipped: ";
 print_r($flipped);
 
+// --- array set operations ---
 
 echo "\n=== Array Set Operations ===\n";
 
@@ -132,6 +152,7 @@ $diff_keys = array_diff_key($a, $b);
 echo "Diff key: ";
 print_r($diff_keys);
 
+// --- array splice ---
 
 echo "\n=== Array Splice ===\n";
 
@@ -140,6 +161,7 @@ $removed = array_splice($arr, 1, 2, ['X', 'Y', 'Z']);
 echo "After splice: " . implode(', ', $arr) . "\n";
 echo "Removed: " . implode(', ', $removed) . "\n";
 
+// --- sorting ---
 
 echo "\n=== Sorting ===\n";
 
@@ -160,6 +182,7 @@ foreach ($items as $item) {
     echo sprintf("  %s: $%.2f\n", $item['name'], $item['price']);
 }
 
+// --- functional array ops ---
 
 echo "\n=== Functional ===\n";
 
@@ -180,6 +203,7 @@ array_walk($numbers, function($val, $key) use (&$walked) {
 });
 echo "Walked: " . implode(', ', $walked) . "\n";
 
+// --- compact/extract ---
 
 echo "\n=== Compact/Extract ===\n";
 
@@ -193,6 +217,7 @@ $record = ['color' => 'blue', 'size' => 'large', 'qty' => 5];
 extract($record);
 echo "$color $size $qty\n";
 
+// --- regex ---
 
 echo "\n=== Regex ===\n";
 
@@ -209,6 +234,7 @@ echo "Redacted: $result\n";
 $parts = preg_split('/[\s,;]+/', "one, two; three four");
 echo "Split: " . implode(' | ', $parts) . "\n";
 
+// --- math ---
 
 echo "\n=== Math ===\n";
 
@@ -230,6 +256,7 @@ echo "decoct(255): " . decoct(255) . "\n";
 echo "bindec('11111111'): " . bindec('11111111') . "\n";
 echo "octdec('377'): " . octdec('377') . "\n";
 
+// --- type juggling ---
 
 echo "\n=== Type Juggling ===\n";
 
@@ -246,6 +273,7 @@ $var = "42";
 settype($var, "integer");
 echo "settype to int: " . $var . " (" . gettype($var) . ")\n";
 
+// --- date/time ---
 
 echo "\n=== Date/Time ===\n";
 

@@ -1,4 +1,8 @@
 <?php
+// covers: sprintf with %d, %s, %f, %e, %g, %b, %o, %x, %X, %c, %u, %%,
+//   width and precision specifiers, left/right alignment, sign forcing,
+//   custom padding chars, positional args (%1$s), zero padding, negative
+//   numbers, very large/small floats, vsprintf, str_repeat
 
 function row(string $fmt, ...$args): void {
     $out = sprintf($fmt, ...$args);

@@ -1,4 +1,7 @@
 <?php
+// covers: PHP 8 type-strictness edges - in_array strict, array_search strict,
+//   strlen coercion, stripos with empty needle, sprintf flags, comparison
+//   semantics, intersection types, nullable params, ValueError surface
 
 echo "=== in_array strict vs loose ===\n";
 var_dump(in_array('1', [1, 2, 3]));

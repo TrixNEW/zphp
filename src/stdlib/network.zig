@@ -275,10 +275,12 @@ fn native_gethostname(ctx: *NativeContext, _: []const Value) RuntimeError!Value 
 fn native_inet_pton(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
     const s = args[0].string;
+    // try IPv4
     if (std.net.Address.parseIp4(s, 0)) |addr| {
         const bytes = std.mem.toBytes(addr.in.sa.addr);
         return .{ .string = try createString(ctx, &bytes) };
     } else |_| {}
+    // try IPv6
     if (std.net.Address.parseIp6(s, 0)) |addr| {
         return .{ .string = try createString(ctx, &addr.in6.sa.addr) };
     } else |_| {}
@@ -299,6 +301,7 @@ fn native_inet_ntop(ctx: *NativeContext, args: []const Value) RuntimeError!Value
         const ip = std.net.Address.initIp6(addr, 0, 0, 0);
         var buf: [64]u8 = undefined;
         const out = std.fmt.bufPrint(&buf, "{f}", .{ip}) catch return .{ .bool = false };
+        // strip [...]:port wrapping
         var s = out;
         if (s.len > 0 and s[0] == '[') {
             const close = std.mem.indexOfScalar(u8, s, ']') orelse return .{ .bool = false };

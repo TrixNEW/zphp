@@ -98,6 +98,7 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
     };
     defer compile_result.deinit();
 
+    // find test_ functions
     var test_fns = std.ArrayListUnmanaged(*const ObjFunction){};
     defer test_fns.deinit(allocator);
     for (compile_result.functions.items) |*func| {
@@ -128,6 +129,7 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
         return result;
     }
 
+    // run each test_ function individually
     tui.step("file", path);
     for (test_fns.items) |func| {
         const vm = VM.initOnHeap(allocator) catch continue;
@@ -144,6 +146,7 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
             @memset(locals, .null);
         }
 
+        // execute the test function
         vm.frames[0] = .{
             .chunk = &func.chunk,
             .ip = 0,

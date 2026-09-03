@@ -1,4 +1,7 @@
 <?php
+// covers: deeply nested control flow - 4-deep foreach by-ref, nested switch,
+//   nested match, try-catch-finally cascades, generator yielding through refs,
+//   recursive closures, captured-by-ref accumulators
 
 echo "=== 4-deep nested foreach by-ref ===\n";
 $grid = [[[[1, 2], [3, 4]], [[5, 6]]]];

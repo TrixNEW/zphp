@@ -1,5 +1,10 @@
 <?php
+// covers: ctype_alpha, ctype_digit, ctype_alnum, ctype_space, ctype_upper,
+//   ctype_lower, ctype_xdigit, ctype_print, ctype_punct, substr_compare,
+//   preg_match, strlen, trim, strtolower, strtoupper, sprintf, str_repeat,
+//   in_array, array_keys, is_numeric, substr, strpos, str_contains
 
+// ctype validation suite
 echo "=== ctype functions ===\n";
 $tests = [
     ['ctype_alpha', ['hello', 'Hello', 'hello world', 'abc123', '', '42']],
@@ -24,6 +29,7 @@ foreach ($tests as $test) {
     }
 }
 
+// substr_compare for prefix/suffix checking
 echo "\n=== substr_compare ===\n";
 function startsWith(string $haystack, string $prefix): bool {
     return substr_compare($haystack, $prefix, 0, strlen($prefix)) === 0;
@@ -40,10 +46,12 @@ echo "starts with 'http://':  " . (startsWith($url, 'http://') ? 'yes' : 'no') .
 echo "ends with '.json':      " . (endsWith($url, '.json') ? 'yes' : 'no') . "\n";
 echo "ends with '.xml':       " . (endsWith($url, '.xml') ? 'yes' : 'no') . "\n";
 
+// case-insensitive comparison
 echo "\ncase-insensitive:\n";
 echo "  'Hello' vs 'hello' at 0: " . substr_compare('Hello World', 'hello', 0, 5, true) . "\n";
 echo "  'WORLD' vs 'world' at 6: " . substr_compare('Hello WORLD', 'world', 6, 5, true) . "\n";
 
+// form validation engine
 echo "\n=== form validation ===\n";
 
 function validateField(string $name, string $value, array $rules): array {
@@ -105,6 +113,7 @@ foreach ($fields as $field) {
     }
 }
 
+// hex color validation
 echo "\n=== hex color validation ===\n";
 function isHexColor(string $color): bool {
     if ($color === '') return false;
@@ -119,6 +128,7 @@ foreach ($colors as $c) {
     echo sprintf("  %-12s %s\n", $display, isHexColor($c) ? 'valid' : 'invalid');
 }
 
+// password strength with ctype
 echo "\n=== password strength ===\n";
 function passwordStrength(string $pw): string {
     if (strlen($pw) < 8) return 'too short';

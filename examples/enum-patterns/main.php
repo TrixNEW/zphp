@@ -1,5 +1,7 @@
 <?php
+// covers: unit enums, string-backed enums, int-backed enums, enum methods, enum interfaces, enum constants, Enum::from, Enum::tryFrom, Enum::cases, enum match, enum comparison, enum in arrays, enum static methods, enum name property, enum value property
 
+// --- unit enums ---
 
 enum Suit {
     case Hearts;
@@ -13,6 +15,7 @@ echo "Unit enum name: " . $suit->name . "\n";
 echo "Hearts === Hearts: " . ($suit === Suit::Hearts ? "true" : "false") . "\n";
 echo "Hearts === Clubs: " . ($suit === Suit::Clubs ? "true" : "false") . "\n";
 
+// --- string-backed enums ---
 
 enum Color: string {
     case Red = 'red';
@@ -34,6 +37,7 @@ echo "tryFrom('blue') name: " . $tryValid->name . "\n";
 $tryInvalid = Color::tryFrom('yellow');
 echo "tryFrom('yellow') is null: " . ($tryInvalid === null ? "true" : "false") . "\n";
 
+// --- int-backed enums ---
 
 enum HttpStatus: int {
     case OK = 200;
@@ -51,6 +55,7 @@ echo "from(404) name: " . $fromInt->name . "\n";
 $tryInt = HttpStatus::tryFrom(999);
 echo "tryFrom(999) is null: " . ($tryInt === null ? "true" : "false") . "\n";
 
+// --- Enum::cases() ---
 
 echo "Suit cases:\n";
 $cases = Suit::cases();
@@ -64,6 +69,7 @@ foreach ($colorCases as $case) {
     echo "  " . $case->name . " = " . $case->value . "\n";
 }
 
+// --- enum methods ---
 
 enum Direction {
     case North;
@@ -95,6 +101,7 @@ echo "North opposite: " . $dir->opposite()->name . "\n";
 echo "North label: " . $dir->label() . "\n";
 echo "East opposite: " . Direction::East->opposite()->name . "\n";
 
+// --- enum implementing interfaces ---
 
 interface HasDescription {
     public function description(): string;
@@ -121,6 +128,7 @@ echo "Season name: " . $season->name . "\n";
 echo "Season value: " . $season->value . "\n";
 echo "Season description: " . $season->description() . "\n";
 
+// --- enum constants ---
 
 enum Size {
     case Small;
@@ -148,6 +156,7 @@ echo "200 status: " . describeStatus(HttpStatus::OK) . "\n";
 echo "404 status: " . describeStatus(HttpStatus::NotFound) . "\n";
 echo "500 status: " . describeStatus(HttpStatus::ServerError) . "\n";
 
+// --- enum in arrays ---
 
 $statusMessages = [];
 $statusMessages[HttpStatus::OK->value] = "All good";
@@ -162,6 +171,7 @@ echo "Favorite count: " . count($favorites) . "\n";
 echo "First favorite: " . $favorites[0]->name . "\n";
 echo "Second favorite: " . $favorites[1]->name . "\n";
 
+// --- enum static methods ---
 
 enum Currency: string {
     case USD = 'USD';
@@ -199,6 +209,7 @@ try {
 }
 echo "Unknown symbol throws: " . ($caughtSymbol ? "true" : "false") . "\n";
 
+// --- enum comparison ---
 
 $a = Suit::Hearts;
 $b = Suit::Hearts;

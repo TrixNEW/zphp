@@ -1,4 +1,6 @@
 <?php
+// covers: PCRE lookbehind/lookahead, named groups, unicode property, multibyte mode,
+//   preg_replace_callback, preg_split flags, anchored matching, PREG_OFFSET_CAPTURE
 
 echo "=== named groups ===\n";
 $re = '/^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})$/';

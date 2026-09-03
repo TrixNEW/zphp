@@ -1,4 +1,7 @@
 <?php
+// covers: php://memory + php://temp, data:// wrapper, compress.zlib://,
+//   gzcompress/gzuncompress, stream filters, stream_get_contents,
+//   file_get_contents over wrappers
 
 echo "=== php://memory round-trip ===\n";
 $f = fopen('php://memory', 'r+');

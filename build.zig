@@ -174,10 +174,10 @@ fn addXxhashShim(b: *std.Build, mod: *std.Build.Module) void {
 fn addIcuShim(b: *std.Build, mod: *std.Build.Module) void {
     var flags = std.ArrayList([]const u8){};
     defer flags.deinit(b.allocator);
-    flags.append(b.allocator, "-std=c11") catch return;
+    flags.append(b.allocator, "-std=c11") catch {};
     if (pkgConfigCflagsIncludes(b, "icu-i18n")) |inc| {
         const flag = std.fmt.allocPrint(b.allocator, "-I{s}", .{inc}) catch return;
-        flags.append(b.allocator, flag) catch return;
+        flags.append(b.allocator, flag) catch {};
     }
     mod.addCSourceFile(.{
         .file = b.path("src/stdlib/icu_shim.c"),
@@ -188,10 +188,10 @@ fn addIcuShim(b: *std.Build, mod: *std.Build.Module) void {
     // exposed in the C++ API. link libc++ once for the whole module
     var cpp_flags = std.ArrayList([]const u8){};
     defer cpp_flags.deinit(b.allocator);
-    cpp_flags.append(b.allocator, "-std=c++17") catch return;
+    cpp_flags.append(b.allocator, "-std=c++17") catch {};
     if (pkgConfigCflagsIncludes(b, "icu-i18n")) |inc| {
         const flag = std.fmt.allocPrint(b.allocator, "-I{s}", .{inc}) catch return;
-        cpp_flags.append(b.allocator, flag) catch return;
+        cpp_flags.append(b.allocator, flag) catch {};
     }
     mod.addCSourceFile(.{
         .file = b.path("src/stdlib/icu_msg_shim.cpp"),

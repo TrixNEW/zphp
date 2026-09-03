@@ -1,5 +1,13 @@
 <?php
+// covers: abstract classes (abstract + concrete methods), interfaces,
+//   multiple interface implementation, traits with methods and properties,
+//   trait conflict resolution (insteadof, as), abstract class using traits,
+//   constructor promotion (public readonly), readonly properties,
+//   union types (int|string), named arguments, static methods and properties,
+//   class constants with visibility, late static binding (static:: vs self::),
+//   instanceof with interfaces and abstract classes, get_class(), is_a()
 
+// --- interfaces ---
 
 interface Identifiable {
     public function getId(): int;
@@ -9,6 +17,7 @@ interface Describable {
     public function describe(): string;
 }
 
+// --- traits ---
 
 trait Timestamped {
     private string $createdAt = '2024-01-01';
@@ -78,6 +87,7 @@ class Status {
     }
 }
 
+// --- late static binding ---
 
 class ParentFactory {
     protected static string $type = 'parent';
@@ -168,6 +178,7 @@ function formatValue(int|string $value): string {
     return 'string(' . $value . ')';
 }
 
+// ====== TESTS ======
 
 echo "=== Test 1: Abstract Class + Interfaces + Traits ===\n";
 $p = new Product(id: 1, name: 'Widget', sku: 'W-100');

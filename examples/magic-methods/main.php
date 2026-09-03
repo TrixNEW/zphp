@@ -1,4 +1,8 @@
 <?php
+// covers: __get / __set / __isset / __unset (property overloading), __call
+//   and __callStatic (method overloading), __invoke (callable objects),
+//   __toString (string conversion), and how they interact with isset(),
+//   unset(), string interpolation, is_callable() and array_map()
 
 class Record
 {

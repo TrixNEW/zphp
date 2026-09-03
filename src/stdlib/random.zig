@@ -115,6 +115,7 @@ fn loadState(obj: *PhpObject, comptime T: type) ?T {
     return out;
 }
 
+// ---- Mt19937 ----
 
 fn mtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
@@ -179,6 +180,7 @@ fn pcgGenerate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .string = owned };
 }
 
+// ---- Xoshiro256** ----
 
 fn xoshConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
@@ -220,6 +222,7 @@ fn secureGenerate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return .{ .string = owned };
 }
 
+// ---- Randomizer dispatch ----
 
 // returns the next u32 from whatever engine the Randomizer was constructed with
 fn engineNextU32(ctx: *NativeContext, eng: *PhpObject) u32 {
@@ -241,6 +244,7 @@ fn engineNextU32(ctx: *NativeContext, eng: *PhpObject) u32 {
         storeState(ctx, eng, std.mem.asBytes(&p)) catch {};
         return @as(u32, @truncate(v));
     }
+    // Secure or unknown: csprng
     return @as(u32, @truncate(freshU64FromCrypto()));
 }
 
@@ -294,6 +298,7 @@ fn rangeU32(ctx: *NativeContext, eng_opt: ?*PhpObject, umax: u32) u32 {
         return if (eng_opt) |e| engineNextU32(ctx, e) else @as(u32, @truncate(freshU64FromCrypto()));
     }
     const span: u64 = @as(u64, umax) + 1;
+    // power-of-two: simple mask
     if ((span & (span - 1)) == 0) {
         const r = if (eng_opt) |e| engineNextU32(ctx, e) else @as(u32, @truncate(freshU64FromCrypto()));
         return @as(u32, @intCast(@as(u64, r) & (span - 1)));

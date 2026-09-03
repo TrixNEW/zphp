@@ -1,4 +1,8 @@
 <?php
+// covers: attribute newInstance validation, non-attribute class rejection,
+//   target enforcement (TARGET_METHOD on class), repeatability enforcement,
+//   IS_REPEATABLE flag, #[Override] valid usage, attribute instantiation
+//   with named args and constructor promotion
 
 #[Attribute]
 class TestAttr {
@@ -13,6 +17,7 @@ $attrs = $rc->getAttributes();
 $inst = $attrs[0]->newInstance();
 echo "valid newInstance: " . $inst->val . "\n";
 
+// non-attribute class
 class NotAnAttr {}
 
 #[NotAnAttr]
@@ -27,6 +32,7 @@ try {
     echo "non-attr: caught\n";
 }
 
+// target enforcement
 #[Attribute(Attribute::TARGET_METHOD)]
 class MethodOnly {
     public function __construct(public string $val = '') {}
@@ -44,6 +50,7 @@ try {
     echo "target: caught\n";
 }
 
+// repeatability enforcement
 #[Attribute]
 class SingleAttr {
     public function __construct(public string $val = '') {}
@@ -78,6 +85,7 @@ $inst5a = $attrs5[0]->newInstance();
 $inst5b = $attrs5[1]->newInstance();
 echo "repeatable: " . $inst5a->val . ", " . $inst5b->val . "\n";
 
+// #[Override] valid usage
 class Base {
     public function doStuff(): string { return 'base'; }
 }

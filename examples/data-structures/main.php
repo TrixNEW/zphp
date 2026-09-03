@@ -1,5 +1,7 @@
 <?php
+// covers: SplStack, SplQueue, SplPriorityQueue, SplFixedArray, array_push, array_pop, array_shift, array_unshift, count, usort, array_splice, array_slice, array_reverse, array_chunk, array_unique, array_fill
 
+// --- stack (LIFO) ---
 
 class Stack {
     private array $items = [];
@@ -48,6 +50,7 @@ echo "  pop: " . $stack->pop() . "\n";
 echo "  size: " . $stack->size() . "\n";
 echo "  remaining: " . implode(', ', $stack->toArray()) . "\n";
 
+// --- queue (FIFO) ---
 
 class Queue {
     private array $items = [];
@@ -90,6 +93,7 @@ echo "  dequeue: " . $queue->dequeue() . "\n";
 echo "  dequeue: " . $queue->dequeue() . "\n";
 echo "  size: " . $queue->size() . "\n";
 
+// --- priority queue ---
 
 class PriorityQueue {
     private array $items = [];
@@ -124,6 +128,7 @@ while ($pq->size() > 0) {
     echo "  " . $pq->extract() . "\n";
 }
 
+// --- linked list ---
 
 class ListNode {
     public $value;
@@ -224,6 +229,7 @@ echo "  reversed: " . implode(' -> ', $list->toArray()) . "\n";
 echo "  removeFirst: " . $list->removeFirst() . "\n";
 echo "  items: " . implode(' -> ', $list->toArray()) . "\n";
 
+// --- ring buffer ---
 
 class RingBuffer {
     private array $buffer;
@@ -282,6 +288,7 @@ echo "  after d (overflow): " . implode(', ', $ring->toArray()) . "\n";
 echo "  read: " . $ring->read() . "\n";
 echo "  remaining: " . implode(', ', $ring->toArray()) . "\n";
 
+// --- trie ---
 
 class TrieNode {
     public array $children = [];
@@ -363,6 +370,7 @@ echo "  startsWith 'ap': " . ($trie->startsWith('ap') ? 'yes' : 'no') . "\n";
 echo "  words with 'app': " . implode(', ', $trie->wordsWithPrefix('app')) . "\n";
 echo "  words with 'b': " . implode(', ', $trie->wordsWithPrefix('b')) . "\n";
 
+// --- array utility functions ---
 
 echo "\nArray utilities:\n";
 

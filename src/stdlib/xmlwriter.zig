@@ -61,6 +61,7 @@ pub fn cleanupObject(obj: *PhpObject) void {
     if (!obj.pooled and std.mem.eql(u8, obj.class_name, "XMLWriter")) closeExisting(obj);
 }
 
+// ---------------- methods ----------------
 
 fn xwOpenMemory(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // if called statically, create object. if instance method, set up on $this
@@ -341,6 +342,7 @@ fn xwWritePi(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .bool = c.xmlTextWriterWritePI(writer, @ptrCast(t_z.ptr), @ptrCast(c_z.ptr)) >= 0 };
 }
 
+// ---------------- registration ----------------
 
 fn cleanupPoolable(obj: *PhpObject) bool {
     cleanupObject(obj);

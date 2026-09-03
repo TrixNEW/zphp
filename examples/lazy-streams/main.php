@@ -1,4 +1,5 @@
 <?php
+// covers: generators, yield, yield from, iterator_to_array, closures, array_sum, array_product, func_get_args, call_user_func, array_merge
 
 // --- generators as lazy sequences ---
 
@@ -23,6 +24,7 @@ function take(Generator $gen, int $n): array {
 echo "First 5 naturals: " . implode(', ', take(naturals(), 5)) . "\n";
 echo "From 10: " . implode(', ', take(naturals(10), 5)) . "\n";
 
+// --- fibonacci generator ---
 
 function fibonacci(): Generator {
     $a = 0;
@@ -37,6 +39,7 @@ function fibonacci(): Generator {
 
 echo "Fibonacci: " . implode(', ', take(fibonacci(), 10)) . "\n";
 
+// --- range generator ---
 
 function rangeGen(int $start, int $end, int $step = 1): Generator {
     if ($step > 0) {
@@ -53,6 +56,7 @@ function rangeGen(int $start, int $end, int $step = 1): Generator {
 echo "Range(1,10,2): " . implode(', ', iterator_to_array(rangeGen(1, 10, 2), false)) . "\n";
 echo "Range(10,1,-3): " . implode(', ', iterator_to_array(rangeGen(10, 1, -3), false)) . "\n";
 
+// --- generator pipeline: map/filter/reduce ---
 
 function genMap(Generator $gen, callable $fn): Generator {
     foreach ($gen as $value) {
@@ -84,6 +88,7 @@ echo "First 5 even squares: " . implode(', ', $first5) . "\n";
 $sum = genReduce(rangeGen(1, 100), function($acc, $n) { return $acc + $n; }, 0);
 echo "Sum 1..100: $sum\n";
 
+// --- yield from (delegation) ---
 
 function inner(): Generator {
     yield 'a';
@@ -99,6 +104,7 @@ function outer(): Generator {
 
 echo "Delegated: " . implode(', ', iterator_to_array(outer(), false)) . "\n";
 
+// --- chunked reading ---
 
 function chunks(array $data, int $size): Generator {
     $len = count($data);
@@ -113,6 +119,7 @@ foreach (chunks($data, 4) as $chunk) {
     echo "  batch: [" . implode(', ', $chunk) . "] sum=" . array_sum($chunk) . "\n";
 }
 
+// --- memoize with closures ---
 
 function memoize(callable $fn): callable {
     $cache = [];
@@ -135,6 +142,7 @@ echo "\nMemoized factorial:\n";
 echo "  5! = " . $factorial(5) . "\n";
 echo "  10! = " . $factorial(10) . "\n";
 
+// --- pipe function ---
 
 function pipe(string $value): string {
     $value = trim($value);

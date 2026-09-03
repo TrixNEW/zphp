@@ -397,6 +397,7 @@ pub fn cleanupHandles(objects: std.ArrayListUnmanaged(*PhpObject)) void {
     for (objects.items) |obj| cleanupHandle(obj);
 }
 
+// file read/write
 
 const c_curl = @cImport({
     @cInclude("curl/curl.h");
@@ -761,6 +762,7 @@ fn native_realpath(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     return .{ .string = try ctx.createString(resolved) };
 }
 
+// directory operations
 
 fn native_mkdir(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
@@ -812,9 +814,11 @@ fn native_rename(_: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .bool = true };
 }
 
+// directory listing
 
 fn native_scandir(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
+    // SCANDIR_SORT_ASCENDING=0, _DESCENDING=1, _NONE=2
     const order: i64 = if (args.len >= 2 and args[1] == .int) args[1].int else 0;
     var dir = std.fs.cwd().openDir(args[0].string, .{ .iterate = true }) catch return Value{ .bool = false };
     defer dir.close();
@@ -1057,6 +1061,7 @@ fn globMatchFlags(pattern: []const u8, name: []const u8, flags: i64) bool {
         if (pi < pattern.len and ni < name.len) {
             // FNM_PATHNAME: '/' in name must be matched literally; * and ? don't cross it
             if (pathname and name[ni] == '/' and pattern[pi] != '/') {
+                // fall through to backtrack
             } else if (pattern[pi] == '?' or eq(pattern[pi], name[ni], casefold)) {
                 pi += 1;
                 ni += 1;
@@ -1107,6 +1112,7 @@ fn globMatchFlags(pattern: []const u8, name: []const u8, flags: i64) bool {
     return true;
 }
 
+// file info
 
 fn native_is_readable(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
@@ -1162,6 +1168,7 @@ fn native_fileinode(_: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_filetype(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
     const stat = std.fs.cwd().statFile(args[0].string) catch {
+        // might be a directory
         var dir = std.fs.cwd().openDir(args[0].string, .{}) catch return Value{ .bool = false };
         dir.close();
         return .{ .string = "dir" };
@@ -1219,6 +1226,7 @@ fn native_readfile(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     return .{ .int = @intCast(content.len) };
 }
 
+// file handle operations (fopen/fclose/fread/fwrite/fgets/feof/fseek/ftell)
 
 fn native_gzopen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // gzopen($path, $mode) opens a gzipped file with transparent compression.
@@ -1553,6 +1561,7 @@ fn native_fread(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return .{ .string = "" };
     }
     if (n < length) try obj.set(ctx.allocator, "__eof", .{ .bool = true });
+    // shrink to actual read size
     if (n < length) {
         const exact = try ctx.allocator.alloc(u8, n);
         @memcpy(exact, buf[0..n]);
