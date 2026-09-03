@@ -132,9 +132,38 @@ $redir_str = implode("\n", $hdrs_redir ?: []);
 test("http_get_last_response_headers contains 302", true, str_contains($redir_str, "302"));
 test("http_get_last_response_headers contains final 200", true, str_contains($redir_str, "200"));
 
+// http_get_last_response_headers trailing whitespace handling
+$fgc_ws = file_get_contents("$base/header-trailing-space");
+$hdrs_ws = http_get_last_response_headers();
+test("http_get_last_response_headers trailing space stripped", true, in_array("X-Trailing-Space: hello", $hdrs_ws ?: [], true));
+test("http_get_last_response_headers trailing tab and space stripped", true, in_array("X-Tab-Space: world", $hdrs_ws ?: [], true));
+test("http_get_last_response_headers empty value with spaces stripped", true, in_array("X-Empty-Value:", $hdrs_ws ?: [], true));
+test("http_get_last_response_headers status line preserved", true, isset($hdrs_ws[0]) && str_starts_with($hdrs_ws[0], "HTTP/"));
+
 // file_get_contents with bad URL resets headers to null
 $fgc_bad = @file_get_contents("http://127.0.0.1:1/nope");
 test("fgc bad returns false", false, $fgc_bad);
 test("http_get_last_response_headers on failed request is null", null, http_get_last_response_headers());
 
+// http_get_last_response_headers preserved on failed transfer after headers received
+$fail_port = getenv('CURL_FAIL_PORT');
+if ($fail_port) {
+    http_clear_last_response_headers();
+    $fgc_fail = @file_get_contents("http://127.0.0.1:$fail_port");
+    test("fgc on transfer failure returns false", false, $fgc_fail);
+    $hdrs_fail = http_get_last_response_headers();
+    test("http_get_last_response_headers preserved on failed transfer", true, is_array($hdrs_fail));
+    test("http_get_last_response_headers contains header from failed transfer", true, in_array("X-Transfer-Fail: true", $hdrs_fail ?: [], true));
+    test("status line trailing whitespace preserved exact", "HTTP/1.1 200 OK   ", $hdrs_fail[0] ?? "");
+    test("100 Continue discarded from headers", false, in_array("HTTP/1.1 100 Continue", $hdrs_fail ?: [], true));
+    test("1xx intermediate headers discarded", false, in_array("X-100-Ignore: true", $hdrs_fail ?: [], true));
+
+    // copy-on-write / isolation test: modifying returned array does not mutate internal VM state
+    $copy = $hdrs_fail;
+    $copy[0] = "MODIFIED_STATUS_LINE";
+    $hdrs_second = http_get_last_response_headers();
+    test("http_get_last_response_headers array isolation (COW)", "HTTP/1.1 200 OK   ", $hdrs_second[0] ?? "");
+}
+
 echo "done\n";
+

@@ -18,7 +18,7 @@ errors=""
 # start server
 "$ZPHP" serve "$APP" --port $PORT --workers 2 &
 SERVER_PID=$!
-cleanup() { kill $SERVER_PID 2>/dev/null || true; wait $SERVER_PID 2>/dev/null || true; exit "${EXIT_CODE:-0}"; }
+cleanup() { kill $SERVER_PID 2>/dev/null || true; kill ${FAIL_PID:-} 2>/dev/null || true; rm -f /tmp/zphp_fail_server_*.ready; wait $SERVER_PID 2>/dev/null || true; exit "${EXIT_CODE:-0}"; }
 trap cleanup EXIT
 
 # wait for server to start
@@ -437,7 +437,49 @@ kill $WSS_PID 2>/dev/null; wait $WSS_PID 2>/dev/null || true
 rm -f /tmp/zphp_test.key /tmp/zphp_test.crt
 
 # --- curl client tests (zphp curl bindings against zphp serve) ---
-curl_out=$(CURL_TEST_PORT=$PORT "$ZPHP" run "$SCRIPT_DIR/serve/curl_client.php" 2>&1)
+FAIL_PORT="${CURL_FAIL_PORT:-$((PORT + 25))}"
+READY_FILE="/tmp/zphp_fail_server_${FAIL_PORT}.ready"
+rm -f "$READY_FILE"
+python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', $FAIL_PORT))
+s.listen(1)
+with open('$READY_FILE', 'w') as f:
+    f.write('ready')
+while True:
+    try:
+        conn, _ = s.accept()
+        _ = conn.recv(1024)
+        conn.sendall(b'HTTP/1.1 100 Continue\r\nX-100-Ignore: true\r\n\r\nHTTP/1.1 200 OK   \r\nX-Transfer-Fail: true\r\nContent-Length: 1000\r\n\r\npartial')
+        conn.close()
+    except Exception:
+        break
+" &
+FAIL_PID=$!
+
+for i in $(seq 1 60); do
+    if [ -f "$READY_FILE" ]; then
+        break
+    fi
+    sleep 0.05
+done
+
+if [ ! -f "$READY_FILE" ]; then
+    echo "  FAIL  mock fail server failed to become ready"
+    failed=$((failed + 1))
+    kill $FAIL_PID 2>/dev/null || true; wait $FAIL_PID 2>/dev/null || true
+    FAIL_PID=
+    curl_fail_arg=""
+else
+    rm -f "$READY_FILE"
+    curl_fail_arg="CURL_FAIL_PORT=$FAIL_PORT"
+fi
+
+curl_out=$(CURL_TEST_PORT=$PORT $curl_fail_arg "$ZPHP" run "$SCRIPT_DIR/serve/curl_client.php" 2>&1)
+kill ${FAIL_PID:-} 2>/dev/null || true; wait ${FAIL_PID:-} 2>/dev/null || true
+FAIL_PID=
 curl_passes=$(echo "$curl_out" | grep -c "^  pass")
 curl_fails=$(echo "$curl_out" | grep -c "^  FAIL")
 echo "$curl_out" | grep -E "^  (pass|FAIL)"

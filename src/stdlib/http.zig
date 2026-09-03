@@ -292,7 +292,9 @@ fn native_headers_list(ctx: *NativeContext, _: []const Value) RuntimeError!Value
 }
 
 fn native_http_get_last_response_headers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    if (ctx.vm.last_http_response_headers) |arr| return .{ .array = arr };
+    if (ctx.vm.last_http_response_headers) |arr| {
+        return .{ .array = try ctx.vm.cloneArray(arr) };
+    }
     return .null;
 }
 
