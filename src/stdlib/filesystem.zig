@@ -409,6 +409,20 @@ const CurlWriteData = struct {
     buffer: std.ArrayListUnmanaged(u8),
 };
 
+const CurlHeaderData = struct {
+    ctx: *NativeContext,
+    headers: *PhpArray,
+    in_1xx: bool = false,
+    oom: bool = false,
+};
+
+fn parseHttpStatus(line: []const u8) ?u16 {
+    var it = std.mem.tokenizeScalar(u8, line, ' ');
+    _ = it.next() orelse return null;
+    const code_str = it.next() orelse return null;
+    return std.fmt.parseInt(u16, code_str, 10) catch null;
+}
+
 fn curlWriteCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaque) callconv(.c) usize {
     const total = size * nmemb;
     const wd: *CurlWriteData = @ptrCast(@alignCast(userdata));
@@ -416,7 +430,52 @@ fn curlWriteCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaqu
     return total;
 }
 
+fn curlHeaderCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaque) callconv(.c) usize {
+    const total = size * nmemb;
+    const hd: *CurlHeaderData = @ptrCast(@alignCast(userdata));
+    const raw = data[0..total];
+    const cleaned_raw = std.mem.trimEnd(u8, raw, "\r\n");
+    if (cleaned_raw.len > 0) {
+        if (std.mem.startsWith(u8, cleaned_raw, "HTTP/")) {
+            if (parseHttpStatus(cleaned_raw)) |code| {
+                if (code >= 100 and code < 200 and code != 101) {
+                    hd.in_1xx = true;
+                    return total;
+                }
+            }
+            hd.in_1xx = false;
+            // Note: ctx.createString creates an owned copy of line in ctx.strings,
+            // safely detached from cURL's transient buffer.
+            const owned = hd.ctx.createString(cleaned_raw) catch {
+                hd.oom = true;
+                return 0;
+            };
+            hd.headers.append(hd.ctx.allocator, .{ .string = owned }) catch {
+                hd.oom = true;
+                return 0;
+            };
+        } else if (!hd.in_1xx) {
+            const line = std.mem.trimEnd(u8, cleaned_raw, " \t");
+            if (line.len > 0) {
+                // Note: ctx.createString creates an owned copy in ctx.strings.
+                const owned = hd.ctx.createString(line) catch {
+                    hd.oom = true;
+                    return 0;
+                };
+                hd.headers.append(hd.ctx.allocator, .{ .string = owned }) catch {
+                    hd.oom = true;
+                    return 0;
+                };
+            }
+        }
+    }
+    return total;
+}
+
 fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!Value {
+    ctx.vm.last_http_response_headers = null;
+
+    // Note: process-local curl_global_init is safe under zphp serve's fork-based worker model.
     if (!curl_global_init_done) {
         _ = c_curl.curl_global_init(c_curl.CURL_GLOBAL_DEFAULT);
         curl_global_init_done = true;
@@ -432,7 +491,7 @@ fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!Value {
 
     _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_URL, &url_buf);
     _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
-    _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_MAXREDIRS, @as(c_long, 10));
+    _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_MAXREDIRS, @as(c_long, 20));
 
     var wd = CurlWriteData{
         .allocator = ctx.allocator,
@@ -440,10 +499,23 @@ fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!Value {
     };
     defer wd.buffer.deinit(wd.allocator);
 
+    // headers_arr is tracked in VM.arrays and swept by freeHeapItems on request reset;
+    // only published to ctx.vm.last_http_response_headers if valid headers were received.
+    const headers_arr = ctx.createArray() catch return .{ .bool = false };
+    var hd = CurlHeaderData{
+        .ctx = ctx,
+        .headers = headers_arr,
+    };
+
     _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_WRITEFUNCTION, @as(?*const fn ([*]u8, usize, usize, *anyopaque) callconv(.c) usize, &curlWriteCallback));
     _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_WRITEDATA, @as(*anyopaque, @ptrCast(&wd)));
+    _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_HEADERFUNCTION, @as(?*const fn ([*]u8, usize, usize, *anyopaque) callconv(.c) usize, &curlHeaderCallback));
+    _ = c_curl.curl_easy_setopt(handle, c_curl.CURLOPT_HEADERDATA, @as(*anyopaque, @ptrCast(&hd)));
 
     const result = c_curl.curl_easy_perform(handle);
+    if (!hd.oom and headers_arr.entries.items.len > 0) {
+        ctx.vm.last_http_response_headers = headers_arr;
+    }
     if (result != c_curl.CURLE_OK) return .{ .bool = false };
 
     const content = try ctx.createString(wd.buffer.items);

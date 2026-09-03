@@ -727,6 +727,7 @@ pub const VM = struct {
     response_code: i64 = 200,
     response_content_type: []const u8 = "text/html",
     response_headers: ?*PhpArray = null,
+    last_http_response_headers: ?*PhpArray = null,
     headers_sent: bool = false,
     default_tz_name: []const u8 = "UTC",
     // populated by DateTime/createFromFormat parsers when input is unparseable.
@@ -2323,6 +2324,7 @@ pub const VM = struct {
         self.response_code = 200;
         self.response_content_type = "text/html";
         self.response_headers = null;
+        self.last_http_response_headers = null;
         self.headers_sent = false;
         self.default_tz_name = "UTC";
         self.default_tz_offset = 0;
