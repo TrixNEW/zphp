@@ -19,6 +19,11 @@ pub fn build(b: *std.Build) void {
         .use_llvm = true,
     });
 
+    const known_folders_mod = b.dependency("known_folders", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("known-folders");
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -34,6 +39,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.linkSystemLibrary("crypto", .{ .preferred_link_mode = .static, .use_pkg_config = .no });
     exe_mod.linkSystemLibrary("nghttp2", .{ .preferred_link_mode = .static });
     exe_mod.linkSystemLibrary("curl", .{});
+    exe_mod.addImport("known-folders", known_folders_mod);
 
     var threaded: std.Io.Threaded = .init_single_threaded;
     defer threaded.deinit();
@@ -101,6 +107,7 @@ pub fn build(b: *std.Build) void {
     addFsSpaceShim(b, test_mod);
     test_mod.link_libc = true;
     test_mod.addObject(fast_loop_test_obj);
+    test_mod.addImport("known-folders", known_folders_mod);
 
     const unit_tests = b.addTest(.{
         .root_module = test_mod,
