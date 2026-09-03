@@ -459,7 +459,11 @@ fn runFile(allocator: std.mem.Allocator, path: []const u8, script_args: []const 
 
 fn runBytecode(allocator: std.mem.Allocator, bc: []const u8, path: []const u8, script_args: []const []const u8) !void {
     var result = bytecode_format.deserialize(allocator, bc) catch {
-        try writeStderr("error: invalid bytecode file\n");
+        var buf: [std.fs.max_path_bytes + 64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "error: invalid bytecode file '{s}'\n", .{path}) catch
+            "error: invalid bytecode file\n";
+
+        try writeStderr(msg);
         std.process.exit(1);
     };
     defer result.deinit();
