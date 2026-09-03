@@ -157,10 +157,16 @@ fn cleanupPoolableHandle(obj: *PhpObject) bool {
     return fd != .int or fd.int > 2;
 }
 
+fn cleanupClosedProcess(obj: *PhpObject) bool {
+    const running = obj.get("__running");
+    return running == .bool and !running.bool;
+}
+
 pub fn register(vm: *VM, a: Allocator) !void {
     var def = ClassDef{ .name = "FileHandle", .native_cleanup = cleanupPoolableHandle };
     try def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
     try vm.classes.put(a, "FileHandle", def);
+    try vm.classes.put(a, "ProcessResource", ClassDef{ .name = "ProcessResource", .native_cleanup = cleanupClosedProcess });
 
     // finfo as an OO wrapper around finfo_* functions
     var finfo_def = ClassDef{ .name = "finfo" };
@@ -3084,9 +3090,7 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     if (args.len < 3 or args[0] != .string) return .{ .bool = false };
     const cmd = args[0].string;
 
-    const proc = try ctx.allocator.create(PhpObject);
-    proc.* = .{ .class_name = "ProcessResource" };
-    try ctx.vm.objects.append(ctx.allocator, proc);
+    const proc = try ctx.createObject("ProcessResource");
     const cmd_copy = try ctx.vm.allocator.dupe(u8, cmd);
     try ctx.vm.strings.append(ctx.allocator, cmd_copy);
     try proc.set(ctx.allocator, "__cmd", .{ .string = cmd_copy });
