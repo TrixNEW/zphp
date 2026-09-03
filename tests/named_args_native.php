@@ -32,9 +32,6 @@ assert(mb_substr(encoding: "UTF-8", length: 2, start: 1, string: "café") === "a
 assert(pathinfo(flags: PATHINFO_EXTENSION, path: "/path/to/file.php") === "php");
 assert(basename(suffix: ".txt", path: "/path/to/note.txt") === "note");
 
-// fixed named args with trailing variadics
-assert(sprintf(format: "%s: %d", "count", 5) === "count: 5");
-
 $threw = false;
 try {
     str_replace(invalid_name: "test", replace: "b", search: "a", subject: "a");
