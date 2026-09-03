@@ -100,6 +100,11 @@ if ($path === "/health") {
 } elseif ($path === "/redirect") {
     header("Location: /headers", true, 302);
     echo "redirecting";
+} elseif ($path === "/header-trailing-space") {
+    header("X-Trailing-Space: hello    ");
+    header("X-Tab-Space: world\t  ");
+    header("X-Empty-Value:   ");
+    echo "whitespace-test";
 } else {
     http_response_code(404);
     echo json_encode(["error" => "not found", "path" => $path]);
