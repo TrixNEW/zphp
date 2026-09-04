@@ -18,11 +18,11 @@ pub fn main(init: std.process.Init) !void {
         .enviorn = init.environ_map,
     };
 
-    const args = init.minimal.args.toSlice(opt.arena_allocator);
+    const args = try init.minimal.args.toSlice(opt.arena_allocator);
 
     if (bytecode_format.detectEmbeddedBytecode(opt.allocator)) |bc| {
         defer opt.allocator.free(bc);
-        try runBytecode(opt.allocator, bc, args[0], if (args.len > 1) args[1..] else &.{});
+        try runBytecode(&opt, bc, args[0], if (args.len > 1) args[1..] else &.{});
         return;
     }
 
@@ -31,7 +31,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    try dispatch(opt, args);
+    try dispatch(&opt, args);
 }
 
 fn dispatch(opt: *const Options, args: []const []const u8) !void {
@@ -39,7 +39,7 @@ fn dispatch(opt: *const Options, args: []const []const u8) !void {
 
     if (std.mem.eql(u8, cmd, "run")) {
         try requireArg(opt.io, args, 3, "usage: zphp run <file>\n");
-        try runFile(opt, args[2], if (args.len > 3) args[3..] else &.{});
+        try runFile(&opt, args[2], if (args.len > 3) args[3..] else &.{});
     } else if (std.mem.eql(u8, cmd, "serve")) {
         try requireArg(
             opt.io,
@@ -73,15 +73,15 @@ fn dispatch(opt: *const Options, args: []const []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "install")) {
         try @import("pkg.zig").install(opt.allocator);
     } else if (std.mem.eql(u8, cmd, "add")) {
-        try requireArg(args, 3, "usage: zphp add <package>\n");
+        try requireArg(opt.io, args, 3, "usage: zphp add <package>\n");
         try @import("pkg.zig").add(opt.allocator, args[2]);
     } else if (std.mem.eql(u8, cmd, "remove")) {
-        try requireArg(args, 3, "usage: zphp remove <package>\n");
+        try requireArg(opt.io, args, 3, "usage: zphp remove <package>\n");
         try @import("pkg.zig").remove(opt.allocator, args[2]);
     } else if (std.mem.eql(u8, cmd, "packages")) {
         try @import("pkg.zig").packages(opt.allocator);
     } else if (std.mem.eql(u8, cmd, "fmt")) {
-        try requireArg(args, 3, "usage: zphp fmt [--check] <file>...\n");
+        try requireArg(opt.io, args, 3, "usage: zphp fmt [--check] <file>...\n");
         try @import("fmt.zig").run(opt.allocator, args[2..]);
     } else if (std.mem.eql(u8, cmd, "build")) {
         try requireArg(opt.io, args, 3, "usage: zphp build [--compile] <file>\n");
@@ -103,31 +103,31 @@ fn requireArg(io: std.Io, args: []const []const u8, min: usize, usage: []const u
     }
 }
 
-fn compileSource(_: std.Io, allocator: std.mem.Allocator, source: []const u8, path: []const u8) !CompileResult {
+fn compileSource(io: std.Io, allocator: std.mem.Allocator, source: []const u8, path: []const u8) !CompileResult {
     var ast = try parser.parse(allocator, source);
     defer ast.deinit();
 
     if (ast.errors.len > 0) {
         const msg = error_format.formatParseErrors(allocator, &ast, path);
         if (msg.len > 0) {
-            try writeStderr(msg);
+            try writeStderr(io, msg);
         } else {
-            try writeStderr("parse error\n");
+            try writeStderr(io, "parse error\n");
         }
         std.process.exit(1);
     }
 
     return compiler.compileWithPath(&ast, allocator, path) catch {
-        try writeStderr("compile error\n");
+        try writeStderr(io, "compile error\n");
         std.process.exit(1);
     };
 }
 
 fn readSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
     return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_source_size)) catch |err| {
-        try writeStderr("error: could not read file '");
-        try writeStderr(path);
-        try writeStderr("'\n");
+        try writeStderr(io, "error: could not read file '");
+        try writeStderr(io, path);
+        try writeStderr(io, "'\n");
         return err;
     };
 }
@@ -162,7 +162,14 @@ fn dumpProfile(io: std.Io, vm: *@import("runtime/vm.zig").VM) void {
 
 const compile_cache_dir = "bytecode-v7";
 
-fn compileCachePath(opt: *const Options, path: []const u8, stat: std.Io.File.Stat, closure_counter: u32) ![]u8 {
+fn compileCachePath(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+    path: []const u8,
+    stat: std.Io.File.Stat,
+    closure_counter: u32,
+) ![]u8 {
     var digest: [32]u8 = undefined;
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(path);
@@ -173,29 +180,36 @@ fn compileCachePath(opt: *const Options, path: []const u8, stat: std.Io.File.Sta
     hasher.update(std.mem.asBytes(&closure_counter));
     hasher.final(&digest);
     const hex = std.fmt.bytesToHex(digest, .lower);
-    const cache_root = try known_folders.getPath(opt.io, opt.allocator, opt.enviorn, .cache);
-    defer opt.allocator.free(cache_root);
-    return std.fmt.allocPrint(opt.allocator, "{s}/{s}/{s}.zphpc", .{ cache_root, compile_cache_dir, hex });
+    const cache_root = (try known_folders.getPath(io, allocator, environ, .cache)) orelse return error.CacheDirUnavailable;
+    defer allocator.free(cache_root);
+    return std.fmt.allocPrint(allocator, "{s}/{s}/{s}.zphpc", .{ cache_root, compile_cache_dir, hex });
 }
 
-fn loadCompileCache(opt: *const Options, path: []const u8, stat: std.Io.File.Stat, closure_counter: u32) ?*CompileResult {
-    const cache_path = compileCachePath(opt.allocator, path, stat, closure_counter) catch return null;
-    defer opt.allocator.free(cache_path);
+fn loadCompileCache(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+    path: []const u8,
+    stat: std.Io.File.Stat,
+    closure_counter: u32,
+) ?*CompileResult {
+    const cache_path = compileCachePath(io, allocator, environ, path, stat, closure_counter) catch return null;
+    defer allocator.free(cache_path);
 
     const data = std.Io.Dir.cwd().readFileAlloc(
-        opt.io,
+        io,
         cache_path,
-        opt.allocator,
+        allocator,
         .limited(256 * 1024 * 1024),
     ) catch return null;
 
-    defer opt.allocator.free(data);
+    defer allocator.free(data);
 
-    const result = bytecode_format.deserialize(opt.allocator, data) catch {
-        std.Io.Dir.cwd().deleteFile(opt.io, cache_path) catch {};
+    const result = bytecode_format.deserialize(allocator, data) catch {
+        std.Io.Dir.cwd().deleteFile(io, cache_path) catch {};
         return null;
     };
-    const heap_result = opt.allocator.create(CompileResult) catch {
+    const heap_result = allocator.create(CompileResult) catch {
         var owned = result;
         owned.deinit();
         return null;
@@ -205,27 +219,31 @@ fn loadCompileCache(opt: *const Options, path: []const u8, stat: std.Io.File.Sta
 }
 
 fn saveCompileCache(
-    opt: *const Options,
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
     path: []const u8,
-    stat: std.fs.File.Stat,
+    stat: std.Io.File.Stat,
     closure_counter: u32,
     result: *const CompileResult,
 ) void {
-    const cache_path = compileCachePath(opt, path, stat, closure_counter) catch return;
-    defer opt.allocator.free(cache_path);
-    const data = bytecode_format.serialize(opt.allocator, result) catch return;
-    defer opt.allocator.free(data);
+    const cache_path = compileCachePath(io, allocator, environ, path, stat, closure_counter) catch return;
+    defer allocator.free(cache_path);
+    const data = bytecode_format.serialize(allocator, result) catch return;
+    defer allocator.free(data);
     var write_buffer: [64 * 1024]u8 = undefined;
 
-    var atomic_file = std.Io.Dir.cwd().createFileAtomic(opt.io, cache_path, .{ .make_path = true }) catch return;
-    defer atomic_file.deinit();
+    var atomic_file = std.Io.Dir.cwd().createFileAtomic(io, cache_path, .{ .make_path = true, .replace = true }) catch return;
+    defer atomic_file.deinit(io);
 
-    var writer = atomic_file.file.writer(opt.io, &write_buffer);
-    writer.interface.writer.writeAll(data) catch return;
-    writer.finish() catch return;
+    var writer = atomic_file.file.writer(io, &write_buffer);
+    writer.interface.writeAll(data) catch return;
+    writer.flush() catch return;
+    atomic_file.replace(io) catch return;
 }
 
-fn loadFile(opt: Options, path: []const u8, vm: *@import("runtime/vm.zig").VM) ?*CompileResult {
+fn loadFile(path: []const u8, allocator: std.mem.Allocator, vm: *@import("runtime/vm.zig").VM) ?*CompileResult {
+    const io = vm.io;
     var abs_path: []const u8 = undefined;
     var source: []const u8 = undefined;
     var source_stat: ?std.Io.File.Stat = null;
@@ -248,7 +266,7 @@ fn loadFile(opt: Options, path: []const u8, vm: *@import("runtime/vm.zig").VM) ?
                 while (split > 0 and tail[split - 1] != '/') split -= 1;
                 if (split == 0) break;
                 const candidate = tail[0 .. split - 1];
-                if (std.Io.Dir.cwd().statFile(opt.io, candidate)) |st| {
+                if (std.Io.Dir.cwd().statFile(io, candidate, .{})) |st| {
                     if (st.kind == .file) {
                         archive = candidate;
                         internal = tail[split..];
@@ -270,72 +288,75 @@ fn loadFile(opt: Options, path: []const u8, vm: *@import("runtime/vm.zig").VM) ?
             cache_entry = c;
         } else {
             const archive_bytes_owned = std.Io.Dir.cwd().readFileAlloc(
-                opt.io,
+                io,
                 archive,
-                opt.allocator,
+                allocator,
                 .limited(256 * 1024 * 10240),
             ) catch return null;
-            const parsed = phar_mod.parse(opt.allocator, archive_bytes_owned) catch {
-                opt.allocator.free(archive_bytes_owned);
+            const parsed = phar_mod.parse(allocator, archive_bytes_owned) catch {
+                allocator.free(archive_bytes_owned);
                 return null;
             };
-            const e = opt.allocator.create(PharCacheEntry) catch {
-                opt.allocator.free(archive_bytes_owned);
+            const e = allocator.create(PharCacheEntry) catch {
+                allocator.free(archive_bytes_owned);
                 var p = parsed;
-                p.deinit(opt.allocator);
+                p.deinit(allocator);
                 return null;
             };
             e.* = .{ .bytes = archive_bytes_owned, .parsed = parsed };
-            const archive_key = opt.allocator.dupe(u8, archive) catch {
-                opt.allocator.free(archive_bytes_owned);
+            const archive_key = allocator.dupe(u8, archive) catch {
+                allocator.free(archive_bytes_owned);
                 var p = parsed;
-                p.deinit(opt.allocator);
-                opt.allocator.destroy(e);
+                p.deinit(allocator);
+                allocator.destroy(e);
                 return null;
             };
-            vm.phar_cache.put(opt.allocator, archive_key, e) catch {
-                opt.allocator.free(archive_key);
-                opt.allocator.free(archive_bytes_owned);
+            vm.phar_cache.put(allocator, archive_key, e) catch {
+                allocator.free(archive_key);
+                allocator.free(archive_bytes_owned);
                 var p = parsed;
-                p.deinit(opt.allocator);
-                opt.allocator.destroy(e);
+                p.deinit(allocator);
+                allocator.destroy(e);
                 return null;
             };
             cache_entry = e;
         }
-        const normalized_internal = std.fs.path.resolve(opt.allocator, &.{ "/", internal }) catch return null;
-        defer opt.allocator.free(normalized_internal);
+        const normalized_internal = std.fs.path.resolve(allocator, &.{ "/", internal }) catch return null;
+        defer allocator.free(normalized_internal);
         const entry = cache_entry.parsed.lookup(std.mem.trimLeft(u8, normalized_internal, "/")) orelse return null;
-        const payload = phar_mod.extract(opt.allocator, &cache_entry.parsed, entry) catch return null;
+        const payload = phar_mod.extract(allocator, &cache_entry.parsed, entry) catch return null;
         source = payload;
         // synthesize a display path so error messages identify the entry inside the phar
-        abs_path = std.fmt.allocPrint(opt.allocator, "phar://{s}/{s}", .{ archive, internal }) catch {
-            opt.allocator.free(payload);
+        abs_path = std.fmt.allocPrint(allocator, "phar://{s}/{s}", .{ archive, internal }) catch {
+            allocator.free(payload);
             return null;
         };
     } else {
-        abs_path = std.Io.Dir.realPathFileAbsoluteAlloc(opt.io, opt.allocator, path) catch opt.allocator.dupe(u8, path) catch return null;
-        const file = std.Io.Dir.cwd().openFile(opt.io, abs_path, .{}) catch {
-            opt.allocator.free(abs_path);
+        abs_path = std.Io.Dir.realPathFileAbsoluteAlloc(io, path, allocator) catch allocator.dupe(u8, path) catch return null;
+        const file = std.Io.Dir.cwd().openFile(io, abs_path, .{}) catch {
+            allocator.free(abs_path);
             return null;
         };
         defer file.close();
-        const stat = file.stat() catch {
-            opt.allocator.free(abs_path);
+        const stat = file.stat(io) catch {
+            allocator.free(abs_path);
             return null;
         };
 
-        if (loadCompileCache(opt, abs_path, stat, closure_counter)) |cached| {
-            opt.allocator.free(abs_path);
-            return cached;
+        if (vm.environ) |environ| {
+            if (loadCompileCache(io, allocator, environ, abs_path, stat, closure_counter)) |cached| {
+                allocator.free(abs_path);
+                return cached;
+            }
         }
 
-        var file_reader = file.reader(opt.io, &.{});
-        source = file_reader.interface.allocRemaining(opt.allocator, max_source_size) catch {
-            opt.allocator.free(abs_path);
+        var read_buffer: [16 * 1024]u8 = undefined;
+        var file_reader = file.reader(io, &read_buffer);
+        source = file_reader.interface.allocRemaining(allocator, .limited(max_source_size)) catch {
+            allocator.free(abs_path);
             return null;
         };
-        const read_stat = file.stat() catch {
+        const read_stat = file.stat(io) catch {
             allocator.free(source);
             allocator.free(abs_path);
             return null;
@@ -343,7 +364,7 @@ fn loadFile(opt: Options, path: []const u8, vm: *@import("runtime/vm.zig").VM) ?
         if (stat.inode != read_stat.inode or stat.size != read_stat.size or stat.mtime.nanoseconds != read_stat.mtime.nanoseconds or stat.ctime.nanoseconds != read_stat.ctime.nanoseconds) {
             allocator.free(source);
             allocator.free(abs_path);
-            return loadFile(opt, path, allocator, vm);
+            return loadFile(path, allocator, vm);
         }
         source_stat = stat;
     }
@@ -392,7 +413,9 @@ fn loadFile(opt: Options, path: []const u8, vm: *@import("runtime/vm.zig").VM) ?
         return null;
     };
 
-    if (source_stat) |stat| saveCompileCache(allocator, abs_path, stat, closure_counter, heap_result);
+    if (source_stat) |stat| {
+        if (vm.environ) |environ| saveCompileCache(io, allocator, environ, abs_path, stat, closure_counter, heap_result);
+    }
 
     return heap_result;
 }
@@ -470,13 +493,13 @@ fn initArgv(vm: *VM, a: std.mem.Allocator, script_path: []const u8, script_args:
 fn runFile(options: *const Options, path: []const u8, script_args: []const []const u8) !void {
     if (std.mem.endsWith(u8, path, ".zphpc")) {
         const bc = std.Io.Dir.cwd().readFileAlloc(options.io, path, options.allocator, .limited(256 * 1024 * 1024)) catch |err| {
-            try writeStderr("error: could not read file '");
-            try writeStderr(path);
-            try writeStderr("'\n");
+            try writeStderr(options.io, "error: could not read file '");
+            try writeStderr(options.io, path);
+            try writeStderr(options.io, "'\n");
             return err;
         };
         defer options.allocator.free(bc);
-        try runBytecode(options.allocator, bc, path, script_args);
+        try runBytecode(options, bc, path, script_args);
         return;
     }
 
@@ -492,21 +515,23 @@ fn runFile(options: *const Options, path: []const u8, script_args: []const []con
     try runWithVM(options, &result, path, script_args);
 }
 
-fn runBytecode(allocator: std.mem.Allocator, bc: []const u8, path: []const u8, script_args: []const []const u8) !void {
-    var result = bytecode_format.deserialize(allocator, bc) catch {
-        try writeStderr("error: invalid bytecode file\n");
+fn runBytecode(opt: *const Options, bc: []const u8, path: []const u8, script_args: []const []const u8) !void {
+    var result = bytecode_format.deserialize(opt.allocator, bc) catch {
+        try writeStderr(opt.io, "error: invalid bytecode file\n");
         std.process.exit(1);
     };
     defer result.deinit();
-    try runWithVM(allocator, &result, path, script_args);
+    try runWithVM(opt, &result, path, script_args);
 }
 
 fn runWithVM(opt: *const Options, result: *CompileResult, script_path: []const u8, script_args: []const []const u8) !void {
     env.loadEnvFile(opt.allocator);
     const vm = VM.initOnHeap(opt.allocator) catch {
-        try writeStderr("vm init error\n");
+        try writeStderr(opt.io, "vm init error\n");
         std.process.exit(1);
     };
+    vm.io = opt.io;
+    vm.environ = opt.enviorn;
     defer {
         if (opt.enviorn.get("ZPHP_DBG_PROFILE") != null) dumpProfile(opt.io, vm);
         vm.deinit();
@@ -518,7 +543,7 @@ fn runWithVM(opt: *const Options, result: *CompileResult, script_path: []const u
     vm.interpret(result) catch {
         if (vm.exit_requested) {
             vm.runShutdownCallbacks() catch {};
-            if (vm.output.items.len > 0) try writeStdout(vm.output.items);
+            if (vm.output.items.len > 0) try writeStdout(opt.io, vm.output.items);
             std.process.exit(vm.exit_code);
         }
         // dispatch to user exception handler if one is installed and we have
@@ -529,14 +554,14 @@ fn runWithVM(opt: *const Options, result: *CompileResult, script_path: []const u
                 vm.user_exception_handler = null; // prevent recursion
                 vm.pending_exception = null;
                 var ctx = vm.makeContext(null);
-                _ = ctx.invokeCallable(handler, &.{exc}) catch {};
+                if (ctx.invokeCallable(handler, &.{exc})) |_| {} else |_| {}
                 vm.runShutdownCallbacks() catch {};
-                if (vm.output.items.len > 0) try writeStdout(vm.output.items);
-                if (std.posix.getenv("ZPHP_DBG_PROFILE") != null) dumpProfile(opt.io, vm);
+                if (vm.output.items.len > 0) try writeStdout(opt.io, vm.output.items);
+                if (opt.enviorn.get("ZPHP_DBG_PROFILE") != null) dumpProfile(opt.io, vm);
                 if (vm.exit_requested) std.process.exit(vm.exit_code);
                 if (vm.pending_exception != null) {
                     const fallback = error_format.formatRuntimeError(opt.allocator, vm);
-                    if (fallback.len > 0) try writeStderr(fallback);
+                    if (fallback.len > 0) try writeStderr(opt.io, fallback);
                     std.process.exit(255);
                 }
                 return;
@@ -544,7 +569,7 @@ fn runWithVM(opt: *const Options, result: *CompileResult, script_path: []const u
         }
         vm.runShutdownCallbacks() catch {};
         if (vm.output.items.len > 0) try writeStdout(opt.io, vm.output.items);
-        if (opt.enviorn.getc("ZPHP_DBG_PROFILE") != null) dumpProfile(opt.io, vm);
+        if (opt.enviorn.get("ZPHP_DBG_PROFILE") != null) dumpProfile(opt.io, vm);
         const msg = error_format.formatRuntimeError(opt.allocator, vm);
         if (msg.len > 0) {
             try writeStderr(opt.io, msg);
@@ -569,7 +594,7 @@ fn buildFile(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
     }
 
     const path = file_path orelse {
-        try writeStderr("usage: zphp build [--compile] <file>\n");
+        try writeStderr(io, "usage: zphp build [--compile] <file>\n");
         std.process.exit(1);
     };
 
@@ -583,20 +608,20 @@ fn buildFile(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8)
     defer result.deinit();
 
     const bc = bytecode_format.serialize(allocator, &result) catch {
-        try writeStderr("serialization error\n");
+        try writeStderr(io, "serialization error\n");
         std.process.exit(1);
     };
     defer allocator.free(bc);
 
     if (compile_exe) {
         const exe_path = std.process.executablePathAlloc(io, allocator) catch {
-            try writeStderr("error: could not determine self exe path\n");
+            try writeStderr(io, "error: could not determine self exe path\n");
             std.process.exit(1);
         };
         defer allocator.free(exe_path);
         const base = std.fs.path.stem(path);
         bytecode_format.appendToExecutable(allocator, exe_path, bc, base) catch {
-            try writeStderr("error: could not create executable\n");
+            try writeStderr(io, "error: could not create executable\n");
             std.process.exit(1);
         };
         try writeStdout(io, "created: ");
@@ -621,7 +646,7 @@ fn writeStdout(io: std.Io, msg: []const u8) !void {
 }
 
 fn writeStderr(io: std.Io, msg: []const u8) !void {
-    _ = try std.Io.File.stdout().writeStreamingAll(io, msg);
+    _ = try std.Io.File.stderr().writeStreamingAll(io, msg);
 }
 
 test {
