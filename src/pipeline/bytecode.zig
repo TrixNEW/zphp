@@ -377,9 +377,9 @@ pub const SourceLocation = struct {
 };
 
 pub const Chunk = struct {
-    code: std.ArrayListUnmanaged(u8) = .{},
-    constants: std.ArrayListUnmanaged(Value) = .{},
-    lines: std.ArrayListUnmanaged(u32) = .{},
+    code: std.ArrayList(u8) = .empty,
+    constants: std.ArrayList(Value) = .empty,
+    lines: std.ArrayList(u32) = .empty,
 
     pub fn deinit(self: *Chunk, allocator: std.mem.Allocator) void {
         self.code.deinit(allocator);

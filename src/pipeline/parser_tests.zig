@@ -5,15 +5,22 @@ const parse = @import("parser.zig").parse;
 const Allocator = std.mem.Allocator;
 
 const Buf = struct {
-    inner: std.ArrayListUnmanaged(u8) = .{},
-    gpa: Allocator,
+    aw: std.Io.Writer.Allocating,
 
-    fn writer(self: *Buf) std.ArrayListUnmanaged(u8).Writer {
-        return self.inner.writer(self.gpa);
+    fn init(gpa: Allocator) Buf {
+        return .{ .aw = std.Io.Writer.Allocating.init(gpa) };
+    }
+
+    fn writer(self: *Buf) *std.Io.Writer {
+        return &self.aw.writer;
+    }
+
+    fn items(self: *Buf) []const u8 {
+        return self.aw.writer.buffered();
     }
 
     fn deinit(self: *Buf) void {
-        self.inner.deinit(self.gpa);
+        self.aw.deinit();
     }
 };
 
@@ -22,7 +29,7 @@ fn expectParse(source: []const u8, expected: []const u8) !void {
     defer ast.deinit();
 
     const stmts = ast.extraSlice(ast.nodes[0].data.lhs);
-    var buf = Buf{ .gpa = std.testing.allocator };
+    var buf = Buf.init(std.testing.allocator);
     defer buf.deinit();
 
     for (stmts, 0..) |stmt, i| {
@@ -30,8 +37,8 @@ fn expectParse(source: []const u8, expected: []const u8) !void {
         try renderNode(&ast, stmt, &buf);
     }
 
-    errdefer std.debug.print("\nexpected: {s}\n  actual: {s}\n", .{ expected, buf.inner.items });
-    try std.testing.expectEqualStrings(expected, buf.inner.items);
+    errdefer std.debug.print("\nexpected: {s}\n  actual: {s}\n", .{ expected, buf.items() });
+    try std.testing.expectEqualStrings(expected, buf.items());
 }
 
 fn expectError(source: []const u8) !void {
