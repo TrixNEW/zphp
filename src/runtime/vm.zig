@@ -1627,9 +1627,9 @@ pub const VM = struct {
         try c.put(a, "SIG_ERR", .{ .int = -1 });
         try c.put(a, "WNOHANG", .{ .int = 1 });
         try c.put(a, "WUNTRACED", .{ .int = 2 });
-        try c.put(a, "SIG_BLOCK", .{ .int = 0 });
-        try c.put(a, "SIG_UNBLOCK", .{ .int = 1 });
-        try c.put(a, "SIG_SETMASK", .{ .int = 2 });
+        try c.put(a, "SIG_BLOCK", .{ .int = posix.SIG.BLOCK });
+        try c.put(a, "SIG_UNBLOCK", .{ .int = posix.SIG.UNBLOCK });
+        try c.put(a, "SIG_SETMASK", .{ .int = posix.SIG.SETMASK });
         try c.put(a, "FTP_ASCII", .{ .int = 1 });
         try c.put(a, "FTP_TEXT", .{ .int = 1 });
         try c.put(a, "FTP_BINARY", .{ .int = 2 });
@@ -3839,7 +3839,7 @@ pub const VM = struct {
                                 }
                             }
                         }
-                        const native_needs_refs = self.native_fns.contains(name) and (std.mem.eql(u8, name, "preg_match") or std.mem.eql(u8, name, "preg_match_all"));
+                        const native_needs_refs = self.native_fns.contains(name) and (std.mem.eql(u8, name, "preg_match") or std.mem.eql(u8, name, "preg_match_all") or std.mem.eql(u8, name, "pcntl_sigprocmask"));
                         if (native_needs_refs or function_needs_refs) {
                             var ref_args: [256]Value = undefined;
                             if (arr.entries.items.len > ref_args.len) return error.RuntimeError;
@@ -3894,7 +3894,7 @@ pub const VM = struct {
                                 }
                             }
                         }
-                        const native_needs_refs = self.native_fns.contains(name_val.string.bytes()) and (std.mem.eql(u8, name_val.string.bytes(), "preg_match") or std.mem.eql(u8, name_val.string.bytes(), "preg_match_all"));
+                        const native_needs_refs = self.native_fns.contains(name_val.string.bytes()) and (std.mem.eql(u8, name_val.string.bytes(), "preg_match") or std.mem.eql(u8, name_val.string.bytes(), "preg_match_all") or std.mem.eql(u8, name_val.string.bytes(), "pcntl_sigprocmask"));
                         if (native_needs_refs or function_needs_refs) {
                             var ref_args: [256]Value = undefined;
                             if (arr.entries.items.len > ref_args.len) return error.RuntimeError;
@@ -6223,7 +6223,10 @@ pub const VM = struct {
                         }
                         try self.objects.append(self.allocator, copy);
                         if (self.hasMethod(src.class_name, "__clone")) {
-                            _ = self.callMethod(copy, "__clone", &.{}) catch {};
+                            _ = self.callMethod(copy, "__clone", &.{}) catch {
+                                if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                                return error.RuntimeError;
+                            };
                         }
                         self.push(.{ .object = copy });
                     } else {
@@ -8358,6 +8361,13 @@ pub const VM = struct {
                                     // name so the stack trace shows it at #0
                                     if (self.pending_exception) |exc| {
                                         if (!isFrameOutNative(mc_entry.full_name)) self.prependNativeFrameToTrace(exc, mc_entry.full_name, args_buf[0..ac]) catch {};
+                                        // Cached calls must dispatch pending callback exceptions
+                                        // just like uncached native calls, but only to a handler
+                                        // owned by this execution boundary.
+                                        if (self.dispatchPendingException(base_frame)) {
+                                            self.pending_native_name = null;
+                                            continue;
+                                        }
                                         self.pending_native_name = mc_entry.full_name;
                                         self.pending_native_is_instance = true;
                                     }
