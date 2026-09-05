@@ -40,15 +40,15 @@ pub const FunctionAttrEntry = struct {
 
 pub const CompileResult = struct {
     chunk: Chunk,
-    functions: std.ArrayListUnmanaged(ObjFunction),
-    string_allocs: std.ArrayListUnmanaged([]const u8),
+    functions: std.ArrayList(ObjFunction),
+    string_allocs: std.ArrayList([]const u8),
     allocator: Allocator,
     local_count: u16 = 0,
     slot_names: []const []const u8 = &.{},
-    type_hints: std.ArrayListUnmanaged(TypeHint) = .{},
-    function_attrs: std.ArrayListUnmanaged(FunctionAttrEntry) = .{},
-    new_defaults: std.ArrayListUnmanaged(*bytecode.NewDefault) = .{},
-    deferred_exprs: std.ArrayListUnmanaged(*bytecode.DeferredExpr) = .{},
+    type_hints: std.ArrayList(TypeHint) = .empty,
+    function_attrs: std.ArrayList(FunctionAttrEntry) = .empty,
+    new_defaults: std.ArrayList(*bytecode.NewDefault) = .empty,
+    deferred_exprs: std.ArrayList(*bytecode.DeferredExpr) = .empty,
     source: []const u8 = "",
     file_path: []const u8 = "",
     strict_types: bool = false,
@@ -197,19 +197,19 @@ fn detectStrictTypes(src: []const u8) bool {
 pub const Compiler = struct {
     ast: *const Ast,
     chunk: Chunk,
-    functions: std.ArrayListUnmanaged(ObjFunction),
-    string_allocs: std.ArrayListUnmanaged([]const u8),
+    functions: std.ArrayList(ObjFunction),
+    string_allocs: std.ArrayList([]const u8),
     allocator: Allocator,
     scope_depth: u32,
     loop_start: ?usize,
-    break_jumps: std.ArrayListUnmanaged(LoopJump),
-    continue_jumps: std.ArrayListUnmanaged(LoopJump),
+    break_jumps: std.ArrayList(LoopJump),
+    continue_jumps: std.ArrayList(LoopJump),
     use_continue_jumps: bool = false,
     // when set, nullsafe operators inside the current chain forward their
     // short-circuit jumps here instead of patching them locally. lets a
     // `$x?->y()->z()` chain short-circuit ALL of `z()` (and further links)
     // when $x is null, matching PHP's nullsafe semantics
-    nullsafe_chain_jumps: ?*std.ArrayListUnmanaged(usize) = null,
+    nullsafe_chain_jumps: ?*std.ArrayList(usize) = null,
     loop_depth: u32 = 0,
     foreach_depth: u32 = 0,
     loop_is_foreach: [32]bool = [_]bool{false} ** 32,
@@ -226,32 +226,32 @@ pub const Compiler = struct {
     cond_fn_count: u16 = 0,
     // top-level class/interface declaration node indices that were emitted into
     // the early-binding prelude. compileNode skips them at their original site
-    hoisted_nodes: std.AutoHashMapUnmanaged(u32, void) = .{},
+    hoisted_nodes: std.AutoHashMapUnmanaged(u32, void) = .empty,
     // names of classes/interfaces already hoisted, so a later declaration whose
     // parent is one of them is recognized as early-bindable too (PHP only
     // early-binds a class whose parent is already bound at its declaration point)
-    hoisted_names: std.StringHashMapUnmanaged(void) = .{},
+    hoisted_names: std.StringHashMapUnmanaged(void) = .empty,
     is_generator: bool = false,
     returns_ref: bool = false,
     namespace: []const u8 = "",
-    use_aliases: std.StringHashMapUnmanaged([]const u8) = .{},
-    use_fn_aliases: std.StringHashMapUnmanaged([]const u8) = .{},
-    use_const_aliases: std.StringHashMapUnmanaged([]const u8) = .{},
-    labels: std.StringHashMapUnmanaged(usize) = .{},
-    pending_gotos: std.ArrayListUnmanaged(PendingGoto) = .{},
+    use_aliases: std.StringHashMapUnmanaged([]const u8) = .empty,
+    use_fn_aliases: std.StringHashMapUnmanaged([]const u8) = .empty,
+    use_const_aliases: std.StringHashMapUnmanaged([]const u8) = .empty,
+    labels: std.StringHashMapUnmanaged(usize) = .empty,
+    pending_gotos: std.ArrayList(PendingGoto) = .empty,
     file_path: []const u8 = "",
-    trait_properties: std.StringHashMapUnmanaged([]const u32) = .{},
-    local_slots: std.StringHashMapUnmanaged(u16) = .{},
+    trait_properties: std.StringHashMapUnmanaged([]const u32) = .empty,
+    local_slots: std.StringHashMapUnmanaged(u16) = .empty,
     next_slot: u16 = 0,
     // set on an arrow-function sub-compiler: points at the enclosing
     // compiler. an arrow captures a parent variable lazily - the first time
     // its body references one - so only the variables the body actually uses
     // are captured (PHP semantics), not the whole enclosing scope
     arrow_parent: ?*Compiler = null,
-    type_hints: std.ArrayListUnmanaged(TypeHint) = .{},
-    function_attrs: std.ArrayListUnmanaged(FunctionAttrEntry) = .{},
-    new_defaults: std.ArrayListUnmanaged(*bytecode.NewDefault) = .{},
-    deferred_exprs: std.ArrayListUnmanaged(*bytecode.DeferredExpr) = .{},
+    type_hints: std.ArrayList(TypeHint) = .empty,
+    function_attrs: std.ArrayList(FunctionAttrEntry) = .empty,
+    new_defaults: std.ArrayList(*bytecode.NewDefault) = .empty,
+    deferred_exprs: std.ArrayList(*bytecode.DeferredExpr) = .empty,
     current_source_offset: u32 = 0,
     current_class: []const u8 = "",
     current_parent: []const u8 = "",
@@ -1194,7 +1194,7 @@ pub const Compiler = struct {
 
     pub fn buildQualifiedString(self: *Compiler, parts: []const u32) Error![]const u8 {
         if (parts.len == 1) return self.ast.tokenSlice(parts[0]);
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(self.allocator);
         for (parts, 0..) |tok_idx, i| {
             if (i > 0) try buf.append(self.allocator, '\\');
@@ -1220,7 +1220,7 @@ pub const Compiler = struct {
 
     // loop helpers
 
-    pub fn patchBreaks(self: *Compiler, prev_breaks: *std.ArrayListUnmanaged(LoopJump)) Error!void {
+    pub fn patchBreaks(self: *Compiler, prev_breaks: *std.ArrayList(LoopJump)) Error!void {
         for (self.break_jumps.items) |bj| {
             if (bj.depth < self.loop_depth) {
                 try prev_breaks.append(self.allocator, bj);
@@ -1231,7 +1231,7 @@ pub const Compiler = struct {
         self.break_jumps.deinit(self.allocator);
     }
 
-    pub fn patchBreaksTo(self: *Compiler, prev_breaks: *std.ArrayListUnmanaged(LoopJump), target: usize) Error!void {
+    pub fn patchBreaksTo(self: *Compiler, prev_breaks: *std.ArrayList(LoopJump), target: usize) Error!void {
         for (self.break_jumps.items) |bj| {
             if (bj.depth < self.loop_depth) {
                 try prev_breaks.append(self.allocator, bj);
@@ -1242,7 +1242,7 @@ pub const Compiler = struct {
         self.break_jumps.deinit(self.allocator);
     }
 
-    pub fn patchContinues(self: *Compiler, prev_continues: *std.ArrayListUnmanaged(LoopJump)) Error!void {
+    pub fn patchContinues(self: *Compiler, prev_continues: *std.ArrayList(LoopJump)) Error!void {
         for (self.continue_jumps.items) |cj| {
             if (cj.depth < self.loop_depth) {
                 try prev_continues.append(self.allocator, cj);
