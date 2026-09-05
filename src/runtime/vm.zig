@@ -341,6 +341,7 @@ pub const ClassDef = struct {
     param_attributes: std.StringHashMapUnmanaged([]const AttributeDef) = .{},
     constant_names: std.StringHashMapUnmanaged(void) = .{},
     constant_order: std.ArrayListUnmanaged([]const u8) = .{},
+    constant_docs: std.StringHashMapUnmanaged([]const u8) = .{},
     const_visibility: std.StringHashMapUnmanaged(Visibility) = .{},
     const_final: std.StringHashMapUnmanaged(void) = .{},
     constant_attributes: std.StringHashMapUnmanaged([]const AttributeDef) = .{},
@@ -436,6 +437,7 @@ pub const ClassDef = struct {
         var ca_iter = self.constant_attributes.valueIterator();
         while (ca_iter.next()) |attrs| freeAttributeDefs(allocator, attrs.*);
         self.constant_attributes.deinit(allocator);
+        self.constant_docs.deinit(allocator);
         if (self.slot_layout) |layout| {
             allocator.free(layout.names);
             allocator.free(layout.defaults);
@@ -446,7 +448,7 @@ pub const ClassDef = struct {
     }
 };
 
-const TraitStaticProp = struct { name: []const u8, value: Value };
+const TraitStaticProp = struct { name: []const u8, value: Value, doc_comment: []const u8 = "" };
 
 pub const InterfaceDef = struct {
     name: []const u8,
@@ -6902,6 +6904,8 @@ pub const VM = struct {
                         while (ci > 0) : (ci -= 1) {
                             const cname_idx = self.readU16();
                             const cname = self.currentChunk().constants.items[cname_idx].string.bytes();
+                            const doc_idx = self.readU16();
+                            if (doc_idx != 0xffff) try def.constant_docs.put(self.allocator, cname, self.currentChunk().constants.items[doc_idx].string.bytes());
                             const cval = self.stack[self.sp - ci];
                             // copyValue: the constant value is owned by the
                             // ClassDef and must be refcounted
@@ -7008,9 +7012,12 @@ pub const VM = struct {
                     if (tc_count > 0) {
                         var tc_names: [32][]const u8 = undefined;
                         var tc_has_default: [32]u8 = undefined;
+                        var tc_docs: [32][]const u8 = undefined;
                         for (0..tc_count) |ci| {
                             tc_names[ci] = self.currentChunk().constants.items[self.readU16()].string.bytes();
                             tc_has_default[ci] = self.readByte();
+                            const doc_idx = self.readU16();
+                            tc_docs[ci] = if (doc_idx == 0xffff) "" else self.currentChunk().constants.items[doc_idx].string.bytes();
                         }
                         const tc_defaults = self.popDefaults(32, tc_has_default[0..tc_count]);
                         const tcs = try self.allocator.alloc(TraitStaticProp, tc_count);
@@ -7021,7 +7028,7 @@ pub const VM = struct {
                                 tcj += 1;
                                 break :blk v;
                             } else Value{ .null = {} };
-                            tcs[ci] = .{ .name = tc_names[ci], .value = cval };
+                            tcs[ci] = .{ .name = tc_names[ci], .value = cval, .doc_comment = tc_docs[ci] };
                         }
                         try self.trait_constants.put(self.allocator, trait_name, tcs);
                     }
@@ -11330,6 +11337,7 @@ pub const VM = struct {
                 try def.const_visibility.put(self.allocator, sprop_names[pi], @enumFromInt(vis_byte));
             }
             if (sprop_is_const[pi] == 1) {
+                try def.constant_docs.put(self.allocator, sprop_names[pi], sprop_doc[pi]);
                 if (!def.constant_names.contains(sprop_names[pi])) {
                     try def.constant_order.append(self.allocator, sprop_names[pi]);
                 }
@@ -11679,6 +11687,8 @@ pub const VM = struct {
         for (0..case_count) |ci| {
             case_names[ci] = self.currentChunk().constants.items[self.readU16()].string.bytes();
             case_has_value[ci] = self.readByte();
+            const doc_idx = self.readU16();
+            if (doc_idx != 0xffff) try def.constant_docs.put(self.allocator, case_names[ci], self.currentChunk().constants.items[doc_idx].string.bytes());
         }
 
         var case_values = try self.allocator.alloc(Value, case_count);
@@ -11761,6 +11771,8 @@ pub const VM = struct {
         for (0..enum_const_count) |_| {
             const ec_name_idx = self.readU16();
             const ec_name = self.currentChunk().constants.items[ec_name_idx].string.bytes();
+            const doc_idx = self.readU16();
+            if (doc_idx != 0xffff) try def.constant_docs.put(self.allocator, ec_name, self.currentChunk().constants.items[doc_idx].string.bytes());
             if (!def.constant_names.contains(ec_name)) {
                 try def.constant_order.append(self.allocator, ec_name);
             }
@@ -12070,6 +12082,7 @@ pub const VM = struct {
                     // each using class gets its own refcounted copy
                     try def.static_props.put(self.allocator, c.name, try self.copyDefault(c.value));
                     try def.constant_names.put(self.allocator, c.name, {});
+                    try def.constant_docs.put(self.allocator, c.name, c.doc_comment);
                 }
             }
         }

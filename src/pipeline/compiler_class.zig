@@ -548,6 +548,8 @@ fn isDeclLeadingTokenTag(tag: Token.Tag) bool {
         .kw_class,
         .kw_interface,
         .kw_trait,
+        .kw_const,
+        .kw_case,
         .kw_enum,
         .kw_public,
         .kw_protected,
@@ -2250,6 +2252,7 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
             const cname = self.ast.tokenSlice(member.main_token);
             const cname_idx = try self.addConstant(.{ .string = Value.String.borrowed(cname) });
             try self.emitU16(cname_idx);
+            try self.emitU16(try docCommentConst(self, member.main_token));
         }
     }
 
@@ -2440,6 +2443,7 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
         const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(pname) });
         try self.emitU16(pname_idx);
         try self.emitByte(if (pmember.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
+        try self.emitU16(try docCommentConst(self, pmember.main_token));
     }
 
     // trait-level attributes
@@ -2548,6 +2552,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
             const cname_idx = try self.addConstant(.{ .string = Value.String.borrowed(case_name) });
             try self.emitU16(cname_idx);
             try self.emitByte(if (member.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
+            try self.emitU16(try docCommentConst(self, member.main_token));
         }
     }
 
@@ -2664,6 +2669,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
             const ec_name = self.ast.tokenSlice(member.main_token);
             const ec_idx = try self.addConstant(.{ .string = Value.String.borrowed(ec_name) });
             try self.emitU16(ec_idx);
+            try self.emitU16(try docCommentConst(self, member.main_token));
         }
     }
 

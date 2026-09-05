@@ -10,7 +10,7 @@ const TypeHint = compiler.TypeHint;
 const Allocator = std.mem.Allocator;
 
 const MAGIC = "ZPHPC\x00";
-const FORMAT_VERSION: u16 = 7;
+const FORMAT_VERSION: u16 = 8;
 
 // tag bytes for serialized values
 const TAG_NULL: u8 = 0;

@@ -617,7 +617,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rcc_def.methods.put(a, "getType", .{ .name = "getType", .arity = 0 });
     try rcc_def.methods.put(a, "hasType", .{ .name = "hasType", .arity = 0 });
     try rcc_def.methods.put(a, "getModifiers", .{ .name = "getModifiers", .arity = 0 });
+    try rcc_def.methods.put(a, "getDocComment", .{ .name = "getDocComment", .arity = 0 });
     try vm.classes.put(a, "ReflectionClassConstant", rcc_def);
+    try vm.native_fns.put(a, "ReflectionClassConstant::getDocComment", rccGetDocComment);
 
     try vm.native_fns.put(a, "ReflectionClassConstant::__construct", rccConstruct);
     try vm.native_fns.put(a, "ReflectionClassConstant::getName", rccGetName);
@@ -1897,6 +1899,46 @@ fn rccGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     return this.get("name");
 }
 
+fn rccGetDocComment(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    const this = getThis(ctx) orelse return .{ .bool = false };
+    const class_name = this.get("class");
+    const const_name = this.get("name");
+    if (class_name != .string or const_name != .string) return .{ .bool = false };
+    const doc = findConstantDoc(ctx, class_name.string.bytes(), const_name.string.bytes(), 0) orelse return .{ .bool = false };
+    if (doc.len == 0) return .{ .bool = false };
+    return .{ .string = Value.String.borrowed(doc) };
+}
+
+fn findConstantOwner(ctx: *NativeContext, class_name: []const u8, name: []const u8, depth: usize) ?[]const u8 {
+    if (depth >= 256) return null;
+    if (ctx.vm.trait_constants.get(class_name)) |constants| {
+        for (constants) |constant| {
+            if (std.mem.eql(u8, constant.name, name)) return class_name;
+        }
+    }
+    if (ctx.vm.classes.get(class_name)) |cls| {
+        if (cls.constant_names.contains(name)) return class_name;
+        if (cls.parent) |parent| {
+            if (findConstantOwner(ctx, parent, name, depth + 1)) |owner| return owner;
+        }
+        for (cls.interfaces.items) |interface| {
+            if (findConstantOwner(ctx, interface, name, depth + 1)) |owner| return owner;
+        }
+    }
+    return null;
+}
+
+fn findConstantDoc(ctx: *NativeContext, class_name: []const u8, name: []const u8, depth: usize) ?[]const u8 {
+    const owner = findConstantOwner(ctx, class_name, name, depth) orelse return null;
+    if (ctx.vm.classes.get(owner)) |cls| return cls.constant_docs.get(name) orelse "";
+    if (ctx.vm.trait_constants.get(owner)) |constants| {
+        for (constants) |constant| {
+            if (std.mem.eql(u8, constant.name, name)) return constant.doc_comment;
+        }
+    }
+    return null;
+}
+
 fn rccGetValue(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .null;
@@ -1949,10 +1991,10 @@ fn rccConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const class_name = if (raw_class.len > 0 and raw_class[0] == '\\') raw_class[1..] else raw_class;
     if (args[1] != .string) return throwReflection(ctx, "ReflectionClassConstant::__construct constant name must be a string");
     const const_name = args[1].string.bytes();
-    const cls = ctx.vm.classes.get(class_name) orelse return throwReflection(ctx, "Class not found");
-    if (!cls.constant_names.contains(const_name)) return throwReflection(ctx, "Constant not found");
+    try ctx.vm.tryAutoload(class_name);
+    const owner = findConstantOwner(ctx, class_name, const_name, 0) orelse return throwReflection(ctx, "Constant not found");
     try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(const_name) });
-    try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
+    try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(owner) });
     return .null;
 }
 
