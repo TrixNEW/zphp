@@ -598,6 +598,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionAttribute::isRepeated", raIsRepeated);
 
     var rcc_def = ClassDef{ .name = "ReflectionClassConstant" };
+    inline for (.{ .{ "IS_PUBLIC", 1 }, .{ "IS_PROTECTED", 2 }, .{ "IS_PRIVATE", 4 }, .{ "IS_FINAL", 32 } }) |constant| {
+        try rcc_def.static_props.put(a, constant[0], .{ .int = constant[1] });
+        try rcc_def.constant_names.put(a, constant[0], {});
+    }
     try rcc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rcc_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
     try rcc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
