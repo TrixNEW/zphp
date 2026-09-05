@@ -2297,11 +2297,11 @@ pub const VM = struct {
             f.suspend_value = .null;
             f.return_value = .null;
         };
+        @import("../stdlib/pdo.zig").cleanupResources(self.objects);
         self.teardownCaptures();
         // cleanup subsystem resources before freeing strings, because cleanup
         // reads class_name from each object and those names may live in self.strings
         // (e.g. when created by unserialize via ctx.createString)
-        @import("../stdlib/pdo.zig").cleanupResources(self.objects);
         @import("../stdlib/curl.zig").cleanupResources(self.objects);
         @import("../stdlib/filesystem.zig").cleanupHandles(self.objects);
         @import("../stdlib/dom.zig").cleanupResources(self.objects);

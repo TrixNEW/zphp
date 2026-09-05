@@ -393,6 +393,8 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
             // PHP 7.4+ __serialize: returns the array used as the object's serialized payload
             if (ctx.vm.hasMethod(obj.class_name, "__serialize")) {
                 const ser_result = try ctx.vm.callMethod(obj, "__serialize", &.{});
+                @import("../runtime/vm.zig").VM.retainValue(ser_result);
+                defer ctx.vm.releaseValue(ser_result);
                 if (ser_result == .array) {
                     try buf.appendSlice(a, "O:");
                     var tmp: [20]u8 = undefined;
@@ -423,9 +425,13 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
 
             // older __sleep: returns string[] of property names to include
             var sleep_props: ?*PhpArray = null;
+            defer if (sleep_props) |props| ctx.vm.releaseValue(.{ .array = props });
             if (ctx.vm.hasMethod(obj.class_name, "__sleep")) {
                 const sleep_result = try ctx.vm.callMethod(obj, "__sleep", &.{});
-                if (sleep_result == .array) sleep_props = sleep_result.array;
+                if (sleep_result == .array) {
+                    @import("../runtime/vm.zig").VM.retainValue(sleep_result);
+                    sleep_props = sleep_result.array;
+                }
             }
 
             try buf.appendSlice(a, "O:");

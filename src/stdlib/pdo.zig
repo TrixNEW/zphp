@@ -165,6 +165,7 @@ fn sqliteFuncTrampoline(ctx: *sqlite.Context, argc: c_int, argv: [*]?*sqlite.Val
 fn sqliteFuncDestroy(p: ?*anyopaque) callconv(.c) void {
     if (p) |ptr| {
         const state: *UserSqlFn = @ptrCast(@alignCast(ptr));
+        state.vm.releaseValue(state.callable);
         state.vm.allocator.destroy(state);
     }
 }
@@ -603,6 +604,7 @@ fn pdoSqliteCreateFunction(ctx: *NativeContext, args: []const Value) RuntimeErro
 
     const state = try ctx.vm.allocator.create(UserSqlFn);
     state.* = .{ .vm = ctx.vm, .callable = args[1] };
+    VM.retainValue(state.callable);
 
     // dupe with manual null terminator so the slice we hand to vm.strings has
     // matching len for free(). dupeZ returns a [:0] slice whose .len excludes
@@ -623,10 +625,7 @@ fn pdoSqliteCreateFunction(ctx: *NativeContext, args: []const Value) RuntimeErro
         null,
         sqliteFuncDestroy,
     );
-    if (rc != 0) {
-        ctx.vm.allocator.destroy(state);
-        return .{ .bool = false };
-    }
+    if (rc != 0) return .{ .bool = false };
     return .{ .bool = true };
 }
 
@@ -649,6 +648,7 @@ fn pdoSqliteCreateCollation(ctx: *NativeContext, args: []const Value) RuntimeErr
 
     const state = try ctx.vm.allocator.create(UserSqlFn);
     state.* = .{ .vm = ctx.vm, .callable = args[1] };
+    VM.retainValue(state.callable);
 
     const name_buf = try ctx.allocator.alloc(u8, name.len + 1);
     @memcpy(name_buf[0..name.len], name);

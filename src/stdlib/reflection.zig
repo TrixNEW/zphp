@@ -1476,7 +1476,11 @@ fn buildReflectionAttribute(ctx: *NativeContext, attr: AttributeDef, target: i64
     const obj = try ctx.createObject("ReflectionAttribute");
     try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(attr.name) });
     const args_arr = try ctx.createArray();
-    for (attr.args, 0..) |arg, i| {
+    for (attr.args, 0..) |stored_arg, i| {
+        const arg = if (stored_arg == .array and !Value.isEmptyArrayDefault(stored_arg))
+            Value{ .array = try ctx.vm.cloneArray(stored_arg.array) }
+        else
+            stored_arg;
         if (i < attr.arg_names.len) {
             if (attr.arg_names[i]) |arg_name| {
                 try args_arr.set(ctx.allocator, .{ .string = Value.String.borrowed(arg_name) }, arg);
