@@ -13838,10 +13838,10 @@ pub const VM = struct {
 
         for (self.autoload_callbacks.items) |callback| {
             if (callback == .string) {
-                _ = self.callByName(callback.string.bytes(), &.{.{ .string = Value.String.borrowed(class_name) }}) catch continue;
+                _ = try self.callByName(callback.string.bytes(), &.{.{ .string = Value.String.borrowed(class_name) }});
             } else {
                 var ctx = self.makeContext(null);
-                _ = ctx.invokeCallable(callback, &.{.{ .string = Value.String.borrowed(class_name) }}) catch continue;
+                _ = try ctx.invokeCallable(callback, &.{.{ .string = Value.String.borrowed(class_name) }});
             }
             if (self.classes.contains(class_name)) return;
         }

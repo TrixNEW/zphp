@@ -2503,16 +2503,26 @@ fn native_class_implements(ctx: *NativeContext, args: []const Value) RuntimeErro
         return Value{ .bool = false };
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
 
-    const cls = ctx.vm.classes.get(class_name) orelse return Value{ .bool = false };
+    const cls = ctx.vm.classes.get(class_name);
+    const interface = ctx.vm.interfaces.get(class_name);
+    if (cls == null and interface == null and !ctx.vm.traits.contains(class_name)) return .{ .bool = false };
 
     var result = try ctx.createArray();
     var queue = std.ArrayListUnmanaged([]const u8){};
     defer queue.deinit(ctx.allocator);
+    if (interface) |def| {
+        for (def.parents.items) |parent| try queue.append(ctx.allocator, parent);
+        if (def.parents.items.len == 0) {
+            if (def.parent) |parent| try queue.append(ctx.allocator, parent);
+        }
+    }
     // PHP enumerates direct interfaces in declaration order, but interfaces
     // reached via parent traversal in REVERSE declaration order. mimic both
-    for (cls.interfaces.items) |iface| try queue.append(ctx.allocator, iface);
+    if (cls) |def| {
+        for (def.interfaces.items) |iface| try queue.append(ctx.allocator, iface);
+    }
 
-    var parent = cls.parent;
+    var parent = if (cls) |def| def.parent else null;
     while (parent) |p| {
         const pcls = ctx.vm.classes.get(p) orelse break;
         var pi = pcls.interfaces.items.len;
@@ -2528,11 +2538,20 @@ fn native_class_implements(ctx: *NativeContext, args: []const Value) RuntimeErro
         const iface = queue.items[i];
         if (result.get(.{ .string = Value.String.borrowed(iface) }) != .null) continue;
         try result.set(ctx.allocator, .{ .string = Value.String.borrowed(iface) }, .{ .string = Value.String.borrowed(iface) });
-        if (ctx.vm.classes.get(iface)) |idef| {
-            for (idef.interfaces.items) |sub| try queue.append(ctx.allocator, sub);
+        if (!ctx.vm.interfaces.contains(iface)) {
+            if (ctx.vm.classes.get(iface)) |idef| {
+                for (idef.interfaces.items) |sub| try queue.append(ctx.allocator, sub);
+            }
         }
         if (ctx.vm.interfaces.get(iface)) |idef| {
-            if (idef.parent) |p| try queue.append(ctx.allocator, p);
+            if (idef.parents.items.len == 0) {
+                if (idef.parent) |p| try queue.append(ctx.allocator, p);
+            }
+            var pi = idef.parents.items.len;
+            while (pi > 0) {
+                pi -= 1;
+                try queue.append(ctx.allocator, idef.parents.items[pi]);
+            }
         }
     }
 
