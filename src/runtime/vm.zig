@@ -3061,6 +3061,22 @@ pub const VM = struct {
         };
     }
 
+    // A constructor is a nested execution boundary: its caller's handlers
+    // must not resume PHP while the new opcode still owns cleanup state.
+    fn runConstructor(self: *VM, base_frame: usize, fast: bool) RuntimeError!void {
+        const saved_handlers = self.handler_count;
+        const saved_floor = self.handler_floor;
+        self.handler_floor = saved_handlers;
+        defer {
+            self.handler_count = saved_handlers;
+            self.handler_floor = saved_floor;
+        }
+        if (fast) try self.fastLoop();
+        // fastLoop may bail in a descendant, not just the constructor frame.
+        if (self.frame_count > base_frame) try self.runUntilFrame(base_frame);
+        _ = self.pop(); // only a normally returned constructor has a result
+    }
+
     pub fn run(self: *VM) RuntimeError!void {
         self.installHooks();
         return self.runLoop(0);
@@ -7336,18 +7352,10 @@ pub const VM = struct {
                                 self.frame_count += 1;
                                 self.retainFrameObjects(self.frame_count - 1);
                                 if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
-                                self.exception_dispatched = false;
-                                try self.fastLoop();
-                                const ctor_frame = &self.frames[self.frame_count - 1];
-                                if (ctor_frame.chunk == &func.chunk) {
-                                    const ctor_base = self.frame_count - 1;
-                                    try self.runUntilFrame(ctor_base);
-                                    if (self.exception_dispatched) {
-                                        self.exception_dispatched = false;
-                                        continue;
-                                    }
-                                }
-                                _ = self.pop();
+                                self.runConstructor(self.frame_count - 1, true) catch |err| {
+                                    if (self.dispatchPendingException(base_frame)) continue;
+                                    return err;
+                                };
                             } else {
                                 var new_vars = self.acquireFrameVars();
                                 try new_vars.put(self.allocator, "$this", .{ .object = obj });
@@ -7384,14 +7392,10 @@ pub const VM = struct {
                                 self.frame_count += 1;
                                 self.retainFrameObjects(self.frame_count - 1);
                                 if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
-                                self.exception_dispatched = false;
-                                const ctor_base = self.frame_count - 1;
-                                try self.runUntilFrame(ctor_base);
-                                if (self.exception_dispatched) {
-                                    self.exception_dispatched = false;
-                                    continue;
-                                }
-                                _ = self.pop();
+                                self.runConstructor(self.frame_count - 1, false) catch |err| {
+                                    if (self.dispatchPendingException(base_frame)) continue;
+                                    return err;
+                                };
                             }
                         } else {
                             self.dropN(ac);
@@ -7507,14 +7511,10 @@ pub const VM = struct {
                             self.frame_count += 1;
                             self.retainFrameObjects(self.frame_count - 1);
                             if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
-                            self.exception_dispatched = false;
-                            const ctor_base = self.frame_count - 1;
-                            try self.runUntilFrame(ctor_base);
-                            if (self.exception_dispatched) {
-                                self.exception_dispatched = false;
-                                continue;
-                            }
-                            _ = self.pop();
+                            self.runConstructor(self.frame_count - 1, false) catch |err| {
+                                if (self.dispatchPendingException(base_frame)) continue;
+                                return err;
+                            };
                         } else {
                             self.dropN(ac + 1);
                         }
