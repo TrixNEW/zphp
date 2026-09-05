@@ -71,7 +71,8 @@ pub fn compileString(self: *Compiler, node: Ast.Node) (Allocator.Error || error{
 pub fn extractHeredocBody(self: *Compiler, token_idx: u32) (Allocator.Error || error{CompileError})![]const u8 {
     const lexeme = self.ast.tokenSlice(token_idx);
     var pos: usize = 3;
-    if (pos < lexeme.len and lexeme[pos] == '\'') {
+    while (pos < lexeme.len and (lexeme[pos] == ' ' or lexeme[pos] == '\t')) pos += 1;
+    if (pos < lexeme.len and (lexeme[pos] == '\'' or lexeme[pos] == '"')) {
         pos += 1;
     }
     const label_start = pos;

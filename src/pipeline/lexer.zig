@@ -209,6 +209,7 @@ pub const Lexer = struct {
         //   <<<LABEL      interpolating heredoc
         //   <<<"LABEL"    same as above, explicit quotes
         //   <<<'LABEL'    nowdoc (no interpolation)
+        while (self.pos < self.source.len and (self.source[self.pos] == ' ' or self.source[self.pos] == '\t')) self.pos += 1;
         var quote: u8 = 0;
         if (self.pos < self.source.len) {
             const q = self.source[self.pos];
@@ -916,6 +917,18 @@ test "quoted heredoc label" {
         .open_tag, .variable, .equal, .heredoc, .semicolon,
     });
     try expectTokens("<?php $x = <<<'EOT'\nhello\nEOT;", &.{
+        .open_tag, .variable, .equal, .nowdoc, .semicolon,
+    });
+}
+
+test "heredoc opener horizontal whitespace" {
+    try expectTokens("<?php $x = <<< \tEOT\nhello\nEOT;", &.{
+        .open_tag, .variable, .equal, .heredoc, .semicolon,
+    });
+    try expectTokens("<?php $x = <<< \t\"EOT\"\nhello\nEOT;", &.{
+        .open_tag, .variable, .equal, .heredoc, .semicolon,
+    });
+    try expectTokens("<?php $x = <<< \t'EOT'\nhello\nEOT;", &.{
         .open_tag, .variable, .equal, .nowdoc, .semicolon,
     });
 }
