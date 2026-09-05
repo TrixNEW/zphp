@@ -345,7 +345,7 @@ pub fn compileSwitch(self: *Compiler, node: Ast.Node) Error!void {
     const case_nodes = self.ast.extraSlice(node.data.rhs);
 
     // phase 1: emit comparison chain, collect jumps to bodies
-    var body_jumps = std.ArrayListUnmanaged(usize){};
+    var body_jumps: std.ArrayList(usize) = .empty;
     defer body_jumps.deinit(self.allocator);
     var default_jump: ?usize = null;
 
@@ -357,7 +357,7 @@ pub fn compileSwitch(self: *Compiler, node: Ast.Node) Error!void {
         }
 
         const values = self.ast.extraSlice(case_node.data.lhs);
-        var hit_jumps = std.ArrayListUnmanaged(usize){};
+        var hit_jumps: std.ArrayList(usize) = .empty;
         defer hit_jumps.deinit(self.allocator);
 
         for (values, 0..) |val, vi| {
@@ -438,7 +438,7 @@ pub fn compileMatch(self: *Compiler, node: Ast.Node) Error!void {
     try self.emitOp(.pop);
 
     const arm_nodes = self.ast.extraSlice(node.data.rhs);
-    var end_jumps = std.ArrayListUnmanaged(usize){};
+    var end_jumps: std.ArrayList(usize) = .empty;
     defer end_jumps.deinit(self.allocator);
     var default_arm: ?u32 = null;
 
@@ -451,7 +451,7 @@ pub fn compileMatch(self: *Compiler, node: Ast.Node) Error!void {
             continue;
         }
 
-        var hit_jumps = std.ArrayListUnmanaged(usize){};
+        var hit_jumps: std.ArrayList(usize) = .empty;
         defer hit_jumps.deinit(self.allocator);
 
         for (values, 0..) |val, vi| {
@@ -528,7 +528,7 @@ fn resolveCatchClassName(self: *Compiler, node_idx: u32) Error![]const u8 {
         end += 2;
     }
 
-    var buf = std.ArrayListUnmanaged(u8){};
+    var buf: std.ArrayList(u8) = .empty;
     var first = true;
     var i = start;
     while (i < end) : (i += 1) {
@@ -582,7 +582,7 @@ pub fn compileTryCatch(self: *Compiler, node: Ast.Node) Error!void {
     self.patchJump(handler_offset_pos);
 
     // exception is on the stack when we arrive here
-    var end_jumps = std.ArrayListUnmanaged(usize){};
+    var end_jumps: std.ArrayList(usize) = .empty;
     defer end_jumps.deinit(self.allocator);
 
     // when there's a finally block, push a handler around catch bodies
@@ -605,7 +605,7 @@ pub fn compileTryCatch(self: *Compiler, node: Ast.Node) Error!void {
             const type_nodes = self.ast.extra_data[types_extra + 1 .. types_extra + 1 + type_count];
 
             // for each type: dup exc, check instanceof, if true jump to match
-            var match_jumps = std.ArrayListUnmanaged(usize){};
+            var match_jumps: std.ArrayList(usize) = .empty;
             defer match_jumps.deinit(self.allocator);
 
             for (type_nodes) |tn| {
