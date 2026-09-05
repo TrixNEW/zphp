@@ -1318,6 +1318,7 @@ fn native_get_parent_class(ctx: *NativeContext, args: []const Value) RuntimeErro
     else
         return Value{ .bool = false };
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
+    if (ctx.vm.traits.contains(class_name) or ctx.vm.interfaces.contains(class_name)) return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse {
         try ctx.vm.setPendingException("TypeError", "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name");
         return error.RuntimeError;
@@ -2596,14 +2597,17 @@ fn native_class_uses(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
         return Value{ .bool = false };
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
 
-    const cls = ctx.vm.classes.get(class_name) orelse {
-        try ctx.vm.tryAutoload(class_name);
-        if (ctx.vm.classes.get(class_name) == null) return Value{ .bool = false };
-        return native_class_uses(ctx, args);
-    };
+    if (!ctx.vm.classes.contains(class_name) and !ctx.vm.traits.contains(class_name) and !ctx.vm.interfaces.contains(class_name)) {
+        if (args.len < 2 or args[1].isTruthy()) try ctx.vm.tryAutoload(class_name);
+        if (!ctx.vm.classes.contains(class_name) and !ctx.vm.traits.contains(class_name) and !ctx.vm.interfaces.contains(class_name)) return .{ .bool = false };
+    }
+    const used_traits = if (ctx.vm.classes.get(class_name)) |cls|
+        cls.used_traits.items
+    else
+        ctx.vm.trait_uses.get(class_name) orelse &.{};
 
     var result = try ctx.createArray();
-    for (cls.used_traits.items) |trait| {
+    for (used_traits) |trait| {
         try result.set(ctx.allocator, .{ .string = Value.String.borrowed(trait) }, .{ .string = Value.String.borrowed(trait) });
     }
     return .{ .array = result };
