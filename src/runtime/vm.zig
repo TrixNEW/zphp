@@ -2783,6 +2783,10 @@ pub const VM = struct {
         self.script_strict_types = result.strict_types;
         self.frames[0] = .{ .chunk = &result.chunk, .ip = 0, .vars = vars, .locals = locals, .slot_names = result.slot_names };
         self.frame_count = 1;
+        // The script frame owns its request-var copies just like every callee.
+        // Slots and vars mirror one binding; retain once before any COW write
+        // releases it, leaving request_vars with its independent root.
+        self.retainFrameObjects(0);
         self.obj_id_base = self.objects.items.len;
         // reset the per-allocation id counter so user-visible '#N' starts at 1
         // matching PHP. internal stdlib-init objects keep the ids they already
