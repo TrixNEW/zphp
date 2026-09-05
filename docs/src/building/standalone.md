@@ -1,45 +1,20 @@
 # Standalone Executables
 
-`zphp build --compile` produces a single executable that contains both the zphp runtime and your compiled PHP bytecode. The result is a binary that runs without needing zphp or PHP installed on the target machine.
+`zphp build --compile` copies the current zphp executable and appends the entry point's compiled bytecode:
 
-## Usage
-
-```
-$ zphp build --compile app.php
-```
-
-This produces an executable called `app` (the input filename without the extension):
-
-```
-$ ./app
-Hello from my PHP application
+```sh
+zphp build --compile app.php
+./app
 ```
 
-## What this means for deployment
+The output is named after the input file's stem and written in the current working directory. For example, building `src/app.php` produces `./app`.
 
-The target machine doesn't need PHP or zphp installed. Copy the binary, run it.
+The executable runs the embedded program in CLI mode, without a separate PHP or zphp installation. Arguments are passed to that program. It does not dispatch `serve` or turn the application into a standalone HTTP server.
 
-```
-$ scp app server:/usr/local/bin/
-$ ssh server '/usr/local/bin/app'
-```
+## Deployment requirements
 
-This works for both scripts (`zphp run` style) and servers (`zphp serve` style). A compiled server binary includes the full HTTP server, TLS support, and everything else `zphp serve` provides.
+This command does not cross-compile. Deploy to a compatible operating system and architecture. Files loaded with `include` or `require` and application assets are not bundled.
 
-## Dependencies
+The output inherits the installed zphp binary's library dependencies. The build prefers static linking for libraries such as OpenSSL and SQLite, but links other libraries dynamically, including database clients and curl. Dynamic dependencies are required even when the PHP program does not call those extensions.
 
-Most of zphp's dependencies are statically linked into the binary. A few remain dynamic:
-
-| Library | Linked | Notes |
-|---|---|---|
-| pcre2, OpenSSL, nghttp2 | Static | Built into the binary |
-| sqlite3, zlib | Dynamic | Present on all Linux and macOS systems |
-| libmysqlclient | Dynamic | Only needed if using PDO with MySQL |
-| libpq | Dynamic | Only needed if using PDO with PostgreSQL |
-
-If your application doesn't use MySQL or PostgreSQL, the binary runs with no additional libraries beyond what the OS provides. If it does, the respective client library needs to be installed on the target machine:
-
-```
-$ sudo apt-get install -y libmysqlclient21   # MySQL
-$ sudo apt-get install -y libpq5              # PostgreSQL
-```
+Inspect the resulting executable with `ldd ./app` on Linux or `otool -L ./app` on macOS, and install its required libraries on the target machine. Do not assume that the target OS supplies them.

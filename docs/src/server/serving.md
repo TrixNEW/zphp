@@ -1,15 +1,12 @@
 # Serving an Application
 
-`zphp serve` is a production HTTP server built into the runtime. It replaces the nginx + php-fpm stack with a single process that handles keep-alive, gzip, static files, worker pooling, and graceful shutdown.
+`zphp serve` runs the built-in HTTP server:
 
-## Basic usage
-
-```
-$ zphp serve app.php
-listening on http://0.0.0.0:8080 (14 workers)
+```sh
+zphp serve app.php --port 3000 --workers 8
 ```
 
-Your `app.php` is compiled to bytecode once at startup. Each worker runs its own VM instance with a pooled copy of the bytecode, so there's no per-request compilation overhead.
+The entry point is compiled at startup. Each worker keeps a persistent VM, with request state reset before each PHP request. Values are reclaimed during execution, not only at request boundaries. Compiled bytecode is retained across requests, including cached includes and directly requested PHP scripts.
 
 ## Options
 
@@ -17,84 +14,32 @@ Your `app.php` is compiled to bytecode once at startup. Each worker runs its own
 |---|---|---|
 | `--port <N>` | 8080 | Port to listen on |
 | `--workers <N>` | CPU count | Number of worker threads |
-| `--tls-cert <file>` | - | Path to TLS certificate (enables HTTPS) |
-| `--tls-key <file>` | - | Path to TLS private key |
-| `--watch` | off | Watch PHP files for changes and automatically reload workers |
+| `--tls-cert <file>` | None | TLS certificate |
+| `--tls-key <file>` | None | TLS private key |
+| `--watch` | Off | Restart workers when PHP file changes are detected under the document root |
 
-```
-$ zphp serve app.php --port 3000 --workers 8
-```
+The server binds to all IPv4 interfaces. Use firewall rules or a reverse proxy to control access. Provide both TLS flags to enable HTTPS.
 
 ## Request handling
 
-Each request executes your PHP file from the top. The standard `$_SERVER`, `$_GET`, `$_POST`, `$_COOKIE`, and `$_FILES` superglobals are populated from the incoming request, just like PHP.
+Existing `.php` files under the document root execute directly. Other dynamic paths run the entry point from the top. Non-PHP files can be served without executing PHP; see [Static Files](./static-files.md).
+
+The server populates request superglobals, including `$_SERVER` and `$_GET`. Form bodies populate `$_POST`, and multipart uploads populate `$_FILES`. Read a raw request body through `php://input`.
 
 ```php
 <?php
+header('Content-Type: application/json');
 
-$method = $_SERVER['REQUEST_METHOD'];
-$path = $_SERVER['REQUEST_URI'];
-
-if ($method === 'GET' && $path === '/health') {
+if ($_SERVER['REQUEST_URI'] === '/health') {
     echo json_encode(['status' => 'ok']);
-} else if ($method === 'POST' && $path === '/api/data') {
-    $body = file_get_contents('php://input');
-    $data = json_decode($body, true);
-    echo json_encode(['received' => $data]);
 } else {
     http_response_code(404);
     echo json_encode(['error' => 'not found']);
 }
 ```
 
-## Response headers and status codes
+For HTTP/1.1 responses, use `header()` and `header_remove()` to manage headers, `http_response_code()` for status, and `setcookie()` for cookies. Keep-alive is supported. Compressible responses are gzip-compressed when the client advertises gzip support.
 
-The standard PHP header functions work in serve mode:
+The HTTP/2 response path currently sends the status and content type, but does not forward custom response headers or cookies. It also does not apply gzip compression. See [TLS and HTTP/2](./tls.md).
 
-```php
-<?php
-header("Content-Type: application/json");
-header("X-Custom: value");
-header("X-Multi: one");
-header("X-Multi: two", false);  // append instead of replace
-header("Location: /other", true, 302);  // set status code as third arg
-http_response_code(201);
-setcookie("session", "abc123", ["path" => "/", "httponly" => true]);
-header_remove("X-Custom");  // remove a specific header
-header_remove();  // remove all custom headers
-headers_list();  // get array of all set headers
-```
-
-These functions work from any call depth - inside functions, methods, closures, included files.
-
-## Features
-
-**Gzip compression** is applied automatically to compressible responses (text, JSON, SVG) when the client sends `Accept-Encoding: gzip`.
-
-**Keep-alive** connections are supported by default. Clients can reuse TCP connections across multiple requests.
-
-**ETag and 304 responses** are handled automatically for static files. The server generates ETags and responds with `304 Not Modified` when the content hasn't changed.
-
-**`.env` auto-loading** at startup. If a `.env` file exists in the working directory, it's loaded automatically and the values are available via `$_ENV`.
-
-**File watching** with `--watch` reloads workers when PHP files change. Useful during development.
-
-**Graceful shutdown** on SIGTERM/SIGINT. Active requests complete before the server exits.
-
-## Comparison to nginx + php-fpm
-
-The traditional PHP deployment requires configuring and running multiple processes:
-
-```
-nginx (reverse proxy, static files, TLS termination)
-  -> php-fpm (process manager, spawns PHP workers)
-    -> your PHP code
-```
-
-With zphp:
-
-```
-zphp serve app.php --tls-cert cert.pem --tls-key key.pem
-```
-
-TLS, static files, gzip, and HTTP/2 are all handled by the same process.
+At startup, a `.env` file in the working directory is loaded into the environment and exposed through `$_ENV`. Use `--watch` during development, or restart the server after deploying changed PHP code.

@@ -1,12 +1,11 @@
 # Package Manager
 
-zphp includes a package manager that uses [Packagist](https://packagist.org/), the same registry that Composer uses. Your existing Composer packages work with zphp.
+zphp includes a package manager that uses [Packagist](https://packagist.org/), the same registry that Composer uses. It is not a complete replacement for Composer. Test installed packages with your application.
 
 ## Quick start
 
 ```
 $ zphp add slim/slim
-$ zphp install
 ```
 
 This creates a `composer.json`, resolves dependencies, downloads packages, and generates a `vendor/autoload.php` that works with zphp's autoloader.
@@ -22,7 +21,7 @@ This creates a `composer.json`, resolves dependencies, downloads packages, and g
 
 ## composer.json
 
-zphp reads the same `composer.json` format you're used to:
+zphp reads `require`, `require-dev`, and project PSR-4 mappings from `composer.json`:
 
 ```json
 {
@@ -50,21 +49,15 @@ zphp reads the same `composer.json` format you're used to:
 
 ## Lock file
 
-`zphp install` generates a `zphp.lock` file that pins exact versions. Commit this to version control for reproducible installs.
+`zphp install` writes resolved versions to `zphp.lock`, but resolves dependencies again on each install rather than installing from that lock file. It does not provide Composer-style reproducible installs.
+
+The resolver skips `php` and `ext-*` requirements. Composer scripts, plugins, and the full Composer dependency-resolution behavior are not implemented. Keep using Composer when your project depends on those features.
 
 ## Autoloading
 
-The generated `vendor/autoload.php` supports PSR-4 namespace mapping. Use it the same way you would with Composer:
+The generated `vendor/autoload.php` supports project and package PSR-4 mappings and package `autoload.files` entries. It does not implement every Composer autoload mode.
 
 ```php
 <?php
-
-require 'vendor/autoload.php';
-
-$app = Slim\Factory\AppFactory::create();
-$app->get('/', function ($request, $response) {
-    $response->getBody()->write("Hello");
-    return $response;
-});
-$app->run();
+require __DIR__ . '/vendor/autoload.php';
 ```

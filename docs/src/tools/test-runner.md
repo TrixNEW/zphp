@@ -8,7 +8,7 @@
 $ zphp test
 ```
 
-This discovers and runs all test files in `tests/` and `test/` directories. Files must be named `*_test.php` or `*Test.php`.
+This discovers and runs test files recursively in `tests/` and `test/` directories. Files must be named `*_test.php` or `*Test.php`.
 
 To run a specific file:
 
@@ -18,7 +18,7 @@ $ zphp test tests/math_test.php
 
 ## Writing tests
 
-Define functions prefixed with `test_`. Each function is run independently. If the function completes without error, it passes. If it throws an exception, it fails.
+Define functions prefixed with `test_`. Each function runs in a fresh VM. When `test_` functions are present, top-level setup code is not executed. Put required setup inside each test function, or use a file-level test. If the function completes without error, it passes. If it throws an exception, it fails.
 
 ```php
 <?php
@@ -57,7 +57,7 @@ $ zphp test tests/math_test.php
   pass  test_array_push
   pass  test_exception_handling
 
-4 passed, 0 failed
+4 tests passed
 ```
 
 ## File-level tests

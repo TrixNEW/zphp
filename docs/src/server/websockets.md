@@ -1,105 +1,37 @@
 # WebSockets
 
-zphp has built-in WebSocket support. Define three handler functions and you have a WebSocket server.
-
-## Handler functions
-
-zphp looks for three globally registered functions by name:
+`zphp serve` supports WebSocket upgrades over HTTP/1.1. Declare `ws_onMessage` in the entry point so the server detects it when compiling the application. Defining it only in a runtime include does not enable WebSocket handling.
 
 ```php
 <?php
-
 function ws_onOpen($conn) {
-    // called when a client connects
-    $conn->send("welcome");
+    $conn->send('welcome');
 }
 
 function ws_onMessage($conn, $message) {
-    // called when a client sends a message
-    $conn->send("echo: " . $message);
-}
-
-function ws_onClose($conn) {
-    // called when a client disconnects
-}
-```
-
-These can be defined anywhere - in your entry point, in a required file, wherever. As long as they're registered as global functions by the time the server starts handling connections, they'll be found.
-
-Serve it:
-
-```
-$ zphp serve ws_app.php --port 8080
-```
-
-Clients connect via `ws://localhost:8080` (or `wss://` if TLS is enabled). Regular HTTP requests are still handled by your PHP code as normal. WebSocket and HTTP coexist on the same port.
-
-## The connection object
-
-Each handler receives a `WebSocketConnection` object:
-
-| Method | Description |
-|---|---|
-| `$conn->send($message)` | Send a text message to the client |
-| `$conn->close()` | Close the connection |
-
-## Example: chat relay
-
-```php
-<?php
-
-$clients = [];
-
-function ws_onOpen($conn) {
-    global $clients;
-    $clients[] = $conn;
-    $conn->send("connected (" . count($clients) . " online)");
-}
-
-function ws_onMessage($conn, $message) {
-    global $clients;
-    foreach ($clients as $client) {
-        $client->send($message);
-    }
-}
-
-function ws_onClose($conn) {
-    global $clients;
-    $clients = array_filter($clients, fn($c) => $c !== $conn);
-}
-```
-
-## WebSocket with TLS
-
-When TLS is enabled, WebSocket connections automatically upgrade to WSS:
-
-```
-$ zphp serve ws_app.php --tls-cert cert.pem --tls-key key.pem
-```
-
-Clients connect via `wss://localhost:8080`.
-
-## Mixed HTTP and WebSocket
-
-Your entry point handles both regular HTTP requests and WebSocket connections. The WebSocket handler functions are only called for WebSocket upgrade requests. Everything else goes through the normal request path.
-
-```php
-<?php
-
-// HTTP requests execute this code
-$path = $_SERVER['REQUEST_URI'];
-if ($path === '/api/status') {
-    echo json_encode(['status' => 'running']);
-}
-
-// WebSocket connections call these functions
-function ws_onOpen($conn) {
-    $conn->send("connected");
-}
-
-function ws_onMessage($conn, $msg) {
-    $conn->send("got: " . $msg);
+    $conn->send('echo: ' . $message);
 }
 
 function ws_onClose($conn) {}
 ```
+
+```sh
+zphp serve ws_app.php --port 8080
+```
+
+Connect to `ws://localhost:8080/`. With TLS configured, use `wss://localhost:8080/` instead. WebSocket upgrades are not implemented on the HTTP/2 path.
+
+## Connection object
+
+Handlers receive a `WebSocketConnection` object. `ws_onOpen` and `ws_onClose` are optional.
+
+| Method | Description |
+|---|---|
+| `$conn->send($message)` | Send a text message |
+| `$conn->close()` | Close the connection |
+
+## State limitations
+
+The entry point runs on the first WebSocket connection handled by each worker. PHP globals are worker-local, so an array of clients cannot broadcast across all workers.
+
+Regular HTTP requests can use the same port, but they reset the same worker VM used by WebSocket callbacks. Do not rely on PHP globals or connection objects surviving mixed HTTP and WebSocket traffic. Use a separate WebSocket process rather than treating this as a shared-state chat server.

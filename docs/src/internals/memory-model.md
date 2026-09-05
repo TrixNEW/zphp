@@ -1,46 +1,62 @@
 # Memory Model
 
-zphp manages memory around the request lifecycle. Each request starts with a clean VM, and when the request ends, all allocations from that request are freed in bulk. There is no garbage collector.
+zphp reclaims unused PHP values during execution, rather than waiting for the script or request to finish. This supports long-running command-line programs whose temporary data is no longer needed after each iteration.
+
+Like traditional PHP, zphp uses reference counting and a cycle collector. Traditional PHP also supports long-running workers; request boundaries are not its only mechanism for reclaiming memory.
+
+## Reclaiming unused values
+
+Reference counting tracks the holders of a value. Replacing a variable or removing an array entry releases that holder. When the last holder disappears, the runtime can reclaim the value. Cleanup is deferred to safe execution boundaries so temporary values remain valid while an expression is being evaluated.
+
+Heap-backed strings and arrays participate in this ownership model, as do objects, generators, and fibers. Variables joined with `&` share a reference cell: storage that lets each alias see the same value. When its last holder disappears, the cell releases its value and becomes available for reuse.
+
+Reference counting alone cannot reclaim a cycle, such as an array containing a reference to itself. zphp's cycle collector detects unreachable cycles. Collection runs automatically at allocation thresholds and can also be requested with `gc_collect_cycles()`.
+
+## Long-running programs
+
+A loop does not need to end its process to release temporary PHP values. For example, replacing `$batch` releases the previous batch when nothing else retains it:
+
+```php
+for ($i = 0; $i < 100000; $i++) {
+    $batch = [$i, ['next' => $i + 1]];
+    processBatch($batch);
+    unset($batch);
+}
+```
+
+This assumes `processBatch()` does not keep the batch in persistent storage. A growing cache or a list that retains every result will still consume increasing memory. Closures that capture values can keep them alive too.
+
+Reclaimed memory can be reused without being returned immediately to the operating system. Internal buffers also retain capacity. A process's reported memory therefore need not fall after `unset()` or cycle collection, and reference counting does not guarantee a fixed memory ceiling for every workload.
+
+The regression suite checks repeated reference creation and object replacement, including reference cycles and suspended execution. These checks test bounded memory for those workloads, not every possible application. See `tests/reference_cell_lifetime.php`, `tests/global_reference_cycle_memory.php`, and `tests/cli_event_loop_memory.php`.
 
 ## Request lifecycle
 
-In serve mode, each worker thread owns a persistent VM instance. A request goes through these steps:
+In serve mode, each worker thread owns a persistent VM instance:
 
-1. The VM resets, freeing all values (strings, arrays, objects, generators, fibers) from the previous request
-2. Superglobals (`$_SERVER`, `$_GET`, `$_POST`, etc.) are populated from the incoming HTTP request
-3. The PHP file executes from the top
-4. The response is sent
+1. Before a request, the VM resets and releases the previous request's PHP values.
+2. Superglobals such as `$_SERVER` and `$_POST` are populated from the incoming request.
+3. The entry file executes from the top and the response is sent.
 
-Compiled bytecode is not freed between requests. It's compiled once at startup and re-executed each time.
+Ordinary PHP variables do not carry application state between requests. Request reset remains a cleanup boundary in addition to reclamation during execution.
 
-Internal buffers are cleared between requests but keep their allocated capacity, so repeated requests reuse memory rather than reallocating.
-
-## How values are stored
-
-Primitives (integers, floats, booleans, null) live on a fixed-size value stack and don't require heap allocation.
-
-Strings, arrays, and objects are heap-allocated and tracked in per-type lists on the VM. When a request ends, the VM walks each list and frees everything. Values cannot leak across requests.
+Compiled bytecode is cached across requests. Required files are compiled when first encountered and re-executed from the cache on subsequent requests. Internal buffers retain capacity for reuse.
 
 ## Copy-on-write
 
-Like PHP, zphp uses copy-on-write for arrays. Assigning an array to a new variable, passing it to a function, or returning it shares the underlying data; the copy is made lazily the first time one side modifies the array.
+Like PHP, zphp uses copy-on-write for arrays. Assignment or argument passing can share the underlying data until a write requires separation.
 
 ```php
-$a = [1, 2, 3, 4, 5];
-$b = $a;   // shared, no copy
-$b[2] = 0; // $b separates here; $a still [1,2,3,4,5]
+$a = [1, 2, 3];
+$b = $a;
+$b[0] = 9;
+
+var_dump($a[0]); // int(1)
+var_dump($b[0]); // int(9)
 ```
 
-The observable semantics are full value isolation - both ends behave as independent copies. Because the clone is deferred to the first write, reading or passing large arrays without modifying them costs nothing. Reference counting on the shared array decides when a write needs to separate; the request-boundary bulk free still reclaims everything at the end.
-
-## Why no garbage collector
-
-PHP's garbage collector handles reference cycles - objects that point to each other and can't be freed by reference counting alone. zphp doesn't need this because every heap-allocated value is tracked in a flat list and freed at the request boundary. Cycles are irrelevant when nothing survives the request.
+Ordinary array assignment preserves independent values without immediately copying the array. Explicit references made with `&` share storage instead.
 
 ## Environment variables
 
-Environment variables are captured once when each worker thread starts, stored as a pre-built `$_ENV` array. Subsequent requests reference this snapshot directly. If you change environment variables after the server starts, workers won't see the changes until they're restarted.
-
-## Stack and frame limits
-
-The value stack holds 2,048 entries. The call stack supports 2,048 nested frames. Both are fixed at compile time, and exceeding them produces a runtime error.
+Workers capture environment variables at startup. `$_ENV` is initialized from that snapshot for each request. Restart workers to pick up changes to the process environment.

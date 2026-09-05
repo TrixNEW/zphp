@@ -1,28 +1,16 @@
 # Bytecode Compilation
 
-`zphp build` compiles a PHP file to bytecode ahead of time. The output is a `.zphpc` file that can be executed directly, skipping the parsing and compilation step at runtime.
+`zphp build` compiles a PHP file to serialized bytecode without executing it:
 
-## Usage
-
-```
-$ zphp build app.php
-```
-
-This produces `app.zphpc` in the same directory. Run it with:
-
-```
-$ zphp run app.zphpc
+```sh
+zphp build app.php
+zphp run app.zphpc
 ```
 
-## When to use this
+For a `.php` input, the output replaces that suffix with `.zphpc` in the same directory. For other filenames, `.zphpc` is appended.
 
-For most use cases, `zphp run` and `zphp serve` handle compilation transparently and you don't need to think about it. `zphp serve` compiles your entry point once at startup and reuses the bytecode across all workers and requests.
+Running the bytecode skips parsing and compiling the entry point. This does not bundle files loaded with `include` or `require`, or application assets. Keep those runtime dependencies available at their expected paths.
 
-Pre-compiling to `.zphpc` is useful when you want to:
-- Ship bytecode without source files
-- Eliminate any startup compilation overhead in scripting contexts
-- Verify that a file compiles successfully without running it
+`zphp serve` accepts a PHP source entry point and retains compiled bytecode across requests; it does not require a separate build step. A `.zphpc` file is for `zphp run`, not `zphp serve`.
 
-## See also
-
-For shipping your PHP application as a single self-contained binary, see [Standalone Executables](./standalone.md).
+For an executable containing the runtime and entry-point bytecode, see [Standalone Executables](./standalone.md).

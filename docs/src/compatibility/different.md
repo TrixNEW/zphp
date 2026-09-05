@@ -1,143 +1,21 @@
 # What Works Differently
 
-zphp is not a drop-in replacement for every PHP program. There are places where behavior differs from PHP 8.4, either by design or as a current limitation. This page documents the ones you're most likely to notice.
-
-## Array copy semantics
-
-Like PHP, zphp uses copy-on-write for arrays: assigning an array to a new variable shares the underlying data until one of them is modified, at which point the writer gets its own copy.
-
-```php
-$a = [1, 2, 3];
-$b = $a;   // shared, no copy yet
-$b[] = 4;  // $b separates here; $a is untouched
-```
-
-The semantics are identical to PHP from your code's perspective - both produce independent copies, and the copy only happens when you actually modify one of them. This matters for performance: passing large arrays around without modifying them is cheap.
-
-## Global variables
-
-The `global` keyword works for reading and writing:
-
-```php
-$counter = 0;
-
-function increment() {
-    global $counter;
-    $counter++;  // this works in zphp
-}
-
-increment();
-echo $counter; // 1
-```
-
-What doesn't work is creating a reference alias between a local and a global:
-
-```php
-$value = 10;
-
-function modify() {
-    global $value;
-    $ref = &$value;  // reference aliasing - not supported in zphp
-    $ref = 20;
-}
-
-modify();
-echo $value; // PHP: 20. zphp: 10.
-```
-
-Direct reads and writes through the `global` keyword work. Indirect modification through reference aliases does not.
-
-## Pass-by-reference
-
-Pass-by-reference works for simple variables, array element access (string, integer, and variable keys), object property access (`$obj->prop`), chained property access up to 4 levels (`$obj->a->b->c->d`), and dynamic property names (`$obj->$var`).
-
-```php
-function modify(&$val) { $val = 'changed'; }
-
-modify($x);                // works
-modify($arr['key']);       // works
-modify($obj->prop);       // works
-modify($obj->a->b);       // works
-modify($obj->$dynamicProp); // works
-```
-
-Passing an entire array or object by reference and modifying nested keys inside the function also works:
-
-```php
-function set_nested(array &$arr) { $arr['a']['b'] = 99; } // works
-```
-
-Combined property + array access also works:
-
-```php
-modify($obj->items['key']); // works
-```
-
-Chains deeper than 4 levels silently skip writeback.
-
-## Type hint enforcement
-
-Type hints on function parameters and return values are enforced, matching PHP's behavior. One difference: zphp's fast execution path skips type checking for performance. If your code relies on type errors being thrown in deeply nested hot loops, the behavior may differ.
-
-## Auto-vivification
-
-In PHP 8.4, assigning to an index on a scalar value throws a TypeError:
-
-```php
-$x = "hello";
-$x[] = 1; // PHP 8.4: TypeError
-```
-
-In zphp, this silently fails - the assignment is a no-op. Nested auto-vivification of missing keys (creating intermediate arrays) works correctly.
-
-## require and include scope
-
-In PHP, `require` shares the calling scope. Variables defined in the required file are visible in the caller, and vice versa:
-
-```php
-// config.php
-$db_host = 'localhost';
-
-// app.php
-require 'config.php';
-echo $db_host; // PHP: 'localhost'
-```
-
-In zphp, `require` executes in an isolated scope. Functions and classes are registered globally (as in PHP), but local variables don't cross the boundary. The example above would not work - `$db_host` would be undefined in `app.php`.
-
-**What still works:**
-
-```php
-// config.php
-return ['host' => 'localhost', 'port' => 3306];
-
-// app.php
-$config = require 'config.php'; // return values work fine
-```
-
-```php
-// helpers.php
-function formatDate($ts) { return date('Y-m-d', $ts); }
-
-// app.php
-require 'helpers.php';
-echo formatDate(time()); // globally registered functions work
-```
-
-Most modern PHP frameworks (Laravel, Symfony, etc.) use return-based config files and autoloaded classes, both of which work correctly.
+zphp is not a drop-in replacement for every PHP application. Test your application and its dependencies against both runtimes, especially when they rely on extension behavior or reflection details.
 
 ## Timezones
 
-Timezone support covers approximately 60 IANA timezone identifiers across the Americas, Europe, Asia, Oceania, and Africa. `date_default_timezone_set()` and `date_default_timezone_get()` work, as do `DateTimeZone`, `DateTime` with timezone arguments, and all timezone-related format specifiers (`e`, `T`, `P`, `O`, `Z`).
+zphp resolves timezone data using a built-in table, system zoneinfo, and an embedded IANA database fallback. `timezone_identifiers_list()` and `timezone_abbreviations_list()` are implemented.
 
-DST transitions are calculated for US rules (second Sunday of March to first Sunday of November) and EU rules (last Sunday of March to last Sunday of October). Zones without DST (Asia/Tokyo, Asia/Kolkata, etc.) use fixed offsets.
-
-Not supported: the full IANA timezone database (historical transition data, political changes to timezone rules), `timezone_identifiers_list()`, and `timezone_abbreviations_list()`. If your timezone isn't in the built-in table, use a fixed offset like `+05:30`.
-
-## strtotime
-
-`strtotime()` supports common formats, relative modifiers ("next Thursday", "+2 days"), ordinal modifiers, and timezone suffixes (UTC, GMT, EST, PST, numeric offsets, RFC 2822).
+The identifier list is fixed in the implementation, and the abbreviation list is derived from the built-in table rather than all historical IANA records. The identifier-list implementation does not apply PHP's group or country filters. Do not assume these listings match the PHP version or timezone database installed on your machine.
 
 ## Named arguments
 
-Named arguments work for user-defined functions and approximately 80 common built-in functions. Built-in functions not on this list fall back to positional argument passing.
+User-defined functions support named arguments. Built-in functions use a signature table that covers only part of the standard library; unlisted built-ins fall back to positional arguments. Use positional arguments when a built-in's named-argument behavior has not been verified.
+
+## Package tooling
+
+The built-in package manager reads parts of `composer.json`, but does not implement Composer's full behavior. It skips PHP and extension version constraints, so a successful install does not establish runtime compatibility. Its lock file is not used to pin subsequent installs. See [Package Manager](../tools/packages.md).
+
+## Compatibility checks
+
+The [test coverage](same.md#test-coverage) is evidence for the scenarios exercised, not a guarantee for arbitrary applications. When reporting a difference, include a small PHP script and the output from both runtimes.

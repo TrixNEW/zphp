@@ -1,53 +1,47 @@
 # Benchmarks
 
-All benchmarks run on Apple M4 (14 cores), comparing zphp (ReleaseFast) against PHP 8.5 (no JIT). Benchmarks are in the `benchmarks/` directory and can be reproduced locally.
+Build with `make release` when measuring performance. Debug builds include allocation diagnostics and are not representative of execution speed.
 
 ## Runtime
 
-Six compute-heavy benchmarks. Best of 5 runs. Startup overhead is subtracted to measure pure execution time.
+The runtime suite measures six compute-heavy scripts, taking the best of five runs for each runtime. Times include process startup and the timing harness overhead; startup is not subtracted.
 
-| Benchmark | PHP | zphp | Ratio |
+Results on Apple M4 with PHP 8.5.4, without PHP's just-in-time compiler:
+
+| Benchmark | PHP | zphp | zphp/PHP |
 |---|---|---|---|
-| string_ops | 97 ms | 27 ms | 0.28x |
-| array_ops | 98 ms | 29 ms | 0.30x |
-| objects | 97 ms | 36 ms | 0.37x |
-| closures | 98 ms | 83 ms | 0.85x |
-| loops | 130 ms | 120 ms | 0.92x |
-| fibonacci | 161 ms | 157 ms | 0.97x |
+| string_ops | 99 ms | 37 ms | 0.37x |
+| array_ops | 81 ms | 43 ms | 0.53x |
+| objects | 103 ms | 76 ms | 0.74x |
+| closures | 103 ms | 99 ms | 0.96x |
+| fibonacci | 171 ms | 260 ms | 1.52x |
+| loops | 132 ms | 209 ms | 1.58x |
 
+A ratio below 1 means zphp took less time. These scripts help detect runtime regressions; they do not predict the performance of a framework application.
+
+```sh
+make bench
 ```
-zig build -Doptimize=ReleaseFast
-./benchmarks/runtime/run
-```
+
+Measure your application's actual workload before choosing a deployment configuration.
 
 ## HTTP throughput
 
-Measured with [wrk](https://github.com/wg/wrk): 4 threads, 100 connections, 10 seconds. All servers return `echo "hello"`.
+The HTTP harness uses [wrk](https://github.com/wg/wrk) against a trivial response. Its defaults are four client threads, 100 connections, and ten seconds.
 
-| Server | req/s | Avg latency |
-|---|---|---|
-| zphp serve | 92,343 | 1.12 ms |
-| nginx + php-fpm (128 workers) | 42,088 | 50.37 ms |
-
-2.2x throughput, 45x lower latency compared to nginx + php-fpm.
-
-```
-zig build -Doptimize=ReleaseFast
+```sh
+make release
 ./benchmarks/serve/wrk_bench
 ```
 
-**Note**: nginx + php-fpm numbers are from Docker with linux/amd64 emulation on Apple Silicon. Native Linux performance would be better for php-fpm. These numbers are directional, not absolute. Run the benchmarks on your own hardware for numbers relevant to your deployment.
+It requires wrk and Docker for the nginx and PHP-FPM comparison. Historical measurements used native zphp against linux/amd64 containers under emulation on Apple Silicon. That difference prevents a fair runtime comparison, so those results should not be used as a production speedup claim.
 
 ## Formatter
 
-Formatting a 416-line PHP file. Best of 10 runs.
+The formatter harness compares the best of ten runs on `benchmarks/sample.php`:
 
-| Tool | Time |
-|---|---|
-| zphp fmt | 5 ms |
-| php-cs-fixer (PSR-12) | 92 ms |
-| prettier @prettier/plugin-php | 95 ms |
-
-```
+```sh
 ./benchmarks/fmt
 ```
+
+It uses GNU-style nanosecond timestamps from `date`, so run it in a compatible environment, such as Linux. It may install comparison tools. Formatters apply different rules, and this benchmark does not establish equivalent output.

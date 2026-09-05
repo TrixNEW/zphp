@@ -33,6 +33,8 @@ Create a file called `server.php`:
 ```php
 <?php
 
+header('Content-Type: application/json');
+
 $method = $_SERVER['REQUEST_METHOD'];
 $path = $_SERVER['REQUEST_URI'];
 
@@ -47,7 +49,6 @@ Serve it:
 
 ```
 $ zphp serve server.php --port 3000
-listening on http://0.0.0.0:3000 (14 workers)
 ```
 
 ```
@@ -55,4 +56,4 @@ $ curl http://localhost:3000/api/hello
 {"method":"GET","path":"\/api\/hello","message":"Hello from zphp"}
 ```
 
-That's a production HTTP server running from a single command. See [Serving an Application](../server/serving.md) for the full details.
+The command starts zphp's built-in HTTP server. See [Serving an Application](../server/serving.md) for the full details.
