@@ -200,7 +200,7 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
                     slot_opt = s;
                 } else if (self.arrowCaptureSlot(var_name)) |s| {
                     slot_opt = s;
-                } else if (!self.inFunctionScope() and var_name.len > 0 and var_name[0] == '$') {
+                } else if (!Compiler.isSuperglobal(var_name) and !self.inFunctionScope() and var_name.len > 0 and var_name[0] == '$') {
                     slot_opt = self.getOrCreateSlot(var_name);
                 }
                 if (slot_opt) |slot| {
@@ -393,7 +393,7 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
     }
 
     // fast path: $var .= expr uses concat_assign to avoid full string copy
-    if (op_tag == .dot_equal and (target.tag == .variable or target.tag == .identifier)) {
+    if (op_tag == .dot_equal and (target.tag == .variable or target.tag == .identifier) and !Compiler.isSuperglobal(self.ast.tokenSlice(target.main_token))) {
         try self.compileNode(node.data.rhs);
         const name = self.ast.tokenSlice(target.main_token);
         const idx = try self.addConstant(.{ .string = Value.String.borrowed(name) });
@@ -432,7 +432,7 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
         // skip the runtime copyValue clone. only safe for plain assignment
         // (no compound ops) and only when rhs is array_literal (not a native
         // return or property access where nested arrays might be shared)
-        if (op_tag == .equal and self.ast.nodes[node.data.rhs].tag == .array_literal and self.inFunctionScope()) {
+        if (!Compiler.isSuperglobal(name) and op_tag == .equal and self.ast.nodes[node.data.rhs].tag == .array_literal and self.inFunctionScope()) {
             const slot = self.getOrCreateSlot(name);
             try self.emitOp(.set_local_transfer);
             try self.emitU16(slot);
@@ -760,12 +760,17 @@ fn compileCallArg(self: *Compiler, fn_name: []const u8, pos: usize, arg_idx: u32
             // non-throwing: a non-array arg passes through so the native raises
             // its own "must be of type array" TypeError
             const name = self.ast.tokenSlice(arg.main_token);
+            if (Compiler.isSuperglobal(name)) {
+                try self.emitOp(.ensure_array_var);
+                try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(name) }));
+                try self.emitByte(1);
+            }
             var slot_opt: ?u16 = null;
             if (self.local_slots.get(name)) |s| {
                 slot_opt = s;
             } else if (self.arrowCaptureSlot(name)) |s| {
                 slot_opt = s;
-            } else if (!self.inFunctionScope() and name.len > 0 and name[0] == '$') {
+            } else if (!Compiler.isSuperglobal(name) and !self.inFunctionScope() and name.len > 0 and name[0] == '$') {
                 slot_opt = self.getOrCreateSlot(name);
             }
             if (slot_opt) |slot| {
@@ -1062,12 +1067,17 @@ fn compileUnset(self: *Compiler, args: []const u32) Error!void {
             const base = self.ast.nodes[arg.data.lhs];
             if (base.tag == .variable) {
                 const bname = self.ast.tokenSlice(base.main_token);
+                if (Compiler.isSuperglobal(bname)) {
+                    try self.emitOp(.ensure_array_var);
+                    try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(bname) }));
+                    try self.emitByte(1);
+                }
                 var slot_opt: ?u16 = null;
                 if (self.local_slots.get(bname)) |s| {
                     slot_opt = s;
                 } else if (self.arrowCaptureSlot(bname)) |s| {
                     slot_opt = s;
-                } else if (!self.inFunctionScope() and bname.len > 0 and bname[0] == '$') {
+                } else if (!Compiler.isSuperglobal(bname) and !self.inFunctionScope() and bname.len > 0 and bname[0] == '$') {
                     slot_opt = self.getOrCreateSlot(bname);
                 }
                 if (slot_opt) |slot| {
@@ -1187,6 +1197,12 @@ pub fn compileVivifyChain(self: *Compiler, node_idx: u32) Error!void {
 }
 
 fn emitEnsureArray(self: *Compiler, name: []const u8) Error!void {
+    if (Compiler.isSuperglobal(name)) {
+        try self.emitOp(.ensure_array_var);
+        try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(name) }));
+        try self.emitByte(0);
+        return;
+    }
     if (self.local_slots.get(name)) |slot| {
         try self.emitOp(.ensure_array_local);
         try self.emitU16(slot);
@@ -1197,7 +1213,7 @@ fn emitEnsureArray(self: *Compiler, name: []const u8) Error!void {
         try self.emitU16(slot);
         return;
     }
-    if (!self.inFunctionScope() and name.len > 0 and name[0] == '$') {
+    if (!Compiler.isSuperglobal(name) and !self.inFunctionScope() and name.len > 0 and name[0] == '$') {
         const slot = self.getOrCreateSlot(name);
         try self.emitOp(.ensure_array_local);
         try self.emitU16(slot);
@@ -1206,6 +1222,7 @@ fn emitEnsureArray(self: *Compiler, name: []const u8) Error!void {
     const idx = try self.addConstant(.{ .string = Value.String.borrowed(name) });
     try self.emitOp(.ensure_array_var);
     try self.emitU16(idx);
+    try self.emitByte(0);
 }
 
 pub fn compileArrayLiteral(self: *Compiler, node: Ast.Node) Error!void {

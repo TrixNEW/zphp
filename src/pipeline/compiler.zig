@@ -1273,6 +1273,13 @@ pub const Compiler = struct {
     // slot management
     // ==================================================================
 
+    pub fn isSuperglobal(name: []const u8) bool {
+        for ([_][]const u8{ "$_SERVER", "$_GET", "$_POST", "$_FILES", "$_COOKIE", "$_SESSION", "$_ENV", "$_REQUEST", "$GLOBALS" }) |candidate| {
+            if (std.mem.eql(u8, name, candidate)) return true;
+        }
+        return false;
+    }
+
     pub fn getOrCreateSlot(self: *Compiler, name: []const u8) u16 {
         if (self.local_slots.get(name)) |slot| return slot;
         const slot = self.next_slot;
@@ -1318,6 +1325,7 @@ pub const Compiler = struct {
     // function when it is a variable used from the enclosing scope. returns
     // null when the name is not (and cannot become) a captured local
     pub fn arrowCaptureSlot(self: *Compiler, name: []const u8) ?u16 {
+        if (isSuperglobal(name)) return null;
         if (self.arrow_parent == null) return null;
         if (name.len == 0 or name[0] != '$') return null;
         if (!self.resolveArrowCapture(name)) return null;
@@ -1325,6 +1333,11 @@ pub const Compiler = struct {
     }
 
     pub fn emitGetVar(self: *Compiler, name: []const u8) Error!void {
+        if (isSuperglobal(name)) {
+            try self.emitOp(.get_var);
+            try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(name) }));
+            return;
+        }
         if (self.local_slots.get(name)) |slot| {
             try self.emitOp(.get_local);
             try self.emitU16(slot);
@@ -1349,6 +1362,11 @@ pub const Compiler = struct {
     }
 
     pub fn emitSetVar(self: *Compiler, name: []const u8) Error!void {
+        if (isSuperglobal(name)) {
+            try self.emitOp(.set_var);
+            try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(name) }));
+            return;
+        }
         if (self.inFunctionScope() or (name.len > 0 and name[0] == '$')) {
             const slot = self.getOrCreateSlot(name);
             try self.emitOp(.set_local);

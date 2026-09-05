@@ -700,6 +700,7 @@ pub fn compileGlobal(self: *Compiler, node: Ast.Node) Error!void {
     for (self.ast.extraSlice(node.data.lhs)) |var_idx| {
         const var_node = self.ast.nodes[var_idx];
         const name = self.ast.tokenSlice(var_node.main_token);
+        if (Compiler.isSuperglobal(name)) continue;
         const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(name) });
         try self.emitOp(.get_global);
         try self.emitU16(name_idx);

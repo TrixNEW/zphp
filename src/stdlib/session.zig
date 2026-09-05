@@ -113,7 +113,7 @@ fn loadSessionData(ctx: *NativeContext, sid: []const u8) !*PhpArray {
 }
 
 fn saveSessionData(ctx: *NativeContext, sid: []const u8) !void {
-    const session_val = ctx.vm.frames[0].vars.get("$_SESSION") orelse return;
+    const session_val = ctx.vm.request_vars.get("$_SESSION") orelse return;
     if (session_val != .array) return;
 
     const serialized = try serialize_mod.serializeToString(ctx, session_val);
@@ -190,7 +190,6 @@ fn native_session_start(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
 
     const arr = try loadSessionData(ctx, sid);
     try ctx.vm.putRequestVar("$_SESSION", .{ .array = arr });
-    try ctx.vm.putGlobalVar("$_SESSION", .{ .array = arr });
 
     if (is_new) try setSessionCookie(ctx, sid);
 
@@ -264,7 +263,6 @@ fn native_session_write_close(ctx: *NativeContext, _: []const Value) RuntimeErro
 fn native_session_unset(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
     try ctx.vm.putRequestVar("$_SESSION", .{ .array = arr });
-    try ctx.vm.putGlobalVar("$_SESSION", .{ .array = arr });
     return .null;
 }
 
@@ -322,7 +320,6 @@ fn native_session_reset(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
     if (sid_val != .string) return .{ .bool = false };
     const arr = try loadSessionData(ctx, sid_val.string.bytes());
     try ctx.vm.putRequestVar("$_SESSION", .{ .array = arr });
-    try ctx.vm.putGlobalVar("$_SESSION", .{ .array = arr });
     return .{ .bool = true };
 }
 
@@ -342,7 +339,7 @@ fn native_session_get_cookie_params(ctx: *NativeContext, _: []const Value) Runti
 }
 
 fn native_session_encode(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const session_val = ctx.vm.frames[0].vars.get("$_SESSION") orelse return .{ .string = Value.String.borrowed("") };
+    const session_val = ctx.vm.request_vars.get("$_SESSION") orelse return .{ .string = Value.String.borrowed("") };
     if (session_val != .array) return .{ .string = Value.String.borrowed("") };
     return try serialize_mod.serializeToString(ctx, session_val);
 }
@@ -352,7 +349,6 @@ fn native_session_decode(ctx: *NativeContext, args: []const Value) RuntimeError!
     const parsed = serialize_mod.unserializeFromString(ctx, args[0].string.bytes()) orelse return .{ .bool = false };
     if (parsed != .array) return .{ .bool = false };
     try ctx.vm.putRequestVar("$_SESSION", parsed);
-    try ctx.vm.putGlobalVar("$_SESSION", parsed);
     return .{ .bool = true };
 }
 

@@ -88,7 +88,7 @@ pub const OpCode = enum(u8) {
     array_set_local, // u16: slot - pop value, pop key, set on local at slot (string char-write or array set with vivify), push value (value-assign: clones)
     array_set_local_ref, // same as array_set_local but does NOT clone
     ensure_array_local, // u16: slot - read local, vivify null/false to array, error on scalar, push result
-    ensure_array_var, // u16: name const - read var, vivify null/false to array, error on scalar, push result
+    ensure_array_var, // u16: name const, u8: separate only (no vivify or push)
     ensure_array_prop, // u16: prop-name const - pop obj, read obj->prop, vivify null/false to array, COW-separate if shared and write back, push result (for $obj->prop[]=/[k] op= writes)
     cow_separate_local, // u16: slot - if the local holds a shared array, separate it in place (write unshared copy back to slot). non-vivifying, non-throwing, pushes NOTHING. emitted before by-ref native args / unset bases
     ensure_array_static_prop, // u16 class-name const, u16 prop-name const - read Class::$prop, vivify, COW-separate if shared + write back, push (for Class::$prop[]=/[k] op= writes)
@@ -331,7 +331,6 @@ pub const OpCode = enum(u8) {
             .dec_local,
             .get_static_prop_dynamic,
             .ensure_array_local,
-            .ensure_array_var,
             .ensure_array_prop,
             .cow_separate_local,
             .make_var_array_elem_ref,
@@ -348,7 +347,7 @@ pub const OpCode = enum(u8) {
             .foreach_ref_bind,
             .declare_fn,
             => 3,
-            .call, .call_spread, .new_obj, .method_call, .method_call_spread, .static_call_dyn_method => 4,
+            .ensure_array_var, .call, .call_spread, .new_obj, .method_call, .method_call_spread, .static_call_dyn_method => 4,
             .make_var_ref, .make_var_prop_ref => 5,
             .get_static_prop,
             .get_class_const,
