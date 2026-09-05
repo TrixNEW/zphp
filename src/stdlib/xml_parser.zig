@@ -135,15 +135,15 @@ fn getErrorCode(_: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn errorString(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const code: i64 = Value.toInt(args[0]);
-    return .{ .string = switch (code) {
+    return .{ .string = Value.String.borrowed(switch (code) {
         0 => "No error",
         1 => "Out of memory",
         2 => "Syntax error",
         4 => "Invalid token",
         else => "Unknown error",
-    } };
+    }) };
 }
 
 fn getCurrentLine(_: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -177,19 +177,22 @@ const ParseState = struct {
         if (self.pos >= self.src.len) return null;
         const c = self.src[self.pos];
         self.pos += 1;
-        if (c == '\n') { self.line += 1; self.col = 0; } else self.col += 1;
+        if (c == '\n') {
+            self.line += 1;
+            self.col = 0;
+        } else self.col += 1;
         return c;
     }
     fn startsWith(self: *const ParseState, s: []const u8) bool {
         if (self.pos + s.len > self.src.len) return false;
-        return std.mem.eql(u8, self.src[self.pos..self.pos + s.len], s);
+        return std.mem.eql(u8, self.src[self.pos .. self.pos + s.len], s);
     }
 };
 
 fn xmlParse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .object) return .{ .int = 0 };
     const parser = args[0].object;
-    const data = if (args[1] == .string) args[1].string else return .{ .int = 0 };
+    const data = if (args[1] == .string) args[1].string.bytes() else return .{ .int = 0 };
     const is_final = args.len < 3 or Value.isTruthy(args[2]);
     _ = is_final;
 
@@ -212,13 +215,23 @@ fn xmlParse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             if (st.startsWith("<?")) {
                 // PI or xml decl - skip until ?>
                 while (st.pos < st.src.len and !st.startsWith("?>")) _ = st.advance();
-                if (st.startsWith("?>")) { _ = st.advance(); _ = st.advance(); }
+                if (st.startsWith("?>")) {
+                    _ = st.advance();
+                    _ = st.advance();
+                }
                 continue;
             }
             if (st.startsWith("<!--")) {
-                _ = st.advance(); _ = st.advance(); _ = st.advance(); _ = st.advance();
+                _ = st.advance();
+                _ = st.advance();
+                _ = st.advance();
+                _ = st.advance();
                 while (st.pos < st.src.len and !st.startsWith("-->")) _ = st.advance();
-                if (st.startsWith("-->")) { _ = st.advance(); _ = st.advance(); _ = st.advance(); }
+                if (st.startsWith("-->")) {
+                    _ = st.advance();
+                    _ = st.advance();
+                    _ = st.advance();
+                }
                 continue;
             }
             if (st.startsWith("<![CDATA[")) {
@@ -228,7 +241,11 @@ fn xmlParse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 while (st.pos < st.src.len and !st.startsWith("]]>")) _ = st.advance();
                 const cdata = st.src[cdata_start..st.pos];
                 if (cdata.len > 0) try flushText(ctx, &st, cdata);
-                if (st.startsWith("]]>")) { _ = st.advance(); _ = st.advance(); _ = st.advance(); }
+                if (st.startsWith("]]>")) {
+                    _ = st.advance();
+                    _ = st.advance();
+                    _ = st.advance();
+                }
                 continue;
             }
             if (st.startsWith("<!")) {
@@ -237,7 +254,8 @@ fn xmlParse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 continue;
             }
             if (st.startsWith("</")) {
-                _ = st.advance(); _ = st.advance();
+                _ = st.advance();
+                _ = st.advance();
                 const name_start = st.pos;
                 while (st.pos < st.src.len) {
                     const c = st.peek().?;
@@ -294,10 +312,10 @@ fn xmlParse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                     if (quote != 0) _ = st.advance();
                     const folded_an = try foldName(ctx, aname, st.case_fold);
                     const unesc = try unescapeEntities(ctx, raw_val);
-                    try attrs.set(ctx.allocator, .{ .string = folded_an }, .{ .string = unesc });
+                    try attrs.set(ctx.allocator, .{ .string = Value.String.borrowed(folded_an) }, .{ .string = Value.String.borrowed(unesc) });
                 } else if (aname.len > 0) {
                     const folded_an = try foldName(ctx, aname, st.case_fold);
-                    try attrs.set(ctx.allocator, .{ .string = folded_an }, .{ .string = "" });
+                    try attrs.set(ctx.allocator, .{ .string = Value.String.borrowed(folded_an) }, .{ .string = Value.String.borrowed("") });
                 } else {
                     break;
                 }
@@ -337,11 +355,31 @@ fn unescapeEntities(ctx: *NativeContext, s: []const u8) ![]const u8 {
     var i: usize = 0;
     while (i < s.len) {
         if (s[i] == '&') {
-            if (i + 5 <= s.len and std.mem.eql(u8, s[i..i+5], "&amp;")) { try out.append(ctx.allocator, '&'); i += 5; continue; }
-            if (i + 4 <= s.len and std.mem.eql(u8, s[i..i+4], "&lt;")) { try out.append(ctx.allocator, '<'); i += 4; continue; }
-            if (i + 4 <= s.len and std.mem.eql(u8, s[i..i+4], "&gt;")) { try out.append(ctx.allocator, '>'); i += 4; continue; }
-            if (i + 6 <= s.len and std.mem.eql(u8, s[i..i+6], "&quot;")) { try out.append(ctx.allocator, '"'); i += 6; continue; }
-            if (i + 6 <= s.len and std.mem.eql(u8, s[i..i+6], "&apos;")) { try out.append(ctx.allocator, '\''); i += 6; continue; }
+            if (i + 5 <= s.len and std.mem.eql(u8, s[i .. i + 5], "&amp;")) {
+                try out.append(ctx.allocator, '&');
+                i += 5;
+                continue;
+            }
+            if (i + 4 <= s.len and std.mem.eql(u8, s[i .. i + 4], "&lt;")) {
+                try out.append(ctx.allocator, '<');
+                i += 4;
+                continue;
+            }
+            if (i + 4 <= s.len and std.mem.eql(u8, s[i .. i + 4], "&gt;")) {
+                try out.append(ctx.allocator, '>');
+                i += 4;
+                continue;
+            }
+            if (i + 6 <= s.len and std.mem.eql(u8, s[i .. i + 6], "&quot;")) {
+                try out.append(ctx.allocator, '"');
+                i += 6;
+                continue;
+            }
+            if (i + 6 <= s.len and std.mem.eql(u8, s[i .. i + 6], "&apos;")) {
+                try out.append(ctx.allocator, '\'');
+                i += 6;
+                continue;
+            }
         }
         try out.append(ctx.allocator, s[i]);
         i += 1;
@@ -356,7 +394,7 @@ fn invokeStart(ctx: *NativeContext, st: *ParseState, name: []const u8, attrs: *P
     if (handler == .null or (handler == .bool and !handler.bool)) return;
     var args = [_]Value{
         .{ .object = st.parser },
-        .{ .string = name },
+        .{ .string = Value.String.borrowed(name) },
         .{ .array = attrs },
     };
     _ = invokeCallable(ctx, st.parser, handler, args[0..]) catch {};
@@ -367,7 +405,7 @@ fn invokeEnd(ctx: *NativeContext, st: *ParseState, name: []const u8) !void {
     if (handler == .null or (handler == .bool and !handler.bool)) return;
     var args = [_]Value{
         .{ .object = st.parser },
-        .{ .string = name },
+        .{ .string = Value.String.borrowed(name) },
     };
     _ = invokeCallable(ctx, st.parser, handler, args[0..]) catch {};
 }
@@ -379,13 +417,16 @@ fn flushText(ctx: *NativeContext, st: *ParseState, raw: []const u8) !void {
     if (st.skip_white) {
         var all_ws = true;
         for (decoded) |c| {
-            if (!std.ascii.isWhitespace(c)) { all_ws = false; break; }
+            if (!std.ascii.isWhitespace(c)) {
+                all_ws = false;
+                break;
+            }
         }
         if (all_ws) return;
     }
     var args = [_]Value{
         .{ .object = st.parser },
-        .{ .string = decoded },
+        .{ .string = Value.String.borrowed(decoded) },
     };
     _ = invokeCallable(ctx, st.parser, handler, args[0..]) catch {};
 }
@@ -393,10 +434,10 @@ fn flushText(ctx: *NativeContext, st: *ParseState, raw: []const u8) !void {
 fn invokeCallable(ctx: *NativeContext, parser: *PhpObject, callable: Value, args: []Value) !Value {
     const bound = parser.get("__bound_object");
     if (bound == .object and callable == .string) {
-        return try ctx.vm.callMethod(bound.object, callable.string, args);
+        return try ctx.vm.callMethod(bound.object, callable.string.bytes(), args);
     }
     if (callable == .string) {
-        return try ctx.vm.callByName(callable.string, args);
+        return try ctx.vm.callByName(callable.string.bytes(), args);
     }
     if (callable == .object) {
         return try ctx.vm.callMethod(callable.object, "__invoke", args);
@@ -407,10 +448,10 @@ fn invokeCallable(ctx: *NativeContext, parser: *PhpObject, callable: Value, args
             const tgt = arr.entries.items[0].value;
             const mname = arr.entries.items[1].value;
             if (mname == .string) {
-                if (tgt == .object) return try ctx.vm.callMethod(tgt.object, mname.string, args);
+                if (tgt == .object) return try ctx.vm.callMethod(tgt.object, mname.string.bytes(), args);
                 if (tgt == .string) {
                     var buf: [256]u8 = undefined;
-                    const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ tgt.string, mname.string }) catch return .null;
+                    const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ tgt.string.bytes(), mname.string.bytes() }) catch return .null;
                     return try ctx.vm.callByName(full, args);
                 }
             }

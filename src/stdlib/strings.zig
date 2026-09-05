@@ -162,13 +162,13 @@ pub const entries = .{
 };
 
 fn substr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2) return .{ .string = "" };
+    if (args.len < 2) return .{ .string = Value.String.borrowed("") };
     if (try rejectArrayParam(ctx, args[0], "substr")) return error.RuntimeError;
     const s = try coerceToString(ctx, args[0]);
     const slen: i64 = @intCast(s.len);
     var start = Value.toInt(args[1]);
     if (start < 0) start = @max(0, slen + start);
-    if (start >= slen) return .{ .string = "" };
+    if (start >= slen) return .{ .string = Value.String.borrowed("") };
     const ustart: usize = @intCast(start);
 
     if (args.len >= 3 and args[2] != .null) {
@@ -177,9 +177,11 @@ fn substr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             length = @max(0, slen - @as(i64, @intCast(ustart)) + length);
         }
         const end: usize = @min(s.len, ustart + @as(usize, @intCast(@max(0, length))));
-        return .{ .string = s[ustart..end] };
+        if (args[0] == .string) return .{ .string = args[0].string.retainedSlice(ustart, end) };
+        return .{ .string = Value.String.borrowed(s[ustart..end]) };
     }
-    return .{ .string = s[ustart..] };
+    if (args[0] == .string) return .{ .string = args[0].string.retainedSlice(ustart, s.len) };
+    return .{ .string = Value.String.borrowed(s[ustart..]) };
 }
 
 fn strpos(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -224,7 +226,7 @@ fn replaceOne(ctx: *NativeContext, subject: []const u8, search: []const u8, repl
 }
 
 fn str_replace(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 3) return if (args.len >= 3) args[2] else Value{ .string = "" };
+    if (args.len < 3) return if (args.len >= 3) args[2] else Value{ .string = Value.String.borrowed("") };
     if (args[0] != .array and args[1] == .array) {
         try ctx.vm.setPendingException("TypeError", "str_replace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string");
         return error.RuntimeError;
@@ -237,39 +239,39 @@ fn str_replace(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         const subject_arr = args[2].array;
         const out = try ctx.createArray();
         for (subject_arr.entries.items) |se| {
-            const elem_str: []const u8 = if (se.value == .string) se.value.string else "";
+            const elem_str: []const u8 = if (se.value == .string) se.value.string.bytes() else "";
             const replaced = try strReplaceOnSingle(ctx, args[0], args[1], elem_str, &total_count);
-            try out.set(ctx.allocator, se.key, .{ .string = replaced });
+            try out.set(ctx.allocator, se.key, .{ .string = Value.String.borrowed(replaced) });
         }
         if (args.len >= 4) ctx.setCallerVar(3, args.len, .{ .int = total_count });
         return .{ .array = out };
     }
 
-    const subject = if (args[2] == .object) try coerceToString(ctx, args[2]) else if (args[2] == .string) args[2].string else return args[2];
+    const subject = if (args[2] == .object) try coerceToString(ctx, args[2]) else if (args[2] == .string) args[2].string.bytes() else return args[2];
     const replaced = try strReplaceOnSingle(ctx, args[0], args[1], subject, &total_count);
     if (args.len >= 4) ctx.setCallerVar(3, args.len, .{ .int = total_count });
-    return .{ .string = replaced };
+    return .{ .string = Value.String.borrowed(replaced) };
 }
 
 fn strReplaceOnSingle(ctx: *NativeContext, search: Value, replace: Value, subject: []const u8, total_count: *i64) ![]const u8 {
     if (search == .array) {
         var result = subject;
         for (search.array.entries.items, 0..) |entry, idx| {
-            const needle = if (entry.value == .string) entry.value.string else continue;
+            const needle = if (entry.value == .string) entry.value.string.bytes() else continue;
             const replacement = if (replace == .array) blk: {
                 break :blk if (idx < replace.array.entries.items.len)
-                    (if (replace.array.entries.items[idx].value == .string) replace.array.entries.items[idx].value.string else "")
+                    (if (replace.array.entries.items[idx].value == .string) replace.array.entries.items[idx].value.string.bytes() else "")
                 else
                     "";
-            } else if (replace == .string) replace.string else "";
+            } else if (replace == .string) replace.string.bytes() else "";
             const r = try replaceOne(ctx, result, needle, replacement);
             result = r.str;
             total_count.* += r.count;
         }
         return result;
     }
-    const s = if (search == .string) search.string else return subject;
-    const rep = if (replace == .string) replace.string else "";
+    const s = if (search == .string) search.string.bytes() else return subject;
+    const rep = if (replace == .string) replace.string.bytes() else "";
     const r = try replaceOne(ctx, subject, s, rep);
     total_count.* += r.count;
     return r.str;
@@ -293,15 +295,15 @@ fn explode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var count: i64 = 0;
     while (i <= s.len) {
         if (limit > 0 and count >= limit - 1) {
-            try arr.append(ctx.allocator, .{ .string = try ctx.createString(s[i..]) });
+            try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(s[i..])) });
             break;
         }
         if (std.mem.indexOf(u8, s[i..], delim)) |pos| {
-            try arr.append(ctx.allocator, .{ .string = try ctx.createString(s[i .. i + pos]) });
+            try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(s[i .. i + pos])) });
             i += pos + delim.len;
             count += 1;
         } else {
-            try arr.append(ctx.allocator, .{ .string = try ctx.createString(s[i..]) });
+            try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(s[i..])) });
             break;
         }
     }
@@ -315,7 +317,7 @@ fn explode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn implode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     var glue: []const u8 = "";
     var arr_val: Value = .null;
     var arr_pos: u8 = 2;
@@ -324,7 +326,7 @@ fn implode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         arr_val = args[0];
         arr_pos = 1;
     } else {
-        glue = if (args[0] == .string) args[0].string else "";
+        glue = if (args[0] == .string) args[0].string.bytes() else "";
         arr_val = args[1];
     }
 
@@ -335,14 +337,14 @@ fn implode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return error.RuntimeError;
     }
     const arr = arr_val.array;
-    if (arr.entries.items.len == 0) return .{ .string = "" };
+    if (arr.entries.items.len == 0) return .{ .string = Value.String.borrowed("") };
 
     var buf = std.ArrayListUnmanaged(u8){};
     for (arr.entries.items, 0..) |entry, i| {
         if (i > 0) try buf.appendSlice(ctx.allocator, glue);
         if (entry.value == .object and ctx.vm.hasMethod(entry.value.object.class_name, "__toString")) {
             const r = try ctx.vm.callMethod(entry.value.object, "__toString", &.{});
-            if (r == .string) try buf.appendSlice(ctx.allocator, r.string) else try r.format(&buf, ctx.allocator);
+            if (r == .string) try buf.appendSlice(ctx.allocator, r.string.bytes()) else try r.format(&buf, ctx.allocator);
         } else {
             if (entry.value == .array) ctx.vm.emitWarning("Array to string conversion");
             try entry.value.format(&buf, ctx.allocator);
@@ -350,7 +352,7 @@ fn implode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     }
     const s = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, s);
-    return .{ .string = s };
+    return .{ .string = Value.String.borrowed(s) };
 }
 
 const default_trim_chars = " \t\n\r\x0b\x00";
@@ -385,47 +387,47 @@ fn trimWithSet(s: []const u8, set: [256]bool, left: bool, right: bool) []const u
 }
 
 fn trim(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
-    const chars = if (args.len >= 2 and args[1] == .string) args[1].string else default_trim_chars;
+    const chars = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else default_trim_chars;
     const set = buildTrimSet(chars);
-    return .{ .string = try ctx.createString(trimWithSet(s, set, true, true)) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(trimWithSet(s, set, true, true))) };
 }
 
 fn ltrim(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
-    const chars = if (args.len >= 2 and args[1] == .string) args[1].string else default_trim_chars;
+    const chars = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else default_trim_chars;
     const set = buildTrimSet(chars);
-    return .{ .string = try ctx.createString(trimWithSet(s, set, true, false)) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(trimWithSet(s, set, true, false))) };
 }
 
 fn rtrim(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
-    const chars = if (args.len >= 2 and args[1] == .string) args[1].string else default_trim_chars;
+    const chars = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else default_trim_chars;
     const set = buildTrimSet(chars);
-    return .{ .string = try ctx.createString(trimWithSet(s, set, false, true)) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(trimWithSet(s, set, false, true))) };
 }
 
 fn strtolower(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     if (try rejectArrayParam(ctx, args[0], "strtolower")) return error.RuntimeError;
     const s = try coerceToString(ctx, args[0]);
     const buf = try ctx.allocator.alloc(u8, s.len);
     for (s, 0..) |c, i| buf[i] = std.ascii.toLower(c);
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn strtoupper(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     if (try rejectArrayParam(ctx, args[0], "strtoupper")) return error.RuntimeError;
     const s = try coerceToString(ctx, args[0]);
     const buf = try ctx.allocator.alloc(u8, s.len);
     for (s, 0..) |c, i| buf[i] = std.ascii.toUpper(c);
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn str_contains(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -451,9 +453,9 @@ fn str_ends_with(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn str_shuffle(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
-    if (s.len <= 1) return .{ .string = s };
+    if (s.len <= 1) return .{ .string = Value.String.borrowed(s) };
     const buf = try ctx.allocator.alloc(u8, s.len);
     @memcpy(buf, s);
     // Fisher-Yates with the default PRNG
@@ -466,11 +468,11 @@ fn str_shuffle(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         buf[j] = tmp;
     }
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn str_repeat(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2) return .{ .string = "" };
+    if (args.len < 2) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
     const raw_times = Value.toInt(args[1]);
     if (raw_times < 0) {
@@ -478,43 +480,42 @@ fn str_repeat(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return error.RuntimeError;
     }
     const times = raw_times;
-    if (times == 0 or s.len == 0) return .{ .string = "" };
+    if (times == 0 or s.len == 0) return .{ .string = Value.String.borrowed("") };
 
     var buf = std.ArrayListUnmanaged(u8){};
     var i: i64 = 0;
     while (i < times) : (i += 1) try buf.appendSlice(ctx.allocator, s);
     const result = try buf.toOwnedSlice(ctx.allocator);
-    try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = try Value.String.adopt(ctx.allocator, result) };
 }
 
 fn ucfirst(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
-    if (s.len == 0) return .{ .string = "" };
+    if (s.len == 0) return .{ .string = Value.String.borrowed("") };
     const buf = try ctx.allocator.alloc(u8, s.len);
     @memcpy(buf, s);
     buf[0] = std.ascii.toUpper(buf[0]);
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn lcfirst(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
-    if (s.len == 0) return .{ .string = "" };
+    if (s.len == 0) return .{ .string = Value.String.borrowed("") };
     const buf = try ctx.allocator.alloc(u8, s.len);
     @memcpy(buf, s);
     buf[0] = std.ascii.toLower(buf[0]);
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn str_pad(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2) return if (args.len > 0) args[0] else Value{ .string = "" };
+    if (args.len < 2) return if (args.len > 0) args[0] else Value{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
     const target_len: usize = @intCast(@max(0, Value.toInt(args[1])));
-    if (s.len >= target_len) return .{ .string = s };
+    if (s.len >= target_len) return .{ .string = Value.String.borrowed(s) };
     const pad_str = if (args.len >= 3 and args[2] != .null) try coerceToString(ctx, args[2]) else " ";
     if (pad_str.len == 0) {
         try ctx.vm.setPendingException("ValueError", "str_pad(): Argument #3 ($pad_string) must not be empty");
@@ -547,7 +548,7 @@ fn str_pad(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_strcmp(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -564,8 +565,8 @@ fn native_strcmp(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_strcasecmp(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .{ .int = 0 };
-    const a = if (args[0] == .string) args[0].string else "";
-    const b = if (args[1] == .string) args[1].string else "";
+    const a = if (args[0] == .string) args[0].string.bytes() else "";
+    const b = if (args[1] == .string) args[1].string.bytes() else "";
     const min_len = @min(a.len, b.len);
     for (0..min_len) |i| {
         const ca = std.ascii.toLower(a[i]);
@@ -615,22 +616,22 @@ fn natCompare(a: []const u8, b: []const u8, fold_case: bool) i64 {
 
 fn native_strnatcmp(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .{ .int = 0 };
-    const a = if (args[0] == .string) args[0].string else "";
-    const b = if (args[1] == .string) args[1].string else "";
+    const a = if (args[0] == .string) args[0].string.bytes() else "";
+    const b = if (args[1] == .string) args[1].string.bytes() else "";
     return .{ .int = natCompare(a, b, false) };
 }
 
 fn native_strnatcasecmp(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .{ .int = 0 };
-    const a = if (args[0] == .string) args[0].string else "";
-    const b = if (args[1] == .string) args[1].string else "";
+    const a = if (args[0] == .string) args[0].string.bytes() else "";
+    const b = if (args[1] == .string) args[1].string.bytes() else "";
     return .{ .int = natCompare(a, b, true) };
 }
 
 fn native_strncasecmp(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3) return .{ .int = 0 };
-    const a = if (args[0] == .string) args[0].string else "";
-    const b = if (args[1] == .string) args[1].string else "";
+    const a = if (args[0] == .string) args[0].string.bytes() else "";
+    const b = if (args[1] == .string) args[1].string.bytes() else "";
     const n_raw = Value.toInt(args[2]);
     if (n_raw < 0) {
         try ctx.vm.setPendingException("ValueError", "strncasecmp(): Argument #3 ($length) must be greater than or equal to 0");
@@ -651,8 +652,8 @@ fn native_strncasecmp(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 
 fn native_strncmp(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3) return .{ .int = 0 };
-    const a = if (args[0] == .string) args[0].string else "";
-    const b = if (args[1] == .string) args[1].string else "";
+    const a = if (args[0] == .string) args[0].string.bytes() else "";
+    const b = if (args[1] == .string) args[1].string.bytes() else "";
     const n_raw = Value.toInt(args[2]);
     if (n_raw < 0) {
         try ctx.vm.setPendingException("ValueError", "strncmp(): Argument #3 ($length) must be greater than or equal to 0");
@@ -673,23 +674,23 @@ fn native_strncmp(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_ord(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .int = 0 };
-    const s = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
     if (s.len == 0) return .{ .int = 0 };
     return .{ .int = s[0] };
 }
 
 fn native_chr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "\x00" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("\x00") };
     const code: u8 = @truncate(@as(u64, @bitCast(Value.toInt(args[0]))));
     const buf = try ctx.allocator.alloc(u8, 1);
     buf[0] = code;
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn native_str_split(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .null;
-    const s = if (args[0] == .string) args[0].string else return Value.null;
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value.null;
     if (args.len >= 2) {
         const len = Value.toInt(args[1]);
         if (len <= 0) {
@@ -703,7 +704,7 @@ fn native_str_split(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     var i: usize = 0;
     while (i < s.len) {
         const end = @min(i + chunk_len, s.len);
-        try arr.append(ctx.allocator, .{ .string = try ctx.createString(s[i..end]) });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(s[i..end])) });
         i = end;
     }
     return .{ .array = arr };
@@ -711,8 +712,8 @@ fn native_str_split(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
 fn native_substr_count(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .{ .int = 0 };
-    const haystack = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
-    const needle = if (args[1] == .string) args[1].string else return Value{ .int = 0 };
+    const haystack = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
+    const needle = if (args[1] == .string) args[1].string.bytes() else return Value{ .int = 0 };
     if (needle.len == 0) {
         try ctx.vm.setPendingException("ValueError", "substr_count(): Argument #2 ($needle) must not be empty");
         return error.RuntimeError;
@@ -752,22 +753,22 @@ fn native_substr_count(ctx: *NativeContext, args: []const Value) RuntimeError!Va
 }
 
 fn native_substr_replace(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 3) return if (args.len > 0) args[0] else Value{ .string = "" };
+    if (args.len < 3) return if (args.len > 0) args[0] else Value{ .string = Value.String.borrowed("") };
 
     if (args[0] == .array) {
         const src_arr = args[0].array;
         var out = try ctx.createArray();
         for (src_arr.entries.items, 0..) |entry, i| {
-            const elem_str: []const u8 = if (entry.value == .string) entry.value.string else "";
+            const elem_str: []const u8 = if (entry.value == .string) entry.value.string.bytes() else "";
             const repl_str: []const u8 = blk: {
                 if (args[1] == .array) {
                     if (i < args[1].array.entries.items.len) {
                         const v = args[1].array.entries.items[i].value;
-                        if (v == .string) break :blk v.string;
+                        if (v == .string) break :blk v.string.bytes();
                     }
                     break :blk "";
                 }
-                break :blk if (args[1] == .string) args[1].string else "";
+                break :blk if (args[1] == .string) args[1].string.bytes() else "";
             };
             const start_val: i64 = blk: {
                 if (args[2] == .array) {
@@ -787,17 +788,17 @@ fn native_substr_replace(ctx: *NativeContext, args: []const Value) RuntimeError!
             } else null;
 
             const replaced = try substrReplaceOne(ctx, elem_str, repl_str, start_val, len_val);
-            try out.append(ctx.allocator, .{ .string = replaced });
+            try out.append(ctx.allocator, .{ .string = Value.String.borrowed(replaced) });
         }
         return .{ .array = out };
     }
 
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    const replacement = if (args[1] == .string) args[1].string else "";
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    const replacement = if (args[1] == .string) args[1].string.bytes() else "";
     const start_val = Value.toInt(args[2]);
     const len_val: ?i64 = if (args.len >= 4) Value.toInt(args[3]) else null;
     const result = try substrReplaceOne(ctx, s, replacement, start_val, len_val);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn substrReplaceOne(ctx: *NativeContext, s: []const u8, replacement: []const u8, start_in: i64, len_opt: ?i64) ![]const u8 {
@@ -828,13 +829,13 @@ fn substrReplaceOne(ctx: *NativeContext, s: []const u8, replacement: []const u8,
 
 fn native_str_word_count(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .int = 0 };
-    const s = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
     const format: i64 = if (args.len > 1) Value.toInt(args[1]) else 0;
     if (format != 0 and format != 1 and format != 2) {
         try ctx.vm.setPendingException("ValueError", "str_word_count(): Argument #2 ($format) must be a valid format value");
         return error.RuntimeError;
     }
-    const charlist: []const u8 = if (args.len > 2 and args[2] == .string) args[2].string else "";
+    const charlist: []const u8 = if (args.len > 2 and args[2] == .string) args[2].string.bytes() else "";
     const extra = buildTrimSet(charlist);
 
     const isWord = struct {
@@ -870,29 +871,27 @@ fn native_str_word_count(ctx: *NativeContext, args: []const Value) RuntimeError!
             }
         } else {
             if (in_word) {
-                const word = s[word_start..i];
                 if (format == 2) {
-                    try arr.set(ctx.allocator, .{ .int = @intCast(word_start) }, .{ .string = word });
+                    try arr.set(ctx.allocator, .{ .int = @intCast(word_start) }, .{ .string = args[0].string.retainedSlice(word_start, i) });
                 } else {
-                    try arr.append(ctx.allocator, .{ .string = word });
+                    try arr.append(ctx.allocator, .{ .string = args[0].string.retainedSlice(word_start, i) });
                 }
                 in_word = false;
             }
         }
     }
     if (in_word) {
-        const word = s[word_start..];
         if (format == 2) {
-            try arr.set(ctx.allocator, .{ .int = @intCast(word_start) }, .{ .string = word });
+            try arr.set(ctx.allocator, .{ .int = @intCast(word_start) }, .{ .string = args[0].string.retainedSlice(word_start, s.len) });
         } else {
-            try arr.append(ctx.allocator, .{ .string = word });
+            try arr.append(ctx.allocator, .{ .string = args[0].string.retainedSlice(word_start, s.len) });
         }
     }
     return .{ .array = arr };
 }
 
 fn native_nl2br(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
     const use_xhtml = if (args.len >= 2) args[1].isTruthy() else true;
     const br = if (use_xhtml) "<br />" else "<br>";
@@ -915,14 +914,14 @@ fn native_nl2br(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_wordwrap(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
     const width: usize = if (args.len >= 2) @intCast(@max(1, Value.toInt(args[1]))) else 75;
-    const brk = if (args.len >= 3 and args[2] == .string) args[2].string else "\n";
+    const brk = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else "\n";
     const cut = args.len >= 4 and args[3].isTruthy();
 
     var buf = std.ArrayListUnmanaged(u8){};
@@ -958,18 +957,18 @@ fn native_wordwrap(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     if (line_start < s.len) try buf.appendSlice(ctx.allocator, s[line_start..]);
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_chunk_split(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     if (args.len >= 2 and Value.toInt(args[1]) <= 0) {
         try ctx.vm.setPendingException("ValueError", "chunk_split(): Argument #2 ($length) must be greater than 0");
         return error.RuntimeError;
     }
     const chunklen: usize = if (args.len >= 2) @intCast(Value.toInt(args[1])) else 76;
-    const end = if (args.len >= 3 and args[2] == .string) args[2].string else "\r\n";
+    const end = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else "\r\n";
 
     var buf = std.ArrayListUnmanaged(u8){};
     if (s.len == 0) {
@@ -985,21 +984,21 @@ fn native_chunk_split(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_number_format(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "0" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("0") };
     // PHP returns the literal "nan" / "inf" / "-inf" for non-finite floats
     if (args[0] == .float) {
         const f = args[0].float;
-        if (std.math.isNan(f)) return Value{ .string = "nan" };
-        if (std.math.isInf(f)) return Value{ .string = if (f < 0) "-inf" else "inf" };
+        if (std.math.isNan(f)) return Value{ .string = Value.String.borrowed("nan") };
+        if (std.math.isInf(f)) return Value{ .string = Value.String.borrowed(if (f < 0) "-inf" else "inf") };
     }
     const decimals_signed: i64 = if (args.len >= 2) Value.toInt(args[1]) else 0;
     const decimals: usize = if (decimals_signed > 0) @intCast(decimals_signed) else 0;
-    const dec_point = if (args.len >= 3 and args[2] == .string) args[2].string else ".";
-    const thousands_sep = if (args.len >= 4 and args[3] == .string) args[3].string else ",";
+    const dec_point = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else ".";
+    const thousands_sep = if (args.len >= 4 and args[3] == .string) args[3].string.bytes() else ",";
 
     // negative decimals: round to nearest 10^|n| (half-up away from zero)
     if (decimals_signed < 0) {
@@ -1012,8 +1011,14 @@ fn native_number_format(ctx: *NativeContext, args: []const Value) RuntimeError!V
         combined[0] = .{ .float = rounded };
         combined[1] = .{ .int = 0 };
         var n: usize = 2;
-        if (args.len >= 3) { combined[2] = args[2]; n = 3; }
-        if (args.len >= 4) { combined[3] = args[3]; n = 4; }
+        if (args.len >= 3) {
+            combined[2] = args[2];
+            n = 3;
+        }
+        if (args.len >= 4) {
+            combined[3] = args[3];
+            n = 4;
+        }
         return native_number_format(ctx, combined[0..n]);
     }
 
@@ -1031,7 +1036,7 @@ fn native_number_format(ctx: *NativeContext, args: []const Value) RuntimeError!V
         } else {
             abs_u = @intCast(if (i < 0) -i else i);
         }
-        const ip_str = std.fmt.bufPrint(&int_part_buf, "{d}", .{abs_u}) catch return Value{ .string = "0" };
+        const ip_str = std.fmt.bufPrint(&int_part_buf, "{d}", .{abs_u}) catch return Value{ .string = Value.String.borrowed("0") };
         var fp_len: usize = 0;
         while (fp_len < decimals and fp_len < frac_part_buf.len) : (fp_len += 1) frac_part_buf[fp_len] = '0';
         formatted = .{
@@ -1068,7 +1073,7 @@ fn native_number_format(ctx: *NativeContext, args: []const Value) RuntimeError!V
 
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 const RoundedFloat = struct { is_negative: bool, int_part: []const u8, frac_part: []const u8 };
@@ -1265,15 +1270,15 @@ fn expandScientific(src: []const u8, out: []u8) ![]const u8 {
 }
 
 fn native_sprintf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const fmt_str = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const fmt_str = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     const result = try sprintfImpl(ctx, fmt_str, args[1..]);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_printf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .int = 0 };
-    const fmt_str = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
+    const fmt_str = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
     const result = try sprintfImpl(ctx, fmt_str, args[1..]);
     try ctx.vm.output.appendSlice(ctx.allocator, result);
     return .{ .int = @intCast(result.len) };
@@ -1281,22 +1286,22 @@ fn native_printf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_fprintf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .{ .int = 0 };
-    const fmt_str = if (args[1] == .string) args[1].string else return Value{ .int = 0 };
+    const fmt_str = if (args[1] == .string) args[1].string.bytes() else return Value{ .int = 0 };
     const result = try sprintfImpl(ctx, fmt_str, args[2..]);
-    const written = try ctx.vm.callByName("fwrite", &.{ args[0], .{ .string = result } });
+    const written = try ctx.vm.callByName("fwrite", &.{ args[0], .{ .string = Value.String.borrowed(result) } });
     return written;
 }
 
 fn native_vfprintf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3) return .{ .int = 0 };
-    const fmt_str = if (args[1] == .string) args[1].string else return Value{ .int = 0 };
+    const fmt_str = if (args[1] == .string) args[1].string.bytes() else return Value{ .int = 0 };
     if (args[2] != .array) return .{ .int = 0 };
     const arr = args[2].array;
     var vals = try ctx.allocator.alloc(Value, arr.entries.items.len);
     defer ctx.allocator.free(vals);
     for (arr.entries.items, 0..) |entry, i| vals[i] = entry.value;
     const result = try sprintfImpl(ctx, fmt_str, vals);
-    return try ctx.vm.callByName("fwrite", &.{ args[0], .{ .string = result } });
+    return try ctx.vm.callByName("fwrite", &.{ args[0], .{ .string = Value.String.borrowed(result) } });
 }
 
 fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) ![]const u8 {
@@ -1402,11 +1407,11 @@ fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) ![
                 's' => {
                     if (arg == .array) ctx.vm.emitWarning("Array to string conversion");
                     const s = blk: {
-                        if (arg == .string) break :blk arg.string;
+                        if (arg == .string) break :blk arg.string.bytes();
                         if (arg == .object) {
                             if (ctx.vm.hasMethod(arg.object.class_name, "__toString")) {
                                 const ret = try ctx.vm.callMethod(arg.object, "__toString", &.{});
-                                if (ret == .string) break :blk ret.string;
+                                if (ret == .string) break :blk ret.string.bytes();
                             } else {
                                 const msg = std.fmt.allocPrint(ctx.allocator, "Object of class {s} could not be converted to string", .{arg.object.class_name}) catch "Object could not be converted to string";
                                 try ctx.strings.append(ctx.allocator, msg);
@@ -1690,7 +1695,6 @@ fn bankersRoundFloat(num: f64, decimals: usize, int_buf: []u8, frac_buf: []u8) !
     };
 }
 
-
 fn formatScientific(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: f64, prec: usize, e_char: u8) !void {
     if (std.math.isNan(val)) {
         try buf.appendSlice(a, "NaN");
@@ -1766,7 +1770,10 @@ fn formatGeneral(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: f6
         // ensure mantissa has at least ".0" so output is "1.0e+3" not "1e+3"
         const mant_slice = buf.items[before_mant..];
         var has_dot = false;
-        for (mant_slice) |c| if (c == '.') { has_dot = true; break; };
+        for (mant_slice) |c| if (c == '.') {
+            has_dot = true;
+            break;
+        };
         if (!has_dot) try buf.appendSlice(a, ".0");
         const e_char: u8 = if (g_char == 'G') 'E' else 'e';
         try buf.append(a, e_char);
@@ -1799,7 +1806,10 @@ fn roundHalfToEven(x: f64) f64 {
 fn stripTrailingZeros(buf: *std.ArrayListUnmanaged(u8)) void {
     var has_dot = false;
     for (buf.items) |c| {
-        if (c == '.') { has_dot = true; break; }
+        if (c == '.') {
+            has_dot = true;
+            break;
+        }
     }
     if (!has_dot) return;
     while (buf.items.len > 0 and buf.items[buf.items.len - 1] == '0') {
@@ -1811,7 +1821,7 @@ fn stripTrailingZeros(buf: *std.ArrayListUnmanaged(u8)) void {
 }
 
 fn native_addslashes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
     var buf = std.ArrayListUnmanaged(u8){};
     for (s) |c| {
@@ -1828,12 +1838,12 @@ fn native_addslashes(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_stripslashes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     var buf = std.ArrayListUnmanaged(u8){};
     var j: usize = 0;
     while (j < s.len) {
@@ -1845,7 +1855,7 @@ fn native_stripslashes(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn latin1NamedEntity(cp: u21) ?[]const u8 {
@@ -1947,41 +1957,76 @@ fn latin1NamedEntity(cp: u21) ?[]const u8 {
         0x00FE => "&thorn;",
         0x00FF => "&yuml;",
         // common HTML5 entities beyond Latin-1 that PHP's htmlentities emits by default
-        0x0152 => "&OElig;",   0x0153 => "&oelig;",
-        0x0160 => "&Scaron;",  0x0161 => "&scaron;",
+        0x0152 => "&OElig;",
+        0x0153 => "&oelig;",
+        0x0160 => "&Scaron;",
+        0x0161 => "&scaron;",
         0x0178 => "&Yuml;",
         0x0192 => "&fnof;",
-        0x02C6 => "&circ;",    0x02DC => "&tilde;",
-        0x2002 => "&ensp;",    0x2003 => "&emsp;",   0x2009 => "&thinsp;",
-        0x200C => "&zwnj;",    0x200D => "&zwj;",
-        0x200E => "&lrm;",     0x200F => "&rlm;",
-        0x2013 => "&ndash;",   0x2014 => "&mdash;",
-        0x2018 => "&lsquo;",   0x2019 => "&rsquo;",  0x201A => "&sbquo;",
-        0x201C => "&ldquo;",   0x201D => "&rdquo;",  0x201E => "&bdquo;",
-        0x2020 => "&dagger;",  0x2021 => "&Dagger;",
-        0x2022 => "&bull;",    0x2026 => "&hellip;",
+        0x02C6 => "&circ;",
+        0x02DC => "&tilde;",
+        0x2002 => "&ensp;",
+        0x2003 => "&emsp;",
+        0x2009 => "&thinsp;",
+        0x200C => "&zwnj;",
+        0x200D => "&zwj;",
+        0x200E => "&lrm;",
+        0x200F => "&rlm;",
+        0x2013 => "&ndash;",
+        0x2014 => "&mdash;",
+        0x2018 => "&lsquo;",
+        0x2019 => "&rsquo;",
+        0x201A => "&sbquo;",
+        0x201C => "&ldquo;",
+        0x201D => "&rdquo;",
+        0x201E => "&bdquo;",
+        0x2020 => "&dagger;",
+        0x2021 => "&Dagger;",
+        0x2022 => "&bull;",
+        0x2026 => "&hellip;",
         0x2030 => "&permil;",
-        0x2039 => "&lsaquo;",  0x203A => "&rsaquo;",
+        0x2039 => "&lsaquo;",
+        0x203A => "&rsaquo;",
         0x20AC => "&euro;",
         0x2122 => "&trade;",
-        0x2190 => "&larr;",    0x2191 => "&uarr;",   0x2192 => "&rarr;",   0x2193 => "&darr;",
+        0x2190 => "&larr;",
+        0x2191 => "&uarr;",
+        0x2192 => "&rarr;",
+        0x2193 => "&darr;",
         0x2194 => "&harr;",
         0x21B5 => "&crarr;",
-        0x2208 => "&isin;",    0x2209 => "&notin;",  0x220B => "&ni;",
-        0x2211 => "&sum;",     0x2212 => "&minus;",
-        0x221A => "&radic;",   0x221E => "&infin;",
-        0x2245 => "&cong;",    0x2248 => "&asymp;",
-        0x2260 => "&ne;",      0x2261 => "&equiv;",
-        0x2264 => "&le;",      0x2265 => "&ge;",
-        0x2282 => "&sub;",     0x2283 => "&sup;",    0x2286 => "&sube;",   0x2287 => "&supe;",
-        0x2295 => "&oplus;",   0x2297 => "&otimes;",
+        0x2208 => "&isin;",
+        0x2209 => "&notin;",
+        0x220B => "&ni;",
+        0x2211 => "&sum;",
+        0x2212 => "&minus;",
+        0x221A => "&radic;",
+        0x221E => "&infin;",
+        0x2245 => "&cong;",
+        0x2248 => "&asymp;",
+        0x2260 => "&ne;",
+        0x2261 => "&equiv;",
+        0x2264 => "&le;",
+        0x2265 => "&ge;",
+        0x2282 => "&sub;",
+        0x2283 => "&sup;",
+        0x2286 => "&sube;",
+        0x2287 => "&supe;",
+        0x2295 => "&oplus;",
+        0x2297 => "&otimes;",
         0x22A5 => "&perp;",
         0x22C5 => "&sdot;",
-        0x2308 => "&lceil;",   0x2309 => "&rceil;",
-        0x230A => "&lfloor;",  0x230B => "&rfloor;",
-        0x2329 => "&lang;",    0x232A => "&rang;",
+        0x2308 => "&lceil;",
+        0x2309 => "&rceil;",
+        0x230A => "&lfloor;",
+        0x230B => "&rfloor;",
+        0x2329 => "&lang;",
+        0x232A => "&rang;",
         0x25CA => "&loz;",
-        0x2660 => "&spades;",  0x2663 => "&clubs;",  0x2665 => "&hearts;", 0x2666 => "&diams;",
+        0x2660 => "&spades;",
+        0x2663 => "&clubs;",
+        0x2665 => "&hearts;",
+        0x2666 => "&diams;",
         else => null,
     };
 }
@@ -1995,11 +2040,11 @@ fn native_get_html_translation_table(ctx: *NativeContext, args: []const Value) R
     var arr = try ctx.createArray();
 
     // base 5 (always present): < > & " '
-    if (escape_double) try arr.set(ctx.allocator, .{ .string = "\"" }, .{ .string = "&quot;" });
-    if (escape_single) try arr.set(ctx.allocator, .{ .string = "'" }, .{ .string = "&#039;" });
-    try arr.set(ctx.allocator, .{ .string = "&" }, .{ .string = "&amp;" });
-    try arr.set(ctx.allocator, .{ .string = "<" }, .{ .string = "&lt;" });
-    try arr.set(ctx.allocator, .{ .string = ">" }, .{ .string = "&gt;" });
+    if (escape_double) try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("\"") }, .{ .string = Value.String.borrowed("&quot;") });
+    if (escape_single) try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("'") }, .{ .string = Value.String.borrowed("&#039;") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("&") }, .{ .string = Value.String.borrowed("&amp;") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("<") }, .{ .string = Value.String.borrowed("&lt;") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(">") }, .{ .string = Value.String.borrowed("&gt;") });
 
     if (table_kind == 1) { // HTML_ENTITIES adds Latin-1 named entities
         var cp: u21 = 0xA0;
@@ -2009,7 +2054,7 @@ fn native_get_html_translation_table(ctx: *NativeContext, args: []const Value) R
                 const elen = std.unicode.utf8Encode(cp, &enc) catch continue;
                 const key = try ctx.allocator.dupe(u8, enc[0..elen]);
                 try ctx.vm.strings.append(ctx.allocator, key);
-                try arr.set(ctx.allocator, .{ .string = key }, .{ .string = ent });
+                try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, .{ .string = Value.String.borrowed(ent) });
             }
         }
     }
@@ -2018,9 +2063,9 @@ fn native_get_html_translation_table(ctx: *NativeContext, args: []const Value) R
 }
 
 fn native_htmlentities(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    if (args[0] == .null) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else blk: {
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    if (args[0] == .null) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else blk: {
         var buf = std.ArrayListUnmanaged(u8){};
         try args[0].format(&buf, ctx.allocator);
         const c = try buf.toOwnedSlice(ctx.allocator);
@@ -2071,12 +2116,12 @@ fn native_htmlentities(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     }
     const out = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn native_htmlspecialchars(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    if (args[0] == .null) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    if (args[0] == .null) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
     const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else 3;
     const escape_double = (flags & 2) != 0;
@@ -2109,7 +2154,7 @@ fn native_htmlspecialchars(ctx: *NativeContext, args: []const Value) RuntimeErro
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 // returns total entity length (including '&' and ';') if s[i..] starts with a
@@ -2151,30 +2196,37 @@ fn html5EntityToCodepoint(name: []const u8) ?u21 {
         .{ "Scaron", 0x0160 }, .{ "scaron", 0x0161 },
         .{ "Yuml", 0x0178 },   .{ "fnof", 0x0192 },
         .{ "circ", 0x02C6 },   .{ "tilde", 0x02DC },
-        .{ "ensp", 0x2002 },   .{ "emsp", 0x2003 },   .{ "thinsp", 0x2009 },
-        .{ "zwnj", 0x200C },   .{ "zwj", 0x200D },
-        .{ "lrm", 0x200E },    .{ "rlm", 0x200F },
-        .{ "ndash", 0x2013 },  .{ "mdash", 0x2014 },
-        .{ "lsquo", 0x2018 },  .{ "rsquo", 0x2019 },  .{ "sbquo", 0x201A },
-        .{ "ldquo", 0x201C },  .{ "rdquo", 0x201D },  .{ "bdquo", 0x201E },
-        .{ "dagger", 0x2020 }, .{ "Dagger", 0x2021 },
-        .{ "bull", 0x2022 },   .{ "hellip", 0x2026 }, .{ "permil", 0x2030 },
+        .{ "ensp", 0x2002 },   .{ "emsp", 0x2003 },
+        .{ "thinsp", 0x2009 }, .{ "zwnj", 0x200C },
+        .{ "zwj", 0x200D },    .{ "lrm", 0x200E },
+        .{ "rlm", 0x200F },    .{ "ndash", 0x2013 },
+        .{ "mdash", 0x2014 },  .{ "lsquo", 0x2018 },
+        .{ "rsquo", 0x2019 },  .{ "sbquo", 0x201A },
+        .{ "ldquo", 0x201C },  .{ "rdquo", 0x201D },
+        .{ "bdquo", 0x201E },  .{ "dagger", 0x2020 },
+        .{ "Dagger", 0x2021 }, .{ "bull", 0x2022 },
+        .{ "hellip", 0x2026 }, .{ "permil", 0x2030 },
         .{ "lsaquo", 0x2039 }, .{ "rsaquo", 0x203A },
         .{ "euro", 0x20AC },   .{ "trade", 0x2122 },
-        .{ "larr", 0x2190 },   .{ "uarr", 0x2191 },   .{ "rarr", 0x2192 },   .{ "darr", 0x2193 },
+        .{ "larr", 0x2190 },   .{ "uarr", 0x2191 },
+        .{ "rarr", 0x2192 },   .{ "darr", 0x2193 },
         .{ "harr", 0x2194 },   .{ "crarr", 0x21B5 },
-        .{ "isin", 0x2208 },   .{ "notin", 0x2209 },  .{ "ni", 0x220B },
-        .{ "sum", 0x2211 },    .{ "minus", 0x2212 },
-        .{ "radic", 0x221A },  .{ "infin", 0x221E },
-        .{ "cong", 0x2245 },   .{ "asymp", 0x2248 },
-        .{ "ne", 0x2260 },     .{ "equiv", 0x2261 },
-        .{ "le", 0x2264 },     .{ "ge", 0x2265 },
-        .{ "sub", 0x2282 },    .{ "sup", 0x2283 },    .{ "sube", 0x2286 },   .{ "supe", 0x2287 },
-        .{ "oplus", 0x2295 },  .{ "otimes", 0x2297 }, .{ "perp", 0x22A5 },   .{ "sdot", 0x22C5 },
-        .{ "lceil", 0x2308 },  .{ "rceil", 0x2309 },  .{ "lfloor", 0x230A }, .{ "rfloor", 0x230B },
-        .{ "lang", 0x2329 },   .{ "rang", 0x232A },
-        .{ "loz", 0x25CA },
-        .{ "spades", 0x2660 }, .{ "clubs", 0x2663 },  .{ "hearts", 0x2665 }, .{ "diams", 0x2666 },
+        .{ "isin", 0x2208 },   .{ "notin", 0x2209 },
+        .{ "ni", 0x220B },     .{ "sum", 0x2211 },
+        .{ "minus", 0x2212 },  .{ "radic", 0x221A },
+        .{ "infin", 0x221E },  .{ "cong", 0x2245 },
+        .{ "asymp", 0x2248 },  .{ "ne", 0x2260 },
+        .{ "equiv", 0x2261 },  .{ "le", 0x2264 },
+        .{ "ge", 0x2265 },     .{ "sub", 0x2282 },
+        .{ "sup", 0x2283 },    .{ "sube", 0x2286 },
+        .{ "supe", 0x2287 },   .{ "oplus", 0x2295 },
+        .{ "otimes", 0x2297 }, .{ "perp", 0x22A5 },
+        .{ "sdot", 0x22C5 },   .{ "lceil", 0x2308 },
+        .{ "rceil", 0x2309 },  .{ "lfloor", 0x230A },
+        .{ "rfloor", 0x230B }, .{ "lang", 0x2329 },
+        .{ "rang", 0x232A },   .{ "loz", 0x25CA },
+        .{ "spades", 0x2660 }, .{ "clubs", 0x2663 },
+        .{ "hearts", 0x2665 }, .{ "diams", 0x2666 },
     };
     inline for (map) |entry| {
         if (std.mem.eql(u8, entry[0], name)) return @as(u21, entry[1]);
@@ -2184,38 +2236,38 @@ fn html5EntityToCodepoint(name: []const u8) ?u21 {
 
 fn latin1EntityToCodepoint(name: []const u8) ?u21 {
     const map = .{
-        .{ "nbsp", 0x00A0 },  .{ "iexcl", 0x00A1 },  .{ "cent", 0x00A2 },
-        .{ "pound", 0x00A3 }, .{ "curren", 0x00A4 }, .{ "yen", 0x00A5 },
-        .{ "brvbar", 0x00A6 },.{ "sect", 0x00A7 },   .{ "uml", 0x00A8 },
-        .{ "copy", 0x00A9 },  .{ "ordf", 0x00AA },   .{ "laquo", 0x00AB },
-        .{ "not", 0x00AC },   .{ "shy", 0x00AD },    .{ "reg", 0x00AE },
-        .{ "macr", 0x00AF },  .{ "deg", 0x00B0 },    .{ "plusmn", 0x00B1 },
-        .{ "sup2", 0x00B2 },  .{ "sup3", 0x00B3 },   .{ "acute", 0x00B4 },
-        .{ "micro", 0x00B5 }, .{ "para", 0x00B6 },   .{ "middot", 0x00B7 },
-        .{ "cedil", 0x00B8 }, .{ "sup1", 0x00B9 },   .{ "ordm", 0x00BA },
-        .{ "raquo", 0x00BB }, .{ "frac14", 0x00BC }, .{ "frac12", 0x00BD },
-        .{ "frac34", 0x00BE },.{ "iquest", 0x00BF }, .{ "Agrave", 0x00C0 },
-        .{ "Aacute", 0x00C1 },.{ "Acirc", 0x00C2 },  .{ "Atilde", 0x00C3 },
-        .{ "Auml", 0x00C4 },  .{ "Aring", 0x00C5 },  .{ "AElig", 0x00C6 },
-        .{ "Ccedil", 0x00C7 },.{ "Egrave", 0x00C8 }, .{ "Eacute", 0x00C9 },
-        .{ "Ecirc", 0x00CA }, .{ "Euml", 0x00CB },   .{ "Igrave", 0x00CC },
-        .{ "Iacute", 0x00CD },.{ "Icirc", 0x00CE },  .{ "Iuml", 0x00CF },
-        .{ "ETH", 0x00D0 },   .{ "Ntilde", 0x00D1 }, .{ "Ograve", 0x00D2 },
-        .{ "Oacute", 0x00D3 },.{ "Ocirc", 0x00D4 },  .{ "Otilde", 0x00D5 },
-        .{ "Ouml", 0x00D6 },  .{ "times", 0x00D7 },  .{ "Oslash", 0x00D8 },
-        .{ "Ugrave", 0x00D9 },.{ "Uacute", 0x00DA }, .{ "Ucirc", 0x00DB },
-        .{ "Uuml", 0x00DC },  .{ "Yacute", 0x00DD }, .{ "THORN", 0x00DE },
-        .{ "szlig", 0x00DF }, .{ "agrave", 0x00E0 }, .{ "aacute", 0x00E1 },
-        .{ "acirc", 0x00E2 }, .{ "atilde", 0x00E3 }, .{ "auml", 0x00E4 },
-        .{ "aring", 0x00E5 }, .{ "aelig", 0x00E6 }, .{ "ccedil", 0x00E7 },
-        .{ "egrave", 0x00E8 },.{ "eacute", 0x00E9 }, .{ "ecirc", 0x00EA },
-        .{ "euml", 0x00EB },  .{ "igrave", 0x00EC }, .{ "iacute", 0x00ED },
-        .{ "icirc", 0x00EE }, .{ "iuml", 0x00EF }, .{ "eth", 0x00F0 },
-        .{ "ntilde", 0x00F1 },.{ "ograve", 0x00F2 }, .{ "oacute", 0x00F3 },
-        .{ "ocirc", 0x00F4 }, .{ "otilde", 0x00F5 }, .{ "ouml", 0x00F6 },
-        .{ "divide", 0x00F7 },.{ "oslash", 0x00F8 }, .{ "ugrave", 0x00F9 },
-        .{ "uacute", 0x00FA },.{ "ucirc", 0x00FB }, .{ "uuml", 0x00FC },
-        .{ "yacute", 0x00FD },.{ "thorn", 0x00FE }, .{ "yuml", 0x00FF },
+        .{ "nbsp", 0x00A0 },   .{ "iexcl", 0x00A1 },  .{ "cent", 0x00A2 },
+        .{ "pound", 0x00A3 },  .{ "curren", 0x00A4 }, .{ "yen", 0x00A5 },
+        .{ "brvbar", 0x00A6 }, .{ "sect", 0x00A7 },   .{ "uml", 0x00A8 },
+        .{ "copy", 0x00A9 },   .{ "ordf", 0x00AA },   .{ "laquo", 0x00AB },
+        .{ "not", 0x00AC },    .{ "shy", 0x00AD },    .{ "reg", 0x00AE },
+        .{ "macr", 0x00AF },   .{ "deg", 0x00B0 },    .{ "plusmn", 0x00B1 },
+        .{ "sup2", 0x00B2 },   .{ "sup3", 0x00B3 },   .{ "acute", 0x00B4 },
+        .{ "micro", 0x00B5 },  .{ "para", 0x00B6 },   .{ "middot", 0x00B7 },
+        .{ "cedil", 0x00B8 },  .{ "sup1", 0x00B9 },   .{ "ordm", 0x00BA },
+        .{ "raquo", 0x00BB },  .{ "frac14", 0x00BC }, .{ "frac12", 0x00BD },
+        .{ "frac34", 0x00BE }, .{ "iquest", 0x00BF }, .{ "Agrave", 0x00C0 },
+        .{ "Aacute", 0x00C1 }, .{ "Acirc", 0x00C2 },  .{ "Atilde", 0x00C3 },
+        .{ "Auml", 0x00C4 },   .{ "Aring", 0x00C5 },  .{ "AElig", 0x00C6 },
+        .{ "Ccedil", 0x00C7 }, .{ "Egrave", 0x00C8 }, .{ "Eacute", 0x00C9 },
+        .{ "Ecirc", 0x00CA },  .{ "Euml", 0x00CB },   .{ "Igrave", 0x00CC },
+        .{ "Iacute", 0x00CD }, .{ "Icirc", 0x00CE },  .{ "Iuml", 0x00CF },
+        .{ "ETH", 0x00D0 },    .{ "Ntilde", 0x00D1 }, .{ "Ograve", 0x00D2 },
+        .{ "Oacute", 0x00D3 }, .{ "Ocirc", 0x00D4 },  .{ "Otilde", 0x00D5 },
+        .{ "Ouml", 0x00D6 },   .{ "times", 0x00D7 },  .{ "Oslash", 0x00D8 },
+        .{ "Ugrave", 0x00D9 }, .{ "Uacute", 0x00DA }, .{ "Ucirc", 0x00DB },
+        .{ "Uuml", 0x00DC },   .{ "Yacute", 0x00DD }, .{ "THORN", 0x00DE },
+        .{ "szlig", 0x00DF },  .{ "agrave", 0x00E0 }, .{ "aacute", 0x00E1 },
+        .{ "acirc", 0x00E2 },  .{ "atilde", 0x00E3 }, .{ "auml", 0x00E4 },
+        .{ "aring", 0x00E5 },  .{ "aelig", 0x00E6 },  .{ "ccedil", 0x00E7 },
+        .{ "egrave", 0x00E8 }, .{ "eacute", 0x00E9 }, .{ "ecirc", 0x00EA },
+        .{ "euml", 0x00EB },   .{ "igrave", 0x00EC }, .{ "iacute", 0x00ED },
+        .{ "icirc", 0x00EE },  .{ "iuml", 0x00EF },   .{ "eth", 0x00F0 },
+        .{ "ntilde", 0x00F1 }, .{ "ograve", 0x00F2 }, .{ "oacute", 0x00F3 },
+        .{ "ocirc", 0x00F4 },  .{ "otilde", 0x00F5 }, .{ "ouml", 0x00F6 },
+        .{ "divide", 0x00F7 }, .{ "oslash", 0x00F8 }, .{ "ugrave", 0x00F9 },
+        .{ "uacute", 0x00FA }, .{ "ucirc", 0x00FB },  .{ "uuml", 0x00FC },
+        .{ "yacute", 0x00FD }, .{ "thorn", 0x00FE },  .{ "yuml", 0x00FF },
     };
     inline for (map) |entry| {
         if (std.mem.eql(u8, entry[0], name)) return @as(u21, entry[1]);
@@ -2224,8 +2276,8 @@ fn latin1EntityToCodepoint(name: []const u8) ?u21 {
 }
 
 fn native_html_entity_decode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else 11;
     // HTML5/XHTML/XML1 modes (bits 4-5) recognize &apos;; HTML401 default does not
     const html5_mode = (flags & 48) != 0;
@@ -2270,12 +2322,12 @@ fn native_html_entity_decode(ctx: *NativeContext, args: []const Value) RuntimeEr
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_htmlspecialchars_decode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else 3; // default ENT_QUOTES | ENT_HTML401
     const decode_double = (flags & 2) != 0;
     const decode_single = (flags & 1) != 0;
@@ -2305,7 +2357,7 @@ fn native_htmlspecialchars_decode(ctx: *NativeContext, args: []const Value) Runt
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn matchNumericEntity(s: []const u8) ?struct { code: u32, len: usize } {
@@ -2365,7 +2417,7 @@ fn matchEntity(s: []const u8) ?EntityMatch {
 
 fn native_hex2bin(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = false };
-    const s = if (args[0] == .string) args[0].string else return Value{ .bool = false };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .bool = false };
     if (s.len % 2 != 0) {
         ctx.vm.emitWarning("hex2bin(): Input string must be hexadecimal string");
         return .{ .bool = false };
@@ -2386,7 +2438,7 @@ fn native_hex2bin(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         buf[j] = (hi << 4) | lo;
     }
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn hexVal(c: u8) ?u8 {
@@ -2397,8 +2449,8 @@ fn hexVal(c: u8) ?u8 {
 }
 
 fn native_bin2hex(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     const hex_chars = "0123456789abcdef";
     const buf = try ctx.allocator.alloc(u8, s.len * 2);
     for (s, 0..) |c, j| {
@@ -2406,12 +2458,12 @@ fn native_bin2hex(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         buf[j * 2 + 1] = hex_chars[c & 0x0f];
     }
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn native_mb_str_split(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .null;
-    const s = if (args[0] == .string) args[0].string else return Value.null;
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value.null;
     const raw_len: i64 = if (args.len >= 2) Value.toInt(args[1]) else 1;
     if (raw_len < 1) {
         try ctx.vm.setPendingException("ValueError", "mb_str_split(): Argument #2 ($length) must be greater than 0");
@@ -2426,23 +2478,20 @@ fn native_mb_str_split(ctx: *NativeContext, args: []const Value) RuntimeError!Va
         var taken: usize = 0;
         while (taken < chunk_len and i < s.len) {
             const byte = s[i];
-            if (byte < 0x80) i += 1
-            else if (byte < 0xE0) i += 2
-            else if (byte < 0xF0) i += 3
-            else i += 4;
+            if (byte < 0x80) i += 1 else if (byte < 0xE0) i += 2 else if (byte < 0xF0) i += 3 else i += 4;
             if (i > s.len) i = s.len;
             taken += 1;
         }
-        try arr.append(ctx.allocator, .{ .string = try ctx.createString(s[start..i]) });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(s[start..i])) });
     }
     return .{ .array = arr };
 }
 
 fn native_mb_strlen(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .int = 0 };
-    const s = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
     if (args.len >= 2 and args[1] == .string) {
-        const enc = args[1].string;
+        const enc = args[1].string.bytes();
         if (std.ascii.eqlIgnoreCase(enc, "8bit") or std.ascii.eqlIgnoreCase(enc, "binary")) {
             return .{ .int = @intCast(s.len) };
         }
@@ -2466,26 +2515,26 @@ fn native_mb_strlen(_: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn native_mb_strtolower(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    return .{ .string = try utfCaseConvert(ctx, s, false) };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    return .{ .string = Value.String.borrowed(try utfCaseConvert(ctx, s, false)) };
 }
 
 fn native_mb_strtoupper(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    return .{ .string = try utfCaseConvert(ctx, s, true) };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    return .{ .string = Value.String.borrowed(try utfCaseConvert(ctx, s, true)) };
 }
 
 fn native_mb_convert_case(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2 or args[0] != .string) return .{ .string = "" };
-    const s = args[0].string;
+    if (args.len < 2 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
     const mode = Value.toInt(args[1]);
     return switch (mode) {
-        0 => .{ .string = try utfCaseConvert(ctx, s, true) },
-        1 => .{ .string = try utfCaseConvert(ctx, s, false) },
-        2 => .{ .string = try utfTitleCase(ctx, s) },
-        else => .{ .string = try ctx.createString(s) },
+        0 => .{ .string = Value.String.borrowed(try utfCaseConvert(ctx, s, true)) },
+        1 => .{ .string = Value.String.borrowed(try utfCaseConvert(ctx, s, false)) },
+        2 => .{ .string = Value.String.borrowed(try utfTitleCase(ctx, s)) },
+        else => .{ .string = Value.String.borrowed(try ctx.createString(s)) },
     };
 }
 
@@ -2545,11 +2594,11 @@ fn utfTitleCase(ctx: *NativeContext, s: []const u8) ![]u8 {
 fn native_mb_check_encoding(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = true };
     if (args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     // encoding arg defaults to mb_internal_encoding (UTF-8)
     var is_ascii = false;
     if (args.len >= 2 and args[1] == .string) {
-        const enc = args[1].string;
+        const enc = args[1].string.bytes();
         // case-insensitive ASCII check
         if (enc.len >= 5) {
             var lo: [16]u8 = undefined;
@@ -2725,7 +2774,7 @@ pub fn unicodeToLower(cp: u21) u21 {
 
 fn native_mb_detect_encoding(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     // walk the candidate list in order and return the first encoding the
     // input is valid for. matches PHP behavior - ASCII before UTF-8 in the
     // candidate list will report ASCII for plain ASCII text
@@ -2738,11 +2787,11 @@ fn native_mb_detect_encoding(_: *NativeContext, args: []const Value) RuntimeErro
             var i: usize = 0;
             while (i < input.len) {
                 const b = input[i];
-                if (b < 0x80) { i += 1; continue; }
-                const len: usize = if ((b & 0xe0) == 0xc0) 2
-                    else if ((b & 0xf0) == 0xe0) 3
-                    else if ((b & 0xf8) == 0xf0) 4
-                    else return false;
+                if (b < 0x80) {
+                    i += 1;
+                    continue;
+                }
+                const len: usize = if ((b & 0xe0) == 0xc0) 2 else if ((b & 0xf0) == 0xe0) 3 else if ((b & 0xf8) == 0xf0) 4 else return false;
                 if (i + len > input.len) return false;
                 var j: usize = 1;
                 while (j < len) : (j += 1) if ((input[i + j] & 0xc0) != 0x80) return false;
@@ -2765,17 +2814,17 @@ fn native_mb_detect_encoding(_: *NativeContext, args: []const Value) RuntimeErro
     if (args.len >= 2 and args[1] == .array) {
         for (args[1].array.entries.items) |entry| {
             if (entry.value == .string) {
-                if (Probe.match(s, entry.value.string)) |hit| return .{ .string = hit };
+                if (Probe.match(s, entry.value.string.bytes())) |hit| return .{ .string = Value.String.borrowed(hit) };
             }
         }
         return .{ .bool = false };
     }
     if (args.len >= 2 and args[1] == .string) {
-        if (Probe.match(s, args[1].string)) |hit| return .{ .string = hit };
+        if (Probe.match(s, args[1].string.bytes())) |hit| return .{ .string = Value.String.borrowed(hit) };
         return .{ .bool = false };
     }
-    if (Probe.isAscii(s)) return .{ .string = "ASCII" };
-    if (Probe.isUtf8(s)) return .{ .string = "UTF-8" };
+    if (Probe.isAscii(s)) return .{ .string = Value.String.borrowed("ASCII") };
+    if (Probe.isUtf8(s)) return .{ .string = Value.String.borrowed("UTF-8") };
     return .{ .bool = false };
 }
 
@@ -2995,21 +3044,21 @@ fn convertLatin1ToUtf8(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
 fn native_utf8_encode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const out = convertLatin1ToUtf8(ctx.allocator, args[0].string) catch return .{ .bool = false };
+    const out = convertLatin1ToUtf8(ctx.allocator, args[0].string.bytes()) catch return .{ .bool = false };
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn native_utf8_decode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const out = convertUtf8ToLatin1(ctx.allocator, args[0].string) catch return .{ .bool = false };
+    const out = convertUtf8ToLatin1(ctx.allocator, args[0].string.bytes()) catch return .{ .bool = false };
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn convertVarEncoding(ctx: *NativeContext, val: Value, to: []const u8, from: []const u8) RuntimeError!Value {
     return switch (val) {
-        .string => try native_mb_convert_encoding(ctx, &.{ val, .{ .string = to }, .{ .string = from } }),
+        .string => try native_mb_convert_encoding(ctx, &.{ val, .{ .string = Value.String.borrowed(to) }, .{ .string = Value.String.borrowed(from) } }),
         .array => blk: {
             const arr = try ctx.createArray();
             for (val.array.entries.items) |e| {
@@ -3027,18 +3076,18 @@ fn convertVarEncoding(ctx: *NativeContext, val: Value, to: []const u8, from: []c
 // calls this on its line array - without it, error rendering throws and cascades
 fn native_mb_convert_variables(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[0] != .string) return .{ .bool = false };
-    const to = args[0].string;
+    const to = args[0].string.bytes();
     // $from may be a comma-separated candidate list or an array of candidates;
     // take the first (detection among ASCII/UTF-8/Latin1 is near-identity anyway)
     const from: []const u8 = blk: {
         if (args[1] == .string) {
-            const s = args[1].string;
+            const s = args[1].string.bytes();
             if (std.mem.indexOfScalar(u8, s, ',')) |c| break :blk std.mem.trim(u8, s[0..c], " ");
             break :blk s;
         }
         if (args[1] == .array and args[1].array.entries.items.len > 0) {
             const f = args[1].array.entries.items[0].value;
-            if (f == .string) break :blk f.string;
+            if (f == .string) break :blk f.string.bytes();
         }
         break :blk "UTF-8";
     };
@@ -3047,14 +3096,14 @@ fn native_mb_convert_variables(ctx: *NativeContext, args: []const Value) Runtime
         const converted = try convertVarEncoding(ctx, args[i], to, from);
         ctx.setCallerVar(i, args.len, converted);
     }
-    return .{ .string = try ctx.createString(from) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(from)) };
 }
 
 fn native_mb_convert_encoding(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const input = args[0].string;
-    const to = args[1].string;
-    const from: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string else "UTF-8";
+    const input = args[0].string.bytes();
+    const to = args[1].string.bytes();
+    const from: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else "UTF-8";
 
     if ((isUtf8Encoding(from) and isUtf8Encoding(to)) or
         (isLatin1Encoding(from) and isLatin1Encoding(to)) or
@@ -3065,12 +3114,12 @@ fn native_mb_convert_encoding(ctx: *NativeContext, args: []const Value) RuntimeE
     if (isUtf8Encoding(from) and isLatin1Encoding(to)) {
         const out = convertUtf8ToLatin1(ctx.allocator, input) catch return .{ .bool = false };
         try ctx.strings.append(ctx.allocator, out);
-        return .{ .string = out };
+        return .{ .string = Value.String.borrowed(out) };
     }
     if (isLatin1Encoding(from) and isUtf8Encoding(to)) {
         const out = convertLatin1ToUtf8(ctx.allocator, input) catch return .{ .bool = false };
         try ctx.strings.append(ctx.allocator, out);
-        return .{ .string = out };
+        return .{ .string = Value.String.borrowed(out) };
     }
     if (isAsciiEncoding(from) and (isUtf8Encoding(to) or isLatin1Encoding(to))) {
         return args[0]; // ascii is a subset of both
@@ -3095,42 +3144,42 @@ fn native_mb_convert_encoding(ctx: *NativeContext, args: []const Value) RuntimeE
         }
         const owned = try out.toOwnedSlice(ctx.allocator);
         try ctx.strings.append(ctx.allocator, owned);
-        return .{ .string = owned };
+        return .{ .string = Value.String.borrowed(owned) };
     }
     // UTF-8/Latin1/ASCII <-> UTF-16{,BE,LE}. "UTF-16" without suffix is BE
     if (isUtf8Encoding(from) and isUtf16Encoding(to)) {
         const out = convertUtf8ToUtf16(ctx.allocator, input, isUtf16LE(to)) catch return .{ .bool = false };
         try ctx.strings.append(ctx.allocator, out);
-        return .{ .string = out };
+        return .{ .string = Value.String.borrowed(out) };
     }
     if (isUtf16Encoding(from) and isUtf8Encoding(to)) {
         const out = convertUtf16ToUtf8(ctx.allocator, input, isUtf16LE(from)) catch return .{ .bool = false };
         try ctx.strings.append(ctx.allocator, out);
-        return .{ .string = out };
+        return .{ .string = Value.String.borrowed(out) };
     }
     if (isUtf8Encoding(from) and isUtf32Encoding(to)) {
         const out = convertUtf8ToUtf32(ctx.allocator, input, isUtf32LE(to)) catch return .{ .bool = false };
         try ctx.strings.append(ctx.allocator, out);
-        return .{ .string = out };
+        return .{ .string = Value.String.borrowed(out) };
     }
     if (isUtf32Encoding(from) and isUtf8Encoding(to)) {
         const out = convertUtf32ToUtf8(ctx.allocator, input, isUtf32LE(from)) catch return .{ .bool = false };
         try ctx.strings.append(ctx.allocator, out);
-        return .{ .string = out };
+        return .{ .string = Value.String.borrowed(out) };
     }
     if (isLatin1Encoding(from) and isUtf16Encoding(to)) {
         const tmp = convertLatin1ToUtf8(ctx.allocator, input) catch return .{ .bool = false };
         defer ctx.allocator.free(tmp);
         const out = convertUtf8ToUtf16(ctx.allocator, tmp, isUtf16LE(to)) catch return .{ .bool = false };
         try ctx.strings.append(ctx.allocator, out);
-        return .{ .string = out };
+        return .{ .string = Value.String.borrowed(out) };
     }
     if (isUtf16Encoding(from) and isLatin1Encoding(to)) {
         const tmp = convertUtf16ToUtf8(ctx.allocator, input, isUtf16LE(from)) catch return .{ .bool = false };
         defer ctx.allocator.free(tmp);
         const out = convertUtf8ToLatin1(ctx.allocator, tmp) catch return .{ .bool = false };
         try ctx.strings.append(ctx.allocator, out);
-        return .{ .string = out };
+        return .{ .string = Value.String.borrowed(out) };
     }
     // unknown encoding pair - pass through
     return args[0];
@@ -3138,8 +3187,8 @@ fn native_mb_convert_encoding(ctx: *NativeContext, args: []const Value) RuntimeE
 
 fn native_iconv(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string) return .{ .bool = false };
-    const from = args[0].string;
-    const to_raw = args[1].string;
+    const from = args[0].string.bytes();
+    const to_raw = args[1].string.bytes();
     // iconv supports "//IGNORE" and "//TRANSLIT" suffixes after the target
     // encoding. IGNORE drops un-convertible chars instead of substituting
     // with '?'; TRANSLIT does a best-effort replacement (currently mapped
@@ -3157,7 +3206,7 @@ fn native_iconv(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // fast path for IGNORE/TRANSLIT when going to ASCII: drop non-ASCII bytes
     // directly so callers don't get the '?' substitutions
     if ((ignore or translit) and isAsciiEncoding(to) and (isUtf8Encoding(from) or isLatin1Encoding(from))) {
-        const input = args[2].string;
+        const input = args[2].string.bytes();
         var out = std.ArrayListUnmanaged(u8){};
         errdefer out.deinit(ctx.allocator);
         var i: usize = 0;
@@ -3174,17 +3223,17 @@ fn native_iconv(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         }
         const owned = try out.toOwnedSlice(ctx.allocator);
         try ctx.strings.append(ctx.allocator, owned);
-        return .{ .string = owned };
+        return .{ .string = Value.String.borrowed(owned) };
     }
 
-    const args2 = [_]Value{ args[2], .{ .string = to }, .{ .string = from } };
+    const args2 = [_]Value{ args[2], .{ .string = Value.String.borrowed(to) }, .{ .string = Value.String.borrowed(from) } };
     return try native_mb_convert_encoding(ctx, &args2);
 }
 
 fn native_mb_strpos(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     const byte_offset: usize = if (args.len >= 3) blk: {
         const off = Value.toInt(args[2]);
         if (off < 0) break :blk 0;
@@ -3211,8 +3260,8 @@ fn native_mb_strpos(_: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_mb_strrpos(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     if (std.mem.lastIndexOf(u8, haystack, needle)) |pos| {
         var char_pos: i64 = 0;
         var j: usize = 0;
@@ -3227,8 +3276,8 @@ fn native_mb_strrpos(_: *NativeContext, args: []const Value) RuntimeError!Value 
 
 fn native_mb_substr_count(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .int = 0 };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     if (needle.len == 0) {
         try ctx.vm.setPendingException("ValueError", "mb_substr_count(): Argument #2 ($needle) must not be empty");
         return error.RuntimeError;
@@ -3247,7 +3296,7 @@ fn native_mb_substr_count(ctx: *NativeContext, args: []const Value) RuntimeError
 }
 
 fn native_mb_internal_encoding(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = "UTF-8" };
+    return .{ .string = Value.String.borrowed("UTF-8") };
 }
 
 fn native_mb_substitute_character(_: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -3274,7 +3323,7 @@ fn cjkWidth(cp: u21) usize {
 
 fn native_mb_strwidth(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .int = 0 };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     var width: i64 = 0;
     var i: usize = 0;
     while (i < s.len) {
@@ -3303,8 +3352,8 @@ fn parseEntityMap(arr: *PhpArray) ?[4]i64 {
 }
 
 fn native_mb_encode_numericentity(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2 or args[0] != .string or args[1] != .array) return if (args.len > 0) args[0] else .{ .string = "" };
-    const s = args[0].string;
+    if (args.len < 2 or args[0] != .string or args[1] != .array) return if (args.len > 0) args[0] else .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
     const map = parseEntityMap(args[1].array) orelse return args[0];
     const hex = args.len >= 4 and args[3].isTruthy();
 
@@ -3344,12 +3393,12 @@ fn native_mb_encode_numericentity(ctx: *NativeContext, args: []const Value) Runt
     }
     const out = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn native_mb_decode_numericentity(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2 or args[0] != .string or args[1] != .array) return if (args.len > 0) args[0] else .{ .string = "" };
-    const s = args[0].string;
+    if (args.len < 2 or args[0] != .string or args[1] != .array) return if (args.len > 0) args[0] else .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
     const map = parseEntityMap(args[1].array) orelse return args[0];
 
     var buf = std.ArrayListUnmanaged(u8){};
@@ -3389,7 +3438,7 @@ fn native_mb_decode_numericentity(ctx: *NativeContext, args: []const Value) Runt
     }
     const out = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn native_mb_chr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -3401,12 +3450,12 @@ fn native_mb_chr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const n = std.unicode.utf8Encode(cp, &buf) catch return .{ .bool = false };
     const out = try ctx.allocator.dupe(u8, buf[0..n]);
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn native_mb_ord(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     if (s.len == 0) {
         try ctx.vm.setPendingException("ValueError", "mb_ord(): Argument #1 ($string) must not be empty");
         return error.RuntimeError;
@@ -3452,8 +3501,8 @@ fn byteToCharPos(s: []const u8, byte_pos: usize) i64 {
 
 fn native_mb_stripos(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     if (needle.len == 0) return .{ .bool = false };
     const start_char: i64 = if (args.len >= 3) Value.toInt(args[2]) else 0;
     var byte_offset: usize = 0;
@@ -3472,8 +3521,8 @@ fn native_mb_stripos(_: *NativeContext, args: []const Value) RuntimeError!Value 
 
 fn native_mb_strripos(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     if (needle.len == 0) return .{ .bool = false };
     // walk to the end recording the last case-insensitive match position
     var last: ?usize = null;
@@ -3488,28 +3537,28 @@ fn native_mb_strripos(_: *NativeContext, args: []const Value) RuntimeError!Value
 
 fn native_mb_strstr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     if (needle.len == 0) return .{ .bool = false };
     const before: bool = if (args.len >= 3) Value.isTruthy(args[2]) else false;
     if (std.mem.indexOf(u8, haystack, needle)) |pos| {
         const slice = if (before) haystack[0..pos] else haystack[pos..];
-        return .{ .string = try ctx.createString(slice) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(slice)) };
     }
     return .{ .bool = false };
 }
 
 fn native_mb_stristr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     if (needle.len == 0) return .{ .bool = false };
     const before: bool = if (args.len >= 3) Value.isTruthy(args[2]) else false;
     var i: usize = 0;
     while (i < haystack.len) : (i += utf8CharLen(haystack[i])) {
         if (matchAtCi(haystack, i, needle)) {
             const slice = if (before) haystack[0..i] else haystack[i..];
-            return .{ .string = try ctx.createString(slice) };
+            return .{ .string = Value.String.borrowed(try ctx.createString(slice)) };
         }
     }
     return .{ .bool = false };
@@ -3521,8 +3570,8 @@ fn native_mb_stristr(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 // is used in PHP. case-sensitive
 fn native_mb_strrchr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     if (needle.len == 0) return .{ .bool = false };
     const nch_len = utf8CharLen(needle[0]);
     if (nch_len > needle.len) return .{ .bool = false };
@@ -3531,14 +3580,14 @@ fn native_mb_strrchr(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     var i: usize = 0;
     while (i < haystack.len) {
         const cl = utf8CharLen(haystack[i]);
-        if (cl == nch_len and i + cl <= haystack.len and std.mem.eql(u8, haystack[i..i + cl], needle[0..nch_len])) {
+        if (cl == nch_len and i + cl <= haystack.len and std.mem.eql(u8, haystack[i .. i + cl], needle[0..nch_len])) {
             last = i;
         }
         i += cl;
     }
     if (last) |pos| {
         const slice = if (before) haystack[0..pos] else haystack[pos..];
-        return .{ .string = try ctx.createString(slice) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(slice)) };
     }
     return .{ .bool = false };
 }
@@ -3550,19 +3599,19 @@ fn native_mb_strrchr(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 fn eastAsianWidth(cp: u32) u8 {
     if (cp < 0x1100) return 1;
     if ((cp >= 0x1100 and cp <= 0x115F) // Hangul Jamo
-        or (cp >= 0x2E80 and cp <= 0x303E) // CJK Radicals, Kangxi
-        or (cp >= 0x3041 and cp <= 0x33FF) // Hiragana, Katakana, CJK
-        or (cp >= 0x3400 and cp <= 0x4DBF) // CJK Ext A
-        or (cp >= 0x4E00 and cp <= 0x9FFF) // CJK Unified
-        or (cp >= 0xA000 and cp <= 0xA4CF) // Yi
-        or (cp >= 0xAC00 and cp <= 0xD7A3) // Hangul Syllables
-        or (cp >= 0xF900 and cp <= 0xFAFF) // CJK Compat Ideographs
-        or (cp >= 0xFE30 and cp <= 0xFE4F) // CJK Compat Forms
-        or (cp >= 0xFF00 and cp <= 0xFF60) // Fullwidth ASCII
-        or (cp >= 0xFFE0 and cp <= 0xFFE6) // Fullwidth signs
-        or (cp >= 0x1F300 and cp <= 0x1FAFF) // Emoji / Symbols
-        or (cp >= 0x20000 and cp <= 0x2FFFD) // CJK Ext B-F
-        or (cp >= 0x30000 and cp <= 0x3FFFD)) return 2; // CJK Ext G+
+    or (cp >= 0x2E80 and cp <= 0x303E) // CJK Radicals, Kangxi
+    or (cp >= 0x3041 and cp <= 0x33FF) // Hiragana, Katakana, CJK
+    or (cp >= 0x3400 and cp <= 0x4DBF) // CJK Ext A
+    or (cp >= 0x4E00 and cp <= 0x9FFF) // CJK Unified
+    or (cp >= 0xA000 and cp <= 0xA4CF) // Yi
+    or (cp >= 0xAC00 and cp <= 0xD7A3) // Hangul Syllables
+    or (cp >= 0xF900 and cp <= 0xFAFF) // CJK Compat Ideographs
+    or (cp >= 0xFE30 and cp <= 0xFE4F) // CJK Compat Forms
+    or (cp >= 0xFF00 and cp <= 0xFF60) // Fullwidth ASCII
+    or (cp >= 0xFFE0 and cp <= 0xFFE6) // Fullwidth signs
+    or (cp >= 0x1F300 and cp <= 0x1FAFF) // Emoji / Symbols
+    or (cp >= 0x20000 and cp <= 0x2FFFD) // CJK Ext B-F
+    or (cp >= 0x30000 and cp <= 0x3FFFD)) return 2; // CJK Ext G+
     return 1;
 }
 
@@ -3585,11 +3634,11 @@ fn decodeUtf8(s: []const u8, i: usize) struct { cp: u32, len: usize } {
 
 fn native_mb_strimwidth(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const start: i64 = Value.toInt(args[1]);
     const max_width: i64 = Value.toInt(args[2]);
-    if (max_width <= 0) return .{ .string = try ctx.createString("") };
-    const marker = if (args.len >= 4 and args[3] == .string) args[3].string else "";
+    if (max_width <= 0) return .{ .string = Value.String.borrowed(try ctx.createString("")) };
+    const marker = if (args.len >= 4 and args[3] == .string) args[3].string.bytes() else "";
 
     // marker width
     var marker_w: i64 = 0;
@@ -3634,7 +3683,7 @@ fn native_mb_strimwidth(ctx: *NativeContext, args: []const Value) RuntimeError!V
             const d = decodeUtf8(s, ti);
             const next_w = tw + eastAsianWidth(d.cp);
             if (next_w > target) break;
-            try out.appendSlice(ctx.allocator, s[ti..ti + d.len]);
+            try out.appendSlice(ctx.allocator, s[ti .. ti + d.len]);
             tw = next_w;
             ti += d.len;
         }
@@ -3642,12 +3691,12 @@ fn native_mb_strimwidth(ctx: *NativeContext, args: []const Value) RuntimeError!V
     }
     const owned = try out.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn native_mb_strcut(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const s = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
     var start: i64 = if (args.len >= 2) Value.toInt(args[1]) else 0;
     if (start < 0) start = @max(0, @as(i64, @intCast(s.len)) + start);
     var ustart: usize = @intCast(@min(start, @as(i64, @intCast(s.len))));
@@ -3666,13 +3715,13 @@ fn native_mb_strcut(ctx: *NativeContext, args: []const Value) RuntimeError!Value
         // align end to leading byte (don't split a multibyte char)
         while (end > ustart and end < s.len and (s[end] & 0xC0) == 0x80) end -= 1;
     }
-    if (end <= ustart) return .{ .string = "" };
-    return .{ .string = try ctx.createString(s[ustart..end]) };
+    if (end <= ustart) return .{ .string = Value.String.borrowed("") };
+    return .{ .string = Value.String.borrowed(try ctx.createString(s[ustart..end])) };
 }
 
 fn native_mb_encoding_aliases(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const enc = args[0].string;
+    const enc = args[0].string.bytes();
     var lower_buf: [32]u8 = undefined;
     if (enc.len > lower_buf.len) return .{ .bool = false };
     for (enc, 0..) |c, i| lower_buf[i] = std.ascii.toLower(c);
@@ -3680,13 +3729,13 @@ fn native_mb_encoding_aliases(ctx: *NativeContext, args: []const Value) RuntimeE
     const arr = try ctx.createArray();
     // small known-alias table covering encodings zphp actually surfaces
     if (std.mem.eql(u8, e, "utf-8") or std.mem.eql(u8, e, "utf8")) {
-        try arr.append(ctx.allocator, .{ .string = "utf8" });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("utf8") });
     } else if (std.mem.eql(u8, e, "ascii") or std.mem.eql(u8, e, "us-ascii")) {
-        try arr.append(ctx.allocator, .{ .string = "ANSI_X3.4-1968" });
-        try arr.append(ctx.allocator, .{ .string = "iso-ir-6" });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("ANSI_X3.4-1968") });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("iso-ir-6") });
     } else if (std.mem.eql(u8, e, "iso-8859-1") or std.mem.eql(u8, e, "latin1")) {
-        try arr.append(ctx.allocator, .{ .string = "ISO_8859-1" });
-        try arr.append(ctx.allocator, .{ .string = "latin1" });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("ISO_8859-1") });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("latin1") });
     }
     return .{ .array = arr };
 }
@@ -3697,36 +3746,30 @@ fn native_mb_list_encodings(ctx: *NativeContext, _: []const Value) RuntimeError!
     // zphp doesn't actually transcode most of these - it lists them so feature
     // detection in libraries (intl, symfony, wp) finds the names it expects
     const list = [_][]const u8{
-        "BASE64", "UUENCODE", "HTML-ENTITIES", "Quoted-Printable", "7bit", "8bit",
-        "UCS-4", "UCS-4BE", "UCS-4LE", "UCS-2", "UCS-2BE", "UCS-2LE",
-        "UTF-32", "UTF-32BE", "UTF-32LE", "UTF-16", "UTF-16BE", "UTF-16LE",
-        "UTF-8", "UTF-7", "UTF7-IMAP", "ASCII",
-        "EUC-JP", "SJIS", "eucJP-win", "EUC-JP-2004",
-        "SJIS-Mobile#DOCOMO", "SJIS-Mobile#KDDI", "SJIS-Mobile#SOFTBANK",
-        "SJIS-mac", "SJIS-2004",
-        "UTF-8-Mobile#DOCOMO", "UTF-8-Mobile#KDDI-A", "UTF-8-Mobile#KDDI-B", "UTF-8-Mobile#SOFTBANK",
-        "CP932", "SJIS-win", "CP51932",
-        "JIS", "ISO-2022-JP", "ISO-2022-JP-MS",
-        "GB18030", "GB18030-2022",
-        "Windows-1252", "Windows-1254",
-        "ISO-8859-1", "ISO-8859-2", "ISO-8859-3", "ISO-8859-4", "ISO-8859-5",
-        "ISO-8859-6", "ISO-8859-7", "ISO-8859-8", "ISO-8859-9", "ISO-8859-10",
-        "ISO-8859-13", "ISO-8859-14", "ISO-8859-15", "ISO-8859-16",
-        "EUC-CN", "CP936", "HZ", "EUC-TW", "BIG-5", "CP950",
-        "EUC-KR", "UHC", "ISO-2022-KR",
-        "Windows-1251", "CP866", "KOI8-R", "KOI8-U", "ArmSCII-8",
-        "CP850", "ISO-2022-JP-2004", "ISO-2022-JP-MOBILE#KDDI",
-        "CP50220", "CP50221", "CP50222",
+        "BASE64",       "UUENCODE",            "HTML-ENTITIES",       "Quoted-Printable",        "7bit",                  "8bit",
+        "UCS-4",        "UCS-4BE",             "UCS-4LE",             "UCS-2",                   "UCS-2BE",               "UCS-2LE",
+        "UTF-32",       "UTF-32BE",            "UTF-32LE",            "UTF-16",                  "UTF-16BE",              "UTF-16LE",
+        "UTF-8",        "UTF-7",               "UTF7-IMAP",           "ASCII",                   "EUC-JP",                "SJIS",
+        "eucJP-win",    "EUC-JP-2004",         "SJIS-Mobile#DOCOMO",  "SJIS-Mobile#KDDI",        "SJIS-Mobile#SOFTBANK",  "SJIS-mac",
+        "SJIS-2004",    "UTF-8-Mobile#DOCOMO", "UTF-8-Mobile#KDDI-A", "UTF-8-Mobile#KDDI-B",     "UTF-8-Mobile#SOFTBANK", "CP932",
+        "SJIS-win",     "CP51932",             "JIS",                 "ISO-2022-JP",             "ISO-2022-JP-MS",        "GB18030",
+        "GB18030-2022", "Windows-1252",        "Windows-1254",        "ISO-8859-1",              "ISO-8859-2",            "ISO-8859-3",
+        "ISO-8859-4",   "ISO-8859-5",          "ISO-8859-6",          "ISO-8859-7",              "ISO-8859-8",            "ISO-8859-9",
+        "ISO-8859-10",  "ISO-8859-13",         "ISO-8859-14",         "ISO-8859-15",             "ISO-8859-16",           "EUC-CN",
+        "CP936",        "HZ",                  "EUC-TW",              "BIG-5",                   "CP950",                 "EUC-KR",
+        "UHC",          "ISO-2022-KR",         "Windows-1251",        "CP866",                   "KOI8-R",                "KOI8-U",
+        "ArmSCII-8",    "CP850",               "ISO-2022-JP-2004",    "ISO-2022-JP-MOBILE#KDDI", "CP50220",               "CP50221",
+        "CP50222",
     };
-    for (list) |n| try arr.append(ctx.allocator, .{ .string = n });
+    for (list) |n| try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(n) });
     return .{ .array = arr };
 }
 
 fn native_mb_str_pad(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return args[0];
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const target_chars: i64 = Value.toInt(args[1]);
-    const pad_str: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string else " ";
+    const pad_str: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else " ";
     const pad_type: i64 = if (args.len >= 4) Value.toInt(args[3]) else 1; // STR_PAD_RIGHT
     if (pad_str.len == 0 or target_chars <= 0) return args[0];
 
@@ -3755,7 +3798,7 @@ fn native_mb_str_pad(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     try buf.appendSlice(ctx.allocator, s);
     try appendPadChars(ctx, &buf, pad_str, right_chars);
 
-    return .{ .string = try ctx.createString(buf.items) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(buf.items)) };
 }
 
 fn appendPadChars(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), pad_str: []const u8, count: i64) !void {
@@ -3780,14 +3823,14 @@ fn utf8CharLen(byte: u8) usize {
 
 fn native_str_getcsv(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .null;
-    const s = if (args[0] == .string) args[0].string else return Value.null;
-    const sep: u8 = if (args.len >= 2 and args[1] == .string and args[1].string.len > 0) args[1].string[0] else ',';
-    const enc: u8 = if (args.len >= 3 and args[2] == .string and args[2].string.len > 0) args[2].string[0] else '"';
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value.null;
+    const sep: u8 = if (args.len >= 2 and args[1] == .string and args[1].string.bytes().len > 0) args[1].string.bytes()[0] else ',';
+    const enc: u8 = if (args.len >= 3 and args[2] == .string and args[2].string.bytes().len > 0) args[2].string.bytes()[0] else '"';
 
     var arr = try ctx.createArray();
 
     if (s.len == 0) {
-        try arr.append(ctx.allocator, .{ .string = "" });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("") });
         return .{ .array = arr };
     }
 
@@ -3815,7 +3858,7 @@ fn native_str_getcsv(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
             } else if (c == sep) {
                 const f = try field.toOwnedSlice(ctx.allocator);
                 try ctx.strings.append(ctx.allocator, f);
-                try arr.append(ctx.allocator, .{ .string = f });
+                try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(f) });
                 at_field_start = true;
             } else {
                 try field.append(ctx.allocator, c);
@@ -3825,7 +3868,7 @@ fn native_str_getcsv(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     }
     const f = try field.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, f);
-    try arr.append(ctx.allocator, .{ .string = f });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(f) });
 
     return .{ .array = arr };
 }
@@ -3833,9 +3876,9 @@ fn native_str_getcsv(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 const base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn native_base64_encode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    if (s.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    if (s.len == 0) return .{ .string = Value.String.borrowed("") };
 
     const out_len = ((s.len + 2) / 3) * 4;
     const buf = try ctx.allocator.alloc(u8, out_len);
@@ -3865,7 +3908,7 @@ fn native_base64_encode(ctx: *NativeContext, args: []const Value) RuntimeError!V
         buf[di + 3] = '=';
     }
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn base64Decode(c: u8) ?u6 {
@@ -3879,8 +3922,8 @@ fn base64Decode(c: u8) ?u6 {
 
 fn native_base64_decode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = false };
-    const s = if (args[0] == .string) args[0].string else return Value{ .bool = false };
-    if (s.len == 0) return .{ .string = "" };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .bool = false };
+    if (s.len == 0) return .{ .string = Value.String.borrowed("") };
 
     const strict = args.len >= 2 and args[1] == .bool and args[1].bool;
 
@@ -3917,12 +3960,12 @@ fn native_base64_decode(ctx: *NativeContext, args: []const Value) RuntimeError!V
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_convert_uuencode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     if (s.len == 0) return .{ .bool = false };
     var buf = std.ArrayListUnmanaged(u8){};
     var i: usize = 0;
@@ -3953,12 +3996,12 @@ fn native_convert_uuencode(ctx: *NativeContext, args: []const Value) RuntimeErro
     try buf.append(ctx.allocator, '\n');
     const out = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn native_convert_uudecode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     if (s.len == 0) return .{ .bool = false };
     var buf = std.ArrayListUnmanaged(u8){};
     var p: usize = 0;
@@ -3984,9 +4027,18 @@ fn native_convert_uudecode(ctx: *NativeContext, args: []const Value) RuntimeErro
             const b0: u8 = @intCast(((c0 << 2) | (c1 >> 4)) & 0xff);
             const b1: u8 = @intCast(((c1 << 4) | (c2 >> 2)) & 0xff);
             const b2: u8 = @intCast(((c2 << 6) | c3) & 0xff);
-            if (produced < decoded_len) { try buf.append(ctx.allocator, b0); produced += 1; }
-            if (produced < decoded_len) { try buf.append(ctx.allocator, b1); produced += 1; }
-            if (produced < decoded_len) { try buf.append(ctx.allocator, b2); produced += 1; }
+            if (produced < decoded_len) {
+                try buf.append(ctx.allocator, b0);
+                produced += 1;
+            }
+            if (produced < decoded_len) {
+                try buf.append(ctx.allocator, b1);
+                produced += 1;
+            }
+            if (produced < decoded_len) {
+                try buf.append(ctx.allocator, b2);
+                produced += 1;
+            }
         }
         // skip the newline at end of line
         if (p < s.len and s[p] == '\r') p += 1;
@@ -3994,7 +4046,7 @@ fn native_convert_uudecode(ctx: *NativeContext, args: []const Value) RuntimeErro
     }
     const out = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn decodeUuChar(c: u8) u8 {
@@ -4004,8 +4056,8 @@ fn decodeUuChar(c: u8) u8 {
 }
 
 fn native_urlencode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     var buf = std.ArrayListUnmanaged(u8){};
     const hex = "0123456789ABCDEF";
     for (s) |c| {
@@ -4021,12 +4073,12 @@ fn native_urlencode(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_urldecode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     var buf = std.ArrayListUnmanaged(u8){};
     var i: usize = 0;
     while (i < s.len) {
@@ -4053,12 +4105,12 @@ fn native_urldecode(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_rawurlencode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     var buf = std.ArrayListUnmanaged(u8){};
     const hex = "0123456789ABCDEF";
     for (s) |c| {
@@ -4072,12 +4124,12 @@ fn native_rawurlencode(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_rawurldecode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     var buf = std.ArrayListUnmanaged(u8){};
     var i: usize = 0;
     while (i < s.len) {
@@ -4101,7 +4153,7 @@ fn native_rawurldecode(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 /// PHP's `string` parameter type rejects arrays with a TypeError. Most native
@@ -4115,7 +4167,7 @@ fn rejectArrayParam(ctx: *NativeContext, v: Value, comptime func_name: []const u
     const bad_type: ?[]const u8 = switch (v) {
         .array => "array",
         .object => |o| if (ctx.vm.hasMethod(o.class_name, "__toString")) null else o.class_name,
-        .string => |s| if (std.mem.startsWith(u8, s, "__closure_")) "Closure" else null,
+        .string => |s| if (std.mem.startsWith(u8, s.bytes(), "__closure_")) "Closure" else null,
         else => null,
     };
     if (bad_type) |bt| {
@@ -4133,7 +4185,7 @@ fn rejectArrayParam(ctx: *NativeContext, v: Value, comptime func_name: []const u
 
 fn coerceToString(ctx: *NativeContext, v: Value) ![]const u8 {
     return switch (v) {
-        .string => |s| s,
+        .string => |s| s.bytes(),
         .int => |n| blk: {
             const s = try std.fmt.allocPrint(ctx.allocator, "{d}", .{n});
             try ctx.strings.append(ctx.allocator, s);
@@ -4149,7 +4201,7 @@ fn coerceToString(ctx: *NativeContext, v: Value) ![]const u8 {
         .object => |o| blk: {
             if (ctx.vm.hasMethod(o.class_name, "__toString")) {
                 const r = try ctx.vm.callMethod(o, "__toString", &.{});
-                if (r == .string) break :blk r.string;
+                if (r == .string) break :blk r.string.bytes();
             }
             break :blk "";
         },
@@ -4158,48 +4210,48 @@ fn coerceToString(ctx: *NativeContext, v: Value) ![]const u8 {
 }
 
 fn native_md5(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
     const raw_output = args.len >= 2 and args[1].isTruthy();
     var hash: [16]u8 = undefined;
     std.crypto.hash.Md5.hash(s, &hash, .{});
-    if (raw_output) return .{ .string = try ctx.createString(&hash) };
+    if (raw_output) return .{ .string = Value.String.borrowed(try ctx.createString(&hash)) };
     const hex = "0123456789abcdef";
     var buf: [32]u8 = undefined;
     for (hash, 0..) |byte, i| {
         buf[i * 2] = hex[byte >> 4];
         buf[i * 2 + 1] = hex[byte & 0x0f];
     }
-    return .{ .string = try ctx.createString(&buf) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(&buf)) };
 }
 
 fn native_sha1(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     const raw_output = args.len >= 2 and args[1].isTruthy();
     var hash: [20]u8 = undefined;
     std.crypto.hash.Sha1.hash(s, &hash, .{});
-    if (raw_output) return .{ .string = try ctx.createString(&hash) };
+    if (raw_output) return .{ .string = Value.String.borrowed(try ctx.createString(&hash)) };
     const hex = "0123456789abcdef";
     var buf: [40]u8 = undefined;
     for (hash, 0..) |byte, i| {
         buf[i * 2] = hex[byte >> 4];
         buf[i * 2 + 1] = hex[byte & 0x0f];
     }
-    return .{ .string = try ctx.createString(&buf) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(&buf)) };
 }
 
 fn native_mb_substr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
+    if (args.len < 2) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
     const char_count = mbCharCount(s);
     var start = Value.toInt(args[1]);
     if (start < 0) start = @max(0, char_count + start);
-    if (start >= char_count) return .{ .string = "" };
+    if (start >= char_count) return .{ .string = Value.String.borrowed("") };
 
     var length = if (args.len >= 3 and args[2] != .null) Value.toInt(args[2]) else char_count - start;
     if (length < 0) length = @max(0, char_count - start + length);
-    if (length <= 0) return .{ .string = "" };
+    if (length <= 0) return .{ .string = Value.String.borrowed("") };
 
     var byte_start: usize = 0;
     var ci: i64 = 0;
@@ -4216,7 +4268,7 @@ fn native_mb_substr(ctx: *NativeContext, args: []const Value) RuntimeError!Value
         chars_remaining -= 1;
     }
 
-    return .{ .string = try ctx.createString(s[byte_start..bi]) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(s[byte_start..bi])) };
 }
 
 fn mbCharCount(s: []const u8) i64 {
@@ -4237,13 +4289,13 @@ fn mbCharLen(byte: u8) usize {
 }
 
 fn native_strrev(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
-    if (s.len == 0) return .{ .string = "" };
+    if (s.len == 0) return .{ .string = Value.String.borrowed("") };
     const buf = try ctx.allocator.alloc(u8, s.len);
     for (s, 0..) |c, i| buf[s.len - 1 - i] = c;
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn toLowerBuf(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
@@ -4310,8 +4362,8 @@ fn strrposImpl(haystack: []const u8, needle: []const u8, args: []const Value) Va
 
 fn native_strripos(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .{ .bool = false };
-    const haystack = if (args[0] == .string) args[0].string else return Value{ .bool = false };
-    const needle = if (args[1] == .string) args[1].string else return Value{ .bool = false };
+    const haystack = if (args[0] == .string) args[0].string.bytes() else return Value{ .bool = false };
+    const needle = if (args[1] == .string) args[1].string.bytes() else return Value{ .bool = false };
     if (needle.len == 0) return .{ .int = @intCast(haystack.len) };
     if (haystack.len == 0) return .{ .bool = false };
     const h_lower = try toLowerBuf(ctx.allocator, haystack);
@@ -4322,25 +4374,25 @@ fn native_strripos(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 }
 
 fn native_str_ireplace(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 3) return if (args.len >= 3) args[2] else Value{ .string = "" };
+    if (args.len < 3) return if (args.len >= 3) args[2] else Value{ .string = Value.String.borrowed("") };
     var total_count: i64 = 0;
 
     if (args[2] == .array) {
         const subject_arr = args[2].array;
         const out = try ctx.createArray();
         for (subject_arr.entries.items) |se| {
-            const elem_str: []const u8 = if (se.value == .string) se.value.string else "";
+            const elem_str: []const u8 = if (se.value == .string) se.value.string.bytes() else "";
             const replaced = try strIreplaceOnSingle(ctx, args[0], args[1], elem_str, &total_count);
-            try out.set(ctx.allocator, se.key, .{ .string = replaced });
+            try out.set(ctx.allocator, se.key, .{ .string = Value.String.borrowed(replaced) });
         }
         if (args.len >= 4) ctx.setCallerVar(3, args.len, .{ .int = total_count });
         return .{ .array = out };
     }
 
-    const subject = if (args[2] == .string) args[2].string else return args[2];
+    const subject = if (args[2] == .string) args[2].string.bytes() else return args[2];
     const replaced = try strIreplaceOnSingle(ctx, args[0], args[1], subject, &total_count);
     if (args.len >= 4) ctx.setCallerVar(3, args.len, .{ .int = total_count });
-    return .{ .string = replaced };
+    return .{ .string = Value.String.borrowed(replaced) };
 }
 
 fn strIreplaceOne(ctx: *NativeContext, subject: []const u8, search: []const u8, replace: []const u8, count: *i64) ![]const u8 {
@@ -4371,27 +4423,27 @@ fn strIreplaceOnSingle(ctx: *NativeContext, search: Value, replace: Value, subje
     if (search == .array) {
         var result = subject;
         for (search.array.entries.items, 0..) |entry, idx| {
-            const needle = if (entry.value == .string) entry.value.string else continue;
+            const needle = if (entry.value == .string) entry.value.string.bytes() else continue;
             const replacement = if (replace == .array) blk: {
                 if (idx < replace.array.entries.items.len) {
-                    if (replace.array.entries.items[idx].value == .string) break :blk replace.array.entries.items[idx].value.string;
+                    if (replace.array.entries.items[idx].value == .string) break :blk replace.array.entries.items[idx].value.string.bytes();
                 }
                 break :blk "";
-            } else if (replace == .string) replace.string else "";
+            } else if (replace == .string) replace.string.bytes() else "";
             result = try strIreplaceOne(ctx, result, needle, replacement, total_count);
         }
         return result;
     }
-    const s = if (search == .string) search.string else return subject;
-    const rep = if (replace == .string) replace.string else "";
+    const s = if (search == .string) search.string.bytes() else return subject;
+    const rep = if (replace == .string) replace.string.bytes() else "";
     return strIreplaceOne(ctx, subject, s, rep, total_count);
 }
 
 fn native_ucwords(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     const s = try coerceToString(ctx, args[0]);
-    if (s.len == 0) return .{ .string = "" };
-    const delimiters = if (args.len >= 2 and args[1] == .string) args[1].string else " \t\r\n\x0b";
+    if (s.len == 0) return .{ .string = Value.String.borrowed("") };
+    const delimiters = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else " \t\r\n\x0b";
     const buf = try ctx.allocator.alloc(u8, s.len);
     var capitalize_next = true;
     for (s, 0..) |c, i| {
@@ -4406,7 +4458,7 @@ fn native_ucwords(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         }
     }
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn isDelimiter(c: u8, delimiters: []const u8) bool {
@@ -4418,16 +4470,16 @@ fn isDelimiter(c: u8, delimiters: []const u8) bool {
 
 fn native_crc32(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .int = 0 };
-    const s = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
     const result = std.hash.crc.Crc32IsoHdlc.hash(s);
     // PHP returns the unsigned 32-bit value (zero-extended into signed 64-bit)
     return .{ .int = @as(i64, result) };
 }
 
 fn native_str_rot13(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    if (s.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    if (s.len == 0) return .{ .string = Value.String.borrowed("") };
     const buf = try ctx.allocator.alloc(u8, s.len);
     for (s, 0..) |c, i| {
         buf[i] = if (c >= 'a' and c <= 'z')
@@ -4438,7 +4490,7 @@ fn native_str_rot13(ctx: *NativeContext, args: []const Value) RuntimeError!Value
             c;
     }
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 // PHP's default Unicode-whitespace set for mb_trim family. matches what PHP
@@ -4446,9 +4498,9 @@ fn native_str_rot13(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 // ones PHP actually uses
 const DEFAULT_MB_TRIM_CPS = [_]u21{
     0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x0020,
-    0x0085, 0x00A0, 0x1680,
-    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A,
-    0x2028, 0x2029, 0x202F, 0x205F,
+    0x0085, 0x00A0, 0x1680, 0x2000, 0x2001, 0x2002,
+    0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008,
+    0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F,
     0x3000, 0xFEFF,
 };
 
@@ -4519,36 +4571,36 @@ fn mbTrimImpl(ctx: *NativeContext, s: []const u8, set: []const u21, left: bool, 
 }
 
 fn native_mb_trim(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    const arg_chars: ?[]const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else null;
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    const arg_chars: ?[]const u8 = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else null;
     const set = try buildMbTrimSet(ctx.allocator, arg_chars);
     defer ctx.allocator.free(set);
-    return .{ .string = try mbTrimImpl(ctx, s, set, true, true) };
+    return .{ .string = Value.String.borrowed(try mbTrimImpl(ctx, s, set, true, true)) };
 }
 
 fn native_mb_ltrim(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    const arg_chars: ?[]const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else null;
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    const arg_chars: ?[]const u8 = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else null;
     const set = try buildMbTrimSet(ctx.allocator, arg_chars);
     defer ctx.allocator.free(set);
-    return .{ .string = try mbTrimImpl(ctx, s, set, true, false) };
+    return .{ .string = Value.String.borrowed(try mbTrimImpl(ctx, s, set, true, false)) };
 }
 
 fn native_mb_rtrim(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    const arg_chars: ?[]const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else null;
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    const arg_chars: ?[]const u8 = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else null;
     const set = try buildMbTrimSet(ctx.allocator, arg_chars);
     defer ctx.allocator.free(set);
-    return .{ .string = try mbTrimImpl(ctx, s, set, false, true) };
+    return .{ .string = Value.String.borrowed(try mbTrimImpl(ctx, s, set, false, true)) };
 }
 
 fn native_quotemeta(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    if (s.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    if (s.len == 0) return .{ .string = Value.String.borrowed("") };
     var buf = std.ArrayListUnmanaged(u8){};
     for (s) |c| {
         if (c == '.' or c == '\\' or c == '+' or c == '*' or c == '?' or
@@ -4561,19 +4613,19 @@ fn native_quotemeta(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_mb_ucfirst(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    return .{ .string = try mbCaseFirst(ctx, s, true) };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    return .{ .string = Value.String.borrowed(try mbCaseFirst(ctx, s, true)) };
 }
 
 fn native_mb_lcfirst(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const s = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    return .{ .string = try mbCaseFirst(ctx, s, false) };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    return .{ .string = Value.String.borrowed(try mbCaseFirst(ctx, s, false)) };
 }
 
 fn mbCaseFirst(ctx: *NativeContext, s: []const u8, to_upper: bool) ![]const u8 {
@@ -4610,15 +4662,15 @@ fn mbCaseFirst(ctx: *NativeContext, s: []const u8, to_upper: bool) ![]const u8 {
 }
 
 fn native_strip_tags(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const s = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
 
     var allowed_tags_buf: [64][64]u8 = undefined;
     var allowed_tags_lens: [64]usize = undefined;
     var n_allowed: usize = 0;
     if (args.len >= 2) {
         if (args[1] == .string) {
-            const allow = args[1].string;
+            const allow = args[1].string.bytes();
             var ai: usize = 0;
             while (ai < allow.len and n_allowed < 64) {
                 if (allow[ai] == '<') {
@@ -4640,7 +4692,7 @@ fn native_strip_tags(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
         } else if (args[1] == .array) {
             for (args[1].array.entries.items) |e| {
                 if (e.value != .string or n_allowed >= 64) continue;
-                const tag = e.value.string;
+                const tag = e.value.string.bytes();
                 var tlen: usize = 0;
                 for (tag) |c| {
                     if (tlen < 64) {
@@ -4691,7 +4743,7 @@ fn native_strip_tags(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn toLowerAscii(c: u8) u8 {
@@ -4699,11 +4751,11 @@ fn toLowerAscii(c: u8) u8 {
 }
 
 fn native_http_build_query(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .array) return .{ .string = "" };
+    if (args.len == 0 or args[0] != .array) return .{ .string = Value.String.borrowed("") };
     const arr = args[0].array;
-    const prefix_str: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else "";
+    const prefix_str: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "";
     // arg_separator default "&"
-    const arg_sep: []const u8 = if (args.len >= 3 and args[2] == .string and args[2].string.len > 0) args[2].string else "&";
+    const arg_sep: []const u8 = if (args.len >= 3 and args[2] == .string and args[2].string.bytes().len > 0) args[2].string.bytes() else "&";
     // encoding: PHP_QUERY_RFC1738 = 1 (default, space → +), PHP_QUERY_RFC3986 = 2 (space → %20)
     const enc_type: i64 = if (args.len >= 4) Value.toInt(args[3]) else 1;
     const rfc3986 = enc_type == 2;
@@ -4713,7 +4765,7 @@ fn native_http_build_query(ctx: *NativeContext, args: []const Value) RuntimeErro
     for (arr.entries.items) |entry| {
         var key_buf: [32]u8 = undefined;
         const key_str: []const u8 = switch (entry.key) {
-            .string => |s| s,
+            .string => |s| s.bytes(),
             .int => |n| blk: {
                 // top-level integer key: prepend numeric prefix
                 if (prefix_str.len > 0) {
@@ -4727,7 +4779,7 @@ fn native_http_build_query(ctx: *NativeContext, args: []const Value) RuntimeErro
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn buildQueryPairs(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, prefix: []const u8, value: Value, first: *bool, sep: []const u8, rfc3986: bool) !void {
@@ -4737,7 +4789,7 @@ fn buildQueryPairs(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, prefi
         for (value.array.entries.items) |entry| {
             var key_buf: [32]u8 = undefined;
             const sub_key = switch (entry.key) {
-                .string => |s| s,
+                .string => |s| s.bytes(),
                 .int => |n| std.fmt.bufPrint(&key_buf, "{d}", .{n}) catch "",
             };
             var nested_key = std.ArrayListUnmanaged(u8){};
@@ -4781,7 +4833,7 @@ fn buildQueryPairs(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, prefi
         try appendUrlEncodedMode(buf, a, prefix, rfc3986);
         try buf.append(a, '=');
         switch (value) {
-            .string => |s| try appendUrlEncodedMode(buf, a, s, rfc3986),
+            .string => |s| try appendUrlEncodedMode(buf, a, s.bytes(), rfc3986),
             .bool => |b| try buf.append(a, if (b) '1' else '0'),
             else => {
                 var tmp = std.ArrayListUnmanaged(u8){};
@@ -4814,8 +4866,8 @@ fn appendUrlEncodedMode(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, 
 }
 
 fn native_qp_encode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const s = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
     var buf = std.ArrayListUnmanaged(u8){};
     const hex = "0123456789ABCDEF";
     var line_len: usize = 0;
@@ -4845,12 +4897,12 @@ fn native_qp_encode(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_qp_decode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const s = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
     var buf = std.ArrayListUnmanaged(u8){};
     var i: usize = 0;
     while (i < s.len) {
@@ -4879,12 +4931,12 @@ fn native_qp_decode(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_parse_url(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return Value{ .bool = false };
-    const url = args[0].string;
+    const url = args[0].string.bytes();
 
     const component: ?i64 = if (args.len >= 2 and args[1] == .int) args[1].int else null;
 
@@ -4907,7 +4959,7 @@ fn native_parse_url(ctx: *NativeContext, args: []const Value) RuntimeError!Value
         }
         if (!scheme_ok) {
             var arr = try ctx.createArray();
-            try arr.set(ctx.allocator, .{ .string = "path" }, .{ .string = try ctx.createString(url) });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("path") }, .{ .string = Value.String.borrowed(try ctx.createString(url)) });
             return .{ .array = arr };
         }
         scheme = url[0..pos];
@@ -5017,27 +5069,27 @@ fn native_parse_url(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
     if (component) |c| {
         return switch (c) {
-            0 => if (scheme) |s| Value{ .string = try ctx.createString(s) } else .null,
-            1 => if (host) |h| Value{ .string = try ctx.createString(h) } else .null,
+            0 => if (scheme) |s| Value{ .string = Value.String.borrowed(try ctx.createString(s)) } else .null,
+            1 => if (host) |h| Value{ .string = Value.String.borrowed(try ctx.createString(h)) } else .null,
             2 => if (port) |p| Value{ .int = p } else .null,
-            3 => if (user) |u| Value{ .string = try ctx.createString(u) } else .null,
-            4 => if (pass) |p| Value{ .string = try ctx.createString(p) } else .null,
-            5 => if (path) |p| Value{ .string = try ctx.createString(p) } else .null,
-            6 => if (query) |q| Value{ .string = try ctx.createString(q) } else .null,
-            7 => if (fragment) |f| Value{ .string = try ctx.createString(f) } else .null,
+            3 => if (user) |u| Value{ .string = Value.String.borrowed(try ctx.createString(u)) } else .null,
+            4 => if (pass) |p| Value{ .string = Value.String.borrowed(try ctx.createString(p)) } else .null,
+            5 => if (path) |p| Value{ .string = Value.String.borrowed(try ctx.createString(p)) } else .null,
+            6 => if (query) |q| Value{ .string = Value.String.borrowed(try ctx.createString(q)) } else .null,
+            7 => if (fragment) |f| Value{ .string = Value.String.borrowed(try ctx.createString(f)) } else .null,
             else => Value{ .bool = false },
         };
     }
 
     var arr = try ctx.createArray();
-    if (scheme) |s| try arr.set(ctx.allocator, .{ .string = "scheme" }, .{ .string = try ctx.createString(s) });
-    if (host) |h| try arr.set(ctx.allocator, .{ .string = "host" }, .{ .string = try ctx.createString(h) });
-    if (port) |p| try arr.set(ctx.allocator, .{ .string = "port" }, .{ .int = p });
-    if (user) |u| try arr.set(ctx.allocator, .{ .string = "user" }, .{ .string = try ctx.createString(u) });
-    if (pass) |p| try arr.set(ctx.allocator, .{ .string = "pass" }, .{ .string = try ctx.createString(p) });
-    if (path) |p| try arr.set(ctx.allocator, .{ .string = "path" }, .{ .string = try ctx.createString(p) });
-    if (query) |q| try arr.set(ctx.allocator, .{ .string = "query" }, .{ .string = try ctx.createString(q) });
-    if (fragment) |f| try arr.set(ctx.allocator, .{ .string = "fragment" }, .{ .string = try ctx.createString(f) });
+    if (scheme) |s| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("scheme") }, .{ .string = Value.String.borrowed(try ctx.createString(s)) });
+    if (host) |h| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("host") }, .{ .string = Value.String.borrowed(try ctx.createString(h)) });
+    if (port) |p| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("port") }, .{ .int = p });
+    if (user) |u| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("user") }, .{ .string = Value.String.borrowed(try ctx.createString(u)) });
+    if (pass) |p| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("pass") }, .{ .string = Value.String.borrowed(try ctx.createString(p)) });
+    if (path) |p| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("path") }, .{ .string = Value.String.borrowed(try ctx.createString(p)) });
+    if (query) |q| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("query") }, .{ .string = Value.String.borrowed(try ctx.createString(q)) });
+    if (fragment) |f| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("fragment") }, .{ .string = Value.String.borrowed(try ctx.createString(f)) });
     return .{ .array = arr };
 }
 
@@ -5073,7 +5125,7 @@ fn urlDecodeSlice(ctx: *NativeContext, s: []const u8) ![]const u8 {
 
 fn native_parse_str(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .null;
-    const s = args[0].string;
+    const s = args[0].string.bytes();
 
     const arr = try ctx.createArray();
     var rest = s;
@@ -5099,7 +5151,7 @@ fn native_parse_str(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
         const decoded_key = try urlDecodeSlice(ctx, key);
         const decoded_val = try urlDecodeSlice(ctx, val);
-        try insertParsedKey(ctx, arr, decoded_key, .{ .string = decoded_val });
+        try insertParsedKey(ctx, arr, decoded_key, .{ .string = Value.String.borrowed(decoded_val) });
     }
     if (args.len >= 2) {
         ctx.setCallerVar(1, args.len, .{ .array = arr });
@@ -5113,7 +5165,10 @@ fn native_parse_str(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 fn sanitizeParseStrKey(ctx: *NativeContext, name: []const u8) ![]const u8 {
     var needs_fix = false;
     for (name) |c| {
-        if (c == ' ' or c == '.' or c == '[') { needs_fix = true; break; }
+        if (c == ' ' or c == '.' or c == '[') {
+            needs_fix = true;
+            break;
+        }
     }
     if (!needs_fix) return name;
     const buf = try ctx.allocator.alloc(u8, name.len);
@@ -5132,7 +5187,7 @@ fn insertParsedKey(ctx: *NativeContext, root: *PhpArray, key: []const u8, value:
     if (raw_base.len == 0 and open != null) return;
     const base_name = try sanitizeParseStrKey(ctx, raw_base);
     if (open == null) {
-        try root.set(ctx.allocator, .{ .string = base_name }, value);
+        try root.set(ctx.allocator, .{ .string = Value.String.borrowed(base_name) }, value);
         return;
     }
     var segments: [16][]const u8 = undefined;
@@ -5146,7 +5201,7 @@ fn insertParsedKey(ctx: *NativeContext, root: *PhpArray, key: []const u8, value:
         pos = close + 1;
     }
 
-    const base_key: PhpArray.Key = .{ .string = base_name };
+    const base_key: PhpArray.Key = .{ .string = Value.String.borrowed(base_name) };
     var current_arr: *PhpArray = root;
     var current_key: PhpArray.Key = base_key;
     var i: usize = 0;
@@ -5175,7 +5230,7 @@ fn insertParsedKey(ctx: *NativeContext, root: *PhpArray, key: []const u8, value:
             if (std.fmt.parseInt(i64, seg, 10)) |n| {
                 current_key = .{ .int = n };
             } else |_| {
-                current_key = .{ .string = seg };
+                current_key = .{ .string = Value.String.borrowed(seg) };
             }
         }
     }
@@ -5184,8 +5239,8 @@ fn insertParsedKey(ctx: *NativeContext, root: *PhpArray, key: []const u8, value:
 
 fn native_addcslashes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return if (args.len >= 1) args[0] else Value.null;
-    const s = args[0].string;
-    const charset = args[1].string;
+    const s = args[0].string.bytes();
+    const charset = args[1].string.bytes();
     // expand "a..z" ranges
     var mask = [_]bool{false} ** 256;
     var i: usize = 0;
@@ -5234,12 +5289,12 @@ fn native_addcslashes(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_stripcslashes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     var buf = std.ArrayListUnmanaged(u8){};
     errdefer buf.deinit(ctx.allocator);
     var i: usize = 0;
@@ -5271,10 +5326,7 @@ fn native_stripcslashes(ctx: *NativeContext, args: []const Value) RuntimeError!V
                 var v: u16 = 0;
                 while (end < s.len and end - (i + 2) < 2) : (end += 1) {
                     const ch = s[end];
-                    const d: u8 = if (ch >= '0' and ch <= '9') ch - '0'
-                        else if (ch >= 'a' and ch <= 'f') ch - 'a' + 10
-                        else if (ch >= 'A' and ch <= 'F') ch - 'A' + 10
-                        else break;
+                    const d: u8 = if (ch >= '0' and ch <= '9') ch - '0' else if (ch >= 'a' and ch <= 'f') ch - 'a' + 10 else if (ch >= 'A' and ch <= 'F') ch - 'A' + 10 else break;
                     v = v * 16 + d;
                 }
                 if (end == i + 2) {
@@ -5294,36 +5346,36 @@ fn native_stripcslashes(ctx: *NativeContext, args: []const Value) RuntimeError!V
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_strrchr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     if (needle.len == 0) return .{ .bool = false };
     const c = needle[0];
     if (std.mem.lastIndexOfScalar(u8, haystack, c)) |pos| {
         const before = args.len >= 3 and args[2].isTruthy();
-        if (before) return .{ .string = try ctx.createString(haystack[0..pos]) };
-        return .{ .string = try ctx.createString(haystack[pos..]) };
+        if (before) return .{ .string = Value.String.borrowed(try ctx.createString(haystack[0..pos])) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(haystack[pos..])) };
     }
     return .{ .bool = false };
 }
 
 fn native_strstr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return Value{ .bool = false };
-    const haystack = if (args[0] == .string) args[0].string else return Value{ .bool = false };
-    const needle = if (args[1] == .string) args[1].string else return Value{ .bool = false };
+    const haystack = if (args[0] == .string) args[0].string.bytes() else return Value{ .bool = false };
+    const needle = if (args[1] == .string) args[1].string.bytes() else return Value{ .bool = false };
     if (needle.len == 0) return Value{ .bool = false };
 
     const before_needle: bool = args.len >= 3 and args[2].isTruthy();
 
     if (std.mem.indexOf(u8, haystack, needle)) |pos| {
         if (before_needle) {
-            return .{ .string = try ctx.createString(haystack[0..pos]) };
+            return .{ .string = Value.String.borrowed(try ctx.createString(haystack[0..pos])) };
         }
-        return .{ .string = try ctx.createString(haystack[pos..]) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(haystack[pos..])) };
     }
     return Value{ .bool = false };
 }
@@ -5334,15 +5386,15 @@ fn native_strtok(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         if (args.len >= 2) {
             // strtok(str, tokens) - reset state with a new string
             if (args[0] != .string or args[1] != .string) return Value{ .bool = false };
-            const owned = try ctx.allocator.dupe(u8, args[0].string);
+            const owned = try ctx.allocator.dupe(u8, args[0].string.bytes());
             try ctx.strings.append(ctx.allocator, owned);
             ctx.vm.strtok_state = owned;
             ctx.vm.strtok_pos = 0;
-            break :blk args[1].string;
+            break :blk args[1].string.bytes();
         }
         // strtok(tokens) - continue with prior string
         if (args[0] != .string) return Value{ .bool = false };
-        break :blk args[0].string;
+        break :blk args[0].string.bytes();
     };
     const s = ctx.vm.strtok_state orelse return .{ .bool = false };
     var p = ctx.vm.strtok_pos;
@@ -5356,13 +5408,13 @@ fn native_strtok(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     while (p < s.len and std.mem.indexOfScalar(u8, tokens, s[p]) == null) : (p += 1) {}
     // advance past the delimiter so the next call doesn't re-consider it
     ctx.vm.strtok_pos = if (p < s.len) p + 1 else p;
-    return .{ .string = try ctx.createString(s[start..p]) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(s[start..p])) };
 }
 
 fn native_stristr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return Value{ .bool = false };
-    const haystack = if (args[0] == .string) args[0].string else return Value{ .bool = false };
-    const needle = if (args[1] == .string) args[1].string else return Value{ .bool = false };
+    const haystack = if (args[0] == .string) args[0].string.bytes() else return Value{ .bool = false };
+    const needle = if (args[1] == .string) args[1].string.bytes() else return Value{ .bool = false };
     if (needle.len == 0) return Value{ .bool = false };
     const before_needle: bool = args.len >= 3 and args[2].isTruthy();
 
@@ -5372,19 +5424,19 @@ fn native_stristr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     defer ctx.allocator.free(lower_n);
     if (std.mem.indexOf(u8, lower_h, lower_n)) |pos| {
         // return the original-case substring
-        if (before_needle) return .{ .string = try ctx.createString(haystack[0..pos]) };
-        return .{ .string = try ctx.createString(haystack[pos..]) };
+        if (before_needle) return .{ .string = Value.String.borrowed(try ctx.createString(haystack[0..pos])) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(haystack[pos..])) };
     }
     return Value{ .bool = false };
 }
 
 fn native_strtr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return .null;
-    const str = args[0].string;
+    const str = args[0].string.bytes();
 
     if (args.len >= 3 and args[1] == .string and args[2] == .string) {
-        const from = args[1].string;
-        const to = args[2].string;
+        const from = args[1].string.bytes();
+        const to = args[2].string.bytes();
         const len = @min(from.len, to.len);
         const buf = try ctx.allocator.alloc(u8, str.len);
         try ctx.strings.append(ctx.allocator, buf);
@@ -5399,7 +5451,7 @@ fn native_strtr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             }
             if (!replaced) buf[i] = c;
         }
-        return .{ .string = buf };
+        return .{ .string = Value.String.borrowed(buf) };
     }
 
     if (args[1] == .array) {
@@ -5416,7 +5468,7 @@ fn native_strtr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             var best_repl: []const u8 = &.{};
             for (replacements.entries.items) |entry| {
                 if (entry.key != .string) continue;
-                const search = entry.key.string;
+                const search = entry.key.string.bytes();
                 if (search.len == 0) continue;
                 if (search.len <= best_search.len) continue;
                 if (i + search.len <= str.len and std.mem.eql(u8, str[i .. i + search.len], search)) {
@@ -5424,7 +5476,7 @@ fn native_strtr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                     // PHP coerces non-string replacement values to their string
                     // form, so int/float/bool entries substitute correctly
                     best_repl = switch (entry.value) {
-                        .string => |s| s,
+                        .string => |s| s.bytes(),
                         .int => |n| try std.fmt.allocPrint(ctx.allocator, "{d}", .{n}),
                         .float => |f| try std.fmt.allocPrint(ctx.allocator, "{d}", .{f}),
                         .bool => |b| if (b) "1" else "",
@@ -5455,16 +5507,16 @@ fn native_strtr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             }
         }
         try ctx.strings.append(ctx.allocator, result);
-        return .{ .string = result[0..out_len] };
+        return .{ .string = Value.String.borrowed(result[0..out_len]) };
     }
 
     return .null;
 }
 
 fn native_vsprintf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2) return .{ .string = "" };
-    const fmt_str = if (args[0] == .string) args[0].string else return Value{ .string = "" };
-    if (args[1] != .array) return .{ .string = "" };
+    if (args.len < 2) return .{ .string = Value.String.borrowed("") };
+    const fmt_str = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("") };
+    if (args[1] != .array) return .{ .string = Value.String.borrowed("") };
 
     // convert array values to a slice for sprintfImpl
     const arr = args[1].array;
@@ -5475,12 +5527,12 @@ fn native_vsprintf(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     }
     if (try vsprintfArgsTooFew(ctx, fmt_str, vals.len)) return error.RuntimeError;
     const result = try sprintfImpl(ctx, fmt_str, vals);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_vprintf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .{ .int = 0 };
-    const fmt_str = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
+    const fmt_str = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
     if (args[1] != .array) return .{ .int = 0 };
     const arr = args[1].array;
     var vals = try ctx.allocator.alloc(Value, arr.entries.items.len);
@@ -5552,8 +5604,8 @@ fn native_fscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .null;
-    const input = args[0].string;
-    const fmt = args[1].string;
+    const input = args[0].string.bytes();
+    const fmt = args[1].string.bytes();
 
     var captures = std.ArrayListUnmanaged(Value){};
     defer captures.deinit(ctx.allocator);
@@ -5627,7 +5679,7 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 }
                 const s = try ctx.allocator.dupe(u8, input[start..ip]);
                 try ctx.strings.append(ctx.allocator, s);
-                try captures.append(ctx.allocator, .{ .string = s });
+                try captures.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
             },
             'c' => {
                 const want: usize = if (has_width) width else 1;
@@ -5635,7 +5687,7 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 const s = try ctx.allocator.dupe(u8, input[ip..end]);
                 try ctx.strings.append(ctx.allocator, s);
                 ip = end;
-                try captures.append(ctx.allocator, .{ .string = s });
+                try captures.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
             },
             'x', 'X' => {
                 // optional 0x / 0X prefix
@@ -5675,7 +5727,7 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                     const u_val: u64 = @bitCast(i_val);
                     const s = try std.fmt.allocPrint(ctx.allocator, "{d}", .{u_val});
                     try ctx.vm.strings.append(ctx.allocator, s);
-                    try captures.append(ctx.allocator, .{ .string = s });
+                    try captures.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
                 }
             },
             'n' => {
@@ -5725,7 +5777,7 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 }
                 const s = try ctx.allocator.dupe(u8, input[start..ip]);
                 try ctx.strings.append(ctx.allocator, s);
-                try captures.append(ctx.allocator, .{ .string = s });
+                try captures.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
             },
             else => {
                 const msg = try std.fmt.allocPrint(ctx.allocator, "Bad scan conversion character \"{c}\"", .{spec});
@@ -5754,7 +5806,10 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var total_specs: usize = 0;
     var sp: usize = 0;
     while (sp < fmt.len) {
-        if (fmt[sp] != '%') { sp += 1; continue; }
+        if (fmt[sp] != '%') {
+            sp += 1;
+            continue;
+        }
         sp += 1;
         while (sp < fmt.len and fmt[sp] >= '0' and fmt[sp] <= '9') sp += 1;
         if (sp >= fmt.len) break;
@@ -5765,7 +5820,10 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             if (sp < fmt.len and fmt[sp] == '^') sp += 1;
             var first = true;
             while (sp < fmt.len) {
-                if (fmt[sp] == ']' and !first) { sp += 1; break; }
+                if (fmt[sp] == ']' and !first) {
+                    sp += 1;
+                    break;
+                }
                 first = false;
                 sp += 1;
             }
@@ -5781,8 +5839,8 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_levenshtein(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .int = -1 };
-    const s1 = args[0].string;
-    const s2 = args[1].string;
+    const s1 = args[0].string.bytes();
+    const s2 = args[1].string.bytes();
 
     // PHP 8 lifted the historical 255-char cap; computes regardless of length.
     if (s1.len == 0) return .{ .int = @intCast(s2.len) };
@@ -5854,8 +5912,8 @@ fn similarTextImpl(s1: []const u8, s2: []const u8, longest: *i64) void {
 
 fn native_similar_text(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .int = 0 };
-    const s1 = args[0].string;
-    const s2 = args[1].string;
+    const s1 = args[0].string.bytes();
+    const s2 = args[1].string.bytes();
 
     var matching: i64 = 0;
     similarTextImpl(s1, s2, &matching);
@@ -5870,9 +5928,9 @@ fn native_similar_text(ctx: *NativeContext, args: []const Value) RuntimeError!Va
 }
 
 fn native_soundex(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const input = args[0].string;
-    if (input.len == 0) return .{ .string = "0000" };
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const input = args[0].string.bytes();
+    if (input.len == 0) return .{ .string = Value.String.borrowed("0000") };
 
     const correct_table = [26]u8{
         '0', '1', '2', '3', '0', '1', '2', '0', '0', '2', '2', '4', '5',
@@ -5888,7 +5946,7 @@ fn native_soundex(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             break;
         }
     }
-    if (first == 0) return .{ .string = "" };
+    if (first == 0) return .{ .string = Value.String.borrowed("") };
 
     var result_buf: [4]u8 = .{ first, '0', '0', '0' };
     var pos: usize = 1;
@@ -5909,14 +5967,14 @@ fn native_soundex(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const result = try ctx.allocator.alloc(u8, 4);
     @memcpy(result, &result_buf);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_metaphone(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const input = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const input = args[0].string.bytes();
     const max_phonemes: usize = if (args.len >= 2) @intCast(@max(Value.toInt(args[1]), 0)) else 32;
-    if (input.len == 0) return .{ .string = "" };
+    if (input.len == 0) return .{ .string = Value.String.borrowed("") };
 
     var buf = std.ArrayListUnmanaged(u8){};
     var upper = try ctx.allocator.alloc(u8, input.len);
@@ -6129,12 +6187,12 @@ fn native_metaphone(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn native_count_chars(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .null;
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const mode: i64 = if (args.len >= 2) Value.toInt(args[1]) else 0;
 
     var freq: [256]i64 = [_]i64{0} ** 256;
@@ -6147,7 +6205,7 @@ fn native_count_chars(ctx: *NativeContext, args: []const Value) RuntimeError!Val
         }
         const r = try buf2.toOwnedSlice(ctx.allocator);
         try ctx.strings.append(ctx.allocator, r);
-        return .{ .string = r };
+        return .{ .string = Value.String.borrowed(r) };
     }
 
     if (mode == 4) {
@@ -6157,7 +6215,7 @@ fn native_count_chars(ctx: *NativeContext, args: []const Value) RuntimeError!Val
         }
         const r = try buf2.toOwnedSlice(ctx.allocator);
         try ctx.strings.append(ctx.allocator, r);
-        return .{ .string = r };
+        return .{ .string = Value.String.borrowed(r) };
     }
 
     var arr = try ctx.createArray();
@@ -6176,8 +6234,8 @@ fn native_count_chars(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 }
 
 fn native_str_increment(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const s = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
     // PHP 8.3+ rejects empty strings and strings containing non-alphanumeric
     // bytes with ValueError
     if (s.len == 0) {
@@ -6236,17 +6294,17 @@ fn native_str_increment(ctx: *NativeContext, args: []const Value) RuntimeError!V
             buf3[0] = '1';
         }
         try ctx.strings.append(ctx.allocator, buf3);
-        return .{ .string = buf3 };
+        return .{ .string = Value.String.borrowed(buf3) };
     }
 
     const r2 = buf3[1..];
     try ctx.strings.append(ctx.allocator, buf3);
-    return .{ .string = r2 };
+    return .{ .string = Value.String.borrowed(r2) };
 }
 
 fn native_str_decrement(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const s = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
     if (s.len == 0) {
         try ctx.vm.setPendingException("ValueError", "str_decrement(): Argument #1 ($string) cannot be empty");
         return error.RuntimeError;
@@ -6259,7 +6317,7 @@ fn native_str_decrement(ctx: *NativeContext, args: []const Value) RuntimeError!V
     }
 
     if (s.len == 1) {
-        if (s[0] == 'a' or s[0] == 'A' or s[0] == '0') return .{ .string = s };
+        if (s[0] == 'a' or s[0] == 'A' or s[0] == '0') return .{ .string = Value.String.borrowed(s) };
     }
 
     var buf3 = try ctx.allocator.alloc(u8, s.len);
@@ -6302,13 +6360,13 @@ fn native_str_decrement(ctx: *NativeContext, args: []const Value) RuntimeError!V
 
     const r2 = buf3[start..];
     try ctx.strings.append(ctx.allocator, buf3);
-    return .{ .string = r2 };
+    return .{ .string = Value.String.borrowed(r2) };
 }
 
 fn native_substr_compare(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     var offset: i64 = Value.toInt(args[2]);
     const length: ?usize = if (args.len >= 4 and args[3] != .null)
         @intCast(@max(Value.toInt(args[3]), 0))
@@ -6359,8 +6417,8 @@ fn spanResolveRange(slen: i64, args: []const Value) struct { start: usize, end: 
 
 fn native_strcspn(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .int = 0 };
-    const s = args[0].string;
-    const chars = args[1].string;
+    const s = args[0].string.bytes();
+    const chars = args[1].string.bytes();
     const r = spanResolveRange(@intCast(s.len), args);
 
     for (r.start..r.end) |i| {
@@ -6373,14 +6431,17 @@ fn native_strcspn(_: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_strspn(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .int = 0 };
-    const s = args[0].string;
-    const chars = args[1].string;
+    const s = args[0].string.bytes();
+    const chars = args[1].string.bytes();
     const r = spanResolveRange(@intCast(s.len), args);
 
     for (r.start..r.end) |i| {
         var found = false;
         for (chars) |c| {
-            if (s[i] == c) { found = true; break; }
+            if (s[i] == c) {
+                found = true;
+                break;
+            }
         }
         if (!found) return .{ .int = @intCast(i - r.start) };
     }
@@ -6389,14 +6450,14 @@ fn native_strspn(_: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_strpbrk(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const s = args[0].string;
-    const chars = args[1].string;
+    const s = args[0].string.bytes();
+    const chars = args[1].string.bytes();
     for (s, 0..) |ch, i| {
         for (chars) |c| {
             if (ch == c) {
                 const result = try ctx.allocator.dupe(u8, s[i..]);
                 try ctx.vm.strings.append(ctx.allocator, result);
-                return .{ .string = result };
+                return .{ .string = Value.String.borrowed(result) };
             }
         }
     }
@@ -6407,8 +6468,8 @@ fn native_strpbrk(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 // but folds case on both sides. only the first character of $needle is used
 fn native_mb_strrichr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     if (needle.len == 0) return .{ .bool = false };
     const before: bool = if (args.len >= 3) Value.isTruthy(args[2]) else false;
     const n_first = lowerCpUtf8(needle, 0);
@@ -6421,7 +6482,7 @@ fn native_mb_strrichr(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     }
     if (last) |pos| {
         const slice = if (before) haystack[0..pos] else haystack[pos..];
-        return .{ .string = try ctx.createString(slice) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(slice)) };
     }
     return .{ .bool = false };
 }
@@ -6430,8 +6491,8 @@ fn native_mb_strrichr(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 // default substitute is `?` (0x3F) - one `?` per invalid byte, not per
 // invalid sequence
 fn native_mb_scrub(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const s = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const s = args[0].string.bytes();
     var buf = std.ArrayListUnmanaged(u8){};
     defer buf.deinit(ctx.allocator);
     var i: usize = 0;
@@ -6462,7 +6523,7 @@ fn native_mb_scrub(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     }
     const out = try ctx.allocator.dupe(u8, buf.items);
     try ctx.vm.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 // CLI always returns false (no HTTP input encoding context). when called with
@@ -6475,35 +6536,35 @@ fn native_mb_http_input(_: *NativeContext, args: []const Value) RuntimeError!Val
 // default HTTP output encoding. setter returns true; getter returns "UTF-8"
 fn native_mb_http_output(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len >= 1 and args[0] == .string) return .{ .bool = true };
-    return .{ .string = "UTF-8" };
+    return .{ .string = Value.String.borrowed("UTF-8") };
 }
 
 // default language. setter accepts neutral/uni/japanese/english/german/etc.
 // we don't differentiate behavior - getter always returns "neutral"
 fn native_mb_language(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len >= 1 and args[0] == .string) return .{ .bool = true };
-    return .{ .string = "neutral" };
+    return .{ .string = Value.String.borrowed("neutral") };
 }
 
 // map an internal encoding name to its MIME charset label
 fn native_mb_preferred_mime_name(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const enc = args[0].string;
+    const enc = args[0].string.bytes();
     var lo: [32]u8 = undefined;
     const cap = @min(enc.len, lo.len);
     for (enc[0..cap], 0..) |c, i| lo[i] = std.ascii.toLower(c);
     const l = lo[0..cap];
-    if (std.mem.eql(u8, l, "utf-8") or std.mem.eql(u8, l, "utf8")) return .{ .string = "UTF-8" };
-    if (std.mem.eql(u8, l, "ascii") or std.mem.eql(u8, l, "us-ascii")) return .{ .string = "US-ASCII" };
-    if (std.mem.eql(u8, l, "iso-8859-1") or std.mem.eql(u8, l, "iso8859-1") or std.mem.eql(u8, l, "latin1")) return .{ .string = "ISO-8859-1" };
-    if (std.mem.eql(u8, l, "iso-8859-15")) return .{ .string = "ISO-8859-15" };
-    if (std.mem.eql(u8, l, "sjis") or std.mem.eql(u8, l, "shift_jis") or std.mem.eql(u8, l, "shift-jis")) return .{ .string = "Shift_JIS" };
-    if (std.mem.eql(u8, l, "euc-jp") or std.mem.eql(u8, l, "eucjp")) return .{ .string = "EUC-JP" };
-    if (std.mem.eql(u8, l, "iso-2022-jp")) return .{ .string = "ISO-2022-JP" };
-    if (std.mem.eql(u8, l, "utf-16")) return .{ .string = "UTF-16" };
-    if (std.mem.eql(u8, l, "utf-16be")) return .{ .string = "UTF-16BE" };
-    if (std.mem.eql(u8, l, "utf-16le")) return .{ .string = "UTF-16LE" };
-    if (std.mem.eql(u8, l, "utf-32")) return .{ .string = "UTF-32" };
+    if (std.mem.eql(u8, l, "utf-8") or std.mem.eql(u8, l, "utf8")) return .{ .string = Value.String.borrowed("UTF-8") };
+    if (std.mem.eql(u8, l, "ascii") or std.mem.eql(u8, l, "us-ascii")) return .{ .string = Value.String.borrowed("US-ASCII") };
+    if (std.mem.eql(u8, l, "iso-8859-1") or std.mem.eql(u8, l, "iso8859-1") or std.mem.eql(u8, l, "latin1")) return .{ .string = Value.String.borrowed("ISO-8859-1") };
+    if (std.mem.eql(u8, l, "iso-8859-15")) return .{ .string = Value.String.borrowed("ISO-8859-15") };
+    if (std.mem.eql(u8, l, "sjis") or std.mem.eql(u8, l, "shift_jis") or std.mem.eql(u8, l, "shift-jis")) return .{ .string = Value.String.borrowed("Shift_JIS") };
+    if (std.mem.eql(u8, l, "euc-jp") or std.mem.eql(u8, l, "eucjp")) return .{ .string = Value.String.borrowed("EUC-JP") };
+    if (std.mem.eql(u8, l, "iso-2022-jp")) return .{ .string = Value.String.borrowed("ISO-2022-JP") };
+    if (std.mem.eql(u8, l, "utf-16")) return .{ .string = Value.String.borrowed("UTF-16") };
+    if (std.mem.eql(u8, l, "utf-16be")) return .{ .string = Value.String.borrowed("UTF-16BE") };
+    if (std.mem.eql(u8, l, "utf-16le")) return .{ .string = Value.String.borrowed("UTF-16LE") };
+    if (std.mem.eql(u8, l, "utf-32")) return .{ .string = Value.String.borrowed("UTF-32") };
     const msg = try std.fmt.allocPrint(ctx.allocator, "mb_preferred_mime_name(): Argument #1 ($encoding) must be a valid encoding, \"{s}\" given", .{enc});
     try ctx.vm.strings.append(ctx.allocator, msg);
     try ctx.vm.setPendingException("ValueError", msg);
@@ -6518,34 +6579,34 @@ fn native_mb_detect_order(ctx: *NativeContext, args: []const Value) RuntimeError
         return .{ .bool = false };
     }
     var arr = try ctx.createArray();
-    try arr.append(ctx.allocator, .{ .string = "ASCII" });
-    try arr.append(ctx.allocator, .{ .string = "UTF-8" });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("ASCII") });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("UTF-8") });
     return .{ .array = arr };
 }
 
 // PHP returns either the full info array, a specific key's value, or false
 // for an unknown key
 fn native_mb_get_info(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const key: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string else null;
+    const key: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else null;
     if (key) |k| {
-        if (std.mem.eql(u8, k, "internal_encoding")) return .{ .string = "UTF-8" };
-        if (std.mem.eql(u8, k, "http_input")) return .{ .string = "UTF-8" };
-        if (std.mem.eql(u8, k, "http_output")) return .{ .string = "UTF-8" };
-        if (std.mem.eql(u8, k, "http_output_conv_mimetypes")) return .{ .string = "^(text/|application/xhtml\\+xml)" };
-        if (std.mem.eql(u8, k, "mail_charset")) return .{ .string = "UTF-8" };
-        if (std.mem.eql(u8, k, "mail_header_encoding")) return .{ .string = "BASE64" };
-        if (std.mem.eql(u8, k, "mail_body_encoding")) return .{ .string = "BASE64" };
+        if (std.mem.eql(u8, k, "internal_encoding")) return .{ .string = Value.String.borrowed("UTF-8") };
+        if (std.mem.eql(u8, k, "http_input")) return .{ .string = Value.String.borrowed("UTF-8") };
+        if (std.mem.eql(u8, k, "http_output")) return .{ .string = Value.String.borrowed("UTF-8") };
+        if (std.mem.eql(u8, k, "http_output_conv_mimetypes")) return .{ .string = Value.String.borrowed("^(text/|application/xhtml\\+xml)") };
+        if (std.mem.eql(u8, k, "mail_charset")) return .{ .string = Value.String.borrowed("UTF-8") };
+        if (std.mem.eql(u8, k, "mail_header_encoding")) return .{ .string = Value.String.borrowed("BASE64") };
+        if (std.mem.eql(u8, k, "mail_body_encoding")) return .{ .string = Value.String.borrowed("BASE64") };
         if (std.mem.eql(u8, k, "illegal_chars")) return .{ .int = 0 };
-        if (std.mem.eql(u8, k, "encoding_translation")) return .{ .string = "Off" };
-        if (std.mem.eql(u8, k, "language")) return .{ .string = "neutral" };
+        if (std.mem.eql(u8, k, "encoding_translation")) return .{ .string = Value.String.borrowed("Off") };
+        if (std.mem.eql(u8, k, "language")) return .{ .string = Value.String.borrowed("neutral") };
         if (std.mem.eql(u8, k, "detect_order")) {
             var arr = try ctx.createArray();
-            try arr.append(ctx.allocator, .{ .string = "ASCII" });
-            try arr.append(ctx.allocator, .{ .string = "UTF-8" });
+            try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("ASCII") });
+            try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("UTF-8") });
             return .{ .array = arr };
         }
         if (std.mem.eql(u8, k, "substitute_character")) return .{ .int = 63 };
-        if (std.mem.eql(u8, k, "strict_detection")) return .{ .string = "Off" };
+        if (std.mem.eql(u8, k, "strict_detection")) return .{ .string = Value.String.borrowed("Off") };
         if (std.mem.eql(u8, k, "all")) {} // fall through to full array
         else {
             ctx.vm.emitWarning("mb_get_info(): argument #1 ($type) must be a valid type");
@@ -6553,21 +6614,21 @@ fn native_mb_get_info(ctx: *NativeContext, args: []const Value) RuntimeError!Val
         }
     }
     var arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "internal_encoding" }, .{ .string = "UTF-8" });
-    try arr.set(ctx.allocator, .{ .string = "http_output" }, .{ .string = "UTF-8" });
-    try arr.set(ctx.allocator, .{ .string = "http_output_conv_mimetypes" }, .{ .string = "^(text/|application/xhtml\\+xml)" });
-    try arr.set(ctx.allocator, .{ .string = "mail_charset" }, .{ .string = "UTF-8" });
-    try arr.set(ctx.allocator, .{ .string = "mail_header_encoding" }, .{ .string = "BASE64" });
-    try arr.set(ctx.allocator, .{ .string = "mail_body_encoding" }, .{ .string = "BASE64" });
-    try arr.set(ctx.allocator, .{ .string = "illegal_chars" }, .{ .int = 0 });
-    try arr.set(ctx.allocator, .{ .string = "encoding_translation" }, .{ .string = "Off" });
-    try arr.set(ctx.allocator, .{ .string = "language" }, .{ .string = "neutral" });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("internal_encoding") }, .{ .string = Value.String.borrowed("UTF-8") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("http_output") }, .{ .string = Value.String.borrowed("UTF-8") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("http_output_conv_mimetypes") }, .{ .string = Value.String.borrowed("^(text/|application/xhtml\\+xml)") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("mail_charset") }, .{ .string = Value.String.borrowed("UTF-8") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("mail_header_encoding") }, .{ .string = Value.String.borrowed("BASE64") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("mail_body_encoding") }, .{ .string = Value.String.borrowed("BASE64") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("illegal_chars") }, .{ .int = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("encoding_translation") }, .{ .string = Value.String.borrowed("Off") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("language") }, .{ .string = Value.String.borrowed("neutral") });
     var order = try ctx.createArray();
-    try order.append(ctx.allocator, .{ .string = "ASCII" });
-    try order.append(ctx.allocator, .{ .string = "UTF-8" });
-    try arr.set(ctx.allocator, .{ .string = "detect_order" }, .{ .array = order });
-    try arr.set(ctx.allocator, .{ .string = "substitute_character" }, .{ .int = 63 });
-    try arr.set(ctx.allocator, .{ .string = "strict_detection" }, .{ .string = "Off" });
+    try order.append(ctx.allocator, .{ .string = Value.String.borrowed("ASCII") });
+    try order.append(ctx.allocator, .{ .string = Value.String.borrowed("UTF-8") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("detect_order") }, .{ .array = order });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("substitute_character") }, .{ .int = 63 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("strict_detection") }, .{ .string = Value.String.borrowed("Off") });
     return .{ .array = arr };
 }
 

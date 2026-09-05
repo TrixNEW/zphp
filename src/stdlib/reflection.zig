@@ -71,7 +71,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "Reflection::getModifierNames", reflectionGetModifierNames);
 
     var rc_def = ClassDef{ .name = "ReflectionClass" };
-    try rc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
+    try rc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try rc_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try rc_def.methods.put(a, "getConstructor", .{ .name = "getConstructor", .arity = 0 });
@@ -193,7 +193,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // ReflectionClass(get_class($obj)) when constructed with an instance,
     // so register an empty subclass and let method dispatch fall through
     var ro_def = ClassDef{ .name = "ReflectionObject", .parent = "ReflectionClass" };
-    try ro_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
+    try ro_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try vm.classes.put(a, "ReflectionObject", ro_def);
 
     const rfa_def = ClassDef{ .name = "ReflectionFunctionAbstract", .is_abstract = true };
@@ -212,8 +212,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rm_def.constant_names.put(a, "IS_PRIVATE", {});
     try rm_def.constant_names.put(a, "IS_ABSTRACT", {});
     try rm_def.constant_names.put(a, "IS_FINAL", {});
-    try rm_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
-    try rm_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
+    try rm_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
+    try rm_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
     try rm_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
     try rm_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try rm_def.methods.put(a, "getParameters", .{ .name = "getParameters", .arity = 0 });
@@ -292,7 +292,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionMethod::isDeprecated", reflectionFalse);
 
     var rp_def = ClassDef{ .name = "ReflectionParameter" };
-    try rp_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
+    try rp_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rp_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
     try rp_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try rp_def.methods.put(a, "getType", .{ .name = "getType", .arity = 0 });
@@ -335,7 +335,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionParameter::getDefaultValueConstantName", rpGetDefaultValueConstantName);
 
     var rnt_def = ClassDef{ .name = "ReflectionNamedType", .parent = "ReflectionType" };
-    try rnt_def.properties.append(a, .{ .name = "type_name", .default = .{ .string = "" } });
+    try rnt_def.properties.append(a, .{ .name = "type_name", .default = .{ .string = Value.String.borrowed("") } });
     try rnt_def.properties.append(a, .{ .name = "nullable", .default = .{ .bool = false } });
     try rnt_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try rnt_def.methods.put(a, "isBuiltin", .{ .name = "isBuiltin", .arity = 0 });
@@ -349,7 +349,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionNamedType::__toString", rntToString);
 
     var rut_def = ClassDef{ .name = "ReflectionUnionType", .parent = "ReflectionType" };
-    try rut_def.properties.append(a, .{ .name = "type_str", .default = .{ .string = "" } });
+    try rut_def.properties.append(a, .{ .name = "type_str", .default = .{ .string = Value.String.borrowed("") } });
     try rut_def.properties.append(a, .{ .name = "nullable", .default = .{ .bool = false } });
     try rut_def.methods.put(a, "getTypes", .{ .name = "getTypes", .arity = 0 });
     try rut_def.methods.put(a, "allowsNull", .{ .name = "allowsNull", .arity = 0 });
@@ -360,7 +360,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionUnionType::__toString", rutToString);
 
     var rit_def = ClassDef{ .name = "ReflectionIntersectionType", .parent = "ReflectionType" };
-    try rit_def.properties.append(a, .{ .name = "type_str", .default = .{ .string = "" } });
+    try rit_def.properties.append(a, .{ .name = "type_str", .default = .{ .string = Value.String.borrowed("") } });
     try rit_def.methods.put(a, "getTypes", .{ .name = "getTypes", .arity = 0 });
     try rit_def.methods.put(a, "allowsNull", .{ .name = "allowsNull", .arity = 0 });
     try rit_def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
@@ -371,7 +371,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     var re_def = ClassDef{ .name = "ReflectionEnum" };
     re_def.parent = "ReflectionClass";
-    try re_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
+    try re_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try re_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try re_def.methods.put(a, "isBacked", .{ .name = "isBacked", .arity = 0 });
     try re_def.methods.put(a, "getBackingType", .{ .name = "getBackingType", .arity = 0 });
@@ -387,8 +387,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnum::hasCase", reHasCase);
 
     var reuc_def = ClassDef{ .name = "ReflectionEnumUnitCase" };
-    try reuc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
-    try reuc_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
+    try reuc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
+    try reuc_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
     try reuc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
     try reuc_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try reuc_def.methods.put(a, "getValue", .{ .name = "getValue", .arity = 0 });
@@ -399,8 +399,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     var rebc_def = ClassDef{ .name = "ReflectionEnumBackedCase" };
     rebc_def.parent = "ReflectionEnumUnitCase";
-    try rebc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
-    try rebc_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
+    try rebc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
+    try rebc_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
     try rebc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
     try rebc_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try rebc_def.methods.put(a, "getValue", .{ .name = "getValue", .arity = 0 });
@@ -412,7 +412,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnumBackedCase::getBackingValue", rebcGetBackingValue);
 
     var rf_def = ClassDef{ .name = "ReflectionFunction", .parent = "ReflectionFunctionAbstract" };
-    try rf_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
+    try rf_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rf_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try rf_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try rf_def.methods.put(a, "getParameters", .{ .name = "getParameters", .arity = 0 });
@@ -483,8 +483,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionFunction::isDisabled", reflectionFalse);
 
     var rprop_def = ClassDef{ .name = "ReflectionProperty" };
-    try rprop_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
-    try rprop_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
+    try rprop_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
+    try rprop_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
     try rprop_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
     try rprop_def.methods.put(a, "setAccessible", .{ .name = "setAccessible", .arity = 1 });
     try rprop_def.methods.put(a, "getValue", .{ .name = "getValue", .arity = 1 });
@@ -598,8 +598,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionAttribute::isRepeated", raIsRepeated);
 
     var rcc_def = ClassDef{ .name = "ReflectionClassConstant" };
-    try rcc_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
-    try rcc_def.properties.append(a, .{ .name = "class", .default = .{ .string = "" } });
+    try rcc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
+    try rcc_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
     try rcc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
     try rcc_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try rcc_def.methods.put(a, "getValue", .{ .name = "getValue", .arity = 0 });
@@ -639,7 +639,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "Closure::fromCallable", closureFromCallable);
 
     var rext_def = ClassDef{ .name = "ReflectionExtension" };
-    try rext_def.properties.append(a, .{ .name = "name", .default = .{ .string = "" } });
+    try rext_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     for ([_][]const u8{
         "__construct",   "getName",     "getVersion",    "getFunctions",    "getConstants",
         "getINIEntries", "getClasses",  "getClassNames", "getDependencies", "info",
@@ -714,12 +714,12 @@ fn rextConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return throwReflection(ctx, "ReflectionExtension::__construct() expects an extension name");
     const loaded = try ctx.vm.callByName("extension_loaded", args[0..1]);
     if (!loaded.isTruthy()) {
-        const msg = try std.fmt.allocPrint(ctx.allocator, "Extension \"{s}\" does not exist", .{args[0].string});
+        const msg = try std.fmt.allocPrint(ctx.allocator, "Extension \"{s}\" does not exist", .{args[0].string.bytes()});
         try ctx.vm.strings.append(ctx.allocator, msg);
         return throwReflection(ctx, msg);
     }
     const this = getThis(ctx) orelse return .null;
-    this.set(ctx.allocator, "name", .{ .string = try ctx.createString(args[0].string) }) catch return error.OutOfMemory;
+    this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(try ctx.createString(args[0].string.bytes())) }) catch return error.OutOfMemory;
     return .null;
 }
 
@@ -729,7 +729,7 @@ fn rextGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn rextGetVersion(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = "8.4.1" };
+    return .{ .string = Value.String.borrowed("8.4.1") };
 }
 
 fn reflectionEmptyArray(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -743,7 +743,7 @@ fn reflectionTrue(_: *NativeContext, _: []const Value) RuntimeError!Value {
 fn rextInfo(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const name = this.get("name");
-    if (name == .string) try ctx.vm.output.appendSlice(ctx.allocator, name.string);
+    if (name == .string) try ctx.vm.output.appendSlice(ctx.allocator, name.string.bytes());
     return .null;
 }
 
@@ -791,7 +791,7 @@ fn createNamedTypeObj(ctx: *NativeContext, type_name: []const u8, nullable: bool
         clean_name = type_name[1..];
         is_nullable = true;
     }
-    try obj.set(ctx.allocator, "type_name", .{ .string = clean_name });
+    try obj.set(ctx.allocator, "type_name", .{ .string = Value.String.borrowed(clean_name) });
     try obj.set(ctx.allocator, "nullable", .{ .bool = is_nullable });
     return obj;
 }
@@ -835,15 +835,15 @@ fn createTypeObj(ctx: *NativeContext, type_name: []const u8, nullable: bool, sel
             return createNamedTypeObj(ctx, resolved, true);
         }
         const obj = try ctx.createObject("ReflectionUnionType");
-        try obj.set(ctx.allocator, "type_str", .{ .string = clean });
+        try obj.set(ctx.allocator, "type_str", .{ .string = Value.String.borrowed(clean) });
         if (has_null) is_nullable = true;
         try obj.set(ctx.allocator, "nullable", .{ .bool = is_nullable });
-        try obj.set(ctx.allocator, "_self_class", .{ .string = self_class orelse "" });
+        try obj.set(ctx.allocator, "_self_class", .{ .string = Value.String.borrowed(self_class orelse "") });
         return obj;
     }
     if (std.mem.indexOfScalar(u8, clean, '&') != null) {
         const obj = try ctx.createObject("ReflectionIntersectionType");
-        try obj.set(ctx.allocator, "type_str", .{ .string = clean });
+        try obj.set(ctx.allocator, "type_str", .{ .string = Value.String.borrowed(clean) });
         return obj;
     }
     return createNamedTypeObj(ctx, clean, is_nullable);
@@ -851,9 +851,9 @@ fn createTypeObj(ctx: *NativeContext, type_name: []const u8, nullable: bool, sel
 
 fn buildMethodObj(ctx: *NativeContext, class_name: []const u8, method_name: []const u8, info: ClassDef.MethodInfo, declaring_class: []const u8) !*PhpObject {
     const obj = try ctx.createObject("ReflectionMethod");
-    try obj.set(ctx.allocator, "name", .{ .string = method_name });
-    try obj.set(ctx.allocator, "class", .{ .string = class_name });
-    try obj.set(ctx.allocator, "_declaring_class", .{ .string = declaring_class });
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(method_name) });
+    try obj.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
+    try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(declaring_class) });
     try obj.set(ctx.allocator, "_is_static", .{ .bool = info.is_static });
     try obj.set(ctx.allocator, "_visibility", .{ .int = @intFromEnum(info.visibility) });
 
@@ -922,8 +922,8 @@ fn buildPropertyObjStatic(
 ) !*PhpObject {
     const obj = try ctx.createObject("ReflectionProperty");
 
-    try obj.set(ctx.allocator, "name", .{ .string = prop.name });
-    try obj.set(ctx.allocator, "class", .{ .string = class_name });
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(prop.name) });
+    try obj.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
     try obj.set(ctx.allocator, "_visibility", .{ .int = @intFromEnum(prop.visibility) });
 
     // PHP's ReflectionProperty::hasDefaultValue() always returns false for
@@ -938,7 +938,7 @@ fn buildPropertyObjStatic(
         if (effective_has_default) prop.default else .null,
     );
 
-    try obj.set(ctx.allocator, "_declaring_class", .{ .string = declaring_class });
+    try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(declaring_class) });
 
     try obj.set(
         ctx.allocator,
@@ -985,7 +985,7 @@ fn hasInterfaceMethod(vm: *VM, iface_name: []const u8, method_name: []const u8) 
 fn rcConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionClass::__construct() expects a class name");
     const raw_class_name = if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else if (args[0] == .object)
         args[0].object.class_name
     else
@@ -1006,7 +1006,7 @@ fn rcConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return throwReflection(ctx, msg);
     }
 
-    try this.set(ctx.allocator, "name", .{ .string = class_name });
+    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(class_name) });
     try this.set(ctx.allocator, "_is_interface", .{ .bool = ctx.vm.interfaces.contains(class_name) });
     try this.set(ctx.allocator, "_is_trait", .{ .bool = ctx.vm.traits.contains(class_name) });
     return .null;
@@ -1019,7 +1019,7 @@ fn rcGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rcGetConstructor(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     if (!ctx.vm.hasMethod(class_name, "__construct")) return .null;
 
@@ -1036,7 +1036,7 @@ fn rcIsInstantiable(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (is_iface == .bool and is_iface.bool) return .{ .bool = false };
     const is_trait = this.get("_is_trait");
     if (is_trait == .bool and is_trait.bool) return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = true };
     if (cls.is_abstract) return .{ .bool = false };
     return .{ .bool = true };
@@ -1044,21 +1044,21 @@ fn rcIsInstantiable(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rcGetParentClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = false };
     const parent_name = cls.parent orelse return .{ .bool = false };
 
     const parent_obj = try ctx.createObject("ReflectionClass");
-    try parent_obj.set(ctx.allocator, "name", .{ .string = parent_name });
+    try parent_obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(parent_name) });
     try parent_obj.set(ctx.allocator, "_is_interface", .{ .bool = ctx.vm.interfaces.contains(parent_name) });
     return .{ .object = parent_obj };
 }
 
 fn rcImplementsInterface(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const iface_name = args[0].string;
+    const iface_name = args[0].string.bytes();
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
 
     var queue = std.ArrayListUnmanaged([]const u8){};
     defer queue.deinit(ctx.allocator);
@@ -1082,7 +1082,7 @@ fn rcImplementsInterface(ctx: *NativeContext, args: []const Value) RuntimeError!
 fn rcIsInstance(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .object) return .{ .bool = false };
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const obj_class = args[0].object.class_name;
     if (std.mem.eql(u8, obj_class, class_name)) return .{ .bool = true };
     if (ctx.vm.interfaces.contains(class_name)) {
@@ -1109,9 +1109,9 @@ fn rcIsInstance(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rcIsSubclassOf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const parent_name = args[0].string;
+    const parent_name = args[0].string.bytes();
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
 
     var current: ?[]const u8 = class_name;
     while (current) |name| {
@@ -1126,7 +1126,7 @@ fn rcIsSubclassOf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rcNewInstance(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (ctx.vm.interfaces.contains(class_name)) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "Cannot instantiate interface {s}", .{class_name});
         try ctx.strings.append(ctx.allocator, msg);
@@ -1157,7 +1157,7 @@ fn rcNewInstance(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rcNewInstanceArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (ctx.vm.classes.get(class_name)) |cd| {
         if (cd.is_abstract) {
             const msg = try std.fmt.allocPrint(ctx.allocator, "Cannot instantiate abstract class {s}", .{class_name});
@@ -1190,7 +1190,7 @@ fn rcNewInstanceArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 
 fn rcGetMethods(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const filter: ?i64 = if (args.len >= 1 and args[0] == .int) args[0].int else null;
 
@@ -1266,9 +1266,9 @@ fn methodModifiers(info: ClassDef.MethodInfo) i64 {
 
 fn rcGetMethod(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return throwReflection(ctx, "ReflectionClass::getMethod() expects a method name");
-    const method_name = args[0].string;
+    const method_name = args[0].string.bytes();
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     if (!ctx.vm.hasMethod(class_name, method_name)) {
         const msg = std.fmt.allocPrint(ctx.allocator, "Method {s}::{s}() does not exist", .{ class_name, method_name }) catch return error.OutOfMemory;
@@ -1286,15 +1286,15 @@ fn rcGetMethod(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn rcHasMethod(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     // PHP method names are case-insensitive
-    if (ctx.vm.hasMethod(class_name, args[0].string)) return .{ .bool = true };
+    if (ctx.vm.hasMethod(class_name, args[0].string.bytes())) return .{ .bool = true };
     var current: ?[]const u8 = class_name;
     while (current) |cn| {
         if (ctx.vm.classes.get(cn)) |cls| {
             var it = cls.methods.iterator();
             while (it.next()) |entry| {
-                if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, args[0].string)) return .{ .bool = true };
+                if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, args[0].string.bytes())) return .{ .bool = true };
             }
             current = cls.parent;
         } else break;
@@ -1306,14 +1306,14 @@ fn rcIsAbstract(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const is_iface = this.get("_is_interface");
     if (is_iface == .bool and is_iface.bool) return .{ .bool = true };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = false };
     return .{ .bool = cls.is_abstract };
 }
 
 fn rcIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = false };
     if (cls.is_enum) return .{ .bool = true };
     return .{ .bool = cls.is_final };
@@ -1323,7 +1323,7 @@ fn rcGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // PHP class modifier bitmask: IS_EXPLICIT_ABSTRACT=32, IS_IMPLICIT_ABSTRACT=16,
     // IS_FINAL=4, IS_READONLY=65536. these are used by ReflectionClass::getModifiers
     const this = getThis(ctx) orelse return .{ .int = 0 };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .int = 0 };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .int = 0 };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .int = 0 };
     var mods: i64 = 0;
     if (cls.is_abstract) mods |= 32;
@@ -1334,7 +1334,7 @@ fn rcGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rcIsReadOnly(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = false };
     return .{ .bool = cls.is_readonly };
 }
@@ -1345,7 +1345,7 @@ fn rcIsCloneable(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (is_iface == .bool and is_iface.bool) return .{ .bool = false };
     const is_trait = this.get("_is_trait");
     if (is_trait == .bool and is_trait.bool) return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = true };
     if (cls.is_abstract) return .{ .bool = false };
     if (cls.is_enum) return .{ .bool = false };
@@ -1365,7 +1365,7 @@ fn rcIsAnonymous(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name = this.get("name");
     if (name != .string) return .{ .bool = false };
-    return .{ .bool = std.mem.startsWith(u8, name.string, "class@anonymous") };
+    return .{ .bool = std.mem.startsWith(u8, name.string.bytes(), "class@anonymous") };
 }
 
 // getInterfaces returns an array keyed by interface name with ReflectionClass
@@ -1373,7 +1373,7 @@ fn rcIsAnonymous(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 // hierarchy plus their parents
 fn rcGetInterfaces(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const arr = try ctx.createArray();
     var seen = std.StringHashMapUnmanaged(void){};
@@ -1394,8 +1394,8 @@ fn rcGetInterfaces(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         try seen.put(ctx.allocator, iface, {});
 
         const refobj = try ctx.createObject("ReflectionClass");
-        try refobj.set(ctx.allocator, "name", .{ .string = iface });
-        try arr.set(ctx.allocator, .{ .string = iface }, .{ .object = refobj });
+        try refobj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(iface) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(iface) }, .{ .object = refobj });
 
         if (ctx.vm.classes.get(iface)) |idef| {
             for (idef.interfaces.items) |sub| try queue.append(ctx.allocator, sub);
@@ -1408,7 +1408,7 @@ fn rcGetInterfaces(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 // as values, covering traits used by the class and its parent chain
 fn rcGetTraits(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const arr = try ctx.createArray();
     var seen = std.StringHashMapUnmanaged(void){};
@@ -1421,8 +1421,8 @@ fn rcGetTraits(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
             if (seen.contains(tname)) continue;
             try seen.put(ctx.allocator, tname, {});
             const refobj = try ctx.createObject("ReflectionClass");
-            try refobj.set(ctx.allocator, "name", .{ .string = tname });
-            try arr.set(ctx.allocator, .{ .string = tname }, .{ .object = refobj });
+            try refobj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(tname) });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(tname) }, .{ .object = refobj });
         }
         current = cls.parent;
     }
@@ -1431,7 +1431,7 @@ fn rcGetTraits(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rcGetInterfaceNames(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const arr = try ctx.createArray();
     var seen = std.StringHashMapUnmanaged(void){};
@@ -1462,7 +1462,7 @@ fn rcGetInterfaceNames(ctx: *NativeContext, _: []const Value) RuntimeError!Value
 fn emitInterfaceDeep(ctx: *NativeContext, arr: *PhpArray, seen: *std.StringHashMapUnmanaged(void), name: []const u8) RuntimeError!void {
     if (seen.contains(name)) return;
     try seen.put(ctx.allocator, name, {});
-    try arr.append(ctx.allocator, .{ .string = name });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(name) });
     if (ctx.vm.interfaces.get(name)) |idef| {
         if (idef.parent) |p| try emitInterfaceDeep(ctx, arr, seen, p);
         for (idef.parents.items) |p| try emitInterfaceDeep(ctx, arr, seen, p);
@@ -1474,12 +1474,12 @@ fn emitInterfaceDeep(ctx: *NativeContext, arr: *PhpArray, seen: *std.StringHashM
 
 fn buildReflectionAttribute(ctx: *NativeContext, attr: AttributeDef, target: i64, is_repeated: bool) RuntimeError!Value {
     const obj = try ctx.createObject("ReflectionAttribute");
-    try obj.set(ctx.allocator, "name", .{ .string = attr.name });
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(attr.name) });
     const args_arr = try ctx.createArray();
     for (attr.args, 0..) |arg, i| {
         if (i < attr.arg_names.len) {
             if (attr.arg_names[i]) |arg_name| {
-                try args_arr.set(ctx.allocator, .{ .string = arg_name }, arg);
+                try args_arr.set(ctx.allocator, .{ .string = Value.String.borrowed(arg_name) }, arg);
                 continue;
             }
         }
@@ -1529,25 +1529,25 @@ fn buildAttributeArrayWithFlags(ctx: *NativeContext, attrs: []const AttributeDef
 
 fn rcGetDocComment(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(name) orelse return .{ .bool = false };
     if (cls.doc_comment.len == 0) return .{ .bool = false };
-    return .{ .string = cls.doc_comment };
+    return .{ .string = Value.String.borrowed(cls.doc_comment) };
 }
 
 fn rmGetDocComment(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const func = rmLookupFunc(ctx) orelse return .{ .bool = false };
     if (func.doc_comment.len == 0) return .{ .bool = false };
-    return .{ .string = func.doc_comment };
+    return .{ .string = Value.String.borrowed(func.doc_comment) };
 }
 
 fn rfGetDocComment(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name_v = this.get("name");
     if (name_v != .string) return .{ .bool = false };
-    const func = ctx.vm.functions.get(name_v.string) orelse return .{ .bool = false };
+    const func = ctx.vm.functions.get(name_v.string.bytes()) orelse return .{ .bool = false };
     if (func.doc_comment.len == 0) return .{ .bool = false };
-    return .{ .string = func.doc_comment };
+    return .{ .string = Value.String.borrowed(func.doc_comment) };
 }
 
 fn reflectionGetDocCommentFalse(_: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -1557,16 +1557,16 @@ fn reflectionGetDocCommentFalse(_: *NativeContext, _: []const Value) RuntimeErro
 
 fn rcGetAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .array = try ctx.createArray() };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .array = try ctx.createArray() };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .array = try ctx.createArray() };
-    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string else null;
+    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else null;
     const flags: i64 = if (args.len >= 2 and args[1] == .int) args[1].int else 0;
     return buildAttributeArrayWithFlags(ctx, cls.attributes.items, filter, 1, flags);
 }
 
 fn rcGetProperties(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     const filter: i64 = if (args.len >= 1 and args[0] == .int) args[0].int else 0;
 
     const arr = try ctx.createArray();
@@ -1636,9 +1636,9 @@ fn matchPropFilter(filter: i64, vis: ClassDef.Visibility, is_static: bool) bool 
 
 fn rcGetProperty(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return throwReflection(ctx, "ReflectionClass::getProperty() expects a property name");
-    const prop_name = args[0].string;
+    const prop_name = args[0].string.bytes();
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     if (findPropertyDef(ctx.vm, class_name, prop_name)) |result| {
         const obj = try buildPropertyObjStatic(ctx, class_name, result.prop, result.declaring_class, result.is_static);
@@ -1652,15 +1652,17 @@ fn rcGetProperty(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn rcHasProperty(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
-    return .{ .bool = findPropertyDef(ctx.vm, class_name, args[0].string) != null };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
+    return .{ .bool = findPropertyDef(ctx.vm, class_name, args[0].string.bytes()) != null };
 }
 
 fn rcNewLazyGhost(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (args.len < 1) return .null;
     const obj = try ctx.vm.allocator.create(PhpObject);
+    // the lazy object owns its initializer until it runs or is cleared
+    VM.retainValue(args[0]);
     obj.* = .{ .class_name = class_name, .lazy_initializer = args[0] };
     try ctx.vm.objects.append(ctx.vm.allocator, obj);
     try ctx.vm.initObjectProperties(obj, class_name);
@@ -1679,15 +1681,16 @@ fn rcIsUninitializedLazyObject(_: *NativeContext, args: []const Value) RuntimeEr
     return .{ .bool = args[0].object.lazy_initializer != .null };
 }
 
-fn rcMarkLazyObjectAsInitialized(_: *NativeContext, args: []const Value) RuntimeError!Value {
+fn rcMarkLazyObjectAsInitialized(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .object) return .null;
+    ctx.vm.releaseValue(args[0].object.lazy_initializer);
     args[0].object.lazy_initializer = .null;
     return .{ .object = args[0].object };
 }
 
 fn rcNewInstanceWithoutConstructor(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const obj = try ctx.vm.allocator.create(PhpObject);
     ctx.vm.next_object_id += 1;
@@ -1705,25 +1708,25 @@ fn rcNewInstanceWithoutConstructor(ctx: *NativeContext, _: []const Value) Runtim
 
 fn rcGetShortName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (std.mem.lastIndexOfScalar(u8, name, '\\')) |pos| {
-        return .{ .string = name[pos + 1 ..] };
+        return .{ .string = Value.String.borrowed(name[pos + 1 ..]) };
     }
-    return .{ .string = name };
+    return .{ .string = Value.String.borrowed(name) };
 }
 
 fn rcGetNamespaceName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const this = getThis(ctx) orelse return .{ .string = "" };
-    const name = if (this.get("name") == .string) this.get("name").string else return .{ .string = "" };
+    const this = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .string = Value.String.borrowed("") };
     if (std.mem.lastIndexOfScalar(u8, name, '\\')) |pos| {
-        return .{ .string = name[0..pos] };
+        return .{ .string = Value.String.borrowed(name[0..pos]) };
     }
-    return .{ .string = "" };
+    return .{ .string = Value.String.borrowed("") };
 }
 
 fn rcInNamespace(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     return .{ .bool = std.mem.indexOfScalar(u8, name, '\\') != null };
 }
 
@@ -1735,26 +1738,26 @@ fn rcIsTrait(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rcGetTraitNames(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .array = try ctx.createArray() };
 
     const arr = try ctx.createArray();
     for (cls.used_traits.items) |name| {
-        try arr.append(ctx.allocator, .{ .string = name });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(name) });
     }
     return .{ .array = arr };
 }
 
 fn rcIsEnum(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(name) orelse return .{ .bool = false };
     return .{ .bool = cls.is_enum };
 }
 
 fn rcGetConstants(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const arr = try ctx.createArray();
     var is_own = true;
@@ -1769,7 +1772,7 @@ fn rcGetConstants(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
                     if (vis == .private) continue;
                 }
                 if (cls.static_props.get(cname)) |val| {
-                    try arr.set(ctx.allocator, .{ .string = cname }, val);
+                    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(cname) }, val);
                 }
             }
         } else {
@@ -1780,7 +1783,7 @@ fn rcGetConstants(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
                     if (vis == .private) continue;
                 }
                 if (cls.static_props.get(entry.key_ptr.*)) |val| {
-                    try arr.set(ctx.allocator, .{ .string = entry.key_ptr.* }, val);
+                    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, val);
                 }
             }
         }
@@ -1792,7 +1795,7 @@ fn rcGetConstants(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rcGetReflectionConstants(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const arr = try ctx.createArray();
     var current: ?[]const u8 = class_name;
@@ -1822,9 +1825,9 @@ fn rcGetReflectionConstants(ctx: *NativeContext, _: []const Value) RuntimeError!
 
 fn rcGetReflectionConstant(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const target = args[0].string;
+    const target = args[0].string.bytes();
 
     var current: ?[]const u8 = class_name;
     while (current) |name| {
@@ -1841,9 +1844,9 @@ fn rcGetReflectionConstant(ctx: *NativeContext, args: []const Value) RuntimeErro
 
 fn rcHasConstant(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const target = args[0].string;
+    const target = args[0].string.bytes();
 
     var current: ?[]const u8 = class_name;
     while (current) |name| {
@@ -1856,9 +1859,9 @@ fn rcHasConstant(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rcGetConstant(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const target = args[0].string;
+    const target = args[0].string.bytes();
 
     var current: ?[]const u8 = class_name;
     while (current) |name| {
@@ -1876,8 +1879,8 @@ fn buildReflectionClassConstant(ctx: *NativeContext, class_name: []const u8, con
     // properties; the value is looked up from the class table on demand. zphp
     // previously stored a third public '_value' which polluted print_r/iter
     const obj = try ctx.createObject("ReflectionClassConstant");
-    try obj.set(ctx.allocator, "name", .{ .string = const_name });
-    try obj.set(ctx.allocator, "class", .{ .string = class_name });
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(const_name) });
+    try obj.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
     return .{ .object = obj };
 }
 
@@ -1888,8 +1891,8 @@ fn rccGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rccGetValue(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .null;
-    const const_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .null;
+    const const_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls = ctx.vm.classes.get(name) orelse break;
@@ -1911,8 +1914,8 @@ fn rccGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         };
     } else mods |= 1;
     const this = getThis(ctx) orelse return .{ .int = mods };
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .{ .int = mods };
-    const const_name = if (this.get("name") == .string) this.get("name").string else return .{ .int = mods };
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .{ .int = mods };
+    const const_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .int = mods };
     if (ctx.vm.classes.get(class_name)) |cls| {
         if (cls.const_final.contains(const_name)) mods |= 32;
     }
@@ -1921,9 +1924,9 @@ fn rccGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rccGetDeclaringClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .null;
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .null;
     const rc = try ctx.createObject("ReflectionClass");
-    try rc.set(ctx.allocator, "name", .{ .string = class_name });
+    try rc.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(class_name) });
     return .{ .object = rc };
 }
 
@@ -1931,24 +1934,24 @@ fn rccConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return throwReflection(ctx, "ReflectionClassConstant::__construct expects class and constant name");
     const this = getThis(ctx) orelse return .null;
     const raw_class: []const u8 = switch (args[0]) {
-        .string => args[0].string,
+        .string => args[0].string.bytes(),
         .object => args[0].object.class_name,
         else => return throwReflection(ctx, "ReflectionClassConstant::__construct class must be a string or object"),
     };
     const class_name = if (raw_class.len > 0 and raw_class[0] == '\\') raw_class[1..] else raw_class;
     if (args[1] != .string) return throwReflection(ctx, "ReflectionClassConstant::__construct constant name must be a string");
-    const const_name = args[1].string;
+    const const_name = args[1].string.bytes();
     const cls = ctx.vm.classes.get(class_name) orelse return throwReflection(ctx, "Class not found");
     if (!cls.constant_names.contains(const_name)) return throwReflection(ctx, "Constant not found");
-    try this.set(ctx.allocator, "name", .{ .string = const_name });
-    try this.set(ctx.allocator, "class", .{ .string = class_name });
+    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(const_name) });
+    try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
     return .null;
 }
 
 fn rccGetAttributes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .null;
-    const const_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .null;
+    const const_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const cls = ctx.vm.classes.get(class_name) orelse {
         return .{ .array = try ctx.createArray() };
@@ -1961,8 +1964,8 @@ fn rccGetAttributes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rccVisibility(ctx: *NativeContext) ?@import("../runtime/vm.zig").ClassDef.Visibility {
     const this = getThis(ctx) orelse return null;
-    const class_name = if (this.get("class") == .string) this.get("class").string else return null;
-    const const_name = if (this.get("name") == .string) this.get("name").string else return null;
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return null;
+    const const_name = if (this.get("name") == .string) this.get("name").string.bytes() else return null;
     const cls = ctx.vm.classes.get(class_name) orelse return null;
     return cls.const_visibility.get(const_name);
 }
@@ -1984,16 +1987,16 @@ fn rccIsPrivate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rccIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .{ .bool = false };
-    const const_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .{ .bool = false };
+    const const_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = false };
     return .{ .bool = cls.const_final.contains(const_name) };
 }
 
 fn rccIsEnumCase(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .{ .bool = false };
-    const const_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .{ .bool = false };
+    const const_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = false };
     if (!cls.is_enum) return .{ .bool = false };
     for (cls.case_order.items) |case_name| {
@@ -2004,8 +2007,8 @@ fn rccIsEnumCase(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rccGetType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .null;
-    const const_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .null;
+    const const_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     var current: ?[]const u8 = class_name;
     while (current) |cn| {
         if (ctx.vm.classes.get(cn)) |cls| {
@@ -2022,8 +2025,8 @@ fn rccGetType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rccHasType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .{ .bool = false };
-    const const_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .{ .bool = false };
+    const const_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     var current: ?[]const u8 = class_name;
     while (current) |cn| {
         if (ctx.vm.classes.get(cn)) |cls| {
@@ -2038,14 +2041,14 @@ fn rcIsInternal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name_v = this.get("name");
     if (name_v != .string) return .{ .bool = false };
-    return .{ .bool = isInternalClassName(name_v.string) };
+    return .{ .bool = isInternalClassName(name_v.string.bytes()) };
 }
 
 fn rcIsUserDefined(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = true };
     const name_v = this.get("name");
     if (name_v != .string) return .{ .bool = true };
-    return .{ .bool = !isInternalClassName(name_v.string) };
+    return .{ .bool = !isInternalClassName(name_v.string.bytes()) };
 }
 
 // hard-coded list of built-in PHP classes zphp ships natively. used by
@@ -2058,15 +2061,15 @@ fn isInternalClassName(name: []const u8) bool {
 
 fn rcGetFileName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(name) orelse return .{ .bool = false };
     if (cls.file_path.len == 0) return .{ .bool = false };
-    return .{ .string = cls.file_path };
+    return .{ .string = Value.String.borrowed(cls.file_path) };
 }
 
 fn rcGetStartLine(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(name) orelse return .{ .bool = false };
     if (cls.start_line == 0) return .{ .bool = false };
     return .{ .int = @intCast(cls.start_line) };
@@ -2074,7 +2077,7 @@ fn rcGetStartLine(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rcGetEndLine(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(name) orelse return .{ .bool = false };
     if (cls.end_line == 0) return .{ .bool = false };
     return .{ .int = @intCast(cls.end_line) };
@@ -2082,7 +2085,7 @@ fn rcGetEndLine(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rcGetDefaultProperties(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     const arr = try ctx.createArray();
     var seen = std.StringHashMapUnmanaged(void){};
     defer seen.deinit(ctx.allocator);
@@ -2094,7 +2097,7 @@ fn rcGetDefaultProperties(ctx: *NativeContext, _: []const Value) RuntimeError!Va
             if (!is_own and prop.visibility == .private) continue;
             if (seen.contains(prop.name)) continue;
             try seen.put(ctx.allocator, prop.name, {});
-            try arr.set(ctx.allocator, .{ .string = prop.name }, prop.default);
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(prop.name) }, prop.default);
         }
         current = cls.parent;
         is_own = false;
@@ -2104,7 +2107,7 @@ fn rcGetDefaultProperties(ctx: *NativeContext, _: []const Value) RuntimeError!Va
 
 fn rcGetStaticProperties(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     const arr = try ctx.createArray();
     var current: ?[]const u8 = class_name;
     while (current) |name| {
@@ -2112,7 +2115,7 @@ fn rcGetStaticProperties(ctx: *NativeContext, _: []const Value) RuntimeError!Val
         var it = cls.static_props.iterator();
         while (it.next()) |entry| {
             if (cls.constant_names.contains(entry.key_ptr.*)) continue;
-            try arr.set(ctx.allocator, .{ .string = entry.key_ptr.* }, entry.value_ptr.*);
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, entry.value_ptr.*);
         }
         current = cls.parent;
     }
@@ -2122,8 +2125,8 @@ fn rcGetStaticProperties(ctx: *NativeContext, _: []const Value) RuntimeError!Val
 fn rcGetStaticPropertyValue(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return throwReflection(ctx, "ReflectionClass::getStaticPropertyValue() expects a property name");
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
-    const prop_name = args[0].string;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
+    const prop_name = args[0].string.bytes();
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls = ctx.vm.classes.get(name) orelse break;
@@ -2139,8 +2142,8 @@ fn rcGetStaticPropertyValue(ctx: *NativeContext, args: []const Value) RuntimeErr
 fn rcSetStaticPropertyValue(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return throwReflection(ctx, "ReflectionClass::setStaticPropertyValue() expects a property name and value");
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
-    const prop_name = args[0].string;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
+    const prop_name = args[0].string.bytes();
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls_ptr = ctx.vm.classes.getPtr(name) orelse break;
@@ -2163,16 +2166,16 @@ fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var method_name: []const u8 = undefined;
 
     if (args.len >= 2 and args[1] == .string) {
-        method_name = args[1].string;
+        method_name = args[1].string.bytes();
         if (args[0] == .string) {
-            class_name = args[0].string;
+            class_name = args[0].string.bytes();
         } else if (args[0] == .object) {
             class_name = args[0].object.class_name;
         } else {
             return throwReflection(ctx, "ReflectionMethod::__construct() expects a class name or object");
         }
     } else if (args[0] == .string) {
-        const s = args[0].string;
+        const s = args[0].string.bytes();
         if (std.mem.indexOf(u8, s, "::")) |sep| {
             class_name = s[0..sep];
             method_name = s[sep + 2 ..];
@@ -2210,9 +2213,9 @@ fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         }
     };
 
-    try this.set(ctx.allocator, "name", .{ .string = method_name });
-    try this.set(ctx.allocator, "class", .{ .string = class_name });
-    try this.set(ctx.allocator, "_declaring_class", .{ .string = declaring });
+    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(method_name) });
+    try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
+    try this.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(declaring) });
     try this.set(ctx.allocator, "_is_static", .{ .bool = info.is_static });
     try this.set(ctx.allocator, "_visibility", .{ .int = @intFromEnum(info.visibility) });
 
@@ -2236,8 +2239,8 @@ fn rmGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rmLookupFunc(ctx: *NativeContext) ?@TypeOf(ctx.vm.functions.get("").?) {
     const this = getThis(ctx) orelse return null;
-    const method_name = if (this.get("name") == .string) this.get("name").string else return null;
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return null;
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return null;
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return null;
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return null;
     return ctx.vm.functions.get(key);
@@ -2246,7 +2249,7 @@ fn rmLookupFunc(ctx: *NativeContext) ?@TypeOf(ctx.vm.functions.get("").?) {
 fn rmGetFileName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const func = rmLookupFunc(ctx) orelse return .{ .bool = false };
     if (func.file_path.len == 0) return .{ .bool = false };
-    return .{ .string = func.file_path };
+    return .{ .string = Value.String.borrowed(func.file_path) };
 }
 
 fn rmGetStartLine(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -2263,24 +2266,24 @@ fn rmGetEndLine(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rmIsInternal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const dc = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .{ .bool = false };
+    const dc = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .{ .bool = false };
     return .{ .bool = isInternalClassName(dc) };
 }
 
 fn rmIsUserDefined(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = true };
-    const dc = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .{ .bool = true };
+    const dc = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .{ .bool = true };
     return .{ .bool = !isInternalClassName(dc) };
 }
 
 fn reflectionEmptyString(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = "" };
+    return .{ .string = Value.String.borrowed("") };
 }
 
 fn rmGetParameters(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .null;
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .null;
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .null;
 
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return .null;
@@ -2315,18 +2318,18 @@ fn rmIsStatic(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rmGetDeclaringClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .null;
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .null;
 
     const obj = try ctx.createObject("ReflectionClass");
-    try obj.set(ctx.allocator, "name", .{ .string = declaring });
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(declaring) });
     try obj.set(ctx.allocator, "_is_interface", .{ .bool = ctx.vm.interfaces.contains(declaring) });
     return .{ .object = obj };
 }
 
 fn rmGetReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .null;
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .null;
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .null;
 
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return .null;
@@ -2339,8 +2342,8 @@ fn rmGetReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rmHasReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .{ .bool = false };
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .{ .bool = false };
 
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return .{ .bool = false };
@@ -2351,13 +2354,13 @@ fn rmHasReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn rmIsConstructor(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name = this.get("name");
-    return .{ .bool = name == .string and std.mem.eql(u8, name.string, "__construct") };
+    return .{ .bool = name == .string and std.mem.eql(u8, name.string.bytes(), "__construct") };
 }
 
 fn rmIsDestructor(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name = this.get("name");
-    return .{ .bool = name == .string and std.mem.eql(u8, name.string, "__destruct") };
+    return .{ .bool = name == .string and std.mem.eql(u8, name.string.bytes(), "__destruct") };
 }
 
 fn rmGetNumberOfParameters(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -2380,7 +2383,7 @@ fn rpGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn rpGetType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const type_val = this.get("_type_name");
-    if (type_val != .string or type_val.string.len == 0) return .null;
+    if (type_val != .string or type_val.string.bytes().len == 0) return .null;
 
     const nullable = this.get("_nullable");
     var is_nullable = nullable == .bool and nullable.bool;
@@ -2391,8 +2394,8 @@ fn rpGetType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         if (this.get("_default_value") == .null) is_nullable = true;
     }
     const declaring = this.get("_declaring_class");
-    const self_class: ?[]const u8 = if (declaring == .string and declaring.string.len > 0) declaring.string else null;
-    const obj = try createTypeObj(ctx, type_val.string, is_nullable, self_class);
+    const self_class: ?[]const u8 = if (declaring == .string and declaring.string.bytes().len > 0) declaring.string.bytes() else null;
+    const obj = try createTypeObj(ctx, type_val.string.bytes(), is_nullable, self_class);
     return .{ .object = obj };
 }
 
@@ -2425,8 +2428,8 @@ fn rpGetPosition(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn rpAllowsNull(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = true };
     const type_val = this.get("_type_name");
-    if (type_val != .string or type_val.string.len == 0) return .{ .bool = true };
-    if (std.mem.eql(u8, type_val.string, "mixed") or std.mem.eql(u8, type_val.string, "null")) return .{ .bool = true };
+    if (type_val != .string or type_val.string.bytes().len == 0) return .{ .bool = true };
+    if (std.mem.eql(u8, type_val.string.bytes(), "mixed") or std.mem.eql(u8, type_val.string.bytes(), "null")) return .{ .bool = true };
     const nullable = this.get("_nullable");
     return .{ .bool = nullable == .bool and nullable.bool };
 }
@@ -2446,14 +2449,14 @@ fn rpCanBePassedByValue(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
 fn rpHasType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const type_val = this.get("_type_name");
-    return .{ .bool = type_val == .string and type_val.string.len > 0 };
+    return .{ .bool = type_val == .string and type_val.string.bytes().len > 0 };
 }
 
 // constant default sentinel: "\x00CC\x00<class>\x00<const>" (class empty for global constants)
 // returns "CONST" for global, "Class::CONST" for class constants
 fn decodeConstSentinel(ctx: *NativeContext, v: Value) !?[]const u8 {
     if (v != .string) return null;
-    const s = v.string;
+    const s = v.string.bytes();
     if (s.len <= 4 or s[0] != 0 or s[1] != 'C' or s[2] != 'C' or s[3] != 0) return null;
     const rest = s[4..];
     const sep = std.mem.indexOfScalar(u8, rest, 0) orelse return null;
@@ -2470,7 +2473,7 @@ fn rpIsDefaultValueConstant(ctx: *NativeContext, _: []const Value) RuntimeError!
     const has_default = this.get("_has_default");
     if (has_default != .bool or !has_default.bool) return .{ .bool = false };
     const name = this.get("_default_const_name");
-    return .{ .bool = name == .string and name.string.len > 0 };
+    return .{ .bool = name == .string and name.string.bytes().len > 0 };
 }
 
 fn rpGetDefaultValueConstantName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -2478,15 +2481,15 @@ fn rpGetDefaultValueConstantName(ctx: *NativeContext, _: []const Value) RuntimeE
     const has_default = this.get("_has_default");
     if (has_default != .bool or !has_default.bool) return throwReflection(ctx, "Internal error: no default value available");
     const name = this.get("_default_const_name");
-    if (name == .string and name.string.len > 0) return name;
+    if (name == .string and name.string.bytes().len > 0) return name;
     return .null;
 }
 
 fn rpGetAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
-    const param_name = if (this.get("name") == .string) this.get("name").string else return .{ .array = try ctx.createArray() };
-    const class_name = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .{ .array = try ctx.createArray() };
-    const method_name = if (this.get("_method_name") == .string) this.get("_method_name").string else return .{ .array = try ctx.createArray() };
+    const param_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .array = try ctx.createArray() };
+    const class_name = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .{ .array = try ctx.createArray() };
+    const method_name = if (this.get("_method_name") == .string) this.get("_method_name").string.bytes() else return .{ .array = try ctx.createArray() };
 
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .array = try ctx.createArray() };
 
@@ -2494,7 +2497,7 @@ fn rpGetAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ method_name, param_name }) catch return .{ .array = try ctx.createArray() };
     const attrs = cls.param_attributes.get(key) orelse return .{ .array = try ctx.createArray() };
 
-    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string else null;
+    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else null;
     const flags: i64 = if (args.len >= 2 and args[1] == .int) args[1].int else 0;
     return buildAttributeArrayWithFlags(ctx, attrs, filter, 32, flags);
 }
@@ -2502,11 +2505,11 @@ fn rpGetAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 fn rpGetDeclaringClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const declaring = this.get("_declaring_class");
-    if (declaring != .string or declaring.string.len == 0) return .null;
+    if (declaring != .string or declaring.string.bytes().len == 0) return .null;
 
     const obj = try ctx.createObject("ReflectionClass");
     try obj.set(ctx.allocator, "name", declaring);
-    try obj.set(ctx.allocator, "_is_interface", .{ .bool = ctx.vm.interfaces.contains(declaring.string) });
+    try obj.set(ctx.allocator, "_is_interface", .{ .bool = ctx.vm.interfaces.contains(declaring.string.bytes()) });
     return .{ .object = obj };
 }
 
@@ -2518,16 +2521,16 @@ fn rpIsVariadic(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rpGetDeclaringFunction(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const func_name = if (this.get("_function") == .string) this.get("_function").string else "";
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else "";
+    const func_name = if (this.get("_function") == .string) this.get("_function").string.bytes() else "";
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else "";
     if (declaring.len > 0) {
         const obj = try ctx.createObject("ReflectionMethod");
-        try obj.set(ctx.allocator, "name", .{ .string = func_name });
-        try obj.set(ctx.allocator, "_declaring_class", .{ .string = declaring });
+        try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(func_name) });
+        try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(declaring) });
         return .{ .object = obj };
     }
     const obj = try ctx.createObject("ReflectionFunction");
-    try obj.set(ctx.allocator, "name", .{ .string = func_name });
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(func_name) });
     return .{ .object = obj };
 }
 
@@ -2542,17 +2545,17 @@ fn rntToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (name_v != .string) return name_v;
     const nullable_v = this.get("nullable");
     const is_nullable = nullable_v == .bool and nullable_v.bool;
-    if (!is_nullable or std.mem.eql(u8, name_v.string, "mixed") or std.mem.eql(u8, name_v.string, "null")) return name_v;
-    const result = std.fmt.allocPrint(ctx.allocator, "?{s}", .{name_v.string}) catch return name_v;
+    if (!is_nullable or std.mem.eql(u8, name_v.string.bytes(), "mixed") or std.mem.eql(u8, name_v.string.bytes(), "null")) return name_v;
+    const result = std.fmt.allocPrint(ctx.allocator, "?{s}", .{name_v.string.bytes()}) catch return name_v;
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn rntIsBuiltin(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name = this.get("type_name");
     if (name != .string) return .{ .bool = false };
-    return .{ .bool = isBuiltinType(name.string) };
+    return .{ .bool = isBuiltinType(name.string.bytes()) };
 }
 
 fn rntAllowsNull(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -2562,7 +2565,7 @@ fn rntAllowsNull(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // mixed and null types implicitly allow null
     const tn = this.get("type_name");
     if (tn == .string) {
-        if (std.mem.eql(u8, tn.string, "mixed") or std.mem.eql(u8, tn.string, "null")) {
+        if (std.mem.eql(u8, tn.string.bytes(), "mixed") or std.mem.eql(u8, tn.string.bytes(), "null")) {
             return .{ .bool = true };
         }
     }
@@ -2574,15 +2577,15 @@ fn rutGetTypes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const ts_v = this.get("type_str");
     if (ts_v != .string) return .{ .array = try ctx.createArray() };
     const sc_v = this.get("_self_class");
-    const self_class: ?[]const u8 = if (sc_v == .string and sc_v.string.len > 0) sc_v.string else null;
+    const self_class: ?[]const u8 = if (sc_v == .string and sc_v.string.bytes().len > 0) sc_v.string.bytes() else null;
     const arr = try ctx.createArray();
-    var it = std.mem.splitScalar(u8, ts_v.string, '|');
+    var it = std.mem.splitScalar(u8, ts_v.string.bytes(), '|');
     while (it.next()) |part| {
         if (part.len == 0) continue;
         const obj = try createNamedTypeObj(ctx, part, false);
         if (self_class) |sc| {
             if (std.mem.eql(u8, part, "self")) {
-                try obj.set(ctx.allocator, "type_name", .{ .string = sc });
+                try obj.set(ctx.allocator, "type_name", .{ .string = Value.String.borrowed(sc) });
             }
         }
         try arr.append(ctx.allocator, .{ .object = obj });
@@ -2607,7 +2610,7 @@ fn ritGetTypes(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const ts_v = this.get("type_str");
     if (ts_v != .string) return .{ .array = try ctx.createArray() };
     const arr = try ctx.createArray();
-    var it = std.mem.splitScalar(u8, ts_v.string, '&');
+    var it = std.mem.splitScalar(u8, ts_v.string.bytes(), '&');
     while (it.next()) |part| {
         if (part.len == 0) continue;
         const obj = try createNamedTypeObj(ctx, part, false);
@@ -2636,39 +2639,41 @@ fn rfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             try this.set(ctx.allocator, "name", callable);
         } else if (callable == .array and callable.array.entries.items.len == 2 and callable.array.entries.items[1].value == .string) {
             const target = callable.array.entries.items[0].value;
-            const method = callable.array.entries.items[1].value.string;
-            const class_name = if (target == .object) target.object.class_name else if (target == .string) target.string else "";
+            const method = callable.array.entries.items[1].value.string.bytes();
+            const class_name = if (target == .object) target.object.class_name else if (target == .string) target.string.bytes() else "";
             const full = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ class_name, method }) catch return .null;
             try ctx.strings.append(ctx.allocator, full);
-            try this.set(ctx.allocator, "name", .{ .string = full });
+            try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(full) });
             try this.set(ctx.allocator, "__is_method_ref", .{ .bool = true });
-            if (target == .object) try this.set(ctx.allocator, "__scope_class", .{ .string = class_name });
+            if (target == .object) try this.set(ctx.allocator, "__scope_class", .{ .string = Value.String.borrowed(class_name) });
         } else return throwReflection(ctx, "ReflectionFunction::__construct() expects a function name");
     } else if (args[0] == .string) {
-        const raw_name = args[0].string;
+        const raw_name = args[0].string.bytes();
         const func_name = if (raw_name.len > 0 and raw_name[0] == '\\') raw_name[1..] else raw_name;
         if (ctx.vm.functions.get(func_name) == null and ctx.vm.native_fns.get(func_name) == null)
             return throwReflection(ctx, "Function does not exist");
-        try this.set(ctx.allocator, "name", .{ .string = func_name });
+        // a closure instance name keeps the closure alive while reflected
+        const name_value: Value = if (args[0] == .string and std.mem.startsWith(u8, func_name, "__closure_")) args[0] else .{ .string = Value.String.borrowed(func_name) };
+        try this.set(ctx.allocator, "name", name_value);
         // closures created inside a class method inherit that class as their scope
         if (std.mem.startsWith(u8, func_name, "__closure_")) {
             if (ctx.vm.closureScopeByName(func_name)) |scope| {
-                try this.set(ctx.allocator, "__scope_class", .{ .string = scope });
+                try this.set(ctx.allocator, "__scope_class", .{ .string = Value.String.borrowed(scope) });
             }
         }
     } else if (args[0] == .array) {
         // array callable [$obj, 'method'] - store as method reference
         const arr = args[0].array;
         if (arr.entries.items.len == 2 and arr.entries.items[1].value == .string) {
-            const method = arr.entries.items[1].value.string;
+            const method = arr.entries.items[1].value.string.bytes();
             const target = arr.entries.items[0].value;
-            const class_name = if (target == .object) target.object.class_name else if (target == .string) target.string else "";
+            const class_name = if (target == .object) target.object.class_name else if (target == .string) target.string.bytes() else "";
             const full = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ class_name, method }) catch return .null;
             try ctx.strings.append(ctx.allocator, full);
-            try this.set(ctx.allocator, "name", .{ .string = full });
+            try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(full) });
             try this.set(ctx.allocator, "__is_method_ref", .{ .bool = true });
             if (target == .object) {
-                try this.set(ctx.allocator, "__scope_class", .{ .string = class_name });
+                try this.set(ctx.allocator, "__scope_class", .{ .string = Value.String.borrowed(class_name) });
             }
         } else {
             return throwReflection(ctx, "ReflectionFunction::__construct() expects a function name");
@@ -2681,13 +2686,13 @@ fn rfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rfInvoke(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const fn_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const fn_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     return ctx.vm.callByName(fn_name, args);
 }
 
 fn rfInvokeArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const fn_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const fn_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (args.len < 1 or args[0] != .array) return .null;
     const arr = args[0].array;
     var call_args: [16]Value = undefined;
@@ -2703,7 +2708,7 @@ fn rfGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rfGetParameters(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const func_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const func = ctx.vm.functions.get(func_name) orelse return .{ .array = try ctx.createArray() };
     return buildParamArray(ctx, func, func_name);
@@ -2711,7 +2716,7 @@ fn rfGetParameters(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rfGetReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const func_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
 
     const type_info = closureAwareTypeInfo(func_name) orelse return .null;
     if (type_info.return_type.len == 0) return .null;
@@ -2734,7 +2739,7 @@ fn closureAwareTypeInfo(func_name: []const u8) ?@TypeOf(vm_mod.getTypeInfo("").?
 
 fn rfHasReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const func_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
 
     const type_info = closureAwareTypeInfo(func_name) orelse return .{ .bool = false };
     return .{ .bool = type_info.return_type.len > 0 };
@@ -2742,14 +2747,14 @@ fn rfHasReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rfGetNumberOfParameters(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .int = 0 };
-    const func_name = if (this.get("name") == .string) this.get("name").string else return .{ .int = 0 };
+    const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .int = 0 };
     const func = ctx.vm.functions.get(func_name) orelse return .{ .int = 0 };
     return .{ .int = func.arity };
 }
 
 fn rfGetNumberOfRequiredParameters(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .int = 0 };
-    const func_name = if (this.get("name") == .string) this.get("name").string else return .{ .int = 0 };
+    const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .int = 0 };
     const func = ctx.vm.functions.get(func_name) orelse return .{ .int = 0 };
     return .{ .int = func.required_params };
 }
@@ -2761,16 +2766,16 @@ fn rfGetFileName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name_v = this.get("name");
     if (name_v != .string) return .{ .bool = false };
-    const func = ctx.vm.functions.get(name_v.string) orelse return .{ .bool = false };
+    const func = ctx.vm.functions.get(name_v.string.bytes()) orelse return .{ .bool = false };
     if (func.file_path.len == 0) return .{ .bool = false };
-    return .{ .string = func.file_path };
+    return .{ .string = Value.String.borrowed(func.file_path) };
 }
 
 fn rfGetStartLine(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name_v = this.get("name");
     if (name_v != .string) return .{ .bool = false };
-    const func = ctx.vm.functions.get(name_v.string) orelse return .{ .bool = false };
+    const func = ctx.vm.functions.get(name_v.string.bytes()) orelse return .{ .bool = false };
     if (func.start_line == 0) return .{ .bool = false };
     return .{ .int = @intCast(func.start_line) };
 }
@@ -2779,39 +2784,39 @@ fn rfGetEndLine(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name_v = this.get("name");
     if (name_v != .string) return .{ .bool = false };
-    const func = ctx.vm.functions.get(name_v.string) orelse return .{ .bool = false };
+    const func = ctx.vm.functions.get(name_v.string.bytes()) orelse return .{ .bool = false };
     if (func.end_line == 0) return .{ .bool = false };
     return .{ .int = @intCast(func.end_line) };
 }
 
 fn rfGetNamespaceName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const this = getThis(ctx) orelse return .{ .string = "" };
+    const this = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
     const name_v = this.get("name");
-    if (name_v != .string) return .{ .string = "" };
-    const name = name_v.string;
-    const last_bs = std.mem.lastIndexOfScalar(u8, name, '\\') orelse return .{ .string = "" };
-    return .{ .string = name[0..last_bs] };
+    if (name_v != .string) return .{ .string = Value.String.borrowed("") };
+    const name = name_v.string.bytes();
+    const last_bs = std.mem.lastIndexOfScalar(u8, name, '\\') orelse return .{ .string = Value.String.borrowed("") };
+    return .{ .string = Value.String.borrowed(name[0..last_bs]) };
 }
 
 fn rfGetShortName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const this = getThis(ctx) orelse return .{ .string = "" };
+    const this = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
     const name_v = this.get("name");
-    if (name_v != .string) return .{ .string = "" };
-    const name = name_v.string;
-    const last_bs = std.mem.lastIndexOfScalar(u8, name, '\\') orelse return .{ .string = name };
-    return .{ .string = name[last_bs + 1 ..] };
+    if (name_v != .string) return .{ .string = Value.String.borrowed("") };
+    const name = name_v.string.bytes();
+    const last_bs = std.mem.lastIndexOfScalar(u8, name, '\\') orelse return .{ .string = Value.String.borrowed(name) };
+    return .{ .string = Value.String.borrowed(name[last_bs + 1 ..]) };
 }
 
 fn rfInNamespace(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
     const name_v = this.get("name");
     if (name_v != .string) return .{ .bool = false };
-    return .{ .bool = std.mem.indexOfScalar(u8, name_v.string, '\\') != null };
+    return .{ .bool = std.mem.indexOfScalar(u8, name_v.string.bytes(), '\\') != null };
 }
 
 fn rfIsAnonymous(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     return .{ .bool = std.mem.startsWith(u8, name, "__closure_") };
 }
 
@@ -2820,7 +2825,7 @@ fn rfIsInternal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // land in vm.functions. closures sit under __closure_ keys which are
     // also user-defined
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     if (std.mem.startsWith(u8, name, "__closure_")) return .{ .bool = false };
     if (ctx.vm.functions.contains(name)) return .{ .bool = false };
     return .{ .bool = ctx.vm.native_fns.contains(name) };
@@ -2833,28 +2838,28 @@ fn rfIsUserDefined(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rfIsGenerator(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const func_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const func = ctx.vm.functions.get(func_name) orelse return .{ .bool = false };
     return .{ .bool = func.is_generator };
 }
 
 fn rfIsVariadic(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const func_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const func = ctx.vm.functions.get(func_name) orelse return .{ .bool = false };
     return .{ .bool = func.is_variadic };
 }
 
 fn rfGetClosureUsedVariables(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
-    const fn_name = if (this.get("name") == .string) this.get("name").string else return .{ .array = try ctx.createArray() };
+    const fn_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .array = try ctx.createArray() };
     const result = try ctx.createArray();
     for (ctx.vm.captures.items) |cap| {
         if (std.mem.eql(u8, cap.closure_name, fn_name)) {
             const name = if (cap.var_name.len > 0 and cap.var_name[0] == '$') cap.var_name[1..] else cap.var_name;
             if (std.mem.eql(u8, name, "this")) continue;
             const val = if (cap.ref_cell) |rc| rc.* else cap.value;
-            try result.set(ctx.allocator, .{ .string = name }, val);
+            try result.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, val);
         }
     }
     return .{ .array = result };
@@ -2863,9 +2868,9 @@ fn rfGetClosureUsedVariables(ctx: *NativeContext, _: []const Value) RuntimeError
 fn rfGetClosureCalledClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     if (this.get("__scope_class") == .string) {
-        const scope_name = this.get("__scope_class").string;
+        const scope_name = this.get("__scope_class").string.bytes();
         const obj = try ctx.createObject("ReflectionClass");
-        try obj.set(ctx.allocator, "name", .{ .string = scope_name });
+        try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(scope_name) });
         return .{ .object = obj };
     }
     return .null;
@@ -2873,26 +2878,26 @@ fn rfGetClosureCalledClass(ctx: *NativeContext, _: []const Value) RuntimeError!V
 
 fn rfGetAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
-    const func_name = if (this.get("name") == .string) this.get("name").string else return .{ .array = try ctx.createArray() };
+    const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .array = try ctx.createArray() };
     const compile_name = ctx.vm.getOrigClosureName(func_name);
     const attrs = ctx.vm.function_attributes.get(compile_name) orelse return .{ .array = try ctx.createArray() };
-    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string else null;
+    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else null;
     const flags: i64 = if (args.len >= 2 and args[1] == .int) args[1].int else 0;
     return buildAttributeArrayWithFlags(ctx, attrs, filter, 2, flags);
 }
 
 fn rfGetClosureScopeClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (this.get("__scope_class") == .string) {
-        const scope_name = this.get("__scope_class").string;
+        const scope_name = this.get("__scope_class").string.bytes();
         const obj = try ctx.createObject("ReflectionClass");
-        try obj.set(ctx.allocator, "name", .{ .string = scope_name });
+        try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(scope_name) });
         return .{ .object = obj };
     }
     if (ctx.vm.closureScopeByName(name)) |scope| {
         const obj = try ctx.createObject("ReflectionClass");
-        try obj.set(ctx.allocator, "name", .{ .string = scope });
+        try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(scope) });
         return .{ .object = obj };
     }
     return .null;
@@ -2900,7 +2905,7 @@ fn rfGetClosureScopeClass(ctx: *NativeContext, _: []const Value) RuntimeError!Va
 
 fn rfGetClosureThis(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     return ctx.vm.closureThisByName(name);
 }
 
@@ -2927,25 +2932,25 @@ fn populateRpFields(ctx: *NativeContext, obj: *PhpObject, func: *const ObjFuncti
 
     const param_name = func.params[i];
     const clean_name = if (param_name.len > 0 and param_name[0] == '$') param_name[1..] else param_name;
-    try obj.set(ctx.allocator, "name", .{ .string = clean_name });
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(clean_name) });
     try obj.set(ctx.allocator, "_position", .{ .int = @intCast(i) });
 
     if (type_info) |ti| {
         if (i < ti.param_types.len and ti.param_types[i].len > 0) {
             const raw_type = ti.param_types[i];
             if (raw_type[0] == '?') {
-                try obj.set(ctx.allocator, "_type_name", .{ .string = raw_type[1..] });
+                try obj.set(ctx.allocator, "_type_name", .{ .string = Value.String.borrowed(raw_type[1..]) });
                 try obj.set(ctx.allocator, "_nullable", .{ .bool = true });
             } else {
-                try obj.set(ctx.allocator, "_type_name", .{ .string = raw_type });
+                try obj.set(ctx.allocator, "_type_name", .{ .string = Value.String.borrowed(raw_type) });
                 try obj.set(ctx.allocator, "_nullable", .{ .bool = false });
             }
         } else {
-            try obj.set(ctx.allocator, "_type_name", .{ .string = "" });
+            try obj.set(ctx.allocator, "_type_name", .{ .string = Value.String.borrowed("") });
             try obj.set(ctx.allocator, "_nullable", .{ .bool = false });
         }
     } else {
-        try obj.set(ctx.allocator, "_type_name", .{ .string = "" });
+        try obj.set(ctx.allocator, "_type_name", .{ .string = Value.String.borrowed("") });
         try obj.set(ctx.allocator, "_nullable", .{ .bool = false });
     }
 
@@ -2958,7 +2963,7 @@ fn populateRpFields(ctx: *NativeContext, obj: *PhpObject, func: *const ObjFuncti
         const raw = func.defaults[i];
         try obj.set(ctx.allocator, "_default_value", try ctx.vm.resolveDefault(raw));
         if (try decodeConstSentinel(ctx, raw)) |const_name| {
-            try obj.set(ctx.allocator, "_default_const_name", .{ .string = const_name });
+            try obj.set(ctx.allocator, "_default_const_name", .{ .string = Value.String.borrowed(const_name) });
         }
     }
 
@@ -2968,10 +2973,10 @@ fn populateRpFields(ctx: *NativeContext, obj: *PhpObject, func: *const ObjFuncti
     if (std.mem.indexOf(u8, type_key, "::")) |sep| {
         const decl_class = try ctx.allocator.dupe(u8, type_key[0..sep]);
         try ctx.strings.append(ctx.allocator, decl_class);
-        try obj.set(ctx.allocator, "_declaring_class", .{ .string = decl_class });
+        try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(decl_class) });
         const meth_name = try ctx.allocator.dupe(u8, type_key[sep + 2 ..]);
         try ctx.strings.append(ctx.allocator, meth_name);
-        try obj.set(ctx.allocator, "_method_name", .{ .string = meth_name });
+        try obj.set(ctx.allocator, "_method_name", .{ .string = Value.String.borrowed(meth_name) });
     }
 }
 
@@ -2984,7 +2989,7 @@ fn rpConstructParam(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     var lookup_key: []const u8 = "";
     switch (args[0]) {
         .string => |s| {
-            lookup_key = s;
+            lookup_key = s.bytes();
         },
         .array => |arr| {
             if (arr.entries.items.len < 2) return throwReflection(ctx, "ReflectionParameter callable must have [class, method]");
@@ -2992,11 +2997,11 @@ fn rpConstructParam(ctx: *NativeContext, args: []const Value) RuntimeError!Value
             const meth_val = arr.entries.items[1].value;
             if (meth_val != .string) return throwReflection(ctx, "ReflectionParameter method name must be string");
             const cls_name: []const u8 = switch (cls_val) {
-                .string => cls_val.string,
+                .string => cls_val.string.bytes(),
                 .object => cls_val.object.class_name,
                 else => return throwReflection(ctx, "ReflectionParameter class must be a string or object"),
             };
-            lookup_key = std.fmt.bufPrint(&key_buf, "{s}::{s}", .{ cls_name, meth_val.string }) catch return throwReflection(ctx, "ReflectionParameter name too long");
+            lookup_key = std.fmt.bufPrint(&key_buf, "{s}::{s}", .{ cls_name, meth_val.string.bytes() }) catch return throwReflection(ctx, "ReflectionParameter name too long");
         },
         else => return throwReflection(ctx, "ReflectionParameter expects a function name or [class, method]"),
     }
@@ -3011,7 +3016,7 @@ fn rpConstructParam(ctx: *NativeContext, args: []const Value) RuntimeError!Value
         .string => |want| {
             for (func.params, 0..) |p, i| {
                 const clean = if (p.len > 0 and p[0] == '$') p[1..] else p;
-                if (std.mem.eql(u8, clean, want)) {
+                if (std.mem.eql(u8, clean, want.bytes())) {
                     idx = i;
                     break;
                 }
@@ -3040,25 +3045,25 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
         const obj = try ctx.createObject("ReflectionParameter");
 
         const clean_name = if (param_name.len > 0 and param_name[0] == '$') param_name[1..] else param_name;
-        try obj.set(ctx.allocator, "name", .{ .string = clean_name });
+        try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(clean_name) });
         try obj.set(ctx.allocator, "_position", .{ .int = @intCast(i) });
 
         if (type_info) |ti| {
             if (i < ti.param_types.len and ti.param_types[i].len > 0) {
                 const raw_type = ti.param_types[i];
                 if (raw_type[0] == '?') {
-                    try obj.set(ctx.allocator, "_type_name", .{ .string = raw_type[1..] });
+                    try obj.set(ctx.allocator, "_type_name", .{ .string = Value.String.borrowed(raw_type[1..]) });
                     try obj.set(ctx.allocator, "_nullable", .{ .bool = true });
                 } else {
-                    try obj.set(ctx.allocator, "_type_name", .{ .string = raw_type });
+                    try obj.set(ctx.allocator, "_type_name", .{ .string = Value.String.borrowed(raw_type) });
                     try obj.set(ctx.allocator, "_nullable", .{ .bool = false });
                 }
             } else {
-                try obj.set(ctx.allocator, "_type_name", .{ .string = "" });
+                try obj.set(ctx.allocator, "_type_name", .{ .string = Value.String.borrowed("") });
                 try obj.set(ctx.allocator, "_nullable", .{ .bool = false });
             }
         } else {
-            try obj.set(ctx.allocator, "_type_name", .{ .string = "" });
+            try obj.set(ctx.allocator, "_type_name", .{ .string = Value.String.borrowed("") });
             try obj.set(ctx.allocator, "_nullable", .{ .bool = false });
         }
 
@@ -3073,7 +3078,7 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
             const raw = func.defaults[i];
             try obj.set(ctx.allocator, "_default_value", try ctx.vm.resolveDefault(raw));
             if (try decodeConstSentinel(ctx, raw)) |const_name| {
-                try obj.set(ctx.allocator, "_default_const_name", .{ .string = const_name });
+                try obj.set(ctx.allocator, "_default_const_name", .{ .string = Value.String.borrowed(const_name) });
             }
         }
 
@@ -3084,15 +3089,15 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
         if (std.mem.indexOf(u8, type_key, "::")) |sep| {
             const decl_class = try ctx.allocator.dupe(u8, type_key[0..sep]);
             try ctx.strings.append(ctx.allocator, decl_class);
-            try obj.set(ctx.allocator, "_declaring_class", .{ .string = decl_class });
+            try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(decl_class) });
             const meth_name = try ctx.allocator.dupe(u8, type_key[sep + 2 ..]);
             try ctx.strings.append(ctx.allocator, meth_name);
-            try obj.set(ctx.allocator, "_method_name", .{ .string = meth_name });
-            try obj.set(ctx.allocator, "_function", .{ .string = meth_name });
+            try obj.set(ctx.allocator, "_method_name", .{ .string = Value.String.borrowed(meth_name) });
+            try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(meth_name) });
         } else {
             const fname = try ctx.allocator.dupe(u8, type_key);
             try ctx.strings.append(ctx.allocator, fname);
-            try obj.set(ctx.allocator, "_function", .{ .string = fname });
+            try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(fname) });
         }
 
         try arr.append(ctx.allocator, .{ .object = obj });
@@ -3103,10 +3108,10 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
 fn closureBind(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return .null;
     const closure = args[0];
-    if (closure != .string or !std.mem.startsWith(u8, closure.string, "__closure_")) return .null;
+    if (closure != .string or !std.mem.startsWith(u8, closure.string.bytes(), "__closure_")) return .null;
     const new_this = if (args.len >= 2) args[1] else Value.null;
     const scope = resolveScope(args);
-    return ctx.vm.cloneClosureWithThis(closure.string, new_this, scope);
+    return ctx.vm.cloneClosureWithThis(closure.string.bytes(), new_this, scope);
 }
 
 fn resolveScope(args: []const Value) VM.ClosureScope {
@@ -3114,8 +3119,8 @@ fn resolveScope(args: []const Value) VM.ClosureScope {
         const scope_arg = args[2];
         if (scope_arg == .null) return .clear;
         if (scope_arg == .string) {
-            if (std.mem.eql(u8, scope_arg.string, "static")) return .preserve;
-            return .{ .set = scope_arg.string };
+            if (std.mem.eql(u8, scope_arg.string.bytes(), "static")) return .preserve;
+            return .{ .set = scope_arg.string.bytes() };
         }
         if (scope_arg == .object) return .{ .set = scope_arg.object.class_name };
         return .clear;
@@ -3134,9 +3139,9 @@ fn closureFromCallable(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     const callable = args[0];
     if (callable == .object and std.mem.eql(u8, callable.object.class_name, "Closure")) return callable;
     // if already a closure, return as-is
-    if (callable == .string and std.mem.startsWith(u8, callable.string, "__closure_")) return callable;
+    if (callable == .string and std.mem.startsWith(u8, callable.string.bytes(), "__closure_")) return callable;
     if (callable == .string) {
-        const raw = callable.string;
+        const raw = callable.string.bytes();
         const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
         if (ctx.vm.functions.contains(name) or ctx.vm.native_fns.contains(name)) {
             // when input had a leading backslash, return the normalized form
@@ -3144,7 +3149,7 @@ fn closureFromCallable(ctx: *NativeContext, args: []const Value) RuntimeError!Va
             if (name.len != raw.len) {
                 const owned = try ctx.allocator.dupe(u8, name);
                 try ctx.strings.append(ctx.allocator, owned);
-                return wrapCallableClosure(ctx, .{ .string = owned });
+                return wrapCallableClosure(ctx, .{ .string = Value.String.borrowed(owned) });
             }
             return wrapCallableClosure(ctx, callable);
         }
@@ -3159,12 +3164,12 @@ fn closureFromCallable(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     if (callable == .array) {
         const entries = callable.array.entries.items;
         if (entries.len == 2 and entries[1].value == .string) {
-            const method = entries[1].value.string;
+            const method = entries[1].value.string.bytes();
             if (entries[0].value == .string) {
-                if (ctx.vm.hasMethod(entries[0].value.string, method)) {
-                    const full = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ entries[0].value.string, method }) catch return .null;
+                if (ctx.vm.hasMethod(entries[0].value.string.bytes(), method)) {
+                    const full = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ entries[0].value.string.bytes(), method }) catch return .null;
                     try ctx.strings.append(ctx.allocator, full);
-                    return wrapCallableClosure(ctx, .{ .string = full });
+                    return wrapCallableClosure(ctx, .{ .string = Value.String.borrowed(full) });
                 }
             } else if (entries[0].value == .object) {
                 if (ctx.vm.hasMethod(entries[0].value.object.class_name, method)) return wrapCallableClosure(ctx, callable);
@@ -3209,7 +3214,7 @@ fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
 
     const raw_class = if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else if (args[0] == .object)
         args[0].object.class_name
     else
@@ -3224,15 +3229,15 @@ fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         raw_class;
 
     const prop_name = if (args[1] == .string)
-        args[1].string
+        args[1].string.bytes()
     else
         return throwReflection(
             ctx,
             "ReflectionProperty::__construct() expects a property name",
         );
 
-    try this.set(ctx.allocator, "name", .{ .string = prop_name });
-    try this.set(ctx.allocator, "class", .{ .string = class_name });
+    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(prop_name) });
+    try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
 
     if (findPropertyDef(ctx.vm, class_name, prop_name)) |result| {
         try this.set(
@@ -3259,7 +3264,7 @@ fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         try this.set(
             ctx.allocator,
             "_declaring_class",
-            .{ .string = result.declaring_class },
+            .{ .string = Value.String.borrowed(result.declaring_class) },
         );
 
         try this.set(
@@ -3308,7 +3313,7 @@ fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rpGetValue(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const prop_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const prop_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (args.len > 0 and args[0] == .object) {
         return args[0].object.get(prop_name);
     }
@@ -3317,7 +3322,7 @@ fn rpGetValue(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rpSetValue(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const prop_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const prop_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (args.len >= 2 and args[0] == .object) {
         const target = args[0].object;
         const vr = ctx.vm.findPropertyVisibility(target.class_name, prop_name);
@@ -3341,10 +3346,10 @@ fn rpropGetType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const dc_v = this.get("_declaring_class");
     if (dc_v != .string) return .null;
-    const class_name = dc_v.string;
+    const class_name = dc_v.string.bytes();
     const prop_name_v = this.get("name");
     if (prop_name_v != .string) return .null;
-    const prop_name = prop_name_v.string;
+    const prop_name = prop_name_v.string.bytes();
 
     // walk the class chain looking for a declared property with a type. each
     // ClassDef.PropertyDef carries the source-form type string (set at class
@@ -3404,7 +3409,7 @@ fn makeReflectionType(ctx: *NativeContext, type_str: []const u8) RuntimeError!Va
     const obj = try ctx.createObject("ReflectionNamedType");
     const dup = try ctx.allocator.dupe(u8, name);
     try ctx.strings.append(ctx.allocator, dup);
-    try obj.set(ctx.allocator, "type_name", .{ .string = dup });
+    try obj.set(ctx.allocator, "type_name", .{ .string = Value.String.borrowed(dup) });
     try obj.set(ctx.allocator, "nullable", .{ .bool = allows_null or std.mem.eql(u8, name, "mixed") or std.mem.eql(u8, name, "null") });
     try obj.set(ctx.allocator, "is_builtin", .{ .bool = isBuiltinTypeName(name) });
     return .{ .object = obj };
@@ -3500,7 +3505,7 @@ fn rpropHasDefaultValue(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
 
 fn rpropIsInitialized(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const prop_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const prop_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     if (args.len > 0 and args[0] == .object) {
         return .{ .bool = args[0].object.get(prop_name) != .null };
     }
@@ -3509,10 +3514,10 @@ fn rpropIsInitialized(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 
 fn rpropGetDeclaringClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .null;
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .null;
 
     const obj = try ctx.createObject("ReflectionClass");
-    try obj.set(ctx.allocator, "name", .{ .string = declaring });
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(declaring) });
     try obj.set(ctx.allocator, "_is_interface", .{ .bool = ctx.vm.interfaces.contains(declaring) });
     return .{ .object = obj };
 }
@@ -3540,14 +3545,14 @@ fn rpropIsPromoted(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // param list)
     const this = getThis(ctx) orelse return .{ .bool = false };
     const class_name = if (this.get("_declaring_class") == .string)
-        this.get("_declaring_class").string
+        this.get("_declaring_class").string.bytes()
     else if (this.get("class") == .string)
-        this.get("class").string
+        this.get("class").string.bytes()
     else
         return .{ .bool = false };
     const prop_name_v = this.get("name");
     if (prop_name_v != .string) return .{ .bool = false };
-    const prop_name = prop_name_v.string;
+    const prop_name = prop_name_v.string.bytes();
 
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = false };
     for (cls.properties.items) |prop| {
@@ -3605,11 +3610,11 @@ fn rpropGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rpropGetAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
-    const prop_name = if (this.get("name") == .string) this.get("name").string else return .{ .array = try ctx.createArray() };
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .{ .array = try ctx.createArray() };
+    const prop_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .array = try ctx.createArray() };
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .{ .array = try ctx.createArray() };
     const cls = ctx.vm.classes.get(declaring) orelse return .{ .array = try ctx.createArray() };
     const attrs = cls.property_attributes.get(prop_name) orelse return .{ .array = try ctx.createArray() };
-    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string else null;
+    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else null;
     const flags: i64 = if (args.len >= 2 and args[1] == .int) args[1].int else 0;
     return buildAttributeArrayWithFlags(ctx, attrs, filter, 8, flags);
 }
@@ -3620,13 +3625,13 @@ fn rpropGetDocComment(ctx: *NativeContext, _: []const Value) RuntimeError!Value 
     if (dc_v != .string) return .{ .bool = false };
     const prop_name_v = this.get("name");
     if (prop_name_v != .string) return .{ .bool = false };
-    var current: ?[]const u8 = dc_v.string;
+    var current: ?[]const u8 = dc_v.string.bytes();
     while (current) |cn| {
         if (ctx.vm.classes.get(cn)) |cls| {
             for (cls.properties.items) |p| {
-                if (std.mem.eql(u8, p.name, prop_name_v.string)) {
+                if (std.mem.eql(u8, p.name, prop_name_v.string.bytes())) {
                     if (p.doc_comment.len == 0) return .{ .bool = false };
-                    return .{ .string = p.doc_comment };
+                    return .{ .string = Value.String.borrowed(p.doc_comment) };
                 }
             }
             current = cls.parent;
@@ -3641,12 +3646,12 @@ fn rpropIsVirtual(_: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rmInvoke(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (args.len > 0 and args[0] == .object) {
         return ctx.callMethod(args[0].object, method_name, args[1..]) catch .null;
     }
     // static call: target is null/missing, dispatch by ClassName::methodName
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .null;
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .null;
     var buf: [256]u8 = undefined;
     const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return .null;
     const rest = if (args.len >= 1) args[1..] else args[0..];
@@ -3655,7 +3660,7 @@ fn rmInvoke(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rmInvokeArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (args.len < 1) return .null;
     const target = args[0];
 
@@ -3670,7 +3675,7 @@ fn rmInvokeArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (target == .object) {
         return ctx.callMethod(target.object, method_name, call_args[0..count]) catch .null;
     }
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .null;
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .null;
     var buf: [256]u8 = undefined;
     const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return .null;
     return ctx.vm.callByName(full, call_args[0..count]) catch .null;
@@ -3678,19 +3683,19 @@ fn rmInvokeArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rmGetClosure(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (args.len < 1 or args[0] != .object) return .null;
 
     const arr = try ctx.createArray();
     try arr.append(ctx.allocator, args[0]);
-    try arr.append(ctx.allocator, .{ .string = method_name });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(method_name) });
     return .{ .array = arr };
 }
 
 fn rmIsAbstract(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .{ .bool = false };
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .{ .bool = false };
 
     if (ctx.vm.interfaces.contains(declaring)) return .{ .bool = true };
 
@@ -3708,8 +3713,8 @@ fn rmIsAbstract(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rmIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .{ .bool = false };
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(declaring) orelse return .{ .bool = false };
     const m = cls.methods.get(method_name) orelse return .{ .bool = false };
     return .{ .bool = m.is_final };
@@ -3717,8 +3722,8 @@ fn rmIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rmFullName(ctx: *NativeContext) ?[]const u8 {
     const this = getThis(ctx) orelse return null;
-    const method_name = if (this.get("name") == .string) this.get("name").string else return null;
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return null;
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return null;
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return null;
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return null;
     const owned = ctx.allocator.dupe(u8, key) catch return null;
@@ -3740,8 +3745,8 @@ fn rmIsGenerator(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn rmGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .int = 0 };
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .{ .int = 0 };
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .{ .int = 0 };
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .int = 0 };
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .{ .int = 0 };
     const cls = ctx.vm.classes.get(declaring) orelse return .{ .int = 0 };
     const info = cls.methods.get(method_name) orelse return .{ .int = 0 };
     return .{ .int = methodModifiers(info) };
@@ -3751,22 +3756,22 @@ fn reflectionGetModifierNames(ctx: *NativeContext, args: []const Value) RuntimeE
     if (args.len < 1 or args[0] != .int) return .{ .array = try ctx.createArray() };
     const m = args[0].int;
     const arr = try ctx.createArray();
-    if ((m & 16) != 0) try arr.append(ctx.allocator, .{ .string = "static" });
-    if ((m & 64) != 0) try arr.append(ctx.allocator, .{ .string = "abstract" });
-    if ((m & 32) != 0) try arr.append(ctx.allocator, .{ .string = "final" });
-    if ((m & 4) != 0) try arr.append(ctx.allocator, .{ .string = "private" });
-    if ((m & 2) != 0) try arr.append(ctx.allocator, .{ .string = "protected" });
-    if ((m & 1) != 0) try arr.append(ctx.allocator, .{ .string = "public" });
+    if ((m & 16) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("static") });
+    if ((m & 64) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("abstract") });
+    if ((m & 32) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("final") });
+    if ((m & 4) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("private") });
+    if ((m & 2) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("protected") });
+    if ((m & 1) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("public") });
     return .{ .array = arr };
 }
 
 fn rmGetAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
-    const method_name = if (this.get("name") == .string) this.get("name").string else return .{ .array = try ctx.createArray() };
-    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string else return .{ .array = try ctx.createArray() };
+    const method_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .array = try ctx.createArray() };
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return .{ .array = try ctx.createArray() };
     const cls = ctx.vm.classes.get(declaring) orelse return .{ .array = try ctx.createArray() };
     const attrs = cls.method_attributes.get(method_name) orelse return .{ .array = try ctx.createArray() };
-    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string else null;
+    const filter: ?[]const u8 = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else null;
     const flags: i64 = if (args.len >= 2 and args[1] == .int) args[1].int else 0;
     return buildAttributeArrayWithFlags(ctx, attrs, filter, 4, flags);
 }
@@ -3779,14 +3784,14 @@ fn rpIsPromoted(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // classified plain '?string $name = null' params as promoted whenever
     // the class happened to declare a separate '$name' property
     const method_v = this.get("_method_name");
-    if (method_v != .string or !std.mem.eql(u8, method_v.string, "__construct")) return .{ .bool = false };
+    if (method_v != .string or !std.mem.eql(u8, method_v.string.bytes(), "__construct")) return .{ .bool = false };
     const class_v = this.get("_declaring_class");
     if (class_v != .string) return .{ .bool = false };
     const name_v = this.get("name");
     if (name_v != .string) return .{ .bool = false };
-    const cls = ctx.vm.classes.getPtr(class_v.string) orelse return .{ .bool = false };
+    const cls = ctx.vm.classes.getPtr(class_v.string.bytes()) orelse return .{ .bool = false };
     for (cls.properties.items) |prop| {
-        if (std.mem.eql(u8, prop.name, name_v.string)) return .{ .bool = prop.is_promoted };
+        if (std.mem.eql(u8, prop.name, name_v.string.bytes())) return .{ .bool = prop.is_promoted };
     }
     return .{ .bool = false };
 }
@@ -3794,13 +3799,13 @@ fn rpIsPromoted(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn rpGetClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const type_val = this.get("_type_name");
-    if (type_val != .string or type_val.string.len == 0) return .null;
-    if (isBuiltinType(type_val.string)) return .null;
+    if (type_val != .string or type_val.string.bytes().len == 0) return .null;
+    if (isBuiltinType(type_val.string.bytes())) return .null;
 
-    if (ctx.vm.classes.contains(type_val.string) or ctx.vm.interfaces.contains(type_val.string)) {
+    if (ctx.vm.classes.contains(type_val.string.bytes()) or ctx.vm.interfaces.contains(type_val.string.bytes())) {
         const obj = try ctx.createObject("ReflectionClass");
         try obj.set(ctx.allocator, "name", type_val);
-        try obj.set(ctx.allocator, "_is_interface", .{ .bool = ctx.vm.interfaces.contains(type_val.string) });
+        try obj.set(ctx.allocator, "_is_interface", .{ .bool = ctx.vm.interfaces.contains(type_val.string.bytes()) });
         return .{ .object = obj };
     }
     return .null;
@@ -3861,7 +3866,7 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const name_val = this.get("name");
     if (name_val != .string) return .null;
-    const attr_name = name_val.string;
+    const attr_name = name_val.string.bytes();
 
     if (!ctx.vm.classes.contains(attr_name)) {
         try ctx.vm.tryAutoload(attr_name);
@@ -3944,7 +3949,7 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
                     if (entry.key == .string) {
                         for (func.params, 0..) |p, pi| {
                             const pn = if (p.len > 0 and p[0] == '$') p[1..] else p;
-                            if (std.mem.eql(u8, pn, entry.key.string)) {
+                            if (std.mem.eql(u8, pn, entry.key.string.bytes())) {
                                 resolved[pi] = entry.value;
                                 if (pi >= pos) pos = pi + 1;
                                 break;
@@ -3993,7 +3998,7 @@ fn raIsRepeated(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn reConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1) return throwReflection(ctx, "ReflectionEnum::__construct() expects an enum name");
     const raw = if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else if (args[0] == .object)
         args[0].object.class_name
     else
@@ -4012,7 +4017,7 @@ fn reConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return throwReflection(ctx, msg);
     }
 
-    try this.set(ctx.allocator, "name", .{ .string = class_name });
+    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(class_name) });
     try this.set(ctx.allocator, "_is_interface", .{ .bool = false });
     try this.set(ctx.allocator, "_is_trait", .{ .bool = false });
     return .null;
@@ -4020,14 +4025,14 @@ fn reConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn reIsBacked(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = false };
     return .{ .bool = cls.backed_type != .none };
 }
 
 fn reGetBackingType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     const cls = ctx.vm.classes.get(class_name) orelse return .null;
     const type_name: []const u8 = switch (cls.backed_type) {
         .none => return .null,
@@ -4040,7 +4045,7 @@ fn reGetBackingType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn reGetCases(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .{ .array = try ctx.createArray() };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .array = try ctx.createArray() };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .array = try ctx.createArray() };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .array = try ctx.createArray() };
     const arr = try ctx.createArray();
     for (cls.case_order.items) |case_name| {
@@ -4053,24 +4058,24 @@ fn reGetCases(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn reGetCase(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return throwReflection(ctx, "ReflectionEnum::getCase() expects a name");
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     const cls = ctx.vm.classes.get(class_name) orelse return .null;
-    if (!cls.constant_names.contains(args[0].string)) {
-        const msg = std.fmt.allocPrint(ctx.allocator, "Case {s}::{s} does not exist", .{ class_name, args[0].string }) catch return throwReflection(ctx, "Case not found");
+    if (!cls.constant_names.contains(args[0].string.bytes())) {
+        const msg = std.fmt.allocPrint(ctx.allocator, "Case {s}::{s} does not exist", .{ class_name, args[0].string.bytes() }) catch return throwReflection(ctx, "Case not found");
         try ctx.strings.append(ctx.allocator, msg);
         return throwReflection(ctx, msg);
     }
-    const obj = try buildEnumCase(ctx, class_name, args[0].string, cls.backed_type != .none);
+    const obj = try buildEnumCase(ctx, class_name, args[0].string.bytes(), cls.backed_type != .none);
     return .{ .object = obj };
 }
 
 fn reHasCase(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const this = getThis(ctx) orelse return .{ .bool = false };
-    const class_name = if (this.get("name") == .string) this.get("name").string else return .{ .bool = false };
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .{ .bool = false };
     const cls = ctx.vm.classes.get(class_name) orelse return .{ .bool = false };
     for (cls.case_order.items) |case_name| {
-        if (std.mem.eql(u8, case_name, args[0].string)) return .{ .bool = true };
+        if (std.mem.eql(u8, case_name, args[0].string.bytes())) return .{ .bool = true };
     }
     return .{ .bool = false };
 }
@@ -4078,8 +4083,8 @@ fn reHasCase(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn buildEnumCase(ctx: *NativeContext, class_name: []const u8, case_name: []const u8, is_backed: bool) !*PhpObject {
     const obj_class: []const u8 = if (is_backed) "ReflectionEnumBackedCase" else "ReflectionEnumUnitCase";
     const obj = try ctx.createObject(obj_class);
-    try obj.set(ctx.allocator, "name", .{ .string = case_name });
-    try obj.set(ctx.allocator, "class", .{ .string = class_name });
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(case_name) });
+    try obj.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
     return obj;
 }
 
@@ -4087,12 +4092,12 @@ fn reucConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     if (args.len < 2) return .null;
     const class_name: []const u8 = switch (args[0]) {
-        .string => |s| s,
+        .string => |s| s.bytes(),
         .object => |o| o.class_name,
         else => return .null,
     };
     if (args[1] != .string) return .null;
-    try this.set(ctx.allocator, "class", .{ .string = class_name });
+    try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
     try this.set(ctx.allocator, "name", .{ .string = args[1].string });
     return .null;
 }
@@ -4104,16 +4109,16 @@ fn reucGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn reucGetValue(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .null;
-    const case_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .null;
+    const case_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     const cls = ctx.vm.classes.get(class_name) orelse return .null;
     return cls.static_props.get(case_name) orelse .null;
 }
 
 fn rebcGetBackingValue(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
-    const class_name = if (this.get("class") == .string) this.get("class").string else return .null;
-    const case_name = if (this.get("name") == .string) this.get("name").string else return .null;
+    const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return .null;
+    const case_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     const cls = ctx.vm.classes.get(class_name) orelse return .null;
     const case_obj_v = cls.static_props.get(case_name) orelse return .null;
     if (case_obj_v != .object) return .null;
@@ -4149,14 +4154,14 @@ fn rgGetExecutingFile(ctx: *NativeContext, _: []const Value) RuntimeError!Value 
     const gen = getGenPtr(obj) orelse return .null;
     _ = gen;
     // zphp stores a single source per VM; surface that as the executing file
-    return .{ .string = try ctx.createString(ctx.vm.file_path) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(ctx.vm.file_path)) };
 }
 
 fn rgGetFunction(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const gen = getGenPtr(obj) orelse return .null;
     const rf = try ctx.createObject("ReflectionFunction");
-    try rf.set(ctx.allocator, "name", .{ .string = try ctx.createString(gen.func.name) });
+    try rf.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(try ctx.createString(gen.func.name)) });
     return .{ .object = rf };
 }
 
@@ -4184,10 +4189,10 @@ fn rgGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
     const frame = try ctx.createArray();
     if (gen.func.chunk.getSourceLocation(if (gen.ip > 0) gen.ip - 1 else 0, ctx.vm.source)) |loc| {
-        try frame.set(ctx.allocator, .{ .string = try ctx.createString("line") }, .{ .int = @intCast(loc.line) });
+        try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("line")) }, .{ .int = @intCast(loc.line) });
     }
-    try frame.set(ctx.allocator, .{ .string = try ctx.createString("file") }, .{ .string = try ctx.createString(ctx.vm.file_path) });
-    try frame.set(ctx.allocator, .{ .string = try ctx.createString("function") }, .{ .string = try ctx.createString(gen.func.name) });
+    try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("file")) }, .{ .string = Value.String.borrowed(try ctx.createString(ctx.vm.file_path)) });
+    try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("function")) }, .{ .string = Value.String.borrowed(try ctx.createString(gen.func.name)) });
     try arr.append(ctx.allocator, .{ .array = frame });
     return .{ .array = arr };
 }
@@ -4220,12 +4225,13 @@ fn rfibGetExecutingLine(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
 fn rfibGetExecutingFile(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     _ = getFibPtr(obj) orelse return .null;
-    return .{ .string = try ctx.createString(ctx.vm.file_path) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(ctx.vm.file_path)) };
 }
 
 fn rfibGetCallable(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const fib = getFibPtr(obj) orelse return .null;
+    ctx.returnShared(fib.callable);
     return fib.callable;
 }
 
@@ -4246,9 +4252,9 @@ fn rfibGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         const frame = try ctx.createArray();
         const ip = if (sf.ip > 0) sf.ip - 1 else 0;
         if (sf.chunk.getSourceLocation(ip, ctx.vm.source)) |loc| {
-            try frame.set(ctx.allocator, .{ .string = try ctx.createString("line") }, .{ .int = @intCast(loc.line) });
+            try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("line")) }, .{ .int = @intCast(loc.line) });
         }
-        try frame.set(ctx.allocator, .{ .string = try ctx.createString("file") }, .{ .string = try ctx.createString(ctx.vm.file_path) });
+        try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("file")) }, .{ .string = Value.String.borrowed(try ctx.createString(ctx.vm.file_path)) });
         try arr.append(ctx.allocator, .{ .array = frame });
     }
     return .{ .array = arr };

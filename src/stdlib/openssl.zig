@@ -22,11 +22,11 @@ pub const entries = .{
 
 fn opensslPbkdf2(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 4 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const password = args[0].string;
-    const salt = args[1].string;
+    const password = args[0].string.bytes();
+    const salt = args[1].string.bytes();
     const key_length: usize = @intCast(@max(0, Value.toInt(args[2])));
     const iterations: usize = @intCast(@max(1, Value.toInt(args[3])));
-    const digest_algo = if (args.len >= 5 and args[4] == .string) args[4].string else "sha1";
+    const digest_algo = if (args.len >= 5 and args[4] == .string) args[4].string.bytes() else "sha1";
 
     var name_buf: [64]u8 = undefined;
     if (digest_algo.len >= name_buf.len) return .{ .bool = false };
@@ -52,13 +52,13 @@ fn opensslPbkdf2(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return .{ .bool = false };
     }
     try ctx.vm.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn opensslDigest(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const data = args[0].string;
-    const algo = args[1].string;
+    const data = args[0].string.bytes();
+    const algo = args[1].string.bytes();
     const raw_output = args.len >= 3 and args[2].isTruthy();
 
     var name_buf: [64]u8 = undefined;
@@ -82,7 +82,7 @@ fn opensslDigest(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (raw_output) {
         const dup = try ctx.allocator.dupe(u8, out_buf[0..out_len]);
         try ctx.vm.strings.append(ctx.allocator, dup);
-        return .{ .string = dup };
+        return .{ .string = Value.String.borrowed(dup) };
     }
     const hex = try ctx.allocator.alloc(u8, out_len * 2);
     const hex_chars = "0123456789abcdef";
@@ -91,13 +91,13 @@ fn opensslDigest(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         hex[i * 2 + 1] = hex_chars[b & 0xf];
     }
     try ctx.vm.strings.append(ctx.allocator, hex);
-    return .{ .string = hex };
+    return .{ .string = Value.String.borrowed(hex) };
 }
 
 fn opensslGetMdMethods(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     var arr = try ctx.createArray();
     const names = [_][]const u8{ "md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3-224", "sha3-256", "sha3-384", "sha3-512" };
-    for (names) |n| try arr.append(ctx.allocator, .{ .string = n });
+    for (names) |n| try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(n) });
     return .{ .array = arr };
 }
 
@@ -114,7 +114,7 @@ fn opensslRandomPseudoBytes(ctx: *NativeContext, args: []const Value) RuntimeErr
     }
     try ctx.vm.strings.append(ctx.allocator, buf);
     if (args.len >= 2) ctx.setCallerVar(1, args.len, .{ .bool = true });
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn fetchCipher(name: []const u8) ?*const c.EVP_CIPHER {
@@ -131,14 +131,14 @@ fn freeCipher(cipher: *const c.EVP_CIPHER) void {
 
 fn cipherIvLength(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const cipher = fetchCipher(args[0].string) orelse return .{ .bool = false };
+    const cipher = fetchCipher(args[0].string.bytes()) orelse return .{ .bool = false };
     defer freeCipher(cipher);
     return .{ .int = c.EVP_CIPHER_iv_length(cipher) };
 }
 
 fn cipherKeyLength(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const cipher = fetchCipher(args[0].string) orelse return .{ .bool = false };
+    const cipher = fetchCipher(args[0].string.bytes()) orelse return .{ .bool = false };
     defer freeCipher(cipher);
     return .{ .int = c.EVP_CIPHER_key_length(cipher) };
 }
@@ -147,11 +147,11 @@ fn opensslEncrypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string)
         return .{ .bool = false };
 
-    const data = args[0].string;
-    const cipher_name = args[1].string;
-    const key = args[2].string;
+    const data = args[0].string.bytes();
+    const cipher_name = args[1].string.bytes();
+    const key = args[2].string.bytes();
     const options: i64 = if (args.len > 3 and args[3] == .int) args[3].int else 0;
-    const iv: []const u8 = if (args.len > 4 and args[4] == .string) args[4].string else "";
+    const iv: []const u8 = if (args.len > 4 and args[4] == .string) args[4].string.bytes() else "";
 
     const cipher = fetchCipher(cipher_name) orelse return .{ .bool = false };
     defer freeCipher(cipher);
@@ -160,7 +160,7 @@ fn opensslEncrypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     defer c.EVP_CIPHER_CTX_free(evp_ctx);
 
     const is_aead = isAeadCipher(cipher);
-    const aad: []const u8 = if (args.len > 6 and args[6] == .string) args[6].string else "";
+    const aad: []const u8 = if (args.len > 6 and args[6] == .string) args[6].string.bytes() else "";
 
     if (c.EVP_EncryptInit_ex(evp_ctx, cipher, null, null, null) != 1)
         return .{ .bool = false };
@@ -198,25 +198,25 @@ fn opensslEncrypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         if (c.EVP_CIPHER_CTX_ctrl(evp_ctx, c.EVP_CTRL_AEAD_GET_TAG, @intCast(tag_len), &tag_buf) != 1)
             return .{ .bool = false };
         const tag_str = try ctx.createString(tag_buf[0..tag_len]);
-        ctx.setCallerVar(5, args.len, .{ .string = tag_str });
+        ctx.setCallerVar(5, args.len, .{ .string = Value.String.borrowed(tag_str) });
     }
 
     const raw = out_buf[0..total];
     if (options & 1 != 0) {
-        return .{ .string = try ctx.createString(raw) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(raw)) };
     }
-    return .{ .string = try base64Encode(ctx, raw) };
+    return .{ .string = Value.String.borrowed(try base64Encode(ctx, raw)) };
 }
 
 fn opensslDecrypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string)
         return .{ .bool = false };
 
-    const raw_data = args[0].string;
-    const cipher_name = args[1].string;
-    const key = args[2].string;
+    const raw_data = args[0].string.bytes();
+    const cipher_name = args[1].string.bytes();
+    const key = args[2].string.bytes();
     const options: i64 = if (args.len > 3 and args[3] == .int) args[3].int else 0;
-    const iv: []const u8 = if (args.len > 4 and args[4] == .string) args[4].string else "";
+    const iv: []const u8 = if (args.len > 4 and args[4] == .string) args[4].string.bytes() else "";
 
     const cipher = fetchCipher(cipher_name) orelse return .{ .bool = false };
     defer freeCipher(cipher);
@@ -233,7 +233,7 @@ fn opensslDecrypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     defer c.EVP_CIPHER_CTX_free(evp_ctx);
 
     const is_aead = isAeadCipher(cipher);
-    const aad: []const u8 = if (args.len > 6 and args[6] == .string) args[6].string else "";
+    const aad: []const u8 = if (args.len > 6 and args[6] == .string) args[6].string.bytes() else "";
 
     if (c.EVP_DecryptInit_ex(evp_ctx, cipher, null, null, null) != 1)
         return .{ .bool = false };
@@ -247,7 +247,7 @@ fn opensslDecrypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return .{ .bool = false };
 
     if (is_aead and args.len > 5 and args[5] == .string) {
-        const tag = args[5].string;
+        const tag = args[5].string.bytes();
         if (tag.len > 0) {
             if (c.EVP_CIPHER_CTX_ctrl(evp_ctx, c.EVP_CTRL_AEAD_SET_TAG, @intCast(tag.len), @constCast(tag.ptr)) != 1)
                 return .{ .bool = false };
@@ -271,7 +271,7 @@ fn opensslDecrypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         return .{ .bool = false };
     total += @intCast(written);
 
-    return .{ .string = try ctx.createString(out_buf[0..total]) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(out_buf[0..total])) };
 }
 
 fn isAeadCipher(cipher: *const c.EVP_CIPHER) bool {
@@ -288,15 +288,15 @@ fn base64Encode(ctx: *NativeContext, data: []const u8) ![]const u8 {
 
 fn getCipherMethods(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const methods = [_][]const u8{
-        "aes-128-cbc",   "aes-192-cbc",   "aes-256-cbc",
-        "aes-128-gcm",   "aes-192-gcm",   "aes-256-gcm",
-        "aes-128-ctr",   "aes-192-ctr",   "aes-256-ctr",
-        "aes-128-ecb",   "aes-192-ecb",   "aes-256-ecb",
-        "des-ede3-cbc",  "chacha20-poly1305",
+        "aes-128-cbc",  "aes-192-cbc",       "aes-256-cbc",
+        "aes-128-gcm",  "aes-192-gcm",       "aes-256-gcm",
+        "aes-128-ctr",  "aes-192-ctr",       "aes-256-ctr",
+        "aes-128-ecb",  "aes-192-ecb",       "aes-256-ecb",
+        "des-ede3-cbc", "chacha20-poly1305",
     };
     const arr = try ctx.createArray();
     for (methods) |name| {
-        try arr.append(ctx.allocator, .{ .string = name });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(name) });
     }
     return .{ .array = arr };
 }

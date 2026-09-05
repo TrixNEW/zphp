@@ -16,12 +16,12 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try def.interfaces.append(a, "ArrayAccess");
     try def.interfaces.append(a, "Iterator");
     for ([_]struct { name: []const u8, value: i64 }{
-        .{ .name = "BZ2", .value = 8192 }, .{ .name = "GZ", .value = 4096 },
-        .{ .name = "NONE", .value = 0 }, .{ .name = "PHAR", .value = 1 },
-        .{ .name = "TAR", .value = 2 }, .{ .name = "ZIP", .value = 3 },
-        .{ .name = "MD5", .value = 1 }, .{ .name = "SHA1", .value = 2 },
-        .{ .name = "SHA256", .value = 3 }, .{ .name = "SHA512", .value = 4 },
-        .{ .name = "OPENSSL", .value = 16 }, .{ .name = "OPENSSL_SHA256", .value = 17 },
+        .{ .name = "BZ2", .value = 8192 },          .{ .name = "GZ", .value = 4096 },
+        .{ .name = "NONE", .value = 0 },            .{ .name = "PHAR", .value = 1 },
+        .{ .name = "TAR", .value = 2 },             .{ .name = "ZIP", .value = 3 },
+        .{ .name = "MD5", .value = 1 },             .{ .name = "SHA1", .value = 2 },
+        .{ .name = "SHA256", .value = 3 },          .{ .name = "SHA512", .value = 4 },
+        .{ .name = "OPENSSL", .value = 16 },        .{ .name = "OPENSSL_SHA256", .value = 17 },
         .{ .name = "OPENSSL_SHA512", .value = 18 },
     }) |constant| try def.static_props.put(a, constant.name, .{ .int = constant.value });
 
@@ -148,10 +148,10 @@ fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
 fn phConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 1 or args[0] != .string) return .null;
-    const filename = try dupString(ctx, args[0].string);
-    try obj.set(ctx.allocator, "__filename", .{ .string = filename });
-    try obj.set(ctx.allocator, "__stub", .{ .string = phar.default_stub });
-    try obj.set(ctx.allocator, "__alias", .{ .string = "" });
+    const filename = try dupString(ctx, args[0].string.bytes());
+    try obj.set(ctx.allocator, "__filename", .{ .string = Value.String.borrowed(filename) });
+    try obj.set(ctx.allocator, "__stub", .{ .string = Value.String.borrowed(phar.default_stub) });
+    try obj.set(ctx.allocator, "__alias", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "__buffering", .{ .bool = false });
     try obj.set(ctx.allocator, "__cursor", .{ .int = 0 });
     _ = try ensureEntries(ctx, obj);
@@ -180,7 +180,7 @@ fn phConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         if (end < bytes.len and bytes[end] == '\r') end += 1;
         if (end < bytes.len and bytes[end] == '\n') end += 1;
         const stub_copy = try dupString(ctx, bytes[0..end]);
-        try obj.set(ctx.allocator, "__stub", .{ .string = stub_copy });
+        try obj.set(ctx.allocator, "__stub", .{ .string = Value.String.borrowed(stub_copy) });
     }
 
     const entries_arr = try ensureEntries(ctx, obj);
@@ -189,7 +189,7 @@ fn phConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         const data = phar.extract(ctx.allocator, &parsed, kv.value_ptr.*) catch continue;
         try ctx.strings.append(ctx.allocator, data);
         const name_copy = try dupString(ctx, kv.key_ptr.*);
-        try entries_arr.set(ctx.allocator, .{ .string = name_copy }, .{ .string = data });
+        try entries_arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name_copy) }, .{ .string = Value.String.borrowed(data) });
     }
     return .null;
 }
@@ -198,10 +198,10 @@ fn phAddFromString(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 2) return .null;
     if (args[0] != .string) return .null;
-    const name_str = try dupString(ctx, args[0].string);
-    const content = if (args[1] == .string) try dupString(ctx, args[1].string) else "";
+    const name_str = try dupString(ctx, args[0].string.bytes());
+    const content = if (args[1] == .string) try dupString(ctx, args[1].string.bytes()) else "";
     const arr = try ensureEntries(ctx, obj);
-    try arr.set(ctx.allocator, .{ .string = name_str }, .{ .string = content });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name_str) }, .{ .string = Value.String.borrowed(content) });
     try saveIfNotBuffering(ctx, obj);
     return .null;
 }
@@ -209,8 +209,8 @@ fn phAddFromString(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 fn phAddFile(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 1 or args[0] != .string) return .null;
-    const path = args[0].string;
-    const local_name = if (args.len >= 2 and args[1] == .string) args[1].string else std.fs.path.basename(path);
+    const path = args[0].string.bytes();
+    const local_name = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else std.fs.path.basename(path);
 
     const cwd = std.fs.cwd();
     const file = cwd.openFile(path, .{}) catch return .null;
@@ -225,7 +225,7 @@ fn phAddFile(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     const arr = try ensureEntries(ctx, obj);
     const name_str = try dupString(ctx, local_name);
-    try arr.set(ctx.allocator, .{ .string = name_str }, .{ .string = buf });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name_str) }, .{ .string = Value.String.borrowed(buf) });
     try saveIfNotBuffering(ctx, obj);
     return .null;
 }
@@ -233,29 +233,29 @@ fn phAddFile(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn phSetStub(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const stub = try dupString(ctx, args[0].string);
-    try obj.set(ctx.allocator, "__stub", .{ .string = stub });
+    const stub = try dupString(ctx, args[0].string.bytes());
+    try obj.set(ctx.allocator, "__stub", .{ .string = Value.String.borrowed(stub) });
     try saveIfNotBuffering(ctx, obj);
     return .{ .bool = true };
 }
 
 fn phGetStub(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
     return obj.get("__stub");
 }
 
 fn phGetAlias(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const v = obj.get("__alias");
-    if (v == .string and v.string.len == 0) return .null;
+    if (v == .string and v.string.bytes().len == 0) return .null;
     return v;
 }
 
 fn phSetAlias(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const alias = try dupString(ctx, args[0].string);
-    try obj.set(ctx.allocator, "__alias", .{ .string = alias });
+    const alias = try dupString(ctx, args[0].string.bytes());
+    try obj.set(ctx.allocator, "__alias", .{ .string = Value.String.borrowed(alias) });
     try saveIfNotBuffering(ctx, obj);
     return .{ .bool = true };
 }
@@ -270,7 +270,7 @@ fn phOffsetExists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const arr = getEntries(obj) orelse return .{ .bool = false };
-    if (arr.string_index.contains(args[0].string)) return .{ .bool = true };
+    if (arr.string_index.contains(args[0].string.bytes())) return .{ .bool = true };
     return .{ .bool = false };
 }
 
@@ -284,10 +284,10 @@ fn phOffsetGet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn phOffsetSet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 2 or args[0] != .string) return .null;
-    const name = try dupString(ctx, args[0].string);
-    const content = if (args[1] == .string) try dupString(ctx, args[1].string) else "";
+    const name = try dupString(ctx, args[0].string.bytes());
+    const content = if (args[1] == .string) try dupString(ctx, args[1].string.bytes()) else "";
     const arr = try ensureEntries(ctx, obj);
-    try arr.set(ctx.allocator, .{ .string = name }, .{ .string = content });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, .{ .string = Value.String.borrowed(content) });
     try saveIfNotBuffering(ctx, obj);
     return .null;
 }
@@ -315,7 +315,7 @@ fn phStopBuffering(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn phGetPath(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
     return obj.get("__filename");
 }
 
@@ -403,7 +403,7 @@ fn phCanCompress(_: *NativeContext, args: []const Value) RuntimeError!Value {
 fn phRunning(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // returns the path to the currently-executing phar, or "" when not running from one
     _ = ctx;
-    return .{ .string = "" };
+    return .{ .string = Value.String.borrowed("") };
 }
 
 fn phLoadPhar(_: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -412,22 +412,22 @@ fn phLoadPhar(_: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn phGetSupportedCompression(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
-    try arr.append(ctx.allocator, .{ .string = "GZ" });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("GZ") });
     return .{ .array = arr };
 }
 
 fn phGetSupportedSignatures(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
-    try arr.append(ctx.allocator, .{ .string = "MD5" });
-    try arr.append(ctx.allocator, .{ .string = "SHA-1" });
-    try arr.append(ctx.allocator, .{ .string = "SHA-256" });
-    try arr.append(ctx.allocator, .{ .string = "SHA-512" });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("MD5") });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("SHA-1") });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("SHA-256") });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("SHA-512") });
     return .{ .array = arr };
 }
 
 fn phIsValidPharFilename(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     return .{ .bool = std.mem.endsWith(u8, name, ".phar") or std.mem.endsWith(u8, name, ".phar.gz") };
 }
 
@@ -437,7 +437,7 @@ fn phMungServer(_: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn phUnlinkArchive(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    std.fs.cwd().deleteFile(args[0].string) catch return .{ .bool = false };
+    std.fs.cwd().deleteFile(args[0].string.bytes()) catch return .{ .bool = false };
     return .{ .bool = true };
 }
 
@@ -449,7 +449,7 @@ fn phMapPhar(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // `Phar::mapPhar('alias')` registers an alias for the currently-running
     // phar file so subsequent `phar://alias/...` reads resolve to it
     if (args.len < 1 or args[0] != .string) return .{ .bool = true };
-    const alias = args[0].string;
+    const alias = args[0].string.bytes();
     const fp = ctx.vm.file_path;
     if (fp.len == 0) return .{ .bool = true };
     const resolved_fp = std.fs.cwd().realpathAlloc(ctx.allocator, fp) catch try ctx.allocator.dupe(u8, fp);
@@ -472,19 +472,19 @@ fn saveAll(ctx: *NativeContext, obj: *PhpObject) !void {
     const filename_v = obj.get("__filename");
     if (filename_v != .string) return;
     const stub_v = obj.get("__stub");
-    const stub: []const u8 = if (stub_v == .string) stub_v.string else phar.default_stub;
+    const stub: []const u8 = if (stub_v == .string) stub_v.string.bytes() else phar.default_stub;
     const alias_v = obj.get("__alias");
-    const alias: []const u8 = if (alias_v == .string) alias_v.string else "";
+    const alias: []const u8 = if (alias_v == .string) alias_v.string.bytes() else "";
 
     const arr = getEntries(obj) orelse return;
     var entries = std.ArrayListUnmanaged(phar.WriteEntry){};
     defer entries.deinit(ctx.allocator);
     for (arr.entries.items) |entry| {
         const name = switch (entry.key) {
-            .string => |s| s,
+            .string => |s| s.bytes(),
             .int => continue,
         };
-        const content = if (entry.value == .string) entry.value.string else "";
+        const content = if (entry.value == .string) entry.value.string.bytes() else "";
         try entries.append(ctx.allocator, .{
             .name = name,
             .contents = content,
@@ -496,7 +496,7 @@ fn saveAll(ctx: *NativeContext, obj: *PhpObject) !void {
     defer ctx.allocator.free(bytes);
 
     const cwd = std.fs.cwd();
-    const file = cwd.createFile(filename_v.string, .{ .truncate = true }) catch return;
+    const file = cwd.createFile(filename_v.string.bytes(), .{ .truncate = true }) catch return;
     defer file.close();
     file.writeAll(bytes) catch return;
 }

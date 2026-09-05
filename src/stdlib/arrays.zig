@@ -108,7 +108,7 @@ fn array_pop(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const arr = args[0].array;
     if (arr.entries.items.len == 0) return .null;
     const entry = arr.entries.pop() orelse return .null;
-    if (entry.key == .string) _ = arr.string_index.remove(entry.key.string);
+    if (entry.key == .string) _ = arr.string_index.remove(entry.key.string.bytes());
     // PHP: array_pop recomputes next int key from the remaining entries
     var max_int: i64 = -1;
     for (arr.entries.items) |e| {
@@ -329,7 +329,7 @@ fn array_unique(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn valueAsString(v: Value, buf: *[64]u8) []const u8 {
     return switch (v) {
-        .string => |s| s,
+        .string => |s| s.bytes(),
         .int => |i| std.fmt.bufPrint(buf, "{d}", .{i}) catch "",
         .float => |f| std.fmt.bufPrint(buf, "{d}", .{f}) catch "",
         .bool => |b| if (b) "1" else "",
@@ -342,7 +342,7 @@ fn valueAsStringForCompare(ctx: *NativeContext, v: Value) RuntimeError![]const u
     if (v == .object) {
         if (ctx.vm.hasMethod(v.object.class_name, "__toString")) {
             const result = try ctx.vm.callMethod(v.object, "__toString", &.{});
-            if (result == .string) return result.string;
+            if (result == .string) return result.string.bytes();
         }
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Object of class {s} could not be converted to string", .{v.object.class_name}) catch "Object could not be converted to string";
@@ -410,7 +410,7 @@ const SortFlags = struct {
 
     fn valueToSortStr(v: Value, buf: *[64]u8) []const u8 {
         return switch (v) {
-            .string => |s| s,
+            .string => |s| s.bytes(),
             .int => |i| std.fmt.bufPrint(buf, "{d}", .{i}) catch "",
             .float => |f| std.fmt.bufPrint(buf, "{d}", .{f}) catch "",
             .bool => |b| if (b) "1" else "",
@@ -519,8 +519,8 @@ fn natsortImpl(arr: *PhpArray, fold_case: bool) void {
         var j: usize = i;
         while (j > 0) {
             const av = arr.entries.items[j - 1].value;
-            const sa: []const u8 = if (av == .string) av.string else "";
-            const sb: []const u8 = if (tmp.value == .string) tmp.value.string else "";
+            const sa: []const u8 = if (av == .string) av.string.bytes() else "";
+            const sb: []const u8 = if (tmp.value == .string) tmp.value.string.bytes() else "";
             if (natCompareStr(sa, sb, fold_case) <= 0) break;
             arr.entries.items[j] = arr.entries.items[j - 1];
             j -= 1;
@@ -617,8 +617,14 @@ pub fn mergeSort(comptime T: type, items: []T, ctx: *NativeContext, callback: Va
         }
         k += 1;
     }
-    while (l < mid) : (l += 1) { buf[k] = items[l]; k += 1; }
-    while (r < items.len) : (r += 1) { buf[k] = items[r]; k += 1; }
+    while (l < mid) : (l += 1) {
+        buf[k] = items[l];
+        k += 1;
+    }
+    while (r < items.len) : (r += 1) {
+        buf[k] = items[r];
+        k += 1;
+    }
     @memcpy(items, buf[0..items.len]);
 }
 
@@ -691,7 +697,7 @@ fn array_map(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // validate callable - PHP throws TypeError for unknown function names.
     // strip leading backslash to match callByName's FQN normalization
     if (callback == .string) {
-        const raw = callback.string;
+        const raw = callback.string.bytes();
         const cb_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
         if (!ctx.vm.functions.contains(cb_name) and !ctx.vm.native_fns.contains(cb_name)) {
             const msg = std.fmt.allocPrint(ctx.allocator, "array_map(): Argument #1 ($callback) must be a valid callback or null, function \"{s}\" not found or invalid function name", .{cb_name}) catch "array_map(): Argument #1 ($callback) must be a valid callback or null";
@@ -773,9 +779,9 @@ fn native_range(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .null;
 
     // character range: single-char strings
-    if (args[0] == .string and args[0].string.len == 1 and args[1] == .string and args[1].string.len == 1) {
-        const lo = args[0].string[0];
-        const hi = args[1].string[0];
+    if (args[0] == .string and args[0].string.bytes().len == 1 and args[1] == .string and args[1].string.bytes().len == 1) {
+        const lo = args[0].string.bytes()[0];
+        const hi = args[1].string.bytes()[0];
         const step: u8 = if (args.len >= 3) @intCast(@max(1, Value.toInt(args[2]))) else 1;
         var arr = try ctx.createArray();
         if (lo <= hi) {
@@ -784,7 +790,7 @@ fn native_range(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 const s = try ctx.allocator.alloc(u8, 1);
                 s[0] = c;
                 try ctx.strings.append(ctx.allocator, s);
-                try arr.append(ctx.allocator, .{ .string = s });
+                try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
                 if (c > hi - step) break;
                 c += step;
             }
@@ -794,7 +800,7 @@ fn native_range(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 const s = try ctx.allocator.alloc(u8, 1);
                 s[0] = c;
                 try ctx.strings.append(ctx.allocator, s);
-                try arr.append(ctx.allocator, .{ .string = s });
+                try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
                 if (c < hi + step) break;
                 c -= step;
             }
@@ -937,7 +943,7 @@ fn array_combine(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (keys_arr.entries.items.len != vals_arr.entries.items.len) {
         const obj = try ctx.allocator.create(@import("../runtime/value.zig").PhpObject);
         obj.* = .{ .class_name = "ValueError" };
-        try obj.set(ctx.allocator, "message", .{ .string = "array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements" });
+        try obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed("array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements") });
         try obj.set(ctx.allocator, "code", .{ .int = 0 });
         try ctx.vm.objects.append(ctx.allocator, obj);
         ctx.vm.pending_exception = .{ .object = obj };
@@ -959,7 +965,7 @@ fn array_combine(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 try k.value.format(&buf, ctx.allocator);
                 const owned = try buf.toOwnedSlice(ctx.allocator);
                 try ctx.vm.strings.append(ctx.allocator, owned);
-                break :blk PhpArray.normalizeKey(.{ .string = owned });
+                break :blk PhpArray.normalizeKey(.{ .string = Value.String.borrowed(owned) });
             },
         };
         try arr.set(ctx.allocator, key, v.value);
@@ -1083,7 +1089,7 @@ fn rowGet(row: Value, key: Value) Value {
     return switch (row) {
         .array => |a| a.get(Value.toArrayKey(key)),
         .object => |o| switch (key) {
-            .string => |s| o.get(s),
+            .string => |s| o.get(s.bytes()),
             .int => |i| blk: {
                 var buf: [32]u8 = undefined;
                 const s = std.fmt.bufPrint(&buf, "{d}", .{i}) catch break :blk .null;
@@ -1104,6 +1110,7 @@ fn array_fill(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var result = try ctx.createArray();
     try result.entries.ensureTotalCapacity(ctx.allocator, count);
     for (0..count) |i| {
+        VM.retainValue(val);
         result.entries.appendAssumeCapacity(.{ .key = .{ .int = start_idx + @as(i64, @intCast(i)) }, .value = val });
     }
     result.next_int_key = start_idx + @as(i64, @intCast(count));
@@ -1131,14 +1138,14 @@ fn arrayFillKeysKey(ctx: *NativeContext, v: Value) !PhpArray.Key {
     return switch (v) {
         .int => |i| .{ .int = i },
         .string => |s| .{ .string = s },
-        .bool => |b| if (b) PhpArray.Key{ .int = 1 } else PhpArray.Key{ .string = "" },
-        .null => .{ .string = "" },
+        .bool => |b| if (b) PhpArray.Key{ .int = 1 } else PhpArray.Key{ .string = Value.String.borrowed("") },
+        .null => .{ .string = Value.String.borrowed("") },
         .float => |f| blk: {
             var buf = std.ArrayListUnmanaged(u8){};
             try (Value{ .float = f }).format(&buf, ctx.allocator);
             const s = try buf.toOwnedSlice(ctx.allocator);
             try ctx.strings.append(ctx.allocator, s);
-            break :blk PhpArray.Key{ .string = s };
+            break :blk PhpArray.Key{ .string = Value.String.borrowed(s) };
         },
         else => .{ .int = 0 },
     };
@@ -1150,7 +1157,7 @@ fn valuesEqualAsString(a: Value, b: Value) bool {
     // array_diff(get_declared_classes(), $before), with both sides .string,
     // 1M+ times during bootstrap; the previous per-call GeneralPurposeAllocator
     // was dominating wall-clock
-    if (a == .string and b == .string) return std.mem.eql(u8, a.string, b.string);
+    if (a == .string and b == .string) return std.mem.eql(u8, a.string.bytes(), b.string.bytes());
     if (a == .int and b == .int) return a.int == b.int;
     if (a == .float and b == .float) return a.float == b.float;
     if (a == .bool and b == .bool) return a.bool == b.bool;
@@ -1331,14 +1338,14 @@ fn array_walk(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         _ = try ctx.invokeCallableRef(callback, slice);
         // re-locate the original entry by key in case the callback reordered
         // or removed entries before it
-        if (findEntryIndex(arr, key)) |k_idx| arr.entries.items[k_idx].value = call_args[0];
+        if (findEntryIndex(arr, key) != null) try ctx.vm.arraySetOwned(arr, key, call_args[0]);
     }
     return .{ .bool = true };
 }
 
 fn findEntryIndex(arr: *PhpArray, key: PhpArray.Key) ?usize {
     if (key == .string) {
-        if (arr.string_index.get(key.string)) |i| return i;
+        if (arr.string_index.get(key.string.bytes())) |i| return i;
         return null;
     }
     for (arr.entries.items, 0..) |e, i| {
@@ -1448,7 +1455,7 @@ fn native_compact(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn compactValue(ctx: *NativeContext, arg: Value, arr: *PhpArray, frame: anytype, slot_names: []const []const u8) RuntimeError!void {
     if (arg == .string) {
-        const name = arg.string;
+        const name = arg.string.bytes();
         const var_name = try std.fmt.allocPrint(ctx.allocator, "${s}", .{name});
         try ctx.strings.append(ctx.allocator, var_name);
         var in_slot = false;
@@ -1456,14 +1463,14 @@ fn compactValue(ctx: *NativeContext, arg: Value, arr: *PhpArray, frame: anytype,
             if (std.mem.eql(u8, sn, var_name)) {
                 in_slot = true;
                 if (i < frame.locals.len) {
-                    try arr.set(ctx.allocator, .{ .string = name }, frame.locals[i]);
+                    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, frame.locals[i]);
                 }
                 break;
             }
         }
         if (!in_slot) {
             if (frame.vars.get(var_name)) |val| {
-                try arr.set(ctx.allocator, .{ .string = name }, val);
+                try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, val);
             } else {
                 const w = try std.fmt.allocPrint(ctx.allocator, "compact(): Undefined variable ${s}", .{name});
                 try ctx.strings.append(ctx.allocator, w);
@@ -1481,7 +1488,7 @@ fn native_extract(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else 0;
     // strip EXTR_REFS bit (256) so the type bits stay intact
     const type_flag = flags & 0xff;
-    const prefix = if (args.len >= 3 and args[2] == .string) args[2].string else "";
+    const prefix = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else "";
     const frame = ctx.vm.currentFrame();
     const slot_names = if (frame.func) |func| func.slot_names else ctx.vm.global_slot_names;
 
@@ -1515,7 +1522,7 @@ fn native_extract(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var count_val: i64 = 0;
     for (arr.entries.items) |entry| {
         if (entry.key != .string) continue;
-        const key = entry.key.string;
+        const key = entry.key.string.bytes();
         const base = try std.fmt.allocPrint(ctx.allocator, "${s}", .{key});
         try ctx.strings.append(ctx.allocator, base);
         const prefixed = try std.fmt.allocPrint(ctx.allocator, "${s}_{s}", .{ prefix, key });
@@ -1556,17 +1563,7 @@ fn native_extract(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             },
         }
 
-        try frame.vars.put(ctx.allocator, var_name, entry.value);
-        for (slot_names, 0..) |sn, si| {
-            if (std.mem.eql(u8, sn, var_name)) {
-                if (si < frame.locals.len) frame.locals[si] = entry.value;
-                break;
-            }
-        }
-        // a previous by-ref pass may have installed a ref-cell for this name;
-        // reading goes through ref_slots first, so update it or extract appears
-        // to silently no-op
-        if (frame.ref_slots.get(var_name)) |cell| cell.* = entry.value;
+        try ctx.vm.setVariableByName(frame, var_name, try ctx.vm.copyValue(entry.value));
         count_val += 1;
     }
     return .{ .int = count_val };
@@ -1574,7 +1571,7 @@ fn native_extract(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn keyLessThan(_: void, a: PhpArray.Entry, b: PhpArray.Entry) bool {
     if (a.key == .int and b.key == .int) return a.key.int < b.key.int;
-    if (a.key == .string and b.key == .string) return std.mem.order(u8, a.key.string, b.key.string) == .lt;
+    if (a.key == .string and b.key == .string) return std.mem.order(u8, a.key.string.bytes(), b.key.string.bytes()) == .lt;
     if (a.key == .int) return true;
     return false;
 }
@@ -1845,7 +1842,6 @@ fn native_sizeof(_: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .int = args[0].array.length() };
 }
 
-
 fn deepReplace(ctx: *NativeContext, base: *PhpArray, overlay: *PhpArray) RuntimeError!*PhpArray {
     var result = try ctx.createArray();
     for (base.entries.items) |entry| {
@@ -1874,7 +1870,7 @@ fn array_replace_recursive(ctx: *NativeContext, args: []const Value) RuntimeErro
 }
 
 fn walkRecursive(ctx: *NativeContext, arr: *PhpArray, callback: Value, userdata: ?Value) RuntimeError!void {
-    for (arr.entries.items, 0..) |entry, idx| {
+    for (arr.entries.items) |entry| {
         if (entry.value == .array) {
             try walkRecursive(ctx, entry.value.array, callback, userdata);
         } else {
@@ -1885,7 +1881,7 @@ fn walkRecursive(ctx: *NativeContext, arr: *PhpArray, callback: Value, userdata:
             var call_args = [3]Value{ entry.value, key_val, userdata orelse .null };
             const slice: []Value = if (userdata != null) call_args[0..3] else call_args[0..2];
             _ = try ctx.invokeCallableRef(callback, slice);
-            arr.entries.items[idx].value = call_args[0];
+            try ctx.vm.arraySetOwned(arr, entry.key, call_args[0]);
         }
     }
 }
@@ -1956,7 +1952,6 @@ fn array_merge_recursive(ctx: *NativeContext, args: []const Value) RuntimeError!
     return .{ .array = result };
 }
 
-
 fn array_multisort(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .array) return .{ .bool = false };
 
@@ -2006,8 +2001,8 @@ fn array_multisort(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
             const kind = k & 0x7;
             const ci = (k & 8) != 0;
             if (kind == 2) {
-                var sa: []const u8 = if (a == .string) a.string else "";
-                var sb: []const u8 = if (b == .string) b.string else "";
+                var sa: []const u8 = if (a == .string) a.string.bytes() else "";
+                var sb: []const u8 = if (b == .string) b.string.bytes() else "";
                 var ba: [128]u8 = undefined;
                 var bb: [128]u8 = undefined;
                 if (ci) {
@@ -2019,7 +2014,9 @@ fn array_multisort(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
                     sb = bb[0..nb];
                 }
                 return switch (std.mem.order(u8, sa, sb)) {
-                    .lt => -1, .gt => 1, .eq => 0,
+                    .lt => -1,
+                    .gt => 1,
+                    .eq => 0,
                 };
             }
             if (kind == 1) {
@@ -2052,7 +2049,7 @@ fn array_multisort(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
                     next_int += 1;
                 },
                 .string => |str| {
-                    try s.arr.string_index.put(ctx.allocator, str, idx);
+                    try s.arr.string_index.put(ctx.allocator, str.bytes(), idx);
                 },
             }
         }
@@ -2107,7 +2104,10 @@ fn array_udiff(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             if (arg != .array) continue;
             for (arg.array.entries.items) |other| {
                 const cmp = try ctx.invokeCallable(callback, &.{ entry.value, other.value });
-                if (Value.toInt(cmp) == 0) { in_any = true; break; }
+                if (Value.toInt(cmp) == 0) {
+                    in_any = true;
+                    break;
+                }
             }
             if (in_any) break;
         }
@@ -2124,13 +2124,22 @@ fn array_uintersect(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     for (src.entries.items) |entry| {
         var in_all = true;
         for (args[1 .. args.len - 1]) |arg| {
-            if (arg != .array) { in_all = false; break; }
+            if (arg != .array) {
+                in_all = false;
+                break;
+            }
             var found = false;
             for (arg.array.entries.items) |other| {
                 const cmp = try ctx.invokeCallable(callback, &.{ entry.value, other.value });
-                if (Value.toInt(cmp) == 0) { found = true; break; }
+                if (Value.toInt(cmp) == 0) {
+                    found = true;
+                    break;
+                }
             }
-            if (!found) { in_all = false; break; }
+            if (!found) {
+                in_all = false;
+                break;
+            }
         }
         if (in_all) try result.set(ctx.allocator, entry.key, entry.value);
     }
@@ -2149,7 +2158,10 @@ fn array_udiff_assoc(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
             for (arg.array.entries.items) |other| {
                 if (!entry.key.eql(other.key)) continue;
                 const cmp = try ctx.invokeCallable(callback, &.{ entry.value, other.value });
-                if (Value.toInt(cmp) == 0) { in_any = true; break; }
+                if (Value.toInt(cmp) == 0) {
+                    in_any = true;
+                    break;
+                }
             }
             if (in_any) break;
         }
@@ -2166,14 +2178,23 @@ fn array_uintersect_assoc(ctx: *NativeContext, args: []const Value) RuntimeError
     for (src.entries.items) |entry| {
         var in_all = true;
         for (args[1 .. args.len - 1]) |arg| {
-            if (arg != .array) { in_all = false; break; }
+            if (arg != .array) {
+                in_all = false;
+                break;
+            }
             var found = false;
             for (arg.array.entries.items) |other| {
                 if (!entry.key.eql(other.key)) continue;
                 const cmp = try ctx.invokeCallable(callback, &.{ entry.value, other.value });
-                if (Value.toInt(cmp) == 0) { found = true; break; }
+                if (Value.toInt(cmp) == 0) {
+                    found = true;
+                    break;
+                }
             }
-            if (!found) { in_all = false; break; }
+            if (!found) {
+                in_all = false;
+                break;
+            }
         }
         if (in_all) try result.set(ctx.allocator, entry.key, entry.value);
     }
@@ -2194,7 +2215,10 @@ fn array_udiff_uassoc(ctx: *NativeContext, args: []const Value) RuntimeError!Val
                 const kcmp = try ctx.invokeCallable(key_cb, &.{ keyToValue(entry.key), keyToValue(other.key) });
                 if (Value.toInt(kcmp) != 0) continue;
                 const vcmp = try ctx.invokeCallable(value_cb, &.{ entry.value, other.value });
-                if (Value.toInt(vcmp) == 0) { in_any = true; break; }
+                if (Value.toInt(vcmp) == 0) {
+                    in_any = true;
+                    break;
+                }
             }
             if (in_any) break;
         }
@@ -2212,15 +2236,24 @@ fn array_uintersect_uassoc(ctx: *NativeContext, args: []const Value) RuntimeErro
     for (src.entries.items) |entry| {
         var in_all = true;
         for (args[1 .. args.len - 2]) |arg| {
-            if (arg != .array) { in_all = false; break; }
+            if (arg != .array) {
+                in_all = false;
+                break;
+            }
             var found = false;
             for (arg.array.entries.items) |other| {
                 const kcmp = try ctx.invokeCallable(key_cb, &.{ keyToValue(entry.key), keyToValue(other.key) });
                 if (Value.toInt(kcmp) != 0) continue;
                 const vcmp = try ctx.invokeCallable(value_cb, &.{ entry.value, other.value });
-                if (Value.toInt(vcmp) == 0) { found = true; break; }
+                if (Value.toInt(vcmp) == 0) {
+                    found = true;
+                    break;
+                }
             }
-            if (!found) { in_all = false; break; }
+            if (!found) {
+                in_all = false;
+                break;
+            }
         }
         if (in_all) try result.set(ctx.allocator, entry.key, entry.value);
     }
@@ -2235,13 +2268,22 @@ fn array_intersect_uassoc(ctx: *NativeContext, args: []const Value) RuntimeError
     for (src.entries.items) |entry| {
         var in_all = true;
         for (args[1 .. args.len - 1]) |arg| {
-            if (arg != .array) { in_all = false; break; }
+            if (arg != .array) {
+                in_all = false;
+                break;
+            }
             var found = false;
             for (arg.array.entries.items) |other| {
                 const key_cmp = try ctx.invokeCallable(callback, &.{ keyToValue(entry.key), keyToValue(other.key) });
-                if (Value.toInt(key_cmp) == 0 and Value.equal(entry.value, other.value)) { found = true; break; }
+                if (Value.toInt(key_cmp) == 0 and Value.equal(entry.value, other.value)) {
+                    found = true;
+                    break;
+                }
             }
-            if (!found) { in_all = false; break; }
+            if (!found) {
+                in_all = false;
+                break;
+            }
         }
         if (in_all) try result.set(ctx.allocator, entry.key, entry.value);
     }
@@ -2256,13 +2298,22 @@ fn array_intersect_ukey(ctx: *NativeContext, args: []const Value) RuntimeError!V
     for (src.entries.items) |entry| {
         var in_all = true;
         for (args[1 .. args.len - 1]) |arg| {
-            if (arg != .array) { in_all = false; break; }
+            if (arg != .array) {
+                in_all = false;
+                break;
+            }
             var found = false;
             for (arg.array.entries.items) |other| {
                 const cmp = try ctx.invokeCallable(callback, &.{ keyToValue(entry.key), keyToValue(other.key) });
-                if (Value.toInt(cmp) == 0) { found = true; break; }
+                if (Value.toInt(cmp) == 0) {
+                    found = true;
+                    break;
+                }
             }
-            if (!found) { in_all = false; break; }
+            if (!found) {
+                in_all = false;
+                break;
+            }
         }
         if (in_all) try result.set(ctx.allocator, entry.key, entry.value);
     }
@@ -2302,12 +2353,12 @@ fn array_change_key_case(ctx: *NativeContext, args: []const Value) RuntimeError!
     for (src.entries.items) |entry| {
         const new_key: PhpArray.Key = switch (entry.key) {
             .string => |s| blk: {
-                const buf = ctx.allocator.alloc(u8, s.len) catch break :blk .{ .string = s };
+                const buf = ctx.allocator.alloc(u8, s.bytes().len) catch break :blk .{ .string = s };
                 ctx.strings.append(ctx.allocator, buf) catch {};
-                for (s, 0..) |c, i| {
+                for (s.bytes(), 0..) |c, i| {
                     buf[i] = if (case_upper) std.ascii.toUpper(c) else std.ascii.toLower(c);
                 }
-                break :blk .{ .string = buf };
+                break :blk .{ .string = Value.String.borrowed(buf) };
             },
             .int => entry.key,
         };

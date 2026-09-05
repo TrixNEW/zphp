@@ -103,15 +103,15 @@ fn freshU64FromCrypto() u64 {
 fn storeState(ctx: *NativeContext, obj: *PhpObject, bytes: []const u8) !void {
     const owned = try ctx.allocator.dupe(u8, bytes);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    try obj.set(ctx.allocator, "_state", .{ .string = owned });
+    try obj.set(ctx.allocator, "_state", .{ .string = Value.String.borrowed(owned) });
 }
 
 fn loadState(obj: *PhpObject, comptime T: type) ?T {
     const v = obj.get("_state");
     if (v != .string) return null;
-    if (v.string.len != @sizeOf(T)) return null;
+    if (v.string.bytes().len != @sizeOf(T)) return null;
     var out: T = undefined;
-    @memcpy(std.mem.asBytes(&out), v.string);
+    @memcpy(std.mem.asBytes(&out), v.string.bytes());
     return out;
 }
 
@@ -143,7 +143,7 @@ fn mtGenerate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     std.mem.writeInt(u32, &bytes, v, .little);
     const owned = try ctx.allocator.dupe(u8, &bytes);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 // ---- PCG OneSeq 128 XSL RR 64 ----
@@ -153,11 +153,11 @@ fn pcgConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var p = PcgOneseq128{};
     if (args.len >= 1 and args[0] != .null) {
         if (args[0] == .string) {
-            if (args[0].string.len != 16) {
+            if (args[0].string.bytes().len != 16) {
                 try ctx.vm.setPendingException("ValueError", "Random\\Engine\\PcgOneseq128XslRr64::__construct(): Argument #1 ($seed) must be a 16 byte (128 bit) string");
                 return error.RuntimeError;
             }
-            _ = p.seedBytes(args[0].string);
+            _ = p.seedBytes(args[0].string.bytes());
         } else {
             p.seedInt(@bitCast(Value.toInt(args[0])));
         }
@@ -177,7 +177,7 @@ fn pcgGenerate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     std.mem.writeInt(u64, &bytes, v, .little);
     const owned = try ctx.allocator.dupe(u8, &bytes);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 // ---- Xoshiro256** ----
@@ -187,11 +187,11 @@ fn xoshConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var x = Xoshiro256ss{};
     if (args.len >= 1 and args[0] != .null) {
         if (args[0] == .string) {
-            if (args[0].string.len != 32) {
+            if (args[0].string.bytes().len != 32) {
                 try ctx.vm.setPendingException("ValueError", "Random\\Engine\\Xoshiro256StarStar::__construct(): Argument #1 ($seed) must be a 32 byte (256 bit) string");
                 return error.RuntimeError;
             }
-            _ = x.seedBytes(args[0].string);
+            _ = x.seedBytes(args[0].string.bytes());
         } else {
             x.seedInt(@bitCast(Value.toInt(args[0])));
         }
@@ -211,7 +211,7 @@ fn xoshGenerate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     std.mem.writeInt(u64, &bytes, v, .little);
     const owned = try ctx.allocator.dupe(u8, &bytes);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn secureGenerate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -219,7 +219,7 @@ fn secureGenerate(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     std.crypto.random.bytes(&bytes);
     const owned = try ctx.allocator.dupe(u8, &bytes);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 // ---- Randomizer dispatch ----
@@ -361,7 +361,7 @@ fn rzGetBytes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         written += take;
     }
     try ctx.vm.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn rzNextInt(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -418,7 +418,7 @@ fn rzShuffleArray(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn rzShuffleBytes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const src = args[0].string;
+    const src = args[0].string.bytes();
     const buf = try ctx.allocator.dupe(u8, src);
     var i: usize = buf.len;
     while (i > 1) {
@@ -429,7 +429,7 @@ fn rzShuffleBytes(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         buf[j] = tmp;
     }
     try ctx.vm.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn rzPickArrayKeys(ctx: *NativeContext, args: []const Value) RuntimeError!Value {

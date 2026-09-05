@@ -1,5 +1,52 @@
 const std = @import("std");
 
+// the VM installs this so container stores can release the value they
+// replace without knowing the VM: overwrite-release at the store choke point
+pub const ReleaseHook = struct { ctx: *anyopaque, call: *const fn (*anyopaque, Value) void };
+pub const RefCell = struct {
+    value: Value = .null,
+    binders: u32 = 0,
+    scratch: i32 = 0,
+    dead: bool = false,
+    visited: bool = false,
+};
+pub fn cellOf(value: *Value) *RefCell {
+    return @fieldParentPtr("value", value);
+}
+pub const CellUnbindHook = struct { ctx: *anyopaque, call: *const fn (*anyopaque, *Value) void };
+pub threadlocal var cell_unbind_hook: ?CellUnbindHook = null;
+fn unbindCell(value: *Value) void {
+    if (cell_unbind_hook) |hook| hook.call(hook.ctx, value);
+}
+
+pub threadlocal var release_hook: ?ReleaseHook = null;
+
+pub threadlocal var trace_obj: ?*PhpObject = null;
+pub threadlocal var trace_rc_verbose: bool = false;
+
+// ZPHP_TRACE_OBJ_CLASS: stack trace at every retain/release of one object
+pub fn traceObjRc(obj: *PhpObject, what: []const u8) void {
+    if (@import("builtin").mode != .Debug) return;
+    if (trace_obj != obj or !trace_rc_verbose) return;
+    std.debug.print("== trace {s} {s}#{d} refcount now {d}\n", .{ what, obj.class_name, obj.id, obj.refcount });
+    std.debug.dumpCurrentStackTrace(null);
+}
+
+fn releaseReplaced(old: Value) void {
+    if (release_hook) |hook| hook.call(hook.ctx, old);
+}
+
+fn retainStored(value: Value) void {
+    switch (value) {
+        .string => |str| str.retain(),
+        .object => |o| o.retain(),
+        .array => |a| a.retain(),
+        .generator => |g| g.retain(),
+        .fiber => |f| f.retain(),
+        else => {},
+    }
+}
+
 pub const PhpArray = struct {
     entries: std.ArrayListUnmanaged(Entry) = .{},
     string_index: std.StringHashMapUnmanaged(usize) = .{},
@@ -18,6 +65,15 @@ pub const PhpArray = struct {
     refcount: u32 = 0,
     elements_released: bool = false,
     pooled: bool = false,
+    release_queued: bool = false,
+    // a weak container (WeakMap key list): its entries hold no reference to
+    // the objects they name, so freeing it releases nothing and the cycle
+    // collector ignores its edges
+    weak: bool = false,
+    // liveness pins taken by natives that hold this array by reference
+    // (array_walk, sort): counted in refcount but not a value copy, so a
+    // write through the reference set must not separate because of them
+    byref_pins: u8 = 0,
 
     pub const Entry = struct {
         key: Key,
@@ -31,13 +87,13 @@ pub const PhpArray = struct {
 
     pub const Key = union(enum) {
         int: i64,
-        string: []const u8,
+        string: PhpString,
 
         pub fn eql(a: Key, b: Key) bool {
             if (@intFromEnum(a) != @intFromEnum(b)) return false;
             return switch (a) {
                 .int => |ai| ai == b.int,
-                .string => |as_| std.mem.eql(u8, as_, b.string),
+                .string => |as_| std.mem.eql(u8, as_.bytes(), b.string.bytes()),
             };
         }
     };
@@ -48,7 +104,7 @@ pub const PhpArray = struct {
     // $arr[3] address the same slot.
     pub fn normalizeKey(key: Key) Key {
         if (key != .string) return key;
-        const s = key.string;
+        const s = key.string.bytes();
         if (s.len == 0) return key;
         var i: usize = 0;
         if (s[0] == '-') {
@@ -70,6 +126,9 @@ pub const PhpArray = struct {
     }
 
     pub fn deinit(self: *PhpArray, allocator: std.mem.Allocator) void {
+        for (self.entries.items) |entry| {
+            if (entry.key == .string) entry.key.string.release();
+        }
         self.entries.deinit(allocator);
         self.string_index.deinit(allocator);
     }
@@ -81,13 +140,9 @@ pub const PhpArray = struct {
     }
 
     pub fn append(self: *PhpArray, allocator: std.mem.Allocator, value: Value) !void {
-        // an object or array stored as an element is a new reference. this is
-        // a store choke point - the value must arrive un-retained (callers
-        // pass transferArg'd or raw values, never copyValue'd ones)
-        if (value == .object) value.object.retain();
-        if (value == .array) value.array.retain();
-        if (value == .generator) value.generator.retain();
-        if (value == .fiber) value.fiber.retain();
+        // a store choke point: the new element takes a reference (callers
+        // pass raw values, never copyValue'd ones); weak containers count nothing
+        if (!self.weak) retainStored(value);
         const k = if (self.has_int_keys) self.next_int_key else 0;
         if (self.has_int_keys and k == std.math.maxInt(i64)) {
             for (self.entries.items) |entry| {
@@ -100,14 +155,11 @@ pub const PhpArray = struct {
     }
 
     pub fn set(self: *PhpArray, allocator: std.mem.Allocator, raw_key: Key, value: Value) !void {
-        // an object or array stored as an element is a new reference. this is
-        // a store choke point - the value must arrive un-retained (callers
-        // pass transferArg'd or raw values, never copyValue'd ones). the
-        // overwritten old element is not released here (no VM access)
-        if (value == .object) value.object.retain();
-        if (value == .array) value.array.retain();
-        if (value == .generator) value.generator.retain();
-        if (value == .fiber) value.fiber.retain();
+        // a store choke point: the element takes a new reference to the
+        // value (callers pass raw values, never copyValue'd ones) and the
+        // element it replaces is released through the VM's release hook.
+        // weak containers ($GLOBALS view, WeakMap keys) count nothing
+        if (!self.weak) retainStored(value);
         const key = normalizeKey(raw_key);
         if (key == .int) {
             const idx = key.int;
@@ -116,41 +168,49 @@ pub const PhpArray = struct {
                 if (uidx < self.entries.items.len) {
                     const entry = &self.entries.items[uidx];
                     if (entry.key == .int and entry.key.int == idx) {
+                        const old = entry.value;
                         entry.value = value;
                         self.next_int_key = if (self.has_int_keys) @max(self.next_int_key, idx + 1) else idx + 1;
                         self.has_int_keys = true;
+                        if (!self.weak) releaseReplaced(old);
                         return;
                     }
                 }
             }
         }
         if (key == .string) {
-            if (self.string_index.get(key.string)) |idx| {
+            if (self.string_index.get(key.string.bytes())) |idx| {
+                const old = self.entries.items[idx].value;
                 self.entries.items[idx].value = value;
+                if (!self.weak) releaseReplaced(old);
                 return;
             }
         } else {
             for (self.entries.items) |*entry| {
                 if (entry.key.eql(key)) {
+                    const old = entry.value;
                     entry.value = value;
+                    if (!self.weak) releaseReplaced(old);
                     return;
                 }
             }
         }
         const new_idx = self.entries.items.len;
+        if (key == .string) key.string.retain();
+        errdefer if (key == .string) key.string.release();
         try self.entries.append(allocator, .{ .key = key, .value = value });
         if (key == .int) {
             const next = if (key.int == std.math.maxInt(i64)) key.int else key.int + 1;
             self.next_int_key = if (self.has_int_keys) @max(self.next_int_key, next) else next;
             self.has_int_keys = true;
         } else if (key == .string) {
-            try self.string_index.put(allocator, key.string, new_idx);
+            try self.string_index.put(allocator, key.string.bytes(), new_idx);
         }
     }
 
     pub fn contains(self: *const PhpArray, raw_key: Key) bool {
         const key = normalizeKey(raw_key);
-        if (key == .string) return self.string_index.contains(key.string);
+        if (key == .string) return self.string_index.contains(key.string.bytes());
         if (key == .int) {
             // mirror get()'s O(1) fast path for sequential dense int keys
             const idx = key.int;
@@ -179,7 +239,7 @@ pub const PhpArray = struct {
             }
         }
         if (key == .string) {
-            if (self.string_index.get(key.string)) |idx| {
+            if (self.string_index.get(key.string.bytes())) |idx| {
                 return self.entries.items[idx].value;
             }
             return .null;
@@ -205,7 +265,7 @@ pub const PhpArray = struct {
             }
         }
         if (key == .string) {
-            if (self.string_index.get(key.string)) |idx| return &self.entries.items[idx];
+            if (self.string_index.get(key.string.bytes())) |idx| return &self.entries.items[idx];
             return null;
         }
         for (self.entries.items) |*entry| {
@@ -222,7 +282,7 @@ pub const PhpArray = struct {
         self.string_index.clearRetainingCapacity();
         for (self.entries.items, 0..) |entry, i| {
             if (entry.key == .string) {
-                try self.string_index.put(allocator, entry.key.string, i);
+                try self.string_index.put(allocator, entry.key.string.bytes(), i);
             }
         }
     }
@@ -230,7 +290,7 @@ pub const PhpArray = struct {
     pub fn remove(self: *PhpArray, key: Key) void {
         var remove_idx: ?usize = null;
         if (key == .string) {
-            if (self.string_index.fetchRemove(key.string)) |kv| {
+            if (self.string_index.fetchRemove(key.string.bytes())) |kv| {
                 remove_idx = kv.value;
             }
         }
@@ -245,7 +305,9 @@ pub const PhpArray = struct {
             }
         }
         if (remove_idx) |idx| {
-            _ = self.entries.orderedRemove(idx);
+            const removed = self.entries.orderedRemove(idx);
+            if (removed.ref) |cell| unbindCell(cell);
+            if (removed.key == .string) removed.key.string.release();
             // rebuild string index for shifted entries
             var it = self.string_index.iterator();
             while (it.next()) |entry| {
@@ -287,6 +349,9 @@ pub const BindingTarget = union(enum) {
     array: struct { array: *PhpArray, key: PhpArray.Key },
     object: struct { object: *PhpObject, prop_name: []const u8 },
     static: struct { class_name: []const u8, prop_name: []const u8 },
+    // a closure's by-reference capture: the capture entry mirrors (and owns
+    // a reference to) the cell's value for the closure instance's lifetime
+    capture: struct { closure: *PhpString.Owner, var_name: []const u8 },
 };
 
 // reverse index key for the prop/static sync direction (a DIRECT write to
@@ -351,7 +416,7 @@ pub const RefIndex = struct {
         switch (target) {
             .object => |o| try self.addPropRev(a, .{ .object = o.object, .class_name = "", .prop_name = o.prop_name }, cell),
             .static => |s| try self.addPropRev(a, .{ .object = null, .class_name = s.class_name, .prop_name = s.prop_name }, cell),
-            .array => {},
+            .array, .capture => {},
         }
     }
 
@@ -437,6 +502,7 @@ pub const RefIndex = struct {
             if (targetEql(existing, target)) return;
         }
         try gop.value_ptr.append(a, target);
+        if (target == .object or target == .static) cellOf(cell).binders += 1;
     }
 
     pub fn addPropRev(self: *RefIndex, a: std.mem.Allocator, key: PropRefKey, cell: *Value) !void {
@@ -454,6 +520,7 @@ pub const RefIndex = struct {
             .array => |x| x.array == b.array.array and x.key.eql(b.array.key),
             .object => |x| x.object == b.object.object and std.mem.eql(u8, x.prop_name, b.object.prop_name),
             .static => |x| std.mem.eql(u8, x.class_name, b.static.class_name) and std.mem.eql(u8, x.prop_name, b.static.prop_name),
+            .capture => |x| x.closure == b.capture.closure and std.mem.eql(u8, x.var_name, b.capture.var_name),
         };
     }
 
@@ -463,11 +530,13 @@ pub const RefIndex = struct {
     // so this removes only the matching one, leaving the others (e.g. the clone's
     // array-lifetime binding survives the binding frame). also scrubs prop_rev
     pub fn removeTarget(self: *RefIndex, a: std.mem.Allocator, cell: *Value, target: BindingTarget) void {
+        var removed = false;
         if (self.fwd.getPtr(cell)) |list| {
             var i: usize = 0;
             while (i < list.items.len) {
                 if (targetEql(list.items[i], target)) {
                     _ = list.swapRemove(i);
+                    removed = true;
                 } else i += 1;
             }
             if (list.items.len == 0) {
@@ -478,8 +547,9 @@ pub const RefIndex = struct {
         switch (target) {
             .object => |o| self.removePropRevCell(a, .{ .object = o.object, .class_name = "", .prop_name = o.prop_name }, cell),
             .static => |s| self.removePropRevCell(a, .{ .object = null, .class_name = s.class_name, .prop_name = s.prop_name }, cell),
-            .array => {},
+            .array, .capture => {},
         }
+        if (removed and (target == .object or target == .static)) unbindCell(cell);
     }
 
     // drop every target/cell associated with this cell (frame teardown, unset,
@@ -512,7 +582,7 @@ pub const RefIndex = struct {
                 switch (t) {
                     .object => |o| self.removePropRevCell(a, .{ .object = o.object, .class_name = "", .prop_name = o.prop_name }, cell),
                     .static => |s| self.removePropRevCell(a, .{ .object = null, .class_name = s.class_name, .prop_name = s.prop_name }, cell),
-                    .array => {},
+                    .array, .capture => {},
                 }
             }
             list.deinit(a);
@@ -594,7 +664,11 @@ pub const Generator = struct {
         self.vars.deinit(allocator);
         self.locals.deinit(allocator);
         self.stack.deinit(allocator);
-        self.ref_slots.deinit(allocator);
+        var refs = self.ref_slots;
+        self.ref_slots = .{};
+        var rit = refs.valueIterator();
+        while (rit.next()) |cell| unbindCell(cell.*);
+        refs.deinit(allocator);
     }
 
     pub fn retain(self: *Generator) void {
@@ -630,6 +704,7 @@ pub const Fiber = struct {
         generator: ?*Generator = null,
         ref_slots: std.StringHashMapUnmanaged(*Value),
         ref_owner: RefIndex.OwnerId = 0,
+        call_name: ?[]const u8 = null,
     };
 
     pub const SavedHandler = struct {
@@ -642,7 +717,11 @@ pub const Fiber = struct {
     pub fn deinit(self: *Fiber, allocator: std.mem.Allocator) void {
         for (self.saved_frames.items) |*f| {
             f.vars.deinit(allocator);
-            f.ref_slots.deinit(allocator);
+            var refs = f.ref_slots;
+            f.ref_slots = .{};
+            var rit = refs.valueIterator();
+            while (rit.next()) |cell| unbindCell(cell.*);
+            refs.deinit(allocator);
             if (f.locals.len > 0) allocator.free(f.locals);
         }
         self.saved_frames.deinit(allocator);
@@ -715,6 +794,7 @@ pub const PhpObject = struct {
     // (PhpArray) can refcount object elements without importing the VM
     pub fn retain(self: *PhpObject) void {
         self.refcount +%= 1;
+        traceObjRc(self, "retain");
     }
 
     pub fn isUnset(self: *const PhpObject, name: []const u8) bool {
@@ -774,51 +854,131 @@ pub const PhpObject = struct {
     }
 
     pub fn set(self: *PhpObject, allocator: std.mem.Allocator, name: []const u8, value: Value) !void {
-        // an object or array stored as a property is a new reference - this
-        // is the universal property-store choke point, so native code calling
-        // obj.set retains too. callers pass transferArg'd or raw values (never
-        // copyValue'd ones). the overwritten old value is not released here
-        // (no VM access); set_prop does overwrite-release, native overwrites
-        // leak (rare). object teardown releases all property objects/arrays
-        if (value == .object) value.object.retain();
-        if (value == .array) value.array.retain();
-        if (value == .generator) value.generator.retain();
-        if (value == .fiber) value.fiber.retain();
+        // the universal property-store choke point: the property takes a
+        // reference to the value (callers pass raw values, never copyValue'd
+        // ones) and the value it replaces is released through the VM's hook
+        retainStored(value);
         // a write resurrects a previously-unset property
         self.clearUnset(name);
         if (self.slots) |s| {
             if (self.getSlotIndex(name)) |idx| {
+                const old = s[idx];
                 s[idx] = value;
+                releaseReplaced(old);
                 return;
             }
         }
-        try self.properties.put(allocator, name, value);
+        const gop = try self.properties.getOrPut(allocator, name);
+        if (gop.found_existing) {
+            const old = gop.value_ptr.*;
+            gop.value_ptr.* = value;
+            releaseReplaced(old);
+        } else {
+            gop.value_ptr.* = value;
+        }
     }
 
     // scope-aware variant for the set_prop opcode path where we know the
     // declaring class (private slots are picked correctly)
     pub fn setForScope(self: *PhpObject, allocator: std.mem.Allocator, name: []const u8, value: Value, scope: ?[]const u8) !void {
-        if (value == .object) value.object.retain();
-        if (value == .array) value.array.retain();
-        if (value == .generator) value.generator.retain();
-        if (value == .fiber) value.fiber.retain();
+        retainStored(value);
         self.clearUnset(name);
         if (self.slots) |s| {
             if (self.getSlotIndexForScope(name, scope)) |idx| {
+                const old = s[idx];
                 s[idx] = value;
+                releaseReplaced(old);
                 return;
             }
         }
-        try self.properties.put(allocator, name, value);
+        const gop = try self.properties.getOrPut(allocator, name);
+        if (gop.found_existing) {
+            const old = gop.value_ptr.*;
+            gop.value_ptr.* = value;
+            releaseReplaced(old);
+        } else {
+            gop.value_ptr.* = value;
+        }
+    }
+};
+
+pub const PhpString = struct {
+    ptr: [*]const u8,
+    len: usize,
+    owner: ?*Owner = null,
+
+    pub const Owner = struct {
+        bytes: []u8,
+        allocator: std.mem.Allocator,
+        refcount: u32 = 1,
+        release_queued: bool = false,
+        // a closure instance name: the bytes live in the VM's recycled name
+        // arena and the VM releases the instance's captures when the last
+        // reference drops, so the owner struct is the closure's identity
+        closure: bool = false,
+    };
+
+    pub fn borrowed(value: []const u8) PhpString {
+        return .{ .ptr = value.ptr, .len = value.len };
+    }
+
+    pub fn create(allocator: std.mem.Allocator, value: []const u8) !PhpString {
+        return adopt(allocator, try allocator.dupe(u8, value));
+    }
+
+    pub fn adopt(allocator: std.mem.Allocator, value: []u8) !PhpString {
+        errdefer allocator.free(value);
+        const owner = try allocator.create(Owner);
+        owner.* = .{ .bytes = value, .allocator = allocator };
+        return .{ .ptr = value.ptr, .len = value.len, .owner = owner };
+    }
+
+    pub fn bytes(self: PhpString) []const u8 {
+        return self.ptr[0..self.len];
+    }
+
+    pub fn format(self: PhpString, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll(self.bytes());
+    }
+
+    pub fn retainedSlice(self: PhpString, start: usize, end: usize) PhpString {
+        self.retain();
+        return .{ .ptr = self.ptr + start, .len = end - start, .owner = self.owner };
+    }
+
+    pub fn retain(self: PhpString) void {
+        if (self.owner) |owner| owner.refcount += 1;
+    }
+
+    pub fn release(self: PhpString) void {
+        const owner = self.owner orelse return;
+        std.debug.assert(owner.refcount > 0);
+        owner.refcount -= 1;
+        if (owner.refcount == 0 and !owner.release_queued and !owner.closure) destroyOwner(owner);
+    }
+
+    pub fn releaseDeferred(self: PhpString) ?*Owner {
+        const owner = self.owner orelse return null;
+        std.debug.assert(owner.refcount > 0);
+        owner.refcount -= 1;
+        return if (owner.refcount == 0) owner else null;
+    }
+
+    pub fn destroyOwner(owner: *Owner) void {
+        const allocator = owner.allocator;
+        if (!owner.closure) allocator.free(owner.bytes);
+        allocator.destroy(owner);
     }
 };
 
 pub const Value = union(enum) {
+    pub const String = PhpString;
+
     null,
     bool: bool,
     int: i64,
     float: f64,
-    string: []const u8,
+    string: PhpString,
     array: *PhpArray,
     object: *PhpObject,
     generator: *Generator,
@@ -838,7 +998,7 @@ pub const Value = union(enum) {
             .bool => |b| b,
             .int => |i| i != 0,
             .float => |f| f != 0.0,
-            .string => |s| s.len > 0 and !std.mem.eql(u8, s, "0"),
+            .string => |s| s.len > 0 and !std.mem.eql(u8, s.bytes(), "0"),
             .array => |a| a.entries.items.len > 0,
             .object, .generator, .fiber => true,
         };
@@ -867,8 +1027,8 @@ pub const Value = union(enum) {
             if (av == 0.0) return .{ .float = std.math.nan(f64) };
             return .{ .float = if (av > 0.0) std.math.inf(f64) else -std.math.inf(f64) };
         }
-        const both_int = (a == .int or (a == .string and isNumericIntString(a.string))) and
-            (b == .int or (b == .string and isNumericIntString(b.string)));
+        const both_int = (a == .int or (a == .string and isNumericIntString(a.string.bytes()))) and
+            (b == .int or (b == .string and isNumericIntString(b.string.bytes())));
         // both-int path: check exact divisibility in integer space so we don't
         // lose precision routing through f64 (PHP_INT_MAX is exactly divisible
         // by 7 but float div rounds the quotient down). PHP_INT_MIN / -1 stays
@@ -967,7 +1127,7 @@ pub const Value = union(enum) {
     }
 
     fn hasKey(arr: *PhpArray, key: PhpArray.Key) bool {
-        if (key == .string) return arr.string_index.contains(key.string);
+        if (key == .string) return arr.string_index.contains(key.string.bytes());
         for (arr.entries.items) |e| if (e.key.eql(key)) return true;
         return false;
     }
@@ -997,17 +1157,17 @@ pub const Value = union(enum) {
         if (a == .bool or b == .bool) return a.isTruthy() == b.isTruthy();
         if (a == .string and b == .string) {
             // PHP: when both strings are numeric, compare numerically (so '1' == '01')
-            if (isNumericString(a.string) and isNumericString(b.string)) {
+            if (isNumericString(a.string.bytes()) and isNumericString(b.string.bytes())) {
                 return toFloat(a) == toFloat(b);
             }
-            return std.mem.eql(u8, a.string, b.string);
+            return std.mem.eql(u8, a.string.bytes(), b.string.bytes());
         }
         // php 8: int/float vs non-numeric string is always false
         if ((a == .int or a == .float) and b == .string) {
-            if (!isNumericString(b.string)) return false;
+            if (!isNumericString(b.string.bytes())) return false;
         }
         if ((b == .int or b == .float) and a == .string) {
-            if (!isNumericString(a.string)) return false;
+            if (!isNumericString(a.string.bytes())) return false;
         }
         return toFloat(a) == toFloat(b);
     }
@@ -1046,7 +1206,7 @@ pub const Value = union(enum) {
             .bool => |ab| ab == b.bool,
             .int => |ai| ai == b.int,
             .float => |af| af == b.float,
-            .string => |as_| std.mem.eql(u8, as_, b.string),
+            .string => |as_| std.mem.eql(u8, as_.bytes(), b.string.bytes()),
             .array => |ap| arrayEqual(ap, b.array, true),
             .object => |ao| ao == b.object,
             .generator => |ag| ag == b.generator,
@@ -1080,14 +1240,14 @@ pub const Value = union(enum) {
         if (a == .array or b == .array) return if (a == .array) 1 else -1;
         if (a == .string and b == .string) {
             // PHP: when both strings are numeric, compare numerically
-            if (isNumericString(a.string) and isNumericString(b.string)) {
+            if (isNumericString(a.string.bytes()) and isNumericString(b.string.bytes())) {
                 const af = toFloat(a);
                 const bf = toFloat(b);
                 if (af < bf) return -1;
                 if (af > bf) return 1;
                 return 0;
             }
-            return switch (std.mem.order(u8, a.string, b.string)) {
+            return switch (std.mem.order(u8, a.string.bytes(), b.string.bytes())) {
                 .lt => -1,
                 .eq => 0,
                 .gt => 1,
@@ -1095,19 +1255,19 @@ pub const Value = union(enum) {
         }
         // PHP 8: number vs non-numeric string falls back to STRING comparison
         // (the number is stringified). Number vs numeric string still numeric.
-        if ((a == .int or a == .float) and b == .string and !isNumericString(b.string)) {
+        if ((a == .int or a == .float) and b == .string and !isNumericString(b.string.bytes())) {
             var buf: [64]u8 = undefined;
             const as: []const u8 = if (a == .int) (std.fmt.bufPrint(&buf, "{d}", .{a.int}) catch "") else (std.fmt.bufPrint(&buf, "{d}", .{a.float}) catch "");
-            return switch (std.mem.order(u8, as, b.string)) {
+            return switch (std.mem.order(u8, as, b.string.bytes())) {
                 .lt => -1,
                 .eq => 0,
                 .gt => 1,
             };
         }
-        if ((b == .int or b == .float) and a == .string and !isNumericString(a.string)) {
+        if ((b == .int or b == .float) and a == .string and !isNumericString(a.string.bytes())) {
             var buf: [64]u8 = undefined;
             const bs: []const u8 = if (b == .int) (std.fmt.bufPrint(&buf, "{d}", .{b.int}) catch "") else (std.fmt.bufPrint(&buf, "{d}", .{b.float}) catch "");
-            return switch (std.mem.order(u8, a.string, bs)) {
+            return switch (std.mem.order(u8, a.string.bytes(), bs)) {
                 .lt => -1,
                 .eq => 0,
                 .gt => 1,
@@ -1116,14 +1276,14 @@ pub const Value = union(enum) {
         // PHP: null vs string compares as "" vs string, so `null < 'abc'` is
         // true and `null == ''` is true
         if (a == .null and b == .string) {
-            return switch (std.mem.order(u8, "", b.string)) {
+            return switch (std.mem.order(u8, "", b.string.bytes())) {
                 .lt => -1,
                 .eq => 0,
                 .gt => 1,
             };
         }
         if (a == .string and b == .null) {
-            return switch (std.mem.order(u8, a.string, "")) {
+            return switch (std.mem.order(u8, a.string.bytes(), "")) {
                 .lt => -1,
                 .eq => 0,
                 .gt => 1,
@@ -1147,7 +1307,7 @@ pub const Value = union(enum) {
     fn arrayHasKey(arr: *PhpArray, key: PhpArray.Key) bool {
         for (arr.entries.items) |e| {
             switch (e.key) {
-                .string => |s| if (key == .string and std.mem.eql(u8, s, key.string)) return true,
+                .string => |s| if (key == .string and std.mem.eql(u8, s.bytes(), key.string.bytes())) return true,
                 .int => |n| if (key == .int and n == key.int) return true,
             }
         }
@@ -1209,7 +1369,7 @@ pub const Value = union(enum) {
             .bool => |b| if (b) @as(i64, 1) else 0,
             .int => |i| i,
             .float => |f| dvalToLval(f),
-            .string => |s| parseLeadingInt(s),
+            .string => |s| parseLeadingInt(s.bytes()),
             .array => |arr| if (arr.entries.items.len > 0) @as(i64, 1) else 0,
             .object, .generator, .fiber => 1,
         };
@@ -1221,7 +1381,7 @@ pub const Value = union(enum) {
             .bool => |b| if (b) 1.0 else 0.0,
             .int => |i| @floatFromInt(i),
             .float => |f| f,
-            .string => |s| parseLeadingFloat(s),
+            .string => |s| parseLeadingFloat(s.bytes()),
             .array, .object, .generator, .fiber => 0.0,
         };
     }
@@ -1320,7 +1480,7 @@ pub const Value = union(enum) {
             .string => |s| .{ .string = s },
             .bool => |b| .{ .int = if (b) 1 else 0 },
             .float => |f| .{ .int = dvalToLval(f) },
-            .null => .{ .string = "" },
+            .null => .{ .string = Value.String.borrowed("") },
             .array, .object, .generator, .fiber => .{ .int = 0 },
         };
     }
@@ -1373,7 +1533,7 @@ pub const Value = union(enum) {
                     }
                 }
             },
-            .string => |s| try buf.appendSlice(allocator, s),
+            .string => |s| try buf.appendSlice(allocator, s.bytes()),
             .array => try buf.appendSlice(allocator, "Array"),
             .object => try buf.appendSlice(allocator, "Object"),
             .generator => try buf.appendSlice(allocator, ""),
@@ -1451,19 +1611,19 @@ pub const Value = union(enum) {
             .float => |f| return .{ .float = f + 1.0 },
             .null => return .{ .int = 1 },
             .string => |s| {
-                if (s.len == 0) return .{ .string = "1" };
-                if (isNumericString(s)) {
-                    if (isNumericIntString(s)) {
-                        const parsed = std.fmt.parseInt(i64, s, 10) catch {
-                            const f = std.fmt.parseFloat(f64, s) catch 0.0;
+                if (s.len == 0) return .{ .string = Value.String.borrowed("1") };
+                if (isNumericString(s.bytes())) {
+                    if (isNumericIntString(s.bytes())) {
+                        const parsed = std.fmt.parseInt(i64, s.bytes(), 10) catch {
+                            const f = std.fmt.parseFloat(f64, s.bytes()) catch 0.0;
                             return .{ .float = f + 1.0 };
                         };
                         return intInc(parsed);
                     }
-                    const f = std.fmt.parseFloat(f64, s) catch 0.0;
+                    const f = std.fmt.parseFloat(f64, s.bytes()) catch 0.0;
                     return .{ .float = f + 1.0 };
                 }
-                return .{ .string = try incrementAlphaString(allocator, s) };
+                return .{ .string = try Value.String.adopt(allocator, try incrementAlphaString(allocator, s.bytes())) };
             },
             else => return a,
         }
@@ -1478,15 +1638,15 @@ pub const Value = union(enum) {
             .null => return .null,
             .string => |s| {
                 if (s.len == 0) return a;
-                if (isNumericString(s)) {
-                    if (isNumericIntString(s)) {
-                        const parsed = std.fmt.parseInt(i64, s, 10) catch {
-                            const f = std.fmt.parseFloat(f64, s) catch 0.0;
+                if (isNumericString(s.bytes())) {
+                    if (isNumericIntString(s.bytes())) {
+                        const parsed = std.fmt.parseInt(i64, s.bytes(), 10) catch {
+                            const f = std.fmt.parseFloat(f64, s.bytes()) catch 0.0;
                             return .{ .float = f - 1.0 };
                         };
                         return intDec(parsed);
                     }
-                    const f = std.fmt.parseFloat(f64, s) catch 0.0;
+                    const f = std.fmt.parseFloat(f64, s.bytes()) catch 0.0;
                     return .{ .float = f - 1.0 };
                 }
                 return a;
@@ -1495,7 +1655,7 @@ pub const Value = union(enum) {
         }
     }
 
-    fn incrementAlphaString(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
+    fn incrementAlphaString(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
         var buf = try allocator.alloc(u8, s.len);
         @memcpy(buf, s);
         var i: usize = s.len;
@@ -1599,7 +1759,7 @@ pub const Value = union(enum) {
             .float => |f| .{ .float_kind = f },
             .bool => |b| .{ .int_kind = if (b) @as(i64, 1) else 0 },
             .null => .{ .int_kind = 0 },
-            .string => |s| classifyNumericString(s),
+            .string => |s| classifyNumericString(s.bytes()),
             else => .{ .int_kind = 0 },
         };
     }
@@ -1647,9 +1807,9 @@ test "truthiness" {
     try std.testing.expect(Value.isTruthy(.{ .bool = true }));
     try std.testing.expect(!Value.isTruthy(.{ .int = 0 }));
     try std.testing.expect(Value.isTruthy(.{ .int = 1 }));
-    try std.testing.expect(!Value.isTruthy(.{ .string = "" }));
-    try std.testing.expect(!Value.isTruthy(.{ .string = "0" }));
-    try std.testing.expect(Value.isTruthy(.{ .string = "hello" }));
+    try std.testing.expect(!Value.isTruthy(.{ .string = Value.String.borrowed("") }));
+    try std.testing.expect(!Value.isTruthy(.{ .string = Value.String.borrowed("0") }));
+    try std.testing.expect(Value.isTruthy(.{ .string = Value.String.borrowed("hello") }));
 }
 
 test "arithmetic" {
@@ -1669,5 +1829,5 @@ test "int float promotion" {
 test "identical" {
     try std.testing.expect(Value.identical(.{ .int = 2 }, .{ .int = 2 }));
     try std.testing.expect(!Value.identical(.{ .int = 1 }, .{ .int = 2 }));
-    try std.testing.expect(!Value.identical(.{ .int = 2 }, .{ .string = "2" }));
+    try std.testing.expect(!Value.identical(.{ .int = 2 }, .{ .string = Value.String.borrowed("2") }));
 }

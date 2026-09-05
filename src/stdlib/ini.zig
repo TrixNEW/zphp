@@ -13,7 +13,7 @@ const ScannerMode = enum(u2) { normal = 0, raw = 1, typed = 2 };
 
 fn native_parse_ini_string(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const input = args[0].string;
+    const input = args[0].string.bytes();
     const process_sections = if (args.len >= 2) Value.isTruthy(args[1]) else false;
     const mode = parseMode(if (args.len >= 3) args[2] else .{ .int = 0 });
     return parseIni(ctx, input, process_sections, mode);
@@ -21,7 +21,7 @@ fn native_parse_ini_string(ctx: *NativeContext, args: []const Value) RuntimeErro
 
 fn native_parse_ini_file(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const path = args[0].string;
+    const path = args[0].string.bytes();
     const content = std.fs.cwd().readFileAlloc(ctx.allocator, path, 1024 * 1024 * 64) catch return Value{ .bool = false };
     try ctx.strings.append(ctx.allocator, content);
     const process_sections = if (args.len >= 2) Value.isTruthy(args[1]) else false;
@@ -61,7 +61,7 @@ fn parseIni(ctx: *NativeContext, input: []const u8, process_sections: bool, mode
                 if (process_sections) {
                     const section_name = line[1..end];
                     const section_arr = try ctx.createArray();
-                    try result.set(ctx.allocator, .{ .string = section_name }, .{ .array = section_arr });
+                    try result.set(ctx.allocator, .{ .string = Value.String.borrowed(section_name) }, .{ .array = section_arr });
                     current_section = section_arr;
                 }
             } else {
@@ -81,7 +81,7 @@ fn parseIni(ctx: *NativeContext, input: []const u8, process_sections: bool, mode
             if (isArrayKey(raw_key)) {
                 try setArrayKey(ctx, target, raw_key, value);
             } else {
-                try target.set(ctx.allocator, .{ .string = raw_key }, value);
+                try target.set(ctx.allocator, .{ .string = Value.String.borrowed(raw_key) }, value);
             }
         }
     }
@@ -90,11 +90,11 @@ fn parseIni(ctx: *NativeContext, input: []const u8, process_sections: bool, mode
 }
 
 fn processValue(ctx: *NativeContext, raw: []const u8, mode: ScannerMode) Value {
-    if (raw.len == 0) return .{ .string = "" };
+    if (raw.len == 0) return .{ .string = Value.String.borrowed("") };
 
     // strip quotes
     if (raw.len >= 2 and ((raw[0] == '"' and raw[raw.len - 1] == '"') or (raw[0] == '\'' and raw[raw.len - 1] == '\''))) {
-        return .{ .string = raw[1 .. raw.len - 1] };
+        return .{ .string = Value.String.borrowed(raw[1 .. raw.len - 1]) };
     }
 
     // strip inline comments (unquoted values only)
@@ -105,7 +105,7 @@ fn processValue(ctx: *NativeContext, raw: []const u8, mode: ScannerMode) Value {
         }
     }
 
-    if (mode == .raw) return .{ .string = val };
+    if (mode == .raw) return .{ .string = Value.String.borrowed(val) };
 
     // normal + typed modes: substitute bare PHP constants (PHP_INT_MAX,
     // user-defined via define(), etc.) - identifier-shaped values match
@@ -130,13 +130,13 @@ fn processValue(ctx: *NativeContext, raw: []const u8, mode: ScannerMode) Value {
         if (isNull(val)) return .null;
         if (parseInteger(val)) |i| return .{ .int = i };
         if (parseFloat(val)) |f| return .{ .float = f };
-        return .{ .string = val };
+        return .{ .string = Value.String.borrowed(val) };
     }
 
     // normal mode: booleans become "1"/""
-    if (isBoolTrue(val)) return .{ .string = "1" };
-    if (isBoolFalse(val)) return .{ .string = "" };
-    return .{ .string = val };
+    if (isBoolTrue(val)) return .{ .string = Value.String.borrowed("1") };
+    if (isBoolFalse(val)) return .{ .string = Value.String.borrowed("") };
+    return .{ .string = Value.String.borrowed(val) };
 }
 
 fn looksLikeIdentifier(s: []const u8) bool {
@@ -154,18 +154,18 @@ fn constToString(ctx: *NativeContext, v: Value) Value {
     switch (v) {
         .string => return v,
         .int => |i| {
-            const s = std.fmt.allocPrint(ctx.allocator, "{d}", .{i}) catch return .{ .string = "" };
+            const s = std.fmt.allocPrint(ctx.allocator, "{d}", .{i}) catch return .{ .string = Value.String.borrowed("") };
             ctx.strings.append(ctx.allocator, s) catch {};
-            return .{ .string = s };
+            return .{ .string = Value.String.borrowed(s) };
         },
         .float => |f| {
-            const s = std.fmt.allocPrint(ctx.allocator, "{d}", .{f}) catch return .{ .string = "" };
+            const s = std.fmt.allocPrint(ctx.allocator, "{d}", .{f}) catch return .{ .string = Value.String.borrowed("") };
             ctx.strings.append(ctx.allocator, s) catch {};
-            return .{ .string = s };
+            return .{ .string = Value.String.borrowed(s) };
         },
-        .bool => |b| return .{ .string = if (b) "1" else "" },
-        .null => return .{ .string = "" },
-        else => return .{ .string = "" },
+        .bool => |b| return .{ .string = Value.String.borrowed(if (b) "1" else "") },
+        .null => return .{ .string = Value.String.borrowed("") },
+        else => return .{ .string = Value.String.borrowed("") },
     }
 }
 
@@ -211,18 +211,18 @@ fn setArrayKey(ctx: *NativeContext, target: *PhpArray, key: []const u8, value: V
     const inner = key[inner_start .. inner_start + inner_end];
 
     var arr: *PhpArray = undefined;
-    const existing = target.get(.{ .string = base });
+    const existing = target.get(.{ .string = Value.String.borrowed(base) });
     if (existing == .array) {
         arr = existing.array;
     } else {
         arr = try ctx.createArray();
-        try target.set(ctx.allocator, .{ .string = base }, .{ .array = arr });
+        try target.set(ctx.allocator, .{ .string = Value.String.borrowed(base) }, .{ .array = arr });
     }
 
     if (inner.len == 0) {
         try arr.append(ctx.allocator, value);
     } else {
-        try arr.set(ctx.allocator, .{ .string = inner }, value);
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(inner) }, value);
     }
 }
 

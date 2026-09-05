@@ -108,14 +108,14 @@ fn makeAttrDeferredOp(self: *Compiler, op: @import("bytecode.zig").DeferredExpr.
     };
     const sentinel = bytecode.encodeDeferredExprSentinel(self.allocator, de) catch return null;
     self.string_allocs.append(self.allocator, sentinel) catch return null;
-    return .{ .string = sentinel };
+    return .{ .string = Value.String.borrowed(sentinel) };
 }
 
 fn resolveAttrFlag(v: Value) ?i64 {
     if (v == .int) return v.int;
     if (v == .string) {
-        if (std.mem.startsWith(u8, v.string, "Attribute::")) {
-            const cn = v.string[11..];
+        if (std.mem.startsWith(u8, v.string.bytes(), "Attribute::")) {
+            const cn = v.string.bytes()[11..];
             const known = [_]struct { n: []const u8, v: i64 }{
                 .{ .n = "TARGET_CLASS", .v = 1 },
                 .{ .n = "TARGET_FUNCTION", .v = 2 },
@@ -139,8 +139,8 @@ fn parseAttrArgAtom(self: *Compiler, tokens: []const Token, source: []const u8, 
         .string => {
             const raw = tokens[pos.*].lexeme(source);
             pos.* += 1;
-            if (raw.len >= 2) return .{ .string = raw[1 .. raw.len - 1] };
-            return .{ .string = raw };
+            if (raw.len >= 2) return .{ .string = Value.String.borrowed(raw[1 .. raw.len - 1]) };
+            return .{ .string = Value.String.borrowed(raw) };
         },
         .integer => {
             const text = tokens[pos.*].lexeme(source);
@@ -184,19 +184,19 @@ fn parseAttrArgAtom(self: *Compiler, tokens: []const Token, source: []const u8, 
             {
                 const member = tokens[pos.* + 2].lexeme(source);
                 pos.* += 3;
-                if (std.mem.eql(u8, member, "class")) return .{ .string = self.resolveClassName(text) };
+                if (std.mem.eql(u8, member, "class")) return .{ .string = Value.String.borrowed(self.resolveClassName(text)) };
                 const sentinel = std.fmt.allocPrint(allocator, "\x00CC\x00{s}\x00{s}", .{ self.resolveClassName(text), member }) catch return .null;
                 self.string_allocs.append(allocator, sentinel) catch return .null;
-                return .{ .string = sentinel };
+                return .{ .string = Value.String.borrowed(sentinel) };
             }
             pos.* += 1;
             // bare identifier: a user-defined constant. emit a deferred class
             // constant sentinel so resolveDefault can fold it at attribute load
             // time (otherwise a bare `FLAG_A` string fed into a DeferredExpr
             // would coerce to 0 via toInt instead of resolving the constant)
-            const sentinel = std.fmt.allocPrint(allocator, "\x00CC\x00\x00{s}", .{text}) catch return .{ .string = text };
-            self.string_allocs.append(allocator, sentinel) catch return .{ .string = text };
-            return .{ .string = sentinel };
+            const sentinel = std.fmt.allocPrint(allocator, "\x00CC\x00\x00{s}", .{text}) catch return .{ .string = Value.String.borrowed(text) };
+            self.string_allocs.append(allocator, sentinel) catch return .{ .string = Value.String.borrowed(text) };
+            return .{ .string = Value.String.borrowed(sentinel) };
         },
         .minus => {
             pos.* += 1;
@@ -358,7 +358,7 @@ fn freeAttrSlice(allocator: Allocator, attrs: []const ParsedAttr) void {
 fn emitAttributeData(self: *Compiler, attrs: []const ParsedAttr) Error!void {
     try self.emitByte(@intCast(attrs.len));
     for (attrs) |attr| {
-        const name_idx = try self.addConstant(.{ .string = attr.name });
+        const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(attr.name) });
         try self.emitU16(name_idx);
         try self.emitByte(@intCast(attr.args.len));
         for (attr.args, 0..) |arg, i| {
@@ -366,7 +366,7 @@ fn emitAttributeData(self: *Compiler, attrs: []const ParsedAttr) Error!void {
             if (i < attr.arg_names.len) {
                 if (attr.arg_names[i]) |arg_name| {
                     try self.emitByte(1);
-                    const an_idx = try self.addConstant(.{ .string = arg_name });
+                    const an_idx = try self.addConstant(.{ .string = Value.String.borrowed(arg_name) });
                     try self.emitU16(an_idx);
                 } else {
                     try self.emitByte(0);
@@ -659,7 +659,7 @@ fn endLineForChunk(self: *Compiler, chunk: *const Chunk) u32 {
 fn docCommentConst(self: *Compiler, tok_idx: u32) Error!u16 {
     const doc = docCommentForToken(self, tok_idx);
     if (doc.len == 0) return 0xffff;
-    return @intCast(try self.addConstant(.{ .string = doc }));
+    return @intCast(try self.addConstant(.{ .string = Value.String.borrowed(doc) }));
 }
 
 fn propertyTypeConst(self: *Compiler, prop_rhs: u32) Error!u16 {
@@ -669,7 +669,7 @@ fn propertyTypeConst(self: *Compiler, prop_rhs: u32) Error!u16 {
     const start_tok = self.ast.extra_data[idx];
     const end_tok = self.ast.extra_data[idx + 1];
     const type_str = try buildTypeString(self, start_tok, end_tok);
-    return @intCast(try self.addConstant(.{ .string = type_str }));
+    return @intCast(try self.addConstant(.{ .string = Value.String.borrowed(type_str) }));
 }
 
 fn extractParamTypes(self: *Compiler, param_nodes: []const u32) Error![]const []const u8 {
@@ -1087,13 +1087,13 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
     for (sub.new_defaults.items) |nd| try self.new_defaults.append(self.allocator, nd);
     sub.new_defaults.deinit(self.allocator);
 
-    const idx = try self.addConstant(.{ .string = owned_name });
+    const idx = try self.addConstant(.{ .string = Value.String.borrowed(owned_name) });
     try self.emitConstant(idx);
 
     for (use_vars) |use_var_node| {
         const use_node = self.ast.nodes[use_var_node];
         const var_name = self.ast.tokenSlice(use_node.main_token);
-        const var_idx = try self.addConstant(.{ .string = var_name });
+        const var_idx = try self.addConstant(.{ .string = Value.String.borrowed(var_name) });
         const is_ref = use_node.data.rhs != 0;
         try self.emitOp(if (is_ref) .closure_bind_ref else .closure_bind);
         try self.emitU16(var_idx);
@@ -1114,7 +1114,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
             if (is_param) continue;
             if (std.mem.eql(u8, sn, "$this")) continue;
             if (self.local_slots.get(sn) == null) continue;
-            const sn_idx = try self.addConstant(.{ .string = sn });
+            const sn_idx = try self.addConstant(.{ .string = Value.String.borrowed(sn) });
             try self.emitOp(.closure_bind);
             try self.emitU16(sn_idx);
         }
@@ -1123,7 +1123,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
     // Static closures never bind $this. Dynamic closures still emit the bind:
     // at runtime it also records class scope when no object is present.
     if (!is_static_closure) {
-        const this_idx = try self.addConstant(.{ .string = "$this" });
+        const this_idx = try self.addConstant(.{ .string = Value.String.borrowed("$this") });
         try self.emitOp(.closure_bind);
         try self.emitU16(this_idx);
     }
@@ -1455,7 +1455,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
-    const name_idx = try self.addConstant(.{ .string = class_name });
+    const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(class_name) });
     try self.emitOp(.class_decl);
     try self.emitByte(class_modifiers);
     try self.emitU16(name_idx);
@@ -1468,7 +1468,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         const member = self.ast.nodes[member_idx];
         if (member.tag == .class_method or member.tag == .static_class_method) {
             const method_name_str = self.ast.tokenSlice(member.main_token);
-            const mname_idx = try self.addConstant(.{ .string = method_name_str });
+            const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(method_name_str) });
             try self.emitU16(mname_idx);
             const param_nodes = self.ast.extraSlice(member.data.lhs);
             try self.emitByte(@intCast(param_nodes.len));
@@ -1487,7 +1487,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             if (get_body != 0) {
                 const hk_name = try std.fmt.allocPrint(self.allocator, "{s}$hook_get", .{prop_name});
                 try self.string_allocs.append(self.allocator, hk_name);
-                const mname_idx = try self.addConstant(.{ .string = hk_name });
+                const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(hk_name) });
                 try self.emitU16(mname_idx);
                 try self.emitByte(0); // arity
                 try self.emitByte(0); // not static
@@ -1497,7 +1497,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             if (set_body != 0) {
                 const hk_name = try std.fmt.allocPrint(self.allocator, "{s}$hook_set", .{prop_name});
                 try self.string_allocs.append(self.allocator, hk_name);
-                const mname_idx = try self.addConstant(.{ .string = hk_name });
+                const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(hk_name) });
                 try self.emitU16(mname_idx);
                 try self.emitByte(1); // arity
                 try self.emitByte(0); // not static
@@ -1506,7 +1506,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             }
         } else if (member.tag == .interface_method) {
             const method_name_str = self.ast.tokenSlice(member.main_token);
-            const mname_idx = try self.addConstant(.{ .string = method_name_str });
+            const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(method_name_str) });
             try self.emitU16(mname_idx);
             const param_nodes = self.ast.extraSlice(member.data.lhs);
             try self.emitByte(@intCast(param_nodes.len));
@@ -1526,7 +1526,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         const suffix = if (is_set) "$hook_set" else "$hook_get";
         const hk_name = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prop_name, suffix });
         try self.string_allocs.append(self.allocator, hk_name);
-        const mname_idx = try self.addConstant(.{ .string = hk_name });
+        const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(hk_name) });
         try self.emitU16(mname_idx);
         try self.emitByte(if (is_set) @as(u8, 1) else @as(u8, 0));
         try self.emitByte(0); // not static
@@ -1540,7 +1540,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         if (member.tag == .class_property) {
             var prop_name = self.ast.tokenSlice(member.main_token);
             if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
-            const pname_idx = try self.addConstant(.{ .string = prop_name });
+            const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
             try self.emitU16(pname_idx);
             try self.emitByte(if (member.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
             try self.emitByte(@intCast(member.data.rhs & 0xff));
@@ -1549,7 +1549,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         } else if (member.tag == .class_property_hooks) {
             var prop_name = self.ast.tokenSlice(member.main_token);
             if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
-            const pname_idx = try self.addConstant(.{ .string = prop_name });
+            const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
             try self.emitU16(pname_idx);
             const default_idx = self.ast.extra_data[member.data.lhs];
             try self.emitByte(if (default_idx != 0) @as(u8, 1) else @as(u8, 0));
@@ -1563,7 +1563,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         const tmember = self.ast.nodes[tpi];
         var tprop_name = self.ast.tokenSlice(tmember.main_token);
         if (tprop_name.len > 0 and tprop_name[0] == '$') tprop_name = tprop_name[1..];
-        const tpname_idx = try self.addConstant(.{ .string = tprop_name });
+        const tpname_idx = try self.addConstant(.{ .string = Value.String.borrowed(tprop_name) });
         try self.emitU16(tpname_idx);
         const has_default: u8 = if (tmember.tag == .class_property_hooks) blk: {
             const default_idx = self.ast.extra_data[tmember.data.lhs];
@@ -1581,7 +1581,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         if (promotion > 0) {
             var param_name = self.ast.tokenSlice(pnode.main_token);
             if (param_name.len > 0 and param_name[0] == '$') param_name = param_name[1..];
-            const pname_idx = try self.addConstant(.{ .string = param_name });
+            const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(param_name) });
             try self.emitU16(pname_idx);
             try self.emitByte(1);
             const is_ro: u8 = if ((pnode.data.rhs & 16) != 0) 4 else 0;
@@ -1595,7 +1595,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
                 const start_tok = self.ast.extra_data[param_type_extra - 1];
                 const end_tok = self.ast.extra_data[param_type_extra];
                 const type_str = try buildTypeString(self, start_tok, end_tok);
-                try self.emitU16(try self.addConstant(.{ .string = type_str }));
+                try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(type_str) }));
             }
             try self.emitU16(0xffff); // promoted params don't carry their own doc comment
         }
@@ -1607,7 +1607,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
         if (member.tag == .static_class_property) {
             var prop_name = self.ast.tokenSlice(member.main_token);
             if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
-            const pname_idx = try self.addConstant(.{ .string = prop_name });
+            const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
             try self.emitU16(pname_idx);
             try self.emitByte(if (member.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
             try self.emitByte(@intCast(member.data.rhs & 0xff));
@@ -1616,7 +1616,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             try self.emitU16(try docCommentConst(self, member.main_token));
         } else if (member.tag == .const_decl) {
             const cname = self.ast.tokenSlice(member.main_token);
-            const cname_idx = try self.addConstant(.{ .string = cname });
+            const cname_idx = try self.addConstant(.{ .string = Value.String.borrowed(cname) });
             try self.emitU16(cname_idx);
             try self.emitByte(1); // always has a value
             try self.emitByte(@intCast(member.data.rhs & 0x13)); // bits 0-1 visibility, bit 4 final
@@ -1629,7 +1629,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     if (parent_node != 0) {
         const pnode = self.ast.nodes[parent_node];
         const parent_name = if (pnode.tag == .qualified_name) try self.buildQualifiedString(self.ast.extraSlice(pnode.data.lhs)) else self.resolveClassName(self.ast.tokenSlice(pnode.main_token));
-        const parent_idx = try self.addConstant(.{ .string = parent_name });
+        const parent_idx = try self.addConstant(.{ .string = Value.String.borrowed(parent_name) });
         try self.emitU16(parent_idx);
     } else {
         try self.emitU16(0xffff);
@@ -1638,7 +1638,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     // emit implements count and names (already resolved in impl_names)
     try self.emitByte(@intCast(impl_count));
     for (0..impl_count) |i| {
-        const iname_idx = try self.addConstant(.{ .string = impl_names[i] });
+        const iname_idx = try self.addConstant(.{ .string = Value.String.borrowed(impl_names[i]) });
         try self.emitU16(iname_idx);
     }
 
@@ -1663,7 +1663,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(all_traits.items.len));
     for (all_traits.items) |tname| {
-        const tname_idx = try self.addConstant(.{ .string = tname });
+        const tname_idx = try self.addConstant(.{ .string = Value.String.borrowed(tname) });
         try self.emitU16(tname_idx);
     }
 
@@ -1683,8 +1683,8 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     for (all_conflicts.items) |cr| {
         const method_name = self.ast.tokenSlice(cr.node.main_token);
         const trait_name = if (cr.node.data.lhs == 0) "" else self.ast.tokenSlice(self.ast.nodes[cr.node.data.lhs].main_token);
-        const method_idx = try self.addConstant(.{ .string = method_name });
-        const trait_idx = try self.addConstant(.{ .string = trait_name });
+        const method_idx = try self.addConstant(.{ .string = Value.String.borrowed(method_name) });
+        const trait_idx = try self.addConstant(.{ .string = Value.String.borrowed(trait_name) });
         try self.emitU16(method_idx);
         try self.emitU16(trait_idx);
         if (cr.node.tag == .trait_insteadof) {
@@ -1693,7 +1693,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             try self.emitByte(@intCast(excluded.len));
             for (excluded) |en| {
                 const ename = self.ast.tokenSlice(self.ast.nodes[en].main_token);
-                const eidx = try self.addConstant(.{ .string = ename });
+                const eidx = try self.addConstant(.{ .string = Value.String.borrowed(ename) });
                 try self.emitU16(eidx);
             }
         } else {
@@ -1701,7 +1701,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             const alias_token: u32 = cr.node.data.rhs & 0x3FFFFFFF;
             const vis_kind: u8 = @intCast(cr.node.data.rhs >> 30);
             const alias = self.ast.tokenSlice(alias_token);
-            const aidx = try self.addConstant(.{ .string = alias });
+            const aidx = try self.addConstant(.{ .string = Value.String.borrowed(alias) });
             try self.emitU16(aidx);
             try self.emitByte(vis_kind);
         }
@@ -1730,7 +1730,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(methods_with_attrs.items.len));
     for (methods_with_attrs.items) |ma| {
-        const mname_idx = try self.addConstant(.{ .string = ma.name });
+        const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(ma.name) });
         try self.emitU16(mname_idx);
         try emitAttributeData(self, ma.attrs);
     }
@@ -1769,7 +1769,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(props_with_attrs.items.len));
     for (props_with_attrs.items) |pa| {
-        const ppname_idx = try self.addConstant(.{ .string = pa.name });
+        const ppname_idx = try self.addConstant(.{ .string = Value.String.borrowed(pa.name) });
         try self.emitU16(ppname_idx);
         try emitAttributeData(self, pa.attrs);
     }
@@ -1792,7 +1792,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(consts_with_attrs.items.len));
     for (consts_with_attrs.items) |ca| {
-        const caname_idx = try self.addConstant(.{ .string = ca.name });
+        const caname_idx = try self.addConstant(.{ .string = Value.String.borrowed(ca.name) });
         try self.emitU16(caname_idx);
         try emitAttributeData(self, ca.attrs);
     }
@@ -1829,11 +1829,11 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(methods_with_param_attrs.items.len));
     for (methods_with_param_attrs.items) |mpa| {
-        const mpa_name_idx = try self.addConstant(.{ .string = mpa.method_name });
+        const mpa_name_idx = try self.addConstant(.{ .string = Value.String.borrowed(mpa.method_name) });
         try self.emitU16(mpa_name_idx);
         try self.emitByte(@intCast(mpa.params.len));
         for (mpa.params) |pa| {
-            const pa_name_idx = try self.addConstant(.{ .string = pa.name });
+            const pa_name_idx = try self.addConstant(.{ .string = Value.String.borrowed(pa.name) });
             try self.emitU16(pa_name_idx);
             try emitAttributeData(self, pa.attrs);
         }
@@ -1844,13 +1844,13 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
 
     // set class constants after class_decl so self:: references resolve
-    const cname_idx = try self.addConstant(.{ .string = class_name });
+    const cname_idx = try self.addConstant(.{ .string = Value.String.borrowed(class_name) });
     for (members) |member_idx| {
         const member = self.ast.nodes[member_idx];
         if (member.tag == .const_decl) {
             try self.compileNode(member.data.lhs);
             const const_name = self.ast.tokenSlice(member.main_token);
-            const cprop_idx = try self.addConstant(.{ .string = const_name });
+            const cprop_idx = try self.addConstant(.{ .string = Value.String.borrowed(const_name) });
             try self.emitOp(.set_static_prop);
             try self.emitU16(cname_idx);
             try self.emitU16(cprop_idx);
@@ -1866,7 +1866,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             try self.compileNode(member.data.lhs);
             var sp_name = self.ast.tokenSlice(member.main_token);
             if (sp_name.len > 0 and sp_name[0] == '$') sp_name = sp_name[1..];
-            const sp_idx = try self.addConstant(.{ .string = sp_name });
+            const sp_idx = try self.addConstant(.{ .string = Value.String.borrowed(sp_name) });
             try self.emitOp(.set_static_prop);
             try self.emitU16(cname_idx);
             try self.emitU16(sp_idx);
@@ -1882,7 +1882,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             try self.compileNode(member.data.lhs);
             var p_name = self.ast.tokenSlice(member.main_token);
             if (p_name.len > 0 and p_name[0] == '$') p_name = p_name[1..];
-            const p_idx = try self.addConstant(.{ .string = p_name });
+            const p_idx = try self.addConstant(.{ .string = Value.String.borrowed(p_name) });
             try self.emitOp(.set_prop_default);
             try self.emitU16(cname_idx);
             try self.emitU16(p_idx);
@@ -1991,7 +1991,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
-    const name_idx = try self.addConstant(.{ .string = anon_name });
+    const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(anon_name) });
     try self.emitOp(.class_decl);
     try self.emitByte(0); // anonymous classes have no class modifiers
     try self.emitU16(name_idx);
@@ -2004,7 +2004,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
         const member = self.ast.nodes[member_idx];
         if (member.tag == .class_method or member.tag == .static_class_method) {
             const method_name_str = self.ast.tokenSlice(member.main_token);
-            const mname_idx = try self.addConstant(.{ .string = method_name_str });
+            const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(method_name_str) });
             try self.emitU16(mname_idx);
             const param_nodes = self.ast.extraSlice(member.data.lhs);
             try self.emitByte(@intCast(param_nodes.len));
@@ -2021,7 +2021,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
         if (member.tag == .class_property) {
             var prop_name = self.ast.tokenSlice(member.main_token);
             if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
-            const pname_idx = try self.addConstant(.{ .string = prop_name });
+            const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
             try self.emitU16(pname_idx);
             try self.emitByte(if (member.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
             try self.emitByte(@intCast(member.data.rhs & 0xff));
@@ -2033,7 +2033,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
         const tmember = self.ast.nodes[tpi];
         var tprop_name = self.ast.tokenSlice(tmember.main_token);
         if (tprop_name.len > 0 and tprop_name[0] == '$') tprop_name = tprop_name[1..];
-        const tpname_idx = try self.addConstant(.{ .string = tprop_name });
+        const tpname_idx = try self.addConstant(.{ .string = Value.String.borrowed(tprop_name) });
         try self.emitU16(tpname_idx);
         try self.emitByte(if (tmember.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
         try self.emitByte(@intCast(tmember.data.rhs & 0xff));
@@ -2046,7 +2046,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
         if (promotion > 0) {
             var param_name = self.ast.tokenSlice(pnode.main_token);
             if (param_name.len > 0 and param_name[0] == '$') param_name = param_name[1..];
-            const pname_idx = try self.addConstant(.{ .string = param_name });
+            const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(param_name) });
             try self.emitU16(pname_idx);
             try self.emitByte(1);
             const is_ro: u8 = if ((pnode.data.rhs & 16) != 0) 4 else 0;
@@ -2060,7 +2060,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
                 const start_tok = self.ast.extra_data[param_type_extra - 1];
                 const end_tok = self.ast.extra_data[param_type_extra];
                 const type_str = try buildTypeString(self, start_tok, end_tok);
-                try self.emitU16(try self.addConstant(.{ .string = type_str }));
+                try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(type_str) }));
             }
             try self.emitU16(0xffff);
         }
@@ -2072,7 +2072,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
         if (member.tag == .static_class_property) {
             var prop_name = self.ast.tokenSlice(member.main_token);
             if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
-            const pname_idx = try self.addConstant(.{ .string = prop_name });
+            const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
             try self.emitU16(pname_idx);
             try self.emitByte(if (member.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
             try self.emitByte(@intCast(member.data.rhs & 0xff));
@@ -2081,7 +2081,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
             try self.emitU16(try docCommentConst(self, member.main_token));
         } else if (member.tag == .const_decl) {
             const cname = self.ast.tokenSlice(member.main_token);
-            const cname_idx = try self.addConstant(.{ .string = cname });
+            const cname_idx = try self.addConstant(.{ .string = Value.String.borrowed(cname) });
             try self.emitU16(cname_idx);
             try self.emitByte(1);
             try self.emitByte(@intCast(member.data.rhs & 0x13)); // bits 0-1 visibility, bit 4 final
@@ -2094,7 +2094,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
     if (parent_node != 0) {
         const apnode = self.ast.nodes[parent_node];
         const parent_name = if (apnode.tag == .qualified_name) try self.buildQualifiedString(self.ast.extraSlice(apnode.data.lhs)) else self.resolveClassName(self.ast.tokenSlice(apnode.main_token));
-        const parent_idx = try self.addConstant(.{ .string = parent_name });
+        const parent_idx = try self.addConstant(.{ .string = Value.String.borrowed(parent_name) });
         try self.emitU16(parent_idx);
     } else {
         try self.emitU16(0xffff);
@@ -2102,7 +2102,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
 
     try self.emitByte(@intCast(impl_count));
     for (0..impl_count) |i| {
-        const iname_idx = try self.addConstant(.{ .string = impl_names[i] });
+        const iname_idx = try self.addConstant(.{ .string = Value.String.borrowed(impl_names[i]) });
         try self.emitU16(iname_idx);
     }
 
@@ -2126,7 +2126,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(all_traits.items.len));
     for (all_traits.items) |tname| {
-        const tname_idx = try self.addConstant(.{ .string = tname });
+        const tname_idx = try self.addConstant(.{ .string = Value.String.borrowed(tname) });
         try self.emitU16(tname_idx);
     }
 
@@ -2145,8 +2145,8 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
     for (all_conflicts.items) |cr| {
         const method_name = self.ast.tokenSlice(cr.cnode.main_token);
         const trait_name = if (cr.cnode.data.lhs == 0) "" else self.ast.tokenSlice(self.ast.nodes[cr.cnode.data.lhs].main_token);
-        const method_idx = try self.addConstant(.{ .string = method_name });
-        const trait_idx = try self.addConstant(.{ .string = trait_name });
+        const method_idx = try self.addConstant(.{ .string = Value.String.borrowed(method_name) });
+        const trait_idx = try self.addConstant(.{ .string = Value.String.borrowed(trait_name) });
         try self.emitU16(method_idx);
         try self.emitU16(trait_idx);
         if (cr.cnode.tag == .trait_insteadof) {
@@ -2155,7 +2155,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
             try self.emitByte(@intCast(excluded.len));
             for (excluded) |en| {
                 const ename = self.ast.tokenSlice(self.ast.nodes[en].main_token);
-                const eidx = try self.addConstant(.{ .string = ename });
+                const eidx = try self.addConstant(.{ .string = Value.String.borrowed(ename) });
                 try self.emitU16(eidx);
             }
         } else {
@@ -2163,7 +2163,7 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
             const alias_token: u32 = cr.cnode.data.rhs & 0x3FFFFFFF;
             const vis_kind: u8 = @intCast(cr.cnode.data.rhs >> 30);
             const alias = self.ast.tokenSlice(alias_token);
-            const aidx = try self.addConstant(.{ .string = alias });
+            const aidx = try self.addConstant(.{ .string = Value.String.borrowed(alias) });
             try self.emitU16(aidx);
             try self.emitByte(vis_kind);
         }
@@ -2216,7 +2216,7 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
-    const name_idx = try self.addConstant(.{ .string = iface_name });
+    const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(iface_name) });
     try self.emitOp(.interface_decl);
     try self.emitU16(name_idx);
     try self.emitU16(method_count);
@@ -2225,7 +2225,7 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
         const member = self.ast.nodes[m];
         if (member.tag == .interface_method) {
             const mname = self.ast.tokenSlice(member.main_token);
-            const mname_idx = try self.addConstant(.{ .string = mname });
+            const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(mname) });
             try self.emitU16(mname_idx);
         }
     }
@@ -2236,7 +2236,7 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
         for (0..parent_count) |i| {
             const pnode = self.ast.nodes[self.ast.extra_data[node.data.rhs + 1 + i]];
             const parent_name = if (pnode.tag == .qualified_name) try self.buildQualifiedString(self.ast.extraSlice(pnode.data.lhs)) else self.resolveClassName(self.ast.tokenSlice(pnode.main_token));
-            const pidx = try self.addConstant(.{ .string = parent_name });
+            const pidx = try self.addConstant(.{ .string = Value.String.borrowed(parent_name) });
             try self.emitU16(pidx);
         }
     } else {
@@ -2248,7 +2248,7 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
         const member = self.ast.nodes[m];
         if (member.tag == .const_decl) {
             const cname = self.ast.tokenSlice(member.main_token);
-            const cname_idx = try self.addConstant(.{ .string = cname });
+            const cname_idx = try self.addConstant(.{ .string = Value.String.borrowed(cname) });
             try self.emitU16(cname_idx);
         }
     }
@@ -2276,7 +2276,7 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(methods_with_attrs.items.len));
     for (methods_with_attrs.items) |ma| {
-        const mname_idx = try self.addConstant(.{ .string = ma.name });
+        const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(ma.name) });
         try self.emitU16(mname_idx);
         try emitAttributeData(self, ma.attrs);
     }
@@ -2288,7 +2288,7 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
         if (member.tag == .const_decl) {
             try self.compileNode(member.data.lhs);
             const cname = self.ast.tokenSlice(member.main_token);
-            const cprop_idx = try self.addConstant(.{ .string = cname });
+            const cprop_idx = try self.addConstant(.{ .string = Value.String.borrowed(cname) });
             try self.emitOp(.set_static_prop);
             try self.emitU16(name_idx);
             try self.emitU16(cprop_idx);
@@ -2403,12 +2403,12 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
-    const name_idx = try self.addConstant(.{ .string = trait_name });
+    const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(trait_name) });
     try self.emitOp(.trait_decl);
     try self.emitU16(name_idx);
     try self.emitByte(@intCast(sub_traits.items.len));
     for (sub_traits.items) |st| {
-        const st_idx = try self.addConstant(.{ .string = st });
+        const st_idx = try self.addConstant(.{ .string = Value.String.borrowed(st) });
         try self.emitU16(st_idx);
     }
     try self.emitByte(@intCast(own_props.items.len));
@@ -2416,7 +2416,7 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
         const pmember = self.ast.nodes[pi];
         var pname = self.ast.tokenSlice(pmember.main_token);
         if (pname.len > 0 and pname[0] == '$') pname = pname[1..];
-        const pname_idx = try self.addConstant(.{ .string = pname });
+        const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(pname) });
         try self.emitU16(pname_idx);
         try self.emitByte(if (pmember.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
         try self.emitByte(@intCast(pmember.data.rhs & 0xff));
@@ -2426,7 +2426,7 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
         const pmember = self.ast.nodes[pi];
         var pname = self.ast.tokenSlice(pmember.main_token);
         if (pname.len > 0 and pname[0] == '$') pname = pname[1..];
-        const pname_idx = try self.addConstant(.{ .string = pname });
+        const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(pname) });
         try self.emitU16(pname_idx);
         try self.emitByte(if (pmember.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
         try self.emitByte(@intCast(pmember.data.rhs & 0xff));
@@ -2437,7 +2437,7 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
     for (const_decls.items) |pi| {
         const pmember = self.ast.nodes[pi];
         const pname = self.ast.tokenSlice(pmember.main_token);
-        const pname_idx = try self.addConstant(.{ .string = pname });
+        const pname_idx = try self.addConstant(.{ .string = Value.String.borrowed(pname) });
         try self.emitU16(pname_idx);
         try self.emitByte(if (pmember.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
     }
@@ -2465,7 +2465,7 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(methods_with_attrs.items.len));
     for (methods_with_attrs.items) |ma| {
-        const mname_idx = try self.addConstant(.{ .string = ma.name });
+        const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(ma.name) });
         try self.emitU16(mname_idx);
         try emitAttributeData(self, ma.attrs);
     }
@@ -2490,7 +2490,7 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(props_with_attrs.items.len));
     for (props_with_attrs.items) |pa| {
-        const ppname_idx = try self.addConstant(.{ .string = pa.name });
+        const ppname_idx = try self.addConstant(.{ .string = Value.String.borrowed(pa.name) });
         try self.emitU16(ppname_idx);
         try emitAttributeData(self, pa.attrs);
     }
@@ -2535,7 +2535,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
-    const name_idx = try self.addConstant(.{ .string = enum_name });
+    const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(enum_name) });
     try self.emitOp(.enum_decl);
     try self.emitU16(name_idx);
     try self.emitByte(backed_type);
@@ -2545,7 +2545,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
         const member = self.ast.nodes[member_idx];
         if (member.tag == .enum_case) {
             const case_name = self.ast.tokenSlice(member.main_token);
-            const cname_idx = try self.addConstant(.{ .string = case_name });
+            const cname_idx = try self.addConstant(.{ .string = Value.String.borrowed(case_name) });
             try self.emitU16(cname_idx);
             try self.emitByte(if (member.data.lhs != 0) @as(u8, 1) else @as(u8, 0));
         }
@@ -2556,7 +2556,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
         const member = self.ast.nodes[member_idx];
         if (member.tag == .class_method or member.tag == .static_class_method) {
             const method_name_str = self.ast.tokenSlice(member.main_token);
-            const mname_idx = try self.addConstant(.{ .string = method_name_str });
+            const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(method_name_str) });
             try self.emitU16(mname_idx);
             const param_nodes = self.ast.extraSlice(member.data.lhs);
             try self.emitByte(@intCast(param_nodes.len));
@@ -2571,7 +2571,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
     try self.emitByte(@intCast(impl_count));
     for (0..impl_count) |i| {
         const impl_node = self.ast.nodes[self.ast.extra_data[rhs_base + 2 + i]];
-        const iname_idx = try self.addConstant(.{ .string = self.ast.tokenSlice(impl_node.main_token) });
+        const iname_idx = try self.addConstant(.{ .string = Value.String.borrowed(self.ast.tokenSlice(impl_node.main_token)) });
         try self.emitU16(iname_idx);
     }
 
@@ -2593,7 +2593,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(enum_traits.items.len));
     for (enum_traits.items) |tname| {
-        const tname_idx = try self.addConstant(.{ .string = tname });
+        const tname_idx = try self.addConstant(.{ .string = Value.String.borrowed(tname) });
         try self.emitU16(tname_idx);
     }
 
@@ -2620,7 +2620,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(methods_with_attrs.items.len));
     for (methods_with_attrs.items) |ma| {
-        const mname_idx = try self.addConstant(.{ .string = ma.name });
+        const mname_idx = try self.addConstant(.{ .string = Value.String.borrowed(ma.name) });
         try self.emitU16(mname_idx);
         try emitAttributeData(self, ma.attrs);
     }
@@ -2646,7 +2646,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     try self.emitByte(@intCast(cases_with_attrs.items.len));
     for (cases_with_attrs.items) |ca| {
-        const cname_idx2 = try self.addConstant(.{ .string = ca.name });
+        const cname_idx2 = try self.addConstant(.{ .string = Value.String.borrowed(ca.name) });
         try self.emitU16(cname_idx2);
         try emitAttributeData(self, ca.attrs);
     }
@@ -2662,12 +2662,12 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
         const member = self.ast.nodes[member_idx];
         if (member.tag == .const_decl) {
             const ec_name = self.ast.tokenSlice(member.main_token);
-            const ec_idx = try self.addConstant(.{ .string = ec_name });
+            const ec_idx = try self.addConstant(.{ .string = Value.String.borrowed(ec_name) });
             try self.emitU16(ec_idx);
         }
     }
 
-    const cname_idx = try self.addConstant(.{ .string = enum_name });
+    const cname_idx = try self.addConstant(.{ .string = Value.String.borrowed(enum_name) });
     const prev_class = self.current_class;
     self.current_class = enum_name;
     defer self.current_class = prev_class;
@@ -2676,7 +2676,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
         if (member.tag == .const_decl) {
             try self.compileNode(member.data.lhs);
             const const_name = self.ast.tokenSlice(member.main_token);
-            const cprop_idx = try self.addConstant(.{ .string = const_name });
+            const cprop_idx = try self.addConstant(.{ .string = Value.String.borrowed(const_name) });
             try self.emitOp(.set_static_prop);
             try self.emitU16(cname_idx);
             try self.emitU16(cprop_idx);
@@ -2783,7 +2783,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
                 try sub.emitGetVar("$this");
                 try sub.emitGetVar(param_name);
                 if (param_name.len > 0 and param_name[0] == '$') param_name = param_name[1..];
-                const prop_idx = try sub.addConstant(.{ .string = param_name });
+                const prop_idx = try sub.addConstant(.{ .string = Value.String.borrowed(param_name) });
                 try sub.emitOp(.set_prop);
                 try sub.emitU16(prop_idx);
                 try sub.emitOp(.pop);
@@ -2923,7 +2923,7 @@ fn compilePropertyHook(self: *Compiler, class_name: []const u8, prop_name: []con
             try sub.emitOp(.get_local);
             try sub.emitU16(this_slot);
             try sub.compileNode(body_idx);
-            const prop_idx = try sub.addConstant(.{ .string = prop_name });
+            const prop_idx = try sub.addConstant(.{ .string = Value.String.borrowed(prop_name) });
             try sub.emitOp(.set_prop);
             try sub.emitU16(prop_idx);
             try sub.emitOp(.pop);

@@ -173,9 +173,9 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
     if (exc == .object) {
         class_name = exc.object.class_name;
         const msg = exc.object.get("message");
-        if (msg == .string) message = msg.string;
+        if (msg == .string) message = msg.string.bytes();
     } else if (exc == .string) {
-        message = exc.string;
+        message = exc.string.bytes();
     }
 
     const frame_idx = if (vm.frame_count > 0) vm.frame_count - 1 else 0;
@@ -400,9 +400,9 @@ fn writeArgValue(buf: *Writer, alloc: std.mem.Allocator, v: Value) void {
         .string => |s| {
             // PHP truncates long strings to 15 chars + '...'
             if (s.len <= 15) {
-                writeFmt(buf, alloc, "'{s}'", .{s});
+                writeFmt(buf, alloc, "'{s}'", .{s.bytes()});
             } else {
-                writeFmt(buf, alloc, "'{s}...'", .{s[0..15]});
+                writeFmt(buf, alloc, "'{s}...'", .{s.bytes()[0..15]});
             }
         },
         .array => write(buf, alloc, "Array"),

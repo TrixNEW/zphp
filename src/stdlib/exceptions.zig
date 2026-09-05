@@ -19,10 +19,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.interfaces.put(a, "Throwable", throwable);
 
     var exc_def = ClassDef{ .name = "Exception" };
-    try exc_def.properties.append(a, .{ .name = "message", .default = .{ .string = "" } });
+    try exc_def.properties.append(a, .{ .name = "message", .default = .{ .string = Value.String.borrowed("") } });
     try exc_def.properties.append(a, .{ .name = "code", .default = .{ .int = 0 } });
     try exc_def.properties.append(a, .{ .name = "previous", .default = .null });
-    try exc_def.properties.append(a, .{ .name = "file", .default = .{ .string = "" } });
+    try exc_def.properties.append(a, .{ .name = "file", .default = .{ .string = Value.String.borrowed("") } });
     try exc_def.properties.append(a, .{ .name = "line", .default = .{ .int = 0 } });
     try exc_def.interfaces.append(a, "Throwable");
     try exc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
@@ -48,10 +48,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "Exception::__toString", exceptionToString);
 
     var err_def = ClassDef{ .name = "Error" };
-    try err_def.properties.append(a, .{ .name = "message", .default = .{ .string = "" } });
+    try err_def.properties.append(a, .{ .name = "message", .default = .{ .string = Value.String.borrowed("") } });
     try err_def.properties.append(a, .{ .name = "code", .default = .{ .int = 0 } });
     try err_def.properties.append(a, .{ .name = "previous", .default = .null });
-    try err_def.properties.append(a, .{ .name = "file", .default = .{ .string = "" } });
+    try err_def.properties.append(a, .{ .name = "file", .default = .{ .string = Value.String.borrowed("") } });
     try err_def.properties.append(a, .{ .name = "line", .default = .{ .int = 0 } });
     try err_def.interfaces.append(a, "Throwable");
     try err_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
@@ -164,7 +164,7 @@ fn exceptionConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     // declaring file, or the script_path for top-level/require frames)
     // instead of the VM-wide entry script
     const exc_file = if (ctx.vm.frame_count > 1) ctx.vm.frameFile(ctx.vm.frame_count - 2) else ctx.vm.file_path;
-    try obj.set(ctx.allocator, "file", .{ .string = exc_file });
+    try obj.set(ctx.allocator, "file", .{ .string = Value.String.borrowed(exc_file) });
     if (ctx.vm.frame_count > 1) {
         const caller = ctx.vm.frames[ctx.vm.frame_count - 2];
         const ip = if (caller.ip > 0) caller.ip - 1 else 0;
@@ -206,18 +206,18 @@ fn buildAndAttachTrace(ctx: *NativeContext, obj: *@import("../runtime/value.zig"
                     try ctx.vm.arrays.append(ctx.vm.allocator, entry);
                     const type_str: []const u8 = if (f.is_static) "::" else "->";
                     if (std.mem.indexOf(u8, f.name, "::")) |sep| {
-                        try entry.set(ctx.vm.allocator, .{ .string = "function" }, .{ .string = f.name[sep + 2 ..] });
-                        try entry.set(ctx.vm.allocator, .{ .string = "class" }, .{ .string = f.name[0..sep] });
-                        try entry.set(ctx.vm.allocator, .{ .string = "type" }, .{ .string = type_str });
+                        try entry.set(ctx.vm.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(f.name[sep + 2 ..]) });
+                        try entry.set(ctx.vm.allocator, .{ .string = Value.String.borrowed("class") }, .{ .string = Value.String.borrowed(f.name[0..sep]) });
+                        try entry.set(ctx.vm.allocator, .{ .string = Value.String.borrowed("type") }, .{ .string = Value.String.borrowed(type_str) });
                     } else {
-                        try entry.set(ctx.vm.allocator, .{ .string = "function" }, .{ .string = try ctx.vm.funcDisplayName(f) });
+                        try entry.set(ctx.vm.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(try ctx.vm.funcDisplayName(f)) });
                     }
                     if (i > 0) {
                         const caller = ctx.vm.frames[i - 1];
                         const ip = if (caller.ip > 0) caller.ip - 1 else 0;
                         if (caller.chunk.getSourceLocation(ip, ctx.vm.source)) |loc| {
-                            try entry.set(ctx.vm.allocator, .{ .string = "line" }, .{ .int = @as(i64, @intCast(loc.line)) });
-                            try entry.set(ctx.vm.allocator, .{ .string = "file" }, .{ .string = ctx.vm.frameFile(i - 1) });
+                            try entry.set(ctx.vm.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = @as(i64, @intCast(loc.line)) });
+                            try entry.set(ctx.vm.allocator, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(ctx.vm.frameFile(i - 1)) });
                         }
                     }
                     const args_arr = try ctx.vm.allocator.create(PhpArray);
@@ -229,7 +229,7 @@ fn buildAndAttachTrace(ctx: *NativeContext, obj: *@import("../runtime/value.zig"
                     for (f.params) |pname| {
                         try args_arr.append(ctx.vm.allocator, frameParamValue(&frame, f, pname));
                     }
-                    try entry.set(ctx.vm.allocator, .{ .string = "args" }, .{ .array = args_arr });
+                    try entry.set(ctx.vm.allocator, .{ .string = Value.String.borrowed("args") }, .{ .array = args_arr });
                     try arr.append(ctx.vm.allocator, .{ .array = entry });
                 }
             }
@@ -247,18 +247,18 @@ fn exceptionGetMessage(ctx: *NativeContext, _: []const Value) RuntimeError!Value
 }
 
 fn exceptionToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return .{ .string = "" };
-    if (this_val != .object) return .{ .string = "" };
+    const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return .{ .string = Value.String.borrowed("") };
+    if (this_val != .object) return .{ .string = Value.String.borrowed("") };
     const obj = this_val.object;
     const msg = obj.get("message");
-    const msg_str = if (msg == .string) msg.string else "";
+    const msg_str = if (msg == .string) msg.string.bytes() else "";
     const file = obj.get("file");
-    const file_str = if (file == .string) file.string else "";
+    const file_str = if (file == .string) file.string.bytes() else "";
     const line = obj.get("line");
     const line_int = if (line == .int) line.int else 0;
     const s = try std.fmt.allocPrint(ctx.allocator, "{s}: {s} in {s}:{d}\nStack trace:\n#0 {{main}}", .{ obj.class_name, msg_str, file_str, line_int });
     try ctx.vm.strings.append(ctx.allocator, s);
-    return .{ .string = s };
+    return .{ .string = Value.String.borrowed(s) };
 }
 
 fn exceptionGetCode(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -277,7 +277,7 @@ fn exceptionGetFile(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return .null;
     if (this_val != .object) return .null;
     const v = this_val.object.get("file");
-    return if (v == .string) v else .{ .string = "" };
+    return if (v == .string) v else .{ .string = Value.String.borrowed("") };
 }
 
 fn exceptionGetLine(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -320,12 +320,12 @@ fn formatTraceArg(buf: *std.ArrayListUnmanaged(u8), alloc: std.mem.Allocator, v:
             // a closure passed as a callable is represented in zphp as its
             // synthetic name (`__closure_N` / `__closure_N_M`); PHP renders
             // it as `Object(Closure)` in trace args
-            if (std.mem.startsWith(u8, s, "__closure_")) {
+            if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
                 try buf.appendSlice(alloc, "Object(Closure)");
-            } else if (s.len <= 15) {
-                try w.print("'{s}'", .{s});
+            } else if (s.bytes().len <= 15) {
+                try w.print("'{s}'", .{s.bytes()});
             } else {
-                try w.print("'{s}...'", .{s[0..15]});
+                try w.print("'{s}...'", .{s.bytes()[0..15]});
             }
         },
         .array => try buf.appendSlice(alloc, "Array"),
@@ -335,8 +335,8 @@ fn formatTraceArg(buf: *std.ArrayListUnmanaged(u8), alloc: std.mem.Allocator, v:
 }
 
 fn exceptionGetTraceAsString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return .{ .string = "" };
-    if (this_val != .object) return .{ .string = "" };
+    const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return .{ .string = Value.String.borrowed("") };
+    if (this_val != .object) return .{ .string = Value.String.borrowed("") };
     const t = this_val.object.get("__trace");
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(ctx.allocator);
@@ -344,15 +344,15 @@ fn exceptionGetTraceAsString(ctx: *NativeContext, _: []const Value) RuntimeError
         for (t.array.entries.items, 0..) |entry, i| {
             if (entry.value != .array) continue;
             const e = entry.value.array;
-            const fn_v = e.get(.{ .string = "function" });
-            const line_v = e.get(.{ .string = "line" });
-            const file_v = e.get(.{ .string = "file" });
-            const class_v = e.get(.{ .string = "class" });
-            const type_v = e.get(.{ .string = "type" });
-            const fn_s = if (fn_v == .string) fn_v.string else "?";
-            const class_s = if (class_v == .string) class_v.string else "";
-            const type_s = if (type_v == .string) type_v.string else "";
-            const file_s = if (file_v == .string) file_v.string else "";
+            const fn_v = e.get(.{ .string = Value.String.borrowed("function") });
+            const line_v = e.get(.{ .string = Value.String.borrowed("line") });
+            const file_v = e.get(.{ .string = Value.String.borrowed("file") });
+            const class_v = e.get(.{ .string = Value.String.borrowed("class") });
+            const type_v = e.get(.{ .string = Value.String.borrowed("type") });
+            const fn_s = if (fn_v == .string) fn_v.string.bytes() else "?";
+            const class_s = if (class_v == .string) class_v.string.bytes() else "";
+            const type_s = if (type_v == .string) type_v.string.bytes() else "";
+            const file_s = if (file_v == .string) file_v.string.bytes() else "";
             const line_n: i64 = if (line_v == .int) line_v.int else 0;
             // a frame with no file/line was called from an internal function
             // (a native dispatched the user callback) - PHP renders these as
@@ -362,7 +362,7 @@ fn exceptionGetTraceAsString(ctx: *NativeContext, _: []const Value) RuntimeError
             } else {
                 try buf.writer(ctx.allocator).print("#{d} {s}({d}): {s}{s}{s}(", .{ i, file_s, line_n, class_s, type_s, fn_s });
             }
-            const args_v = e.get(.{ .string = "args" });
+            const args_v = e.get(.{ .string = Value.String.borrowed("args") });
             if (args_v == .array) {
                 for (args_v.array.entries.items, 0..) |arg_entry, ai| {
                     if (ai > 0) try buf.appendSlice(ctx.allocator, ", ");
@@ -378,5 +378,5 @@ fn exceptionGetTraceAsString(ctx: *NativeContext, _: []const Value) RuntimeError
     }
     const owned = try ctx.allocator.dupe(u8, buf.items);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }

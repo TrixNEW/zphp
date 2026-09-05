@@ -34,7 +34,7 @@ fn assertEq(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     defer ctx.allocator.free(s2);
 
     const msg = if (args.len >= 3 and args[2] == .string)
-        args[2].string
+        args[2].string.bytes()
     else blk: {
         const m = try std.fmt.allocPrint(ctx.allocator, "expected {s}, got {s}", .{ s1, s2 });
         try ctx.strings.append(ctx.allocator, m);
@@ -47,41 +47,41 @@ fn assertEq(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn assertTrue(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return failAssertion(ctx, "assert_true requires 1 argument");
     if (args[0].isTruthy()) return .null;
-    const msg = if (args.len >= 2 and args[1] == .string) args[1].string else "expected true, got false";
+    const msg = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "expected true, got false";
     return failAssertion(ctx, msg);
 }
 
 fn assertFalse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return failAssertion(ctx, "assert_false requires 1 argument");
     if (!args[0].isTruthy()) return .null;
-    const msg = if (args.len >= 2 and args[1] == .string) args[1].string else "expected false, got true";
+    const msg = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "expected false, got true";
     return failAssertion(ctx, msg);
 }
 
 fn assertNull(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return failAssertion(ctx, "assert_null requires 1 argument");
     if (args[0] == .null) return .null;
-    const msg = if (args.len >= 2 and args[1] == .string) args[1].string else "expected null";
+    const msg = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "expected null";
     return failAssertion(ctx, msg);
 }
 
 fn assertNotNull(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return failAssertion(ctx, "assert_not_null requires 1 argument");
     if (args[0] != .null) return .null;
-    const msg = if (args.len >= 2 and args[1] == .string) args[1].string else "expected non-null";
+    const msg = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "expected non-null";
     return failAssertion(ctx, msg);
 }
 
 fn assertContains(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return failAssertion(ctx, "assert_contains requires 2 arguments");
     if (args[0] == .string and args[1] == .string) {
-        if (std.mem.indexOf(u8, args[0].string, args[1].string) != null) return .null;
+        if (std.mem.indexOf(u8, args[0].string.bytes(), args[1].string.bytes()) != null) return .null;
     }
     if (args[0] == .array and args.len >= 2) {
         for (args[0].array.entries.items) |entry| {
             if (Value.identical(entry.value, args[1])) return .null;
         }
     }
-    const msg = if (args.len >= 3 and args[2] == .string) args[2].string else "value not found in haystack";
+    const msg = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else "value not found in haystack";
     return failAssertion(ctx, msg);
 }

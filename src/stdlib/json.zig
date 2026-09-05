@@ -58,7 +58,7 @@ fn json_encode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     last_error_msg = "No error";
     const result = buf.toOwnedSlice(ctx.allocator) catch return .{ .bool = false };
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn encodeValue(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: Value, depth: usize, max_depth: usize, flags: i64, vm: ?*vm_mod.VM, visited: *std.ArrayListUnmanaged(usize)) !void {
@@ -138,18 +138,18 @@ fn encodeValue(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: Valu
             }
         },
         .string => |s| {
-            if (std.mem.startsWith(u8, s, "__closure_")) {
+            if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
                 try buf.appendSlice(a, "{}");
                 return;
             }
             if ((flags & JSON_NUMERIC_CHECK) != 0 and s.len > 0) {
-                if (std.fmt.parseInt(i64, s, 10)) |int_val| {
+                if (std.fmt.parseInt(i64, s.bytes(), 10)) |int_val| {
                     var tmp: [32]u8 = undefined;
                     const ns = std.fmt.bufPrint(&tmp, "{d}", .{int_val}) catch "";
                     try buf.appendSlice(a, ns);
                     return;
                 } else |_| {
-                    if (std.fmt.parseFloat(f64, s)) |float_val| {
+                    if (std.fmt.parseFloat(f64, s.bytes())) |float_val| {
                         if (!std.math.isNan(float_val) and !std.math.isInf(float_val)) {
                             if (float_val == @trunc(float_val) and @abs(float_val) < 1e15) {
                                 const iv: i64 = @intFromFloat(float_val);
@@ -173,7 +173,7 @@ fn encodeValue(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: Valu
             try buf.append(a, '"');
             var i: usize = 0;
             while (i < s.len) {
-                const c = s[i];
+                const c = s.bytes()[i];
                 switch (c) {
                     '"' => {
                         if (hex_quot) {
@@ -220,7 +220,7 @@ fn encodeValue(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: Valu
                             const codepoint: ?u21 = blk: {
                                 const sl = seq_len_or catch break :blk null;
                                 if (i + sl > s.len) break :blk null;
-                                const cp = std.unicode.utf8Decode(s[i..][0..sl]) catch break :blk null;
+                                const cp = std.unicode.utf8Decode(s.bytes()[i..][0..sl]) catch break :blk null;
                                 break :blk cp;
                             };
                             if (codepoint == null) {
@@ -246,7 +246,7 @@ fn encodeValue(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: Valu
                             const unescape_line_term = (flags & 2048) != 0; // JSON_UNESCAPED_LINE_TERMINATORS
                             const is_line_term = cp == 0x2028 or cp == 0x2029;
                             if (unescape_unicode and !(is_line_term and !unescape_line_term)) {
-                                try buf.appendSlice(a, s[i..][0..sl]);
+                                try buf.appendSlice(a, s.bytes()[i..][0..sl]);
                             } else if (cp <= 0xFFFF) {
                                 var hex_buf: [6]u8 = undefined;
                                 const hex_str = std.fmt.bufPrint(&hex_buf, "\\u{x:0>4}", .{cp}) catch unreachable;
@@ -409,7 +409,10 @@ fn encodeValue(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: Valu
                 var in_slots = false;
                 if (obj.slot_layout) |layout| {
                     for (layout.names) |sn| {
-                        if (std.mem.eql(u8, sn, entry.key_ptr.*)) { in_slots = true; break; }
+                        if (std.mem.eql(u8, sn, entry.key_ptr.*)) {
+                            in_slots = true;
+                            break;
+                        }
                     }
                 }
                 if (!in_slots and prop_count < props.len) {
@@ -430,7 +433,7 @@ fn encodeValue(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: Valu
                     try buf.append(a, '\n');
                     try appendIndent(buf, a, depth + 1);
                 }
-                try encodeValue(buf, a, .{ .string = prop.name }, depth, max_depth, flags, vm, visited);
+                try encodeValue(buf, a, .{ .string = Value.String.borrowed(prop.name) }, depth, max_depth, flags, vm, visited);
                 try buf.append(a, ':');
                 if (pretty) try buf.append(a, ' ');
                 try encodeValue(buf, a, prop.value, depth + 1, max_depth, flags, vm, visited);
@@ -482,7 +485,7 @@ fn appendIndent(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, depth: u
 
 fn json_decode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .null;
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const flags = if (args.len >= 4) Value.toInt(args[3]) else 0;
     // PHP semantics: JSON_OBJECT_AS_ARRAY only applies when $associative is
     // null (default); an explicit true/false wins over the flag.
@@ -532,23 +535,23 @@ fn json_decode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 // integer (no leading zeros, no plus sign, no whitespace) and fits in i64
 // becomes an int key. Used by json_decode in assoc mode.
 fn decodeKeyToArrayKey(s: []const u8) PhpArray.Key {
-    if (s.len == 0) return .{ .string = s };
+    if (s.len == 0) return .{ .string = Value.String.borrowed(s) };
     var i: usize = 0;
     if (s[0] == '-') {
-        if (s.len == 1) return .{ .string = s };
+        if (s.len == 1) return .{ .string = Value.String.borrowed(s) };
         i = 1;
     }
-    if (i >= s.len) return .{ .string = s };
+    if (i >= s.len) return .{ .string = Value.String.borrowed(s) };
     if (s[i] == '0') {
-        if (s.len - i != 1) return .{ .string = s };
+        if (s.len - i != 1) return .{ .string = Value.String.borrowed(s) };
     } else if (s[i] < '1' or s[i] > '9') {
-        return .{ .string = s };
+        return .{ .string = Value.String.borrowed(s) };
     }
     var j: usize = i + 1;
     while (j < s.len) : (j += 1) {
-        if (s[j] < '0' or s[j] > '9') return .{ .string = s };
+        if (s[j] < '0' or s[j] > '9') return .{ .string = Value.String.borrowed(s) };
     }
-    const v = std.fmt.parseInt(i64, s, 10) catch return .{ .string = s };
+    const v = std.fmt.parseInt(i64, s, 10) catch return .{ .string = Value.String.borrowed(s) };
     return .{ .int = v };
 }
 
@@ -654,7 +657,7 @@ fn parseString(ctx: *NativeContext, s: []const u8, pos: *usize) !Value {
     pos.* += 1;
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn parseNumber(ctx: *NativeContext, s: []const u8, pos: *usize, flags: i64) !Value {
@@ -682,7 +685,7 @@ fn parseNumber(ctx: *NativeContext, s: []const u8, pos: *usize, flags: i64) !Val
         if ((flags & JSON_BIGINT_AS_STRING) != 0) {
             const dup = try ctx.allocator.dupe(u8, num_str);
             try ctx.strings.append(ctx.allocator, dup);
-            return .{ .string = dup };
+            return .{ .string = Value.String.borrowed(dup) };
         }
         const f = std.fmt.parseFloat(f64, num_str) catch 0.0;
         return .{ .float = f };
@@ -774,7 +777,7 @@ fn parseObject(ctx: *NativeContext, s: []const u8, pos: *usize, assoc: bool, max
                 return error.RuntimeError;
             }
             const key_val = try parseString(ctx, s, pos);
-            const key_str = if (key_val == .string) key_val.string else "";
+            const key_str = if (key_val == .string) key_val.string.bytes() else "";
             skipWhitespace(s, pos);
             if (pos.* >= s.len or s[pos.*] != ':') {
                 setSyntaxError();
@@ -811,7 +814,7 @@ fn parseObject(ctx: *NativeContext, s: []const u8, pos: *usize, assoc: bool, max
             return error.RuntimeError;
         }
         const key_val = try parseString(ctx, s, pos);
-        const key_str = if (key_val == .string) key_val.string else "";
+        const key_str = if (key_val == .string) key_val.string.bytes() else "";
         skipWhitespace(s, pos);
         if (pos.* >= s.len or s[pos.*] != ':') {
             setSyntaxError();
@@ -841,7 +844,7 @@ fn skipWhitespace(s: []const u8, pos: *usize) void {
 fn throwJsonException(ctx: *NativeContext, msg: []const u8) RuntimeError {
     const obj = ctx.allocator.create(PhpObject) catch return error.OutOfMemory;
     obj.* = .{ .class_name = "JsonException" };
-    obj.set(ctx.allocator, "message", .{ .string = msg }) catch {};
+    obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed(msg) }) catch {};
     obj.set(ctx.allocator, "code", .{ .int = 0 }) catch {};
     ctx.vm.objects.append(ctx.allocator, obj) catch {};
     ctx.vm.pending_exception = .{ .object = obj };
@@ -850,7 +853,7 @@ fn throwJsonException(ctx: *NativeContext, msg: []const u8) RuntimeError {
 
 fn json_validate(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const depth: usize = if (args.len >= 2) @intCast(@max(1, Value.toInt(args[1]))) else 512;
     const flags = if (args.len >= 3) Value.toInt(args[2]) else 0;
     last_error = 0;
@@ -882,5 +885,5 @@ fn native_json_last_error(_: *NativeContext, _: []const Value) RuntimeError!Valu
 }
 
 fn native_json_last_error_msg(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = last_error_msg };
+    return .{ .string = Value.String.borrowed(last_error_msg) };
 }

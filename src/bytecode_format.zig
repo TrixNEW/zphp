@@ -155,20 +155,20 @@ fn internChunkStrings(allocator: Allocator, strtab: *StringTable, chunk: *const 
 fn internValueStrings(allocator: Allocator, strtab: *StringTable, val: Value) !void {
     switch (val) {
         .string => |s| {
-            if (bytecode.deferredExprPtr(s)) |de| {
+            if (bytecode.deferredExprPtr(s.bytes())) |de| {
                 try internValueStrings(allocator, strtab, de.lhs);
                 try internValueStrings(allocator, strtab, de.rhs);
-            } else if (bytecode.newDefaultPtr(s)) |nd| {
+            } else if (bytecode.newDefaultPtr(s.bytes())) |nd| {
                 _ = try strtab.intern(allocator, nd.class_name);
                 for (nd.args) |arg| try internValueStrings(allocator, strtab, arg);
             } else {
-                _ = try strtab.intern(allocator, s);
+                _ = try strtab.intern(allocator, s.bytes());
             }
         },
         .array => |arr| {
             if (val.isEmptyArrayDefault()) return;
             for (arr.entries.items) |entry| {
-                if (entry.key == .string) _ = try strtab.intern(allocator, entry.key.string);
+                if (entry.key == .string) _ = try strtab.intern(allocator, entry.key.string.bytes());
                 try internValueStrings(allocator, strtab, if (entry.ref) |ref| ref.* else entry.value);
             }
         },
@@ -258,19 +258,19 @@ fn serializeValue(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab
             try writeF64(buf, allocator, f);
         },
         .string => |s| {
-            if (bytecode.deferredExprPtr(s)) |de| {
+            if (bytecode.deferredExprPtr(s.bytes())) |de| {
                 try buf.append(allocator, TAG_DEFERRED_EXPR);
                 try buf.append(allocator, @intFromEnum(de.op));
                 try serializeValue(buf, allocator, strtab, de.lhs);
                 try serializeValue(buf, allocator, strtab, de.rhs);
-            } else if (bytecode.newDefaultPtr(s)) |nd| {
+            } else if (bytecode.newDefaultPtr(s.bytes())) |nd| {
                 try buf.append(allocator, TAG_NEW_DEFAULT);
                 try writeU32(buf, allocator, try strtab.intern(allocator, nd.class_name));
                 try buf.append(allocator, @intCast(nd.args.len));
                 for (nd.args) |a| try serializeValue(buf, allocator, strtab, a);
             } else {
                 try buf.append(allocator, TAG_STRING);
-                try writeU32(buf, allocator, try strtab.intern(allocator, s));
+                try writeU32(buf, allocator, try strtab.intern(allocator, s.bytes()));
             }
         },
         .array => |arr| {
@@ -287,7 +287,7 @@ fn serializeValue(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab
                         },
                         .string => |key| {
                             try buf.append(allocator, 1);
-                            try writeU32(buf, allocator, try strtab.intern(allocator, key));
+                            try writeU32(buf, allocator, try strtab.intern(allocator, key.bytes()));
                         },
                     }
                     try serializeValue(buf, allocator, strtab, if (entry.ref) |ref| ref.* else entry.value);
@@ -633,7 +633,7 @@ fn deserializeValue(r: *Reader, ctx: *DeserCtx) !Value {
         TAG_BOOL_TRUE => .{ .bool = true },
         TAG_INT => .{ .int = try r.readI64() },
         TAG_FLOAT => .{ .float = try r.readF64() },
-        TAG_STRING => .{ .string = ctx.strings[try readStringIndex(r, ctx.strings)] },
+        TAG_STRING => .{ .string = Value.String.borrowed(ctx.strings[try readStringIndex(r, ctx.strings)]) },
         TAG_EMPTY_ARRAY => Value.empty_array_default,
         TAG_ARRAY => blk: {
             const arr = try ctx.allocator.create(@import("runtime/value.zig").PhpArray);
@@ -645,7 +645,7 @@ fn deserializeValue(r: *Reader, ctx: *DeserCtx) !Value {
                 const key_tag = try r.readByte();
                 const key: @import("runtime/value.zig").PhpArray.Key = switch (key_tag) {
                     0 => .{ .int = try r.readI64() },
-                    1 => .{ .string = ctx.strings[try readStringIndex(r, ctx.strings)] },
+                    1 => .{ .string = Value.String.borrowed(ctx.strings[try readStringIndex(r, ctx.strings)]) },
                     else => return error.InvalidFormat,
                 };
                 try arr.set(ctx.allocator, key, try deserializeValue(r, ctx));
@@ -664,7 +664,7 @@ fn deserializeValue(r: *Reader, ctx: *DeserCtx) !Value {
             try ctx.new_defaults.append(ctx.allocator, nd);
             const sentinel = bytecode.encodeNewDefaultSentinel(ctx.allocator, nd) catch return error.OutOfMemory;
             try ctx.string_allocs.append(ctx.allocator, sentinel);
-            break :blk .{ .string = sentinel };
+            break :blk .{ .string = Value.String.borrowed(sentinel) };
         },
         TAG_DEFERRED_EXPR => blk: {
             const op = std.meta.intToEnum(bytecode.DeferredExpr.Op, try r.readByte()) catch return error.InvalidFormat;
@@ -676,7 +676,7 @@ fn deserializeValue(r: *Reader, ctx: *DeserCtx) !Value {
             try ctx.deferred_exprs.append(ctx.allocator, de);
             const sentinel = bytecode.encodeDeferredExprSentinel(ctx.allocator, de) catch return error.OutOfMemory;
             try ctx.string_allocs.append(ctx.allocator, sentinel);
-            break :blk .{ .string = sentinel };
+            break :blk .{ .string = Value.String.borrowed(sentinel) };
         },
         else => return error.InvalidFormat,
     };

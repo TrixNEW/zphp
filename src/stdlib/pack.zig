@@ -91,7 +91,7 @@ fn formatByteSize(code: u8) ?usize {
 fn native_pack(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = false };
     const fmt = switch (args[0]) {
-        .string => |s| s,
+        .string => |s| s.bytes(),
         else => return .{ .bool = false },
     };
 
@@ -106,7 +106,7 @@ fn native_pack(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             'a', 'A', 'Z' => {
                 if (arg_idx >= args.len) return .{ .bool = false };
                 const s = switch (args[arg_idx]) {
-                    .string => |v| v,
+                    .string => |v| v.bytes(),
                     else => "",
                 };
                 arg_idx += 1;
@@ -130,7 +130,7 @@ fn native_pack(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             'H', 'h' => {
                 if (arg_idx >= args.len) return .{ .bool = false };
                 const s = switch (args[arg_idx]) {
-                    .string => |v| v,
+                    .string => |v| v.bytes(),
                     else => "",
                 };
                 arg_idx += 1;
@@ -303,7 +303,7 @@ fn native_pack(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const result = try ctx.allocator.alloc(u8, buf.items.len);
     @memcpy(result, buf.items);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 // emit PHP's 'not enough input values' warning and return false. PHP's
@@ -321,11 +321,11 @@ fn unpackShort(ctx: *NativeContext, code: u8, need: usize, have: usize) RuntimeE
 fn native_unpack(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .{ .bool = false };
     const fmt = switch (args[0]) {
-        .string => |s| s,
+        .string => |s| s.bytes(),
         else => return .{ .bool = false },
     };
     const data = switch (args[1]) {
-        .string => |s| s,
+        .string => |s| s.bytes(),
         else => return .{ .bool = false },
     };
     var offset: usize = 0;
@@ -361,7 +361,7 @@ fn native_unpack(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
                 const owned = try ctx.createString(slice);
                 const key = try makeKey(ctx, entry.name, 0, 1);
-                try arr.set(ctx.allocator, key, .{ .string = owned });
+                try arr.set(ctx.allocator, key, .{ .string = Value.String.borrowed(owned) });
             },
             'H', 'h' => {
                 const nibbles = switch (entry.count) {
@@ -385,7 +385,7 @@ fn native_unpack(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 offset += bytes_needed;
 
                 const key = try makeKey(ctx, entry.name, 0, 1);
-                try arr.set(ctx.allocator, key, .{ .string = hex_buf });
+                try arr.set(ctx.allocator, key, .{ .string = Value.String.borrowed(hex_buf) });
             },
             'c' => {
                 const repeat = resolveRepeat(entry.count, 1, data.len, offset);
@@ -626,10 +626,10 @@ fn resolveRepeat(count: FormatEntry.Count, byte_size: usize, data_len: usize, of
 
 fn makeKey(ctx: *NativeContext, name: ?[]const u8, i: usize, repeat: usize) !PhpArray.Key {
     if (name) |n| {
-        if (repeat <= 1) return .{ .string = n };
+        if (repeat <= 1) return .{ .string = Value.String.borrowed(n) };
         const buf = try std.fmt.allocPrint(ctx.allocator, "{s}{d}", .{ n, i + 1 });
         try ctx.strings.append(ctx.allocator, buf);
-        return .{ .string = buf };
+        return .{ .string = Value.String.borrowed(buf) };
     }
     return .{ .int = @intCast(i + 1) };
 }

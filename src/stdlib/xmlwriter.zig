@@ -13,18 +13,12 @@ const c = @cImport({
     @cInclude("libxml/tree.h");
 });
 
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
+fn dupString(ctx: *NativeContext, s: []const u8) !Value.String {
+    return Value.String.borrowed(try ctx.createString(s));
 }
 
 fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
+    return ctx.allocator.dupeZ(u8, s);
 }
 
 fn cstrLen(p: [*c]const u8) usize {
@@ -89,7 +83,8 @@ fn xwOpenURI(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         break :blk o;
     };
     closeExisting(obj);
-    const path_z = try dupZ(ctx, args[0].string);
+    const path_z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(path_z);
     const writer = c.xmlNewTextWriterFilename(path_z.ptr, 0);
     if (writer == null) return .{ .bool = false };
     try obj.set(ctx.allocator, "__writer", .{ .int = @intCast(@intFromPtr(writer)) });
@@ -113,7 +108,8 @@ fn xwToMemory(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn xwToUri(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = try ctx.createObject("XMLWriter");
-    const path_z = try dupZ(ctx, args[0].string);
+    const path_z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(path_z);
     const writer = c.xmlNewTextWriterFilename(path_z.ptr, 0);
     if (writer == null) return .{ .bool = false };
     try obj.set(ctx.allocator, "__writer", .{ .int = @intCast(@intFromPtr(writer)) });
@@ -165,7 +161,8 @@ fn xwSetIndentString(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const s_z = try dupZ(ctx, args[0].string);
+    const s_z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(s_z);
     const rc = c.xmlTextWriterSetIndentString(writer, @ptrCast(s_z.ptr));
     return .{ .bool = rc >= 0 };
 }
@@ -173,9 +170,12 @@ fn xwSetIndentString(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 fn xwStartDocument(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const ver_z: ?[:0]u8 = if (args.len > 0 and args[0] == .string) try dupZ(ctx, args[0].string) else null;
-    const enc_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string and args[1].string.len > 0) try dupZ(ctx, args[1].string) else null;
-    const sta_z: ?[:0]u8 = if (args.len > 2 and args[2] == .string and args[2].string.len > 0) try dupZ(ctx, args[2].string) else null;
+    const ver_z: ?[:0]u8 = if (args.len > 0 and args[0] == .string) try dupZ(ctx, args[0].string.bytes()) else null;
+    defer if (ver_z) |z| ctx.allocator.free(z);
+    const enc_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0) try dupZ(ctx, args[1].string.bytes()) else null;
+    defer if (enc_z) |z| ctx.allocator.free(z);
+    const sta_z: ?[:0]u8 = if (args.len > 2 and args[2] == .string and args[2].string.bytes().len > 0) try dupZ(ctx, args[2].string.bytes()) else null;
+    defer if (sta_z) |z| ctx.allocator.free(z);
     const ver_ptr: [*c]const u8 = if (ver_z) |z| @ptrCast(z.ptr) else null;
     const enc_ptr: [*c]const u8 = if (enc_z) |z| @ptrCast(z.ptr) else null;
     const sta_ptr: [*c]const u8 = if (sta_z) |z| @ptrCast(z.ptr) else null;
@@ -193,7 +193,8 @@ fn xwStartElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const z = try dupZ(ctx, args[0].string);
+    const z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(z);
     return .{ .bool = c.xmlTextWriterStartElement(writer, @ptrCast(z.ptr)) >= 0 };
 }
 
@@ -201,16 +202,21 @@ fn xwStartElementNS(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     if (args.len < 3) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const prefix_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.len > 0)
-        @ptrCast((try dupZ(ctx, args[0].string)).ptr)
+    const prefix_z: ?[:0]u8 = if (args[0] == .string and args[0].string.bytes().len > 0)
+        try dupZ(ctx, args[0].string.bytes())
     else
         null;
+    defer if (prefix_z) |z| ctx.allocator.free(z);
+    const prefix_ptr: [*c]const u8 = if (prefix_z) |z| @ptrCast(z.ptr) else null;
     if (args[1] != .string) return .{ .bool = false };
-    const name_z = try dupZ(ctx, args[1].string);
-    const ns_ptr: [*c]const u8 = if (args[2] == .string and args[2].string.len > 0)
-        @ptrCast((try dupZ(ctx, args[2].string)).ptr)
+    const name_z = try dupZ(ctx, args[1].string.bytes());
+    defer ctx.allocator.free(name_z);
+    const ns_z: ?[:0]u8 = if (args[2] == .string and args[2].string.bytes().len > 0)
+        try dupZ(ctx, args[2].string.bytes())
     else
         null;
+    defer if (ns_z) |z| ctx.allocator.free(z);
+    const ns_ptr: [*c]const u8 = if (ns_z) |z| @ptrCast(z.ptr) else null;
     return .{ .bool = c.xmlTextWriterStartElementNS(writer, prefix_ptr, @ptrCast(name_z.ptr), ns_ptr) >= 0 };
 }
 
@@ -230,8 +236,10 @@ fn xwWriteElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const name_z = try dupZ(ctx, args[0].string);
-    const content_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string) try dupZ(ctx, args[1].string) else null;
+    const name_z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(name_z);
+    const content_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string) try dupZ(ctx, args[1].string.bytes()) else null;
+    defer if (content_z) |z| ctx.allocator.free(z);
     const content_ptr: [*c]const u8 = if (content_z) |z| @ptrCast(z.ptr) else null;
     return .{ .bool = c.xmlTextWriterWriteElement(writer, @ptrCast(name_z.ptr), content_ptr) >= 0 };
 }
@@ -240,8 +248,10 @@ fn xwWriteAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const name_z = try dupZ(ctx, args[0].string);
-    const val_z = try dupZ(ctx, args[1].string);
+    const name_z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(name_z);
+    const val_z = try dupZ(ctx, args[1].string.bytes());
+    defer ctx.allocator.free(val_z);
     return .{ .bool = c.xmlTextWriterWriteAttribute(writer, @ptrCast(name_z.ptr), @ptrCast(val_z.ptr)) >= 0 };
 }
 
@@ -249,17 +259,23 @@ fn xwWriteAttributeNS(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     if (args.len < 4) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const prefix_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.len > 0)
-        @ptrCast((try dupZ(ctx, args[0].string)).ptr)
+    const prefix_z: ?[:0]u8 = if (args[0] == .string and args[0].string.bytes().len > 0)
+        try dupZ(ctx, args[0].string.bytes())
     else
         null;
+    defer if (prefix_z) |z| ctx.allocator.free(z);
+    const prefix_ptr: [*c]const u8 = if (prefix_z) |z| @ptrCast(z.ptr) else null;
     if (args[1] != .string or args[3] != .string) return .{ .bool = false };
-    const name_z = try dupZ(ctx, args[1].string);
-    const ns_ptr: [*c]const u8 = if (args[2] == .string and args[2].string.len > 0)
-        @ptrCast((try dupZ(ctx, args[2].string)).ptr)
+    const name_z = try dupZ(ctx, args[1].string.bytes());
+    defer ctx.allocator.free(name_z);
+    const ns_z: ?[:0]u8 = if (args[2] == .string and args[2].string.bytes().len > 0)
+        try dupZ(ctx, args[2].string.bytes())
     else
         null;
-    const val_z = try dupZ(ctx, args[3].string);
+    defer if (ns_z) |z| ctx.allocator.free(z);
+    const ns_ptr: [*c]const u8 = if (ns_z) |z| @ptrCast(z.ptr) else null;
+    const val_z = try dupZ(ctx, args[3].string.bytes());
+    defer ctx.allocator.free(val_z);
     return .{ .bool = c.xmlTextWriterWriteAttributeNS(writer, prefix_ptr, @ptrCast(name_z.ptr), ns_ptr, @ptrCast(val_z.ptr)) >= 0 };
 }
 
@@ -267,7 +283,8 @@ fn xwStartAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const z = try dupZ(ctx, args[0].string);
+    const z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(z);
     return .{ .bool = c.xmlTextWriterStartAttribute(writer, @ptrCast(z.ptr)) >= 0 };
 }
 
@@ -281,7 +298,8 @@ fn xwText(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const z = try dupZ(ctx, args[0].string);
+    const z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(z);
     return .{ .bool = c.xmlTextWriterWriteString(writer, @ptrCast(z.ptr)) >= 0 };
 }
 
@@ -289,7 +307,8 @@ fn xwWriteRaw(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const z = try dupZ(ctx, args[0].string);
+    const z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(z);
     return .{ .bool = c.xmlTextWriterWriteRaw(writer, @ptrCast(z.ptr)) >= 0 };
 }
 
@@ -297,7 +316,8 @@ fn xwWriteCData(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const z = try dupZ(ctx, args[0].string);
+    const z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(z);
     return .{ .bool = c.xmlTextWriterWriteCDATA(writer, @ptrCast(z.ptr)) >= 0 };
 }
 
@@ -317,7 +337,8 @@ fn xwWriteComment(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const z = try dupZ(ctx, args[0].string);
+    const z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(z);
     return .{ .bool = c.xmlTextWriterWriteComment(writer, @ptrCast(z.ptr)) >= 0 };
 }
 
@@ -337,8 +358,10 @@ fn xwWritePi(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const writer = getWriter(obj) orelse return .{ .bool = false };
-    const t_z = try dupZ(ctx, args[0].string);
-    const c_z = try dupZ(ctx, args[1].string);
+    const t_z = try dupZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(t_z);
+    const c_z = try dupZ(ctx, args[1].string.bytes());
+    defer ctx.allocator.free(c_z);
     return .{ .bool = c.xmlTextWriterWritePI(writer, @ptrCast(t_z.ptr), @ptrCast(c_z.ptr)) >= 0 };
 }
 
@@ -353,17 +376,13 @@ pub fn register(vm: *VM, a: Allocator) !void {
     var def = ClassDef{ .name = "XMLWriter", .native_cleanup = cleanupPoolable };
 
     inline for (.{
-        "openMemory", "openURI", "outputMemory", "flush",
-        "setIndent", "setIndentString",
-        "startDocument", "endDocument",
-        "startElement", "startElementNS", "endElement", "fullEndElement",
-        "writeElement",
-        "writeAttribute", "writeAttributeNS", "startAttribute", "endAttribute",
-        "text", "writeRaw",
-        "writeCData", "startCdata", "endCdata",
-        "writeComment", "startComment", "endComment",
-        "writePi",
-        "toMemory", "toUri",
+        "openMemory",   "openURI",         "outputMemory",     "flush",
+        "setIndent",    "setIndentString", "startDocument",    "endDocument",
+        "startElement", "startElementNS",  "endElement",       "fullEndElement",
+        "writeElement", "writeAttribute",  "writeAttributeNS", "startAttribute",
+        "endAttribute", "text",            "writeRaw",         "writeCData",
+        "startCdata",   "endCdata",        "writeComment",     "startComment",
+        "endComment",   "writePi",         "toMemory",         "toUri",
     }) |m| {
         try def.methods.put(a, m, .{ .name = m, .arity = 0 });
     }
@@ -455,31 +474,79 @@ fn procOpenURI(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn procOutputMemory(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return procCall(ctx, args, "outputMemory");
 }
-fn procFlush(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "flush"); }
-fn procSetIndent(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "setIndent"); }
-fn procSetIndentString(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "setIndentString"); }
-fn procStartDocument(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "startDocument"); }
-fn procEndDocument(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "endDocument"); }
-fn procStartElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "startElement"); }
-fn procStartElementNS(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "startElementNS"); }
-fn procEndElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "endElement"); }
-fn procFullEndElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "fullEndElement"); }
-fn procWriteElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "writeElement"); }
-fn procWriteAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "writeAttribute"); }
-fn procWriteAttributeNS(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "writeAttributeNS"); }
-fn procStartAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "startAttribute"); }
-fn procEndAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "endAttribute"); }
-fn procText(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "text"); }
-fn procWriteRaw(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "writeRaw"); }
-fn procWriteCData(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "writeCData"); }
-fn procStartCdata(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "startCdata"); }
-fn procEndCdata(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "endCdata"); }
-fn procWriteComment(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "writeComment"); }
-fn procStartComment(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "startComment"); }
-fn procEndComment(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "endComment"); }
-fn procWritePi(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return procCall(ctx, args, "writePi"); }
+fn procFlush(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "flush");
+}
+fn procSetIndent(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "setIndent");
+}
+fn procSetIndentString(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "setIndentString");
+}
+fn procStartDocument(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "startDocument");
+}
+fn procEndDocument(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "endDocument");
+}
+fn procStartElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "startElement");
+}
+fn procStartElementNS(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "startElementNS");
+}
+fn procEndElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "endElement");
+}
+fn procFullEndElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "fullEndElement");
+}
+fn procWriteElement(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "writeElement");
+}
+fn procWriteAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "writeAttribute");
+}
+fn procWriteAttributeNS(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "writeAttributeNS");
+}
+fn procStartAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "startAttribute");
+}
+fn procEndAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "endAttribute");
+}
+fn procText(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "text");
+}
+fn procWriteRaw(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "writeRaw");
+}
+fn procWriteCData(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "writeCData");
+}
+fn procStartCdata(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "startCdata");
+}
+fn procEndCdata(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "endCdata");
+}
+fn procWriteComment(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "writeComment");
+}
+fn procStartComment(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "startComment");
+}
+fn procEndComment(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "endComment");
+}
+fn procWritePi(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return procCall(ctx, args, "writePi");
+}
 
-fn methodNameFor(comptime _: anytype) []const u8 { return ""; }
+fn methodNameFor(comptime _: anytype) []const u8 {
+    return "";
+}
 
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
     for (objects.items) |obj| {

@@ -24,7 +24,7 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ZPHP = os.path.join(ROOT, "zig-out", "bin", "zphp")
+ZPHP = os.environ.get("ZPHP", os.path.join(ROOT, "zig-out", "bin", "zphp"))
 
 # real-app harnesses (bootstrap real WordPress / Laravel and do actual work).
 # extra suites can be added here as the project grows (e.g. a pinned phpunit run).

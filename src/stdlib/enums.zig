@@ -29,25 +29,25 @@ fn coerceForLookup(ctx: *NativeContext, def_backed: anytype, arg: Value) !Value 
             .null => .{ .int = 0 },
             .float => |f| .{ .int = @intFromFloat(f) },
             .string => |s| blk: {
-                const i = std.fmt.parseInt(i64, s, 10) catch break :blk arg;
+                const i = std.fmt.parseInt(i64, s.bytes(), 10) catch break :blk arg;
                 break :blk .{ .int = i };
             },
             else => arg,
         },
         .string_type => switch (arg) {
             .string => arg,
-            .bool => |b| .{ .string = if (b) "1" else "0" },
-            .null => .{ .string = "0" },
+            .bool => |b| .{ .string = Value.String.borrowed(if (b) "1" else "0") },
+            .null => .{ .string = Value.String.borrowed("0") },
             .int => |n| blk: {
                 const s = try std.fmt.allocPrint(ctx.allocator, "{d}", .{n});
                 try ctx.vm.strings.append(ctx.allocator, s);
-                break :blk .{ .string = s };
+                break :blk .{ .string = Value.String.borrowed(s) };
             },
             .float => |f| blk: {
                 const truncated: i64 = @intFromFloat(f);
                 const s = try std.fmt.allocPrint(ctx.allocator, "{d}", .{truncated});
                 try ctx.vm.strings.append(ctx.allocator, s);
-                break :blk .{ .string = s };
+                break :blk .{ .string = Value.String.borrowed(s) };
             },
             else => arg,
         },
@@ -58,7 +58,7 @@ fn coerceForLookup(ctx: *NativeContext, def_backed: anytype, arg: Value) !Value 
 fn throwBuiltin(ctx: *NativeContext, class: []const u8, msg: []const u8) RuntimeError!Value {
     const obj = try ctx.allocator.create(@import("../runtime/value.zig").PhpObject);
     obj.* = .{ .class_name = class };
-    try obj.set(ctx.allocator, "message", .{ .string = msg });
+    try obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed(msg) });
     try obj.set(ctx.allocator, "code", .{ .int = 0 });
     try ctx.vm.objects.append(ctx.allocator, obj);
     ctx.vm.pending_exception = .{ .object = obj };
@@ -68,7 +68,7 @@ fn throwBuiltin(ctx: *NativeContext, class: []const u8, msg: []const u8) Runtime
 fn argDisplayString(ctx: *NativeContext, arg: Value) ![]const u8 {
     return switch (arg) {
         .string => |s| blk: {
-            const out = try std.fmt.allocPrint(ctx.allocator, "\"{s}\"", .{s});
+            const out = try std.fmt.allocPrint(ctx.allocator, "\"{s}\"", .{s.bytes()});
             try ctx.vm.strings.append(ctx.allocator, out);
             break :blk out;
         },
@@ -113,7 +113,7 @@ fn checkEnumArgType(ctx: *NativeContext, backed: anytype, enum_name: []const u8,
     };
     const ok: bool = switch (backed) {
         // PHP coerces scalars+null; only array/object/resource are rejected
-        .int_type => arg == .int or arg == .float or arg == .bool or arg == .null or (arg == .string and isNumericIntStr(arg.string)),
+        .int_type => arg == .int or arg == .float or arg == .bool or arg == .null or (arg == .string and isNumericIntStr(arg.string.bytes())),
         .string_type => arg == .string or arg == .int or arg == .float or arg == .bool or arg == .null,
         else => true,
     };

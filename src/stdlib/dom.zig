@@ -155,7 +155,7 @@ fn cstrLen(p: [*c]const u8) usize {
 fn cstrToValue(ctx: *NativeContext, p: [*c]const u8) !Value {
     if (p == null) return .null;
     const slice = p[0..cstrLen(p)];
-    return .{ .string = try dupString(ctx, slice) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, slice)) };
 }
 
 // ---------------- class name dispatch by xmlElementType ----------------
@@ -203,8 +203,8 @@ fn domDocConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 
     var version: []const u8 = "1.0";
     var encoding: []const u8 = "";
-    if (args.len > 0 and args[0] == .string) version = args[0].string;
-    if (args.len > 1 and args[1] == .string) encoding = args[1].string;
+    if (args.len > 0 and args[0] == .string) version = args[0].string.bytes();
+    if (args.len > 1 and args[1] == .string) encoding = args[1].string.bytes();
 
     const version_z = try dupZ(ctx, version);
     const doc = c.xmlNewDoc(@ptrCast(version_z.ptr)) orelse return .null;
@@ -232,7 +232,7 @@ fn parseOptions(args: []const Value, idx: usize) c_int {
 fn domDocLoadXML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
-    const src = args[0].string;
+    const src = args[0].string.bytes();
     const opts = parseOptions(args, 1);
 
     // replace any prior doc
@@ -251,7 +251,7 @@ fn domDocSchemaValidateSource(ctx: *NativeContext, args: []const Value) RuntimeE
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const doc = getDocPtr(obj) orelse return .{ .bool = false };
-    const source = args[0].string;
+    const source = args[0].string.bytes();
     const parser_ctx = c.xmlSchemaNewMemParserCtxt(source.ptr, @intCast(source.len)) orelse return .{ .bool = false };
     defer c.xmlSchemaFreeParserCtxt(parser_ctx);
     const schema = c.xmlSchemaParse(parser_ctx) orelse return .{ .bool = false };
@@ -264,7 +264,7 @@ fn domDocSchemaValidateSource(ctx: *NativeContext, args: []const Value) RuntimeE
 fn domDocLoad(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
-    const path_z = try dupZ(ctx, args[0].string);
+    const path_z = try dupZ(ctx, args[0].string.bytes());
     const opts = parseOptions(args, 1);
 
     if (getDocPtr(obj)) |old| {
@@ -281,7 +281,7 @@ fn domDocLoad(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn domDocLoadHTML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
-    const src = args[0].string;
+    const src = args[0].string.bytes();
     const opts = parseOptions(args, 1);
 
     if (getDocPtr(obj)) |old| {
@@ -298,7 +298,7 @@ fn domDocLoadHTML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn domDocLoadHTMLFile(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
-    const path_z = try dupZ(ctx, args[0].string);
+    const path_z = try dupZ(ctx, args[0].string.bytes());
     const opts = parseOptions(args, 1);
 
     if (getDocPtr(obj)) |old| {
@@ -333,9 +333,9 @@ fn domDocSaveXML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         const fmt: c_int = if (formatOutputOn(obj)) 1 else 0;
         _ = c.xmlNodeDump(buf, doc, n, 0, fmt);
         const out = c.xmlBufferContent(buf);
-        if (out == null) return .{ .string = try dupString(ctx, "") };
+        if (out == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
         const slice = out[0..cstrLen(out)];
-        return .{ .string = try dupString(ctx, slice) };
+        return .{ .string = Value.String.borrowed(try dupString(ctx, slice)) };
     }
 
     // full doc. pass NULL encoding when the document doesn't have one so libxml2
@@ -347,7 +347,7 @@ fn domDocSaveXML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (out == null) return .{ .bool = false };
     defer c.xmlFree.?(out);
     const slice = out[0..@intCast(size)];
-    return .{ .string = try dupString(ctx, slice) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, slice)) };
 }
 
 fn domDocSaveHTML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -360,9 +360,9 @@ fn domDocSaveHTML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         defer c.xmlBufferFree(buf);
         _ = c.htmlNodeDump(buf, doc, n);
         const out = c.xmlBufferContent(buf);
-        if (out == null) return .{ .string = try dupString(ctx, "") };
+        if (out == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
         const slice = out[0..cstrLen(out)];
-        return .{ .string = try dupString(ctx, slice) };
+        return .{ .string = Value.String.borrowed(try dupString(ctx, slice)) };
     }
 
     var out: [*c]u8 = null;
@@ -371,14 +371,14 @@ fn domDocSaveHTML(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (out == null) return .{ .bool = false };
     defer c.xmlFree.?(out);
     const slice = out[0..@intCast(size)];
-    return .{ .string = try dupString(ctx, slice) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, slice)) };
 }
 
 fn domDocSave(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const doc = getDocPtr(obj) orelse return .{ .bool = false };
-    const path_z = try dupZ(ctx, args[0].string);
+    const path_z = try dupZ(ctx, args[0].string.bytes());
     const fmt: c_int = if (formatOutputOn(obj)) 1 else 0;
     const written = c.xmlSaveFormatFile(path_z.ptr, doc, fmt);
     if (written < 0) return .{ .bool = false };
@@ -389,10 +389,10 @@ fn domDocCreateElement(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const doc = getDocPtr(obj) orelse return .{ .bool = false };
-    const name_z = try dupZ(ctx, args[0].string);
+    const name_z = try dupZ(ctx, args[0].string.bytes());
     const node = c.xmlNewDocNode(doc, null, @ptrCast(name_z.ptr), null) orelse return .{ .bool = false };
-    if (args.len > 1 and args[1] == .string and args[1].string.len > 0) {
-        const text_z = try dupZ(ctx, args[1].string);
+    if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0) {
+        const text_z = try dupZ(ctx, args[1].string.bytes());
         const tn = c.xmlNewDocText(doc, @ptrCast(text_z.ptr));
         _ = c.xmlAddChild(node, tn);
     }
@@ -403,7 +403,7 @@ fn domDocCreateTextNode(ctx: *NativeContext, args: []const Value) RuntimeError!V
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const doc = getDocPtr(obj) orelse return .{ .bool = false };
-    const text_z = try dupZ(ctx, args[0].string);
+    const text_z = try dupZ(ctx, args[0].string.bytes());
     const node = c.xmlNewDocText(doc, @ptrCast(text_z.ptr)) orelse return .{ .bool = false };
     return wrapNode(ctx, node, obj);
 }
@@ -412,7 +412,7 @@ fn domDocCreateComment(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const doc = getDocPtr(obj) orelse return .{ .bool = false };
-    const text_z = try dupZ(ctx, args[0].string);
+    const text_z = try dupZ(ctx, args[0].string.bytes());
     const node = c.xmlNewDocComment(doc, @ptrCast(text_z.ptr)) orelse return .{ .bool = false };
     return wrapNode(ctx, node, obj);
 }
@@ -421,7 +421,7 @@ fn domDocCreateCDATASection(ctx: *NativeContext, args: []const Value) RuntimeErr
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const doc = getDocPtr(obj) orelse return .{ .bool = false };
-    const text = args[0].string;
+    const text = args[0].string.bytes();
     const node = c.xmlNewCDataBlock(doc, @ptrCast(text.ptr), @intCast(text.len)) orelse return .{ .bool = false };
     return wrapNode(ctx, node, obj);
 }
@@ -430,7 +430,7 @@ fn domDocCreateAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const doc = getDocPtr(obj) orelse return .{ .bool = false };
-    const name_z = try dupZ(ctx, args[0].string);
+    const name_z = try dupZ(ctx, args[0].string.bytes());
     // detached attribute: create via xmlNewDocProp on null parent
     const attr = c.xmlNewDocProp(doc, @ptrCast(name_z.ptr), null) orelse return .{ .bool = false };
     return wrapNode(ctx, @ptrCast(attr), obj);
@@ -441,8 +441,8 @@ fn domDocCreateElementNS(ctx: *NativeContext, args: []const Value) RuntimeError!
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const doc = getDocPtr(obj) orelse return .{ .bool = false };
 
-    const ns_uri: ?[]const u8 = if (args[0] == .string) args[0].string else null;
-    const qname = args[1].string;
+    const ns_uri: ?[]const u8 = if (args[0] == .string) args[0].string.bytes() else null;
+    const qname = args[1].string.bytes();
 
     // split qname into prefix:localname
     var prefix_buf: ?[:0]u8 = null;
@@ -461,8 +461,8 @@ fn domDocCreateElementNS(ctx: *NativeContext, args: []const Value) RuntimeError!
         const ns = c.xmlNewNs(node, @ptrCast(uri_z.ptr), prefix_ptr);
         c.xmlSetNs(node, ns);
     }
-    if (args.len > 2 and args[2] == .string and args[2].string.len > 0) {
-        const text_z = try dupZ(ctx, args[2].string);
+    if (args.len > 2 and args[2] == .string and args[2].string.bytes().len > 0) {
+        const text_z = try dupZ(ctx, args[2].string.bytes());
         const tn = c.xmlNewDocText(doc, @ptrCast(text_z.ptr));
         _ = c.xmlAddChild(node, tn);
     }
@@ -491,7 +491,7 @@ fn domDocGetElementsByTagName(ctx: *NativeContext, args: []const Value) RuntimeE
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const doc = getDocPtr(obj) orelse return .{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
 
     const root = c.xmlDocGetRootElement(doc);
     var list = std.ArrayList(*c.xmlNode){};
@@ -506,13 +506,13 @@ fn domDocGetElementById(ctx: *NativeContext, args: []const Value) RuntimeError!V
     if (args.len < 1 or args[0] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
     const doc = getDocPtr(obj) orelse return .null;
-    const id_z = try dupZ(ctx, args[0].string);
+    const id_z = try dupZ(ctx, args[0].string.bytes());
     const attr = c.xmlGetID(doc, @ptrCast(id_z.ptr));
     if (attr == null) {
         // fall back to scanning for any attribute named "id" with this value
         const root = c.xmlDocGetRootElement(doc);
         if (root) |r| {
-            if (findById(r, args[0].string)) |n| return wrapNode(ctx, n, obj);
+            if (findById(r, args[0].string.bytes())) |n| return wrapNode(ctx, n, obj);
         }
         return .null;
     }
@@ -603,7 +603,7 @@ fn domNodeProp(prop: []const u8) ?(*const fn (ctx: *NativeContext, args: []const
 fn domGenericGet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
-    const prop = args[0].string;
+    const prop = args[0].string.bytes();
     return try readProperty(ctx, obj, prop);
 }
 
@@ -611,24 +611,24 @@ fn domGenericSet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
     const node = getNodePtr(obj) orelse return .null;
-    const prop = args[0].string;
+    const prop = args[0].string.bytes();
     const val = args[1];
 
     if (std.mem.eql(u8, prop, "nodeValue") or std.mem.eql(u8, prop, "textContent")) {
-        const s = if (val == .string) val.string else "";
+        const s = if (val == .string) val.string.bytes() else "";
         const s_z = try dupZ(ctx, s);
         // wipe existing content and set fresh
         _ = c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
         return .null;
     }
     if (std.mem.eql(u8, prop, "data") and (node.type == c.XML_TEXT_NODE or node.type == c.XML_CDATA_SECTION_NODE or node.type == c.XML_COMMENT_NODE)) {
-        const s = if (val == .string) val.string else "";
+        const s = if (val == .string) val.string.bytes() else "";
         const s_z = try dupZ(ctx, s);
         _ = c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
         return .null;
     }
     if (std.mem.eql(u8, prop, "value") and node.type == c.XML_ATTRIBUTE_NODE) {
-        const s = if (val == .string) val.string else "";
+        const s = if (val == .string) val.string.bytes() else "";
         const s_z = try dupZ(ctx, s);
         _ = c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
         return .null;
@@ -647,17 +647,17 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
     if (obj.get("__ns_kind") == .bool and obj.get("__ns_kind").bool) {
         if (std.mem.eql(u8, prop, "nodeName")) {
             const px = obj.get("__ns_prefix");
-            if (px == .string and px.string.len > 0) {
-                const out = try std.fmt.allocPrint(ctx.allocator, "xmlns:{s}", .{px.string});
+            if (px == .string and px.string.bytes().len > 0) {
+                const out = try std.fmt.allocPrint(ctx.allocator, "xmlns:{s}", .{px.string.bytes()});
                 try ctx.strings.append(ctx.allocator, out);
-                return .{ .string = out };
+                return .{ .string = Value.String.borrowed(out) };
             }
-            return .{ .string = try dupString(ctx, "xmlns") };
+            return .{ .string = Value.String.borrowed(try dupString(ctx, "xmlns")) };
         }
         if (std.mem.eql(u8, prop, "nodeValue") or std.mem.eql(u8, prop, "value")) {
             const href = obj.get("__ns_href");
             if (href == .string) return href;
-            return .{ .string = try dupString(ctx, "") };
+            return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
         }
         if (std.mem.eql(u8, prop, "nodeType")) return .{ .int = @intCast(c.XML_NAMESPACE_DECL) };
         return .null;
@@ -671,12 +671,12 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
     if (std.mem.eql(u8, prop, "nodeName")) {
         // for documents, return "#document"
         if (node.type == c.XML_DOCUMENT_NODE or node.type == c.XML_HTML_DOCUMENT_NODE) {
-            return .{ .string = try dupString(ctx, "#document") };
+            return .{ .string = Value.String.borrowed(try dupString(ctx, "#document")) };
         }
-        if (node.type == c.XML_TEXT_NODE) return .{ .string = try dupString(ctx, "#text") };
-        if (node.type == c.XML_CDATA_SECTION_NODE) return .{ .string = try dupString(ctx, "#cdata-section") };
-        if (node.type == c.XML_COMMENT_NODE) return .{ .string = try dupString(ctx, "#comment") };
-        if (node.type == c.XML_DOCUMENT_FRAG_NODE) return .{ .string = try dupString(ctx, "#document-fragment") };
+        if (node.type == c.XML_TEXT_NODE) return .{ .string = Value.String.borrowed(try dupString(ctx, "#text")) };
+        if (node.type == c.XML_CDATA_SECTION_NODE) return .{ .string = Value.String.borrowed(try dupString(ctx, "#cdata-section")) };
+        if (node.type == c.XML_COMMENT_NODE) return .{ .string = Value.String.borrowed(try dupString(ctx, "#comment")) };
+        if (node.type == c.XML_DOCUMENT_FRAG_NODE) return .{ .string = Value.String.borrowed(try dupString(ctx, "#document-fragment")) };
         // for elements, include prefix if namespaced
         if (node.type == c.XML_ELEMENT_NODE and node.ns != null and node.ns.*.prefix != null) {
             const prefix = node.ns.*.prefix;
@@ -686,7 +686,7 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
                 name[0..cstrLen(name)],
             });
             try ctx.strings.append(ctx.allocator, out);
-            return .{ .string = out };
+            return .{ .string = Value.String.borrowed(out) };
         }
         return try cstrToValue(ctx, node.name);
     }
@@ -696,17 +696,17 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
             return .null;
         }
         const content = c.xmlNodeGetContent(node);
-        if (content == null) return .{ .string = try dupString(ctx, "") };
+        if (content == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
         defer c.xmlFree.?(content);
         const slice = content[0..cstrLen(content)];
-        return .{ .string = try dupString(ctx, slice) };
+        return .{ .string = Value.String.borrowed(try dupString(ctx, slice)) };
     }
     if (std.mem.eql(u8, prop, "textContent")) {
         const content = c.xmlNodeGetContent(node);
-        if (content == null) return .{ .string = try dupString(ctx, "") };
+        if (content == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
         defer c.xmlFree.?(content);
         const slice = content[0..cstrLen(content)];
-        return .{ .string = try dupString(ctx, slice) };
+        return .{ .string = Value.String.borrowed(try dupString(ctx, slice)) };
     }
     if (std.mem.eql(u8, prop, "nodeType")) {
         return .{ .int = @intCast(node.type) };
@@ -776,7 +776,7 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
     }
     if (std.mem.eql(u8, prop, "prefix")) {
         if (node.ns != null and node.ns.*.prefix != null) return try cstrToValue(ctx, node.ns.*.prefix);
-        return .{ .string = try dupString(ctx, "") };
+        return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     }
     if (std.mem.eql(u8, prop, "localName")) {
         if (node.type == c.XML_ELEMENT_NODE or node.type == c.XML_ATTRIBUTE_NODE) {
@@ -788,7 +788,7 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
         const u = c.xmlNodeGetBase(@ptrCast(node.doc), node);
         if (u == null) return .null;
         defer c.xmlFree.?(u);
-        return .{ .string = try dupString(ctx, u[0..cstrLen(u)]) };
+        return .{ .string = Value.String.borrowed(try dupString(ctx, u[0..cstrLen(u)])) };
     }
     if (std.mem.eql(u8, prop, "tagName")) {
         if (node.type == c.XML_ELEMENT_NODE) {
@@ -800,7 +800,7 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
                     name[0..cstrLen(name)],
                 });
                 try ctx.strings.append(ctx.allocator, out);
-                return .{ .string = out };
+                return .{ .string = Value.String.borrowed(out) };
             }
             return try cstrToValue(ctx, node.name);
         }
@@ -811,9 +811,9 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
     }
     if (std.mem.eql(u8, prop, "data") or std.mem.eql(u8, prop, "value")) {
         const content = c.xmlNodeGetContent(node);
-        if (content == null) return .{ .string = try dupString(ctx, "") };
+        if (content == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
         defer c.xmlFree.?(content);
-        return .{ .string = try dupString(ctx, content[0..cstrLen(content)]) };
+        return .{ .string = Value.String.borrowed(try dupString(ctx, content[0..cstrLen(content)])) };
     }
     if (std.mem.eql(u8, prop, "length")) {
         const content = c.xmlNodeGetContent(node);
@@ -937,7 +937,7 @@ fn domNodeGetNodePath(ctx: *NativeContext, _: []const Value) RuntimeError!Value 
     const p = c.xmlGetNodePath(node);
     if (p == null) return .null;
     defer c.xmlFree.?(p);
-    return .{ .string = try dupString(ctx, p[0..cstrLen(p)]) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, p[0..cstrLen(p)])) };
 }
 
 fn domNodeGetLineNo(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -950,7 +950,7 @@ fn domNodeLookupPrefix(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     if (args.len < 1 or args[0] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
     const node = getNodePtr(obj) orelse return .null;
-    const uri_z = try dupZ(ctx, args[0].string);
+    const uri_z = try dupZ(ctx, args[0].string.bytes());
     const ns = c.xmlSearchNsByHref(node.doc, node, @ptrCast(uri_z.ptr));
     if (ns == null or ns.*.prefix == null) return .null;
     return try cstrToValue(ctx, ns.*.prefix);
@@ -960,8 +960,8 @@ fn domNodeLookupNamespaceURI(ctx: *NativeContext, args: []const Value) RuntimeEr
     if (args.len < 1) return .null;
     const obj = getThis(ctx) orelse return .null;
     const node = getNodePtr(obj) orelse return .null;
-    const prefix_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.len > 0)
-        @ptrCast((try dupZ(ctx, args[0].string)).ptr)
+    const prefix_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.bytes().len > 0)
+        @ptrCast((try dupZ(ctx, args[0].string.bytes())).ptr)
     else
         null;
     const ns = c.xmlSearchNs(node.doc, node, prefix_ptr);
@@ -972,22 +972,22 @@ fn domNodeLookupNamespaceURI(ctx: *NativeContext, args: []const Value) RuntimeEr
 // ---------------- DOMElement methods ----------------
 
 fn domElementGetAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 1 or args[0] != .string) return .{ .string = try dupString(ctx, "") };
-    const obj = getThis(ctx) orelse return .{ .string = try dupString(ctx, "") };
-    const node = getNodePtr(obj) orelse return .{ .string = try dupString(ctx, "") };
-    const name_z = try dupZ(ctx, args[0].string);
+    if (args.len < 1 or args[0] != .string) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    const node = getNodePtr(obj) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    const name_z = try dupZ(ctx, args[0].string.bytes());
     const v = c.xmlGetProp(node, @ptrCast(name_z.ptr));
-    if (v == null) return .{ .string = try dupString(ctx, "") };
+    if (v == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     defer c.xmlFree.?(v);
-    return .{ .string = try dupString(ctx, v[0..cstrLen(v)]) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, v[0..cstrLen(v)])) };
 }
 
 fn domElementSetAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const node = getNodePtr(obj) orelse return .{ .bool = false };
-    const name_z = try dupZ(ctx, args[0].string);
-    const val_z = try dupZ(ctx, args[1].string);
+    const name_z = try dupZ(ctx, args[0].string.bytes());
+    const val_z = try dupZ(ctx, args[1].string.bytes());
     const attr = c.xmlSetProp(node, @ptrCast(name_z.ptr), @ptrCast(val_z.ptr));
     if (attr == null) return .{ .bool = false };
     return wrapNode(ctx, @ptrCast(attr), getOwnerDocObj(obj) orelse obj);
@@ -997,7 +997,7 @@ fn domElementHasAttribute(ctx: *NativeContext, args: []const Value) RuntimeError
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const node = getNodePtr(obj) orelse return .{ .bool = false };
-    const name_z = try dupZ(ctx, args[0].string);
+    const name_z = try dupZ(ctx, args[0].string.bytes());
     return .{ .bool = c.xmlHasProp(node, @ptrCast(name_z.ptr)) != null };
 }
 
@@ -1005,36 +1005,36 @@ fn domElementRemoveAttribute(ctx: *NativeContext, args: []const Value) RuntimeEr
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const node = getNodePtr(obj) orelse return .{ .bool = false };
-    const name_z = try dupZ(ctx, args[0].string);
+    const name_z = try dupZ(ctx, args[0].string.bytes());
     const rc = c.xmlUnsetProp(node, @ptrCast(name_z.ptr));
     return .{ .bool = rc == 0 };
 }
 
 fn domElementGetAttributeNS(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2 or args[1] != .string) return .{ .string = try dupString(ctx, "") };
-    const obj = getThis(ctx) orelse return .{ .string = try dupString(ctx, "") };
-    const node = getNodePtr(obj) orelse return .{ .string = try dupString(ctx, "") };
-    const ns_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.len > 0)
-        @ptrCast((try dupZ(ctx, args[0].string)).ptr)
+    if (args.len < 2 or args[1] != .string) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    const node = getNodePtr(obj) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    const ns_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.bytes().len > 0)
+        @ptrCast((try dupZ(ctx, args[0].string.bytes())).ptr)
     else
         null;
-    const name_z = try dupZ(ctx, args[1].string);
+    const name_z = try dupZ(ctx, args[1].string.bytes());
     const v = c.xmlGetNsProp(node, @ptrCast(name_z.ptr), ns_ptr);
-    if (v == null) return .{ .string = try dupString(ctx, "") };
+    if (v == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     defer c.xmlFree.?(v);
-    return .{ .string = try dupString(ctx, v[0..cstrLen(v)]) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, v[0..cstrLen(v)])) };
 }
 
 fn domElementSetAttributeNS(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[1] != .string or args[2] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const node = getNodePtr(obj) orelse return .{ .bool = false };
-    const qname = args[1].string;
-    const val_z = try dupZ(ctx, args[2].string);
+    const qname = args[1].string.bytes();
+    const val_z = try dupZ(ctx, args[2].string.bytes());
 
     var ns_ptr: ?*c.xmlNs = null;
-    if (args[0] == .string and args[0].string.len > 0) {
-        const uri_z = try dupZ(ctx, args[0].string);
+    if (args[0] == .string and args[0].string.bytes().len > 0) {
+        const uri_z = try dupZ(ctx, args[0].string.bytes());
         // resolve / create namespace
         if (std.mem.indexOfScalar(u8, qname, ':')) |colon| {
             const prefix_z = try dupZ(ctx, qname[0..colon]);
@@ -1059,11 +1059,11 @@ fn domElementHasAttributeNS(ctx: *NativeContext, args: []const Value) RuntimeErr
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const node = getNodePtr(obj) orelse return .{ .bool = false };
-    const ns_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.len > 0)
-        @ptrCast((try dupZ(ctx, args[0].string)).ptr)
+    const ns_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.bytes().len > 0)
+        @ptrCast((try dupZ(ctx, args[0].string.bytes())).ptr)
     else
         null;
-    const name_z = try dupZ(ctx, args[1].string);
+    const name_z = try dupZ(ctx, args[1].string.bytes());
     const v = c.xmlGetNsProp(node, @ptrCast(name_z.ptr), ns_ptr);
     if (v == null) return .{ .bool = false };
     c.xmlFree.?(v);
@@ -1074,12 +1074,12 @@ fn domElementRemoveAttributeNS(ctx: *NativeContext, args: []const Value) Runtime
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const node = getNodePtr(obj) orelse return .{ .bool = false };
-    const ns_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.len > 0)
-        @ptrCast((try dupZ(ctx, args[0].string)).ptr)
+    const ns_ptr: [*c]const u8 = if (args[0] == .string and args[0].string.bytes().len > 0)
+        @ptrCast((try dupZ(ctx, args[0].string.bytes())).ptr)
     else
         null;
     _ = ns_ptr;
-    const name_z = try dupZ(ctx, args[1].string);
+    const name_z = try dupZ(ctx, args[1].string.bytes());
     _ = c.xmlUnsetNsProp(node, null, @ptrCast(name_z.ptr));
     return .null;
 }
@@ -1091,15 +1091,15 @@ fn domElementGetElementsByTagName(ctx: *NativeContext, args: []const Value) Runt
     var list = std.ArrayList(*c.xmlNode){};
     defer list.deinit(ctx.allocator);
     var child = node.children;
-    while (child != null) : (child = child.*.next) try collectByName(ctx.allocator, child, args[0].string, &list);
+    while (child != null) : (child = child.*.next) try collectByName(ctx.allocator, child, args[0].string.bytes(), &list);
     return try makeNodeList(ctx, getOwnerDocObj(obj) orelse obj, list.items);
 }
 
 fn domGetElementsByTagNameNS(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
-    const ns = if (args[0] == .string) args[0].string else "*";
-    const name = args[1].string;
+    const ns = if (args[0] == .string) args[0].string.bytes() else "*";
+    const name = args[1].string.bytes();
     var node = getNodePtr(obj) orelse return .{ .bool = false };
     // for DOMDocument, the wrapping node may not have children walking the doc;
     // start at the root element
@@ -1118,7 +1118,7 @@ fn domElementGetAttributeNode(ctx: *NativeContext, args: []const Value) RuntimeE
     if (args.len < 1 or args[0] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
     const node = getNodePtr(obj) orelse return .null;
-    const name_z = try dupZ(ctx, args[0].string);
+    const name_z = try dupZ(ctx, args[0].string.bytes());
     const attr = c.xmlHasProp(node, @ptrCast(name_z.ptr));
     if (attr == null) return .null;
     return wrapNode(ctx, @ptrCast(attr), getOwnerDocObj(obj) orelse obj);
@@ -1130,7 +1130,7 @@ fn domCdAppendData(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     if (args.len < 1 or args[0] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
     const node = getNodePtr(obj) orelse return .null;
-    const text_z = try dupZ(ctx, args[0].string);
+    const text_z = try dupZ(ctx, args[0].string.bytes());
     _ = c.xmlNodeAddContent(node, @ptrCast(text_z.ptr));
     return .null;
 }
@@ -1140,14 +1140,14 @@ fn domCdSubstringData(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const node = getNodePtr(obj) orelse return .{ .bool = false };
     const content = c.xmlNodeGetContent(node);
-    if (content == null) return .{ .string = try dupString(ctx, "") };
+    if (content == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     defer c.xmlFree.?(content);
     const slice = content[0..cstrLen(content)];
     const off: usize = if (args[0].int < 0) 0 else @intCast(args[0].int);
-    if (off >= slice.len) return .{ .string = try dupString(ctx, "") };
+    if (off >= slice.len) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     const cnt: usize = if (args[1].int < 0) 0 else @intCast(args[1].int);
     const end = @min(off + cnt, slice.len);
-    return .{ .string = try dupString(ctx, slice[off..end]) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, slice[off..end])) };
 }
 
 // ---------------- DOMNodeList ----------------
@@ -1254,7 +1254,7 @@ fn makeNamedNodeMap(ctx: *NativeContext, owner_doc: *PhpObject, element: *c.xmlN
         if (attr.*.name != null) {
             const name = attr.*.name;
             const key = try dupString(ctx, name[0..cstrLen(name)]);
-            try named.set(ctx.allocator, .{ .string = key }, wrapped);
+            try named.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, wrapped);
         }
         i += 1;
     }
@@ -1308,9 +1308,9 @@ fn domXpathRegisterNamespace(ctx: *NativeContext, args: []const Value) RuntimeEr
         try obj.set(ctx.allocator, "__namespaces", .{ .array = arr });
         ns_map = .{ .array = arr };
     }
-    const key = try dupString(ctx, args[0].string);
-    const val = try dupString(ctx, args[1].string);
-    try ns_map.array.set(ctx.allocator, .{ .string = key }, .{ .string = val });
+    const key = try dupString(ctx, args[0].string.bytes());
+    const val = try dupString(ctx, args[1].string.bytes());
+    try ns_map.array.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, .{ .string = Value.String.borrowed(val) });
     return .{ .bool = true };
 }
 
@@ -1335,13 +1335,13 @@ fn domXpathQuery(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (ns_map == .array) {
         for (ns_map.array.entries.items) |e| {
             if (e.key != .string or e.value != .string) continue;
-            const prefix_z = try dupZ(ctx, e.key.string);
-            const uri_z = try dupZ(ctx, e.value.string);
+            const prefix_z = try dupZ(ctx, e.key.string.bytes());
+            const uri_z = try dupZ(ctx, e.value.string.bytes());
             _ = c.xmlXPathRegisterNs(xctx, @ptrCast(prefix_z.ptr), @ptrCast(uri_z.ptr));
         }
     }
 
-    const expr_z = try dupZ(ctx, args[0].string);
+    const expr_z = try dupZ(ctx, args[0].string.bytes());
     const result = c.xmlXPathEvalExpression(@ptrCast(expr_z.ptr), xctx);
     if (result == null) return .{ .bool = false };
     defer c.xmlXPathFreeObject(result);
@@ -1383,15 +1383,15 @@ fn wrapNamespaceNode(ctx: *NativeContext, owner_doc: *PhpObject, ns: *c.xmlNs) !
     try obj.set(ctx.allocator, "__owner", .{ .object = owner_doc });
     if (ns.prefix != null) {
         const slice = ns.prefix[0..cstrLen(ns.prefix)];
-        try obj.set(ctx.allocator, "__ns_prefix", .{ .string = try dupString(ctx, slice) });
+        try obj.set(ctx.allocator, "__ns_prefix", .{ .string = Value.String.borrowed(try dupString(ctx, slice)) });
     } else {
-        try obj.set(ctx.allocator, "__ns_prefix", .{ .string = try dupString(ctx, "") });
+        try obj.set(ctx.allocator, "__ns_prefix", .{ .string = Value.String.borrowed(try dupString(ctx, "")) });
     }
     if (ns.href != null) {
         const slice = ns.href[0..cstrLen(ns.href)];
-        try obj.set(ctx.allocator, "__ns_href", .{ .string = try dupString(ctx, slice) });
+        try obj.set(ctx.allocator, "__ns_href", .{ .string = Value.String.borrowed(try dupString(ctx, slice)) });
     } else {
-        try obj.set(ctx.allocator, "__ns_href", .{ .string = try dupString(ctx, "") });
+        try obj.set(ctx.allocator, "__ns_href", .{ .string = Value.String.borrowed(try dupString(ctx, "")) });
     }
     return .{ .object = obj };
 }
@@ -1414,13 +1414,13 @@ fn domXpathEvaluate(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     if (ns_map == .array) {
         for (ns_map.array.entries.items) |e| {
             if (e.key != .string or e.value != .string) continue;
-            const prefix_z = try dupZ(ctx, e.key.string);
-            const uri_z = try dupZ(ctx, e.value.string);
+            const prefix_z = try dupZ(ctx, e.key.string.bytes());
+            const uri_z = try dupZ(ctx, e.value.string.bytes());
             _ = c.xmlXPathRegisterNs(xctx, @ptrCast(prefix_z.ptr), @ptrCast(uri_z.ptr));
         }
     }
 
-    const expr_z = try dupZ(ctx, args[0].string);
+    const expr_z = try dupZ(ctx, args[0].string.bytes());
     const result = c.xmlXPathEvalExpression(@ptrCast(expr_z.ptr), xctx);
     if (result == null) return .{ .bool = false };
     defer c.xmlXPathFreeObject(result);
@@ -1434,9 +1434,9 @@ fn domXpathEvaluate(ctx: *NativeContext, args: []const Value) RuntimeError!Value
         c.XPATH_BOOLEAN => return .{ .bool = result.*.boolval != 0 },
         c.XPATH_NUMBER => return .{ .float = result.*.floatval },
         c.XPATH_STRING => {
-            if (result.*.stringval == null) return .{ .string = try dupString(ctx, "") };
+            if (result.*.stringval == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
             const s = result.*.stringval;
-            return .{ .string = try dupString(ctx, s[0..cstrLen(s)]) };
+            return .{ .string = Value.String.borrowed(try dupString(ctx, s[0..cstrLen(s)])) };
         },
         else => return .null,
     }
@@ -1706,7 +1706,7 @@ fn domNodeListReadOnly(_: *NativeContext, _: []const Value) RuntimeError!Value {
 fn domNodeListGet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
-    if (std.mem.eql(u8, args[0].string, "length")) {
+    if (std.mem.eql(u8, args[0].string.bytes(), "length")) {
         const items = obj.get("__items");
         if (items != .array) return .{ .int = 0 };
         return .{ .int = @intCast(items.array.entries.items.len) };
@@ -1818,7 +1818,7 @@ fn registerConstants(vm: *VM, a: Allocator) !void {
     try vm.php_constants.put(a, "LIBXML_VERSION", .{ .int = @intCast(c.LIBXML_VERSION) });
     // c.LIBXML_DOTTED_VERSION is a string literal macro so this slice points
     // into the binary's rodata and lives for the program's lifetime
-    try vm.php_constants.put(a, "LIBXML_DOTTED_VERSION", .{ .string = std.mem.span(@as([*:0]const u8, c.LIBXML_DOTTED_VERSION)) });
+    try vm.php_constants.put(a, "LIBXML_DOTTED_VERSION", .{ .string = Value.String.borrowed(std.mem.span(@as([*:0]const u8, c.LIBXML_DOTTED_VERSION))) });
 }
 
 // ---------------- libxml error-handling stubs ----------------
@@ -1867,13 +1867,13 @@ fn buildLibXMLError(ctx: *NativeContext, e: CapturedError) RuntimeError!Value {
     // the buffer into ctx allocator space so it shares the script lifetime
     const msg_copy = try ctx.allocator.dupe(u8, e.message);
     try ctx.vm.strings.append(ctx.allocator, msg_copy);
-    try obj.set(ctx.allocator, "message", .{ .string = msg_copy });
+    try obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed(msg_copy) });
     if (e.file) |f| {
         const fc = try ctx.allocator.dupe(u8, f);
         try ctx.vm.strings.append(ctx.allocator, fc);
-        try obj.set(ctx.allocator, "file", .{ .string = fc });
+        try obj.set(ctx.allocator, "file", .{ .string = Value.String.borrowed(fc) });
     } else {
-        try obj.set(ctx.allocator, "file", .{ .string = "" });
+        try obj.set(ctx.allocator, "file", .{ .string = Value.String.borrowed("") });
     }
     try obj.set(ctx.allocator, "line", .{ .int = @intCast(e.line) });
     return .{ .object = obj };

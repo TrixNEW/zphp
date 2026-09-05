@@ -283,7 +283,7 @@ pub fn compileForeach(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitOp(.pop); // -> []
         try self.compileNode(iter_n); // push the (already-separated) iterable
         try self.emitGetVar(key_name); // push the key
-        const vidx = try self.addConstant(.{ .string = val_name });
+        const vidx = try self.addConstant(.{ .string = Value.String.borrowed(val_name) });
         try self.emitOp(.foreach_ref_bind); // $v = &iterable[key] (reverts prior elem if uncaptured)
         try self.emitU16(vidx);
     } else {
@@ -483,11 +483,11 @@ pub fn compileMatch(self: *Compiler, node: Ast.Node) Error!void {
         //   "Unhandled match case 99" / "case 'foo'" / "case of type array"
         // by calling a runtime helper with the matched value
         try self.emitGetVar(temp_name);
-        const helper_idx = try self.addConstant(.{ .string = "__zphp_match_unhandled_msg" });
+        const helper_idx = try self.addConstant(.{ .string = Value.String.borrowed("__zphp_match_unhandled_msg") });
         try self.emitOp(.call);
         try self.emitU16(helper_idx);
         try self.emitByte(1);
-        const cls_idx = try self.addConstant(.{ .string = "UnhandledMatchError" });
+        const cls_idx = try self.addConstant(.{ .string = Value.String.borrowed("UnhandledMatchError") });
         try self.emitOp(.new_obj);
         try self.emitU16(cls_idx);
         try self.emitByte(1);
@@ -619,7 +619,7 @@ pub fn compileTryCatch(self: *Compiler, node: Ast.Node) Error!void {
                 // walks the type-name node properly (handles FQN `\Foo`, relative
                 // `Sub\Foo`, and bare `Foo`)
                 const type_name = try resolveCatchClassName(self, tn);
-                const tidx = try self.addConstant(.{ .string = type_name });
+                const tidx = try self.addConstant(.{ .string = Value.String.borrowed(type_name) });
                 try self.emitConstant(tidx); // [exc, exc, type]
                 try self.emitOp(.instance_check); // [exc, bool]
                 const mj = try self.emitJump(.jump_if_true); // peek bool
@@ -700,7 +700,7 @@ pub fn compileGlobal(self: *Compiler, node: Ast.Node) Error!void {
     for (self.ast.extraSlice(node.data.lhs)) |var_idx| {
         const var_node = self.ast.nodes[var_idx];
         const name = self.ast.tokenSlice(var_node.main_token);
-        const name_idx = try self.addConstant(.{ .string = name });
+        const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(name) });
         try self.emitOp(.get_global);
         try self.emitU16(name_idx);
     }
@@ -708,7 +708,7 @@ pub fn compileGlobal(self: *Compiler, node: Ast.Node) Error!void {
 
 pub fn compileStaticVar(self: *Compiler, node: Ast.Node) Error!void {
     const var_name = self.ast.tokenSlice(node.main_token);
-    const var_idx = try self.addConstant(.{ .string = var_name });
+    const var_idx = try self.addConstant(.{ .string = Value.String.borrowed(var_name) });
 
     // get_static pushes the current value (or null if uninitialized)
     // VM derives the storage key from current function name + var name

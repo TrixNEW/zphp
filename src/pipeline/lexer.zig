@@ -646,12 +646,12 @@ test "bare dollar" {
 
 test "all single-char operators" {
     try expectTokens("<?php + - * / % = ! < > & | ^ ~ @ . ? ( ) { } [ ] ; , : \\", &.{
-        .open_tag,  .plus,      .minus,     .star,      .slash,
-        .percent,   .equal,     .bang,      .lt,        .gt,
-        .amp,       .pipe,      .caret,     .tilde,     .at,
-        .dot,       .question,  .l_paren,   .r_paren,   .l_brace,
-        .r_brace,   .l_bracket, .r_bracket, .semicolon, .comma,
-        .colon,     .backslash,
+        .open_tag, .plus,      .minus,     .star,      .slash,
+        .percent,  .equal,     .bang,      .lt,        .gt,
+        .amp,      .pipe,      .caret,     .tilde,     .at,
+        .dot,      .question,  .l_paren,   .r_paren,   .l_brace,
+        .r_brace,  .l_bracket, .r_bracket, .semicolon, .comma,
+        .colon,    .backslash,
     });
 }
 
@@ -808,9 +808,9 @@ test "function definition" {
     try expectTokens(
         "<?php function add($a, $b) { return $a + $b; }",
         &.{
-            .open_tag,   .kw_function, .identifier, .l_paren,   .variable,
-            .comma,      .variable,    .r_paren,    .l_brace,   .kw_return,
-            .variable,   .plus,        .variable,   .semicolon, .r_brace,
+            .open_tag, .kw_function, .identifier, .l_paren,   .variable,
+            .comma,    .variable,    .r_paren,    .l_brace,   .kw_return,
+            .variable, .plus,        .variable,   .semicolon, .r_brace,
         },
     );
 }
@@ -819,9 +819,9 @@ test "class definition" {
     try expectTokens(
         "<?php class Foo extends Bar { public function baz(): void {} }",
         &.{
-            .open_tag,     .kw_class,    .identifier, .kw_extends, .identifier,
-            .l_brace,      .kw_public,   .kw_function, .identifier, .l_paren,
-            .r_paren,      .colon,       .identifier,  .l_brace,   .r_brace,
+            .open_tag, .kw_class,  .identifier,  .kw_extends, .identifier,
+            .l_brace,  .kw_public, .kw_function, .identifier, .l_paren,
+            .r_paren,  .colon,     .identifier,  .l_brace,    .r_brace,
             .r_brace,
         },
     );
@@ -829,9 +829,9 @@ test "class definition" {
 
 test "match expression" {
     try expectTokens("<?php match($x) { 1 => 'a', 2 => 'b' }", &.{
-        .open_tag,    .kw_match,  .l_paren,   .variable,  .r_paren,
-        .l_brace,     .integer,   .fat_arrow, .string,    .comma,
-        .integer,     .fat_arrow, .string,    .r_brace,
+        .open_tag, .kw_match,  .l_paren,   .variable, .r_paren,
+        .l_brace,  .integer,   .fat_arrow, .string,   .comma,
+        .integer,  .fat_arrow, .string,    .r_brace,
     });
 }
 
@@ -875,8 +875,8 @@ test "multiple php blocks" {
     try expectTokens(
         "A<?php $a; ?>B<?= $b ?>C",
         &.{
-            .inline_html, .open_tag,      .variable, .semicolon,
-            .close_tag,   .inline_html,   .open_tag_echo, .variable,
+            .inline_html, .open_tag,    .variable,      .semicolon,
+            .close_tag,   .inline_html, .open_tag_echo, .variable,
             .close_tag,   .inline_html,
         },
     );
@@ -923,7 +923,7 @@ test "quoted heredoc label" {
 test "heredoc label cannot start with digit" {
     // `<<<1FOO` -> invalid heredoc opener, then the digit/letters tokenize normally
     try expectTokens("<?php <<<1FOO\nhi\n1FOO;", &.{
-        .open_tag,  .invalid, .integer, .identifier,
+        .open_tag,   .invalid, .integer,    .identifier,
         .identifier, .integer, .identifier, .semicolon,
     });
 }

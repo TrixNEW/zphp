@@ -471,7 +471,7 @@ fn resolveScale(args: []const Value, scale_idx: usize) usize {
 fn argToString(args: []const Value, idx: usize) ?[]const u8 {
     if (args.len <= idx) return null;
     return switch (args[idx]) {
-        .string => |s| s,
+        .string => |s| s.bytes(),
         else => null,
     };
 }
@@ -479,7 +479,7 @@ fn argToString(args: []const Value, idx: usize) ?[]const u8 {
 fn returnStr(ctx: *NativeContext, s: []const u8) !Value {
     const owned = try ctx.allocator.dupe(u8, s);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn bcAdd(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -609,8 +609,8 @@ fn bcDivmod(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const arr = try ctx.allocator.create(@import("../runtime/value.zig").PhpArray);
     arr.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, arr);
-    try arr.append(ctx.allocator, .{ .string = q_owned });
-    try arr.append(ctx.allocator, .{ .string = r_owned });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(q_owned) });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(r_owned) });
     return .{ .array = arr };
 }
 

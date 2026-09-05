@@ -62,7 +62,7 @@ pub const entries = .{
 /// non-numeric strings raise TypeError. used by abs/sqrt/etc
 fn requireNumeric(ctx: *NativeContext, v: Value, comptime fn_name: []const u8, comptime type_label: []const u8) !bool {
     if (v == .int or v == .float or v == .bool or v == .null) return false;
-    if (v == .string and Value.isNumericString(v.string)) return false;
+    if (v == .string and Value.isNumericString(v.string.bytes())) return false;
     const tn: []const u8 = switch (v) {
         .array => "array",
         .object => v.object.class_name,
@@ -90,7 +90,7 @@ fn native_abs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         .float => |f| .{ .float = @abs(f) },
         .string => |s| blk: {
             // numeric strings with '.' or exponent should use float path
-            const has_float_marker = std.mem.indexOfAny(u8, s, ".eE") != null;
+            const has_float_marker = std.mem.indexOfAny(u8, s.bytes(), ".eE") != null;
             if (has_float_marker) break :blk Value{ .float = @abs(Value.toFloat(args[0])) };
             const i = Value.toInt(args[0]);
             if (i == std.math.minInt(i64)) break :blk Value{ .float = -@as(f64, @floatFromInt(i)) };
@@ -126,15 +126,8 @@ fn native_round(_: *NativeContext, args: []const Value) RuntimeError!Value {
         if (m == .object and std.mem.eql(u8, m.object.class_name, "RoundingMode")) {
             const case_name = m.object.get("name");
             if (case_name == .string) {
-                const n = case_name.string;
-                if (std.mem.eql(u8, n, "HalfAwayFromZero")) mode = 1
-                else if (std.mem.eql(u8, n, "HalfTowardsZero")) mode = 2
-                else if (std.mem.eql(u8, n, "HalfEven")) mode = 3
-                else if (std.mem.eql(u8, n, "HalfOdd")) mode = 4
-                else if (std.mem.eql(u8, n, "TowardsZero")) mode = 5
-                else if (std.mem.eql(u8, n, "AwayFromZero")) mode = 6
-                else if (std.mem.eql(u8, n, "NegativeInfinity")) mode = 7
-                else if (std.mem.eql(u8, n, "PositiveInfinity")) mode = 8;
+                const n = case_name.string.bytes();
+                if (std.mem.eql(u8, n, "HalfAwayFromZero")) mode = 1 else if (std.mem.eql(u8, n, "HalfTowardsZero")) mode = 2 else if (std.mem.eql(u8, n, "HalfEven")) mode = 3 else if (std.mem.eql(u8, n, "HalfOdd")) mode = 4 else if (std.mem.eql(u8, n, "TowardsZero")) mode = 5 else if (std.mem.eql(u8, n, "AwayFromZero")) mode = 6 else if (std.mem.eql(u8, n, "NegativeInfinity")) mode = 7 else if (std.mem.eql(u8, n, "PositiveInfinity")) mode = 8;
             }
         } else {
             mode = Value.toInt(m);
@@ -337,12 +330,12 @@ fn native_intdiv(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn native_base_convert(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 3) return .{ .string = "0" };
-    var num_str = if (args[0] == .string) args[0].string else return Value{ .string = "0" };
+    if (args.len < 3) return .{ .string = Value.String.borrowed("0") };
+    var num_str = if (args[0] == .string) args[0].string.bytes() else return Value{ .string = Value.String.borrowed("0") };
     const from_base: u8 = @intCast(@max(2, @min(36, Value.toInt(args[1]))));
     const to_base: u8 = @intCast(@max(2, @min(36, Value.toInt(args[2]))));
     if (num_str.len > 0 and (num_str[0] == '-' or num_str[0] == '+')) num_str = num_str[1..];
-    const val = std.fmt.parseInt(u64, num_str, from_base) catch return Value{ .string = "0" };
+    const val = std.fmt.parseInt(u64, num_str, from_base) catch return Value{ .string = Value.String.borrowed("0") };
     const digits = "0123456789abcdefghijklmnopqrstuvwxyz";
     var buf: [65]u8 = undefined;
     var pos: usize = buf.len;
@@ -357,7 +350,7 @@ fn native_base_convert(ctx: *NativeContext, args: []const Value) RuntimeError!Va
             v /= to_base;
         }
     }
-    return .{ .string = try ctx.createString(buf[pos..]) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(buf[pos..])) };
 }
 
 // parses digits in `base`, returning int if it fits in i64 and float on
@@ -371,10 +364,7 @@ fn baseDecimal(s: []const u8, base: u8) Value {
         const d: ?u8 = switch (base) {
             2 => if (c == '0' or c == '1') c - '0' else null,
             8 => if (c >= '0' and c <= '7') c - '0' else null,
-            16 => if (c >= '0' and c <= '9') c - '0'
-                else if (c >= 'a' and c <= 'f') 10 + (c - 'a')
-                else if (c >= 'A' and c <= 'F') 10 + (c - 'A')
-                else null,
+            16 => if (c >= '0' and c <= '9') c - '0' else if (c >= 'a' and c <= 'f') 10 + (c - 'a') else if (c >= 'A' and c <= 'F') 10 + (c - 'A') else null,
             else => null,
         };
         if (d == null) continue;
@@ -402,44 +392,44 @@ fn baseDecimal(s: []const u8, base: u8) Value {
 
 fn native_bindec(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .int = 0 };
-    const s = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
     return baseDecimal(s, 2);
 }
 
 fn native_octdec(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .int = 0 };
-    const s = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
     return baseDecimal(s, 8);
 }
 
 fn native_hexdec(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .int = 0 };
-    const s = if (args[0] == .string) args[0].string else return Value{ .int = 0 };
+    const s = if (args[0] == .string) args[0].string.bytes() else return Value{ .int = 0 };
     return baseDecimal(s, 16);
 }
 
 fn native_decbin(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "0" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("0") };
     const val = Value.toInt(args[0]);
     var buf: [65]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{b}", .{@as(u64, @bitCast(val))}) catch return Value{ .string = "0" };
-    return .{ .string = try ctx.createString(s) };
+    const s = std.fmt.bufPrint(&buf, "{b}", .{@as(u64, @bitCast(val))}) catch return Value{ .string = Value.String.borrowed("0") };
+    return .{ .string = Value.String.borrowed(try ctx.createString(s)) };
 }
 
 fn native_decoct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "0" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("0") };
     const val = Value.toInt(args[0]);
     var buf: [32]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{o}", .{@as(u64, @bitCast(val))}) catch return Value{ .string = "0" };
-    return .{ .string = try ctx.createString(s) };
+    const s = std.fmt.bufPrint(&buf, "{o}", .{@as(u64, @bitCast(val))}) catch return Value{ .string = Value.String.borrowed("0") };
+    return .{ .string = Value.String.borrowed(try ctx.createString(s)) };
 }
 
 fn native_dechex(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "0" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("0") };
     const val = Value.toInt(args[0]);
     var buf: [17]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "{x}", .{@as(u64, @bitCast(val))}) catch return Value{ .string = "0" };
-    return .{ .string = try ctx.createString(s) };
+    const s = std.fmt.bufPrint(&buf, "{x}", .{@as(u64, @bitCast(val))}) catch return Value{ .string = Value.String.borrowed("0") };
+    return .{ .string = Value.String.borrowed(try ctx.createString(s)) };
 }
 
 fn native_sin(_: *NativeContext, args: []const Value) RuntimeError!Value {

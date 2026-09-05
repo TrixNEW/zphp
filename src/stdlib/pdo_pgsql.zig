@@ -59,12 +59,12 @@ pub fn connect(ctx: *NativeContext, obj: *PhpObject, rest: []const u8, args: []c
     if (args.len >= 2 and args[1] == .string) {
         if (conninfo.items.len > 0) try conninfo.append(ctx.allocator, ' ');
         try conninfo.appendSlice(ctx.allocator, "user=");
-        try conninfo.appendSlice(ctx.allocator, args[1].string);
+        try conninfo.appendSlice(ctx.allocator, args[1].string.bytes());
     }
     if (args.len >= 3 and args[2] == .string) {
         if (conninfo.items.len > 0) try conninfo.append(ctx.allocator, ' ');
         try conninfo.appendSlice(ctx.allocator, "password=");
-        try conninfo.appendSlice(ctx.allocator, args[2].string);
+        try conninfo.appendSlice(ctx.allocator, args[2].string.bytes());
     }
 
     try conninfo.append(ctx.allocator, 0);
@@ -109,7 +109,7 @@ pub fn query(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeError
     }
 
     const stmt_obj = try ctx.createObject("PDOStatement");
-    try stmt_obj.set(ctx.allocator, "__driver", .{ .string = "pgsql" });
+    try stmt_obj.set(ctx.allocator, "__driver", .{ .string = Value.String.borrowed("pgsql") });
     try stmt_obj.set(ctx.allocator, "__db_ptr", .{ .int = @intCast(@intFromPtr(conn)) });
     try stmt_obj.set(ctx.allocator, "__res_ptr", .{ .int = @intCast(@intFromPtr(res)) });
     try stmt_obj.set(ctx.allocator, "__current_row", .{ .int = 0 });
@@ -158,7 +158,7 @@ pub fn prepare(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeErr
     }
 
     const stmt_obj = try ctx.createObject("PDOStatement");
-    try stmt_obj.set(ctx.allocator, "__driver", .{ .string = "pgsql" });
+    try stmt_obj.set(ctx.allocator, "__driver", .{ .string = Value.String.borrowed("pgsql") });
     try stmt_obj.set(ctx.allocator, "__db_ptr", .{ .int = @intCast(@intFromPtr(conn)) });
     try stmt_obj.set(ctx.allocator, "__res_ptr", .{ .int = 0 });
     try stmt_obj.set(ctx.allocator, "__current_row", .{ .int = 0 });
@@ -168,12 +168,12 @@ pub fn prepare(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeErr
 
     const sql_owned = try rewritten.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, sql_owned);
-    try stmt_obj.set(ctx.allocator, "__sql", .{ .string = sql_owned });
+    try stmt_obj.set(ctx.allocator, "__sql", .{ .string = Value.String.borrowed(sql_owned) });
 
     if (param_names.items.len > 0) {
         var map = try ctx.createArray();
         for (param_names.items, 0..) |name, idx| {
-            try map.set(ctx.allocator, .{ .string = name }, .{ .int = @intCast(idx) });
+            try map.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, .{ .int = @intCast(idx) });
         }
         try stmt_obj.set(ctx.allocator, "__param_map", .{ .array = map });
     }
@@ -186,7 +186,7 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
     const conn = getConn(obj) orelse return .{ .bool = false };
     const sql_val = obj.get("__sql");
     if (sql_val != .string) return .{ .bool = false };
-    const sql_z = try pdo.dupeZ(ctx, sql_val.string);
+    const sql_z = try pdo.dupeZ(ctx, sql_val.string.bytes());
 
     // free previous result
     if (getRes(obj)) |old_res| {
@@ -210,9 +210,9 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
         if (param_map) |pm| {
             // named params
             for (params.entries.items) |entry| {
-                var name = if (entry.key == .string) entry.key.string else continue;
+                var name = if (entry.key == .string) entry.key.string.bytes() else continue;
                 if (name.len > 0 and name[0] == ':') name = name[1..];
-                const idx_val = pm.get(.{ .string = name });
+                const idx_val = pm.get(.{ .string = Value.String.borrowed(name) });
                 if (idx_val == .int) {
                     const idx: usize = @intCast(idx_val.int);
                     if (idx < param_count) {
@@ -281,7 +281,7 @@ fn valueToZ(ctx: *NativeContext, val: Value) !?[*:0]const u8 {
             return z.ptr;
         },
         .string => |s| {
-            const z = try pdo.dupeZ(ctx, s);
+            const z = try pdo.dupeZ(ctx, s.bytes());
             return z.ptr;
         },
         else => return null,
@@ -303,14 +303,14 @@ pub fn stmtFetch(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Runt
     while (col < num_fields) : (col += 1) {
         const val = if (pg.PQgetisnull(res, current_row, col) != 0) Value.null else blk: {
             const s = std.mem.span(pg.PQgetvalue(res, current_row, col));
-            break :blk Value{ .string = try ctx.createString(s) };
+            break :blk Value{ .string = Value.String.borrowed(try ctx.createString(s)) };
         };
 
         if (mode == 3 or mode == 4) try row.append(ctx.allocator, val);
         if (mode == 2 or mode == 4) {
             if (pg.PQfname(res, col)) |name_ptr| {
                 const name = std.mem.span(name_ptr);
-                try row.set(ctx.allocator, .{ .string = try ctx.createString(name) }, val);
+                try row.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(name)) }, val);
             }
         }
     }
@@ -342,7 +342,7 @@ pub fn stmtFetchColumn(ctx: *NativeContext, obj: *PhpObject, args: []const Value
 
     if (pg.PQgetisnull(res, current_row, col) != 0) return .null;
     const s = std.mem.span(pg.PQgetvalue(res, current_row, col));
-    return .{ .string = try ctx.createString(s) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(s)) };
 }
 
 pub fn stmtColumnCount(obj: *PhpObject) RuntimeError!Value {
@@ -362,13 +362,13 @@ pub fn stmtCloseCursor(ctx: *NativeContext, obj: *PhpObject) RuntimeError!Value 
 
 pub fn lastInsertId(ctx: *NativeContext, obj: *PhpObject) RuntimeError!Value {
     // postgres uses RETURNING or lastval() for insert IDs
-    const conn = getConn(obj) orelse return .{ .string = "0" };
+    const conn = getConn(obj) orelse return .{ .string = Value.String.borrowed("0") };
     const sql_z: [*:0]const u8 = "SELECT lastval()";
-    const res = pg.PQexec(conn, sql_z) orelse return .{ .string = "0" };
+    const res = pg.PQexec(conn, sql_z) orelse return .{ .string = Value.String.borrowed("0") };
     defer pg.PQclear(res);
-    if (pg.PQresultStatus(res) != pg.PGRES_TUPLES_OK or pg.PQntuples(res) == 0) return .{ .string = "0" };
+    if (pg.PQresultStatus(res) != pg.PGRES_TUPLES_OK or pg.PQntuples(res) == 0) return .{ .string = Value.String.borrowed("0") };
     const s = std.mem.span(pg.PQgetvalue(res, 0, 0));
-    return .{ .string = try ctx.createString(s) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(s)) };
 }
 
 pub fn beginTransaction(ctx: *NativeContext, obj: *PhpObject) RuntimeError!Value {
@@ -402,9 +402,9 @@ pub fn errorInfo(ctx: *NativeContext, obj: *PhpObject) RuntimeError!Value {
     const conn = getConn(obj) orelse return .null;
     var arr = try ctx.createArray();
     const msg = std.mem.span(pg.PQerrorMessage(conn));
-    try arr.append(ctx.allocator, .{ .string = "00000" });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("00000") });
     try arr.append(ctx.allocator, .null);
-    try arr.append(ctx.allocator, .{ .string = try ctx.createString(msg) });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(msg)) });
     return .{ .array = arr };
 }
 

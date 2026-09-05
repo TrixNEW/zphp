@@ -92,7 +92,7 @@ fn curlInit(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     const obj = try ctx.createObject("CurlHandle");
     try obj.set(ctx.allocator, "__curl_ptr", .{ .int = @intCast(@intFromPtr(handle)) });
-    try obj.set(ctx.allocator, "__error", .{ .string = "" });
+    try obj.set(ctx.allocator, "__error", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "__errno", .{ .int = 0 });
     try obj.set(ctx.allocator, "__return_transfer", .{ .bool = false });
     try obj.set(ctx.allocator, "__header_out", .{ .bool = false });
@@ -102,7 +102,7 @@ fn curlInit(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     try obj.set(ctx.allocator, "__slist_ptr", .{ .int = 0 });
 
     if (args.len > 0 and args[0] == .string) {
-        const url_z = try dupeZ(ctx, args[0].string);
+        const url_z = try dupeZ(ctx, args[0].string.bytes());
         _ = c.curl_easy_setopt(handle, c.CURLOPT_URL, url_z.ptr);
     }
 
@@ -141,7 +141,7 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         option == c.CURLOPT_UNIX_SOCKET_PATH)
     {
         const s = switch (value) {
-            .string => value.string,
+            .string => value.string.bytes(),
             .null => "",
             else => return .{ .bool = false },
         };
@@ -215,7 +215,7 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
     // CURLOPT_POSTFIELDS
     if (option == c.CURLOPT_POSTFIELDS) {
         const s = switch (value) {
-            .string => value.string,
+            .string => value.string.bytes(),
             else => return .{ .bool = false },
         };
         const z = try dupeZ(ctx, s);
@@ -239,7 +239,7 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
         var slist: ?*c.struct_curl_slist = null;
         for (value.array.entries.items) |entry| {
             if (entry.value == .string) {
-                const z = try dupeZ(ctx, entry.value.string);
+                const z = try dupeZ(ctx, entry.value.string.bytes());
                 slist = c.curl_slist_append(slist, z.ptr);
             }
         }
@@ -357,12 +357,12 @@ fn curlExec(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         const err_msg = c.curl_easy_strerror(result);
         const msg = std.mem.span(err_msg);
         const owned = try ctx.createString(msg);
-        try obj.set(ctx.allocator, "__error", .{ .string = owned });
+        try obj.set(ctx.allocator, "__error", .{ .string = Value.String.borrowed(owned) });
         try obj.set(ctx.allocator, "__errno", .{ .int = @intCast(result) });
         return .{ .bool = false };
     }
 
-    try obj.set(ctx.allocator, "__error", .{ .string = "" });
+    try obj.set(ctx.allocator, "__error", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "__errno", .{ .int = 0 });
 
     // store http code
@@ -372,7 +372,7 @@ fn curlExec(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     if (return_transfer) {
         const str = try ctx.createString(cb_data.buffer.items);
-        return .{ .string = str };
+        return .{ .string = Value.String.borrowed(str) };
     }
 
     return .{ .bool = true };
@@ -404,8 +404,8 @@ pub fn cleanupHandle(obj: *PhpObject) void {
 }
 
 fn curlError(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    const obj = getThisObj(args) orelse return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    const obj = getThisObj(args) orelse return .{ .string = Value.String.borrowed("") };
     return obj.get("__error");
 }
 
@@ -444,7 +444,7 @@ fn getInfoOption(ctx: *NativeContext, handle: *c.CURL, option: i64) RuntimeError
         if (code != c.CURLE_OK or ptr == null) return .{ .bool = false };
         const s = std.mem.span(ptr);
         const owned = try ctx.createString(s);
-        return .{ .string = owned };
+        return .{ .string = Value.String.borrowed(owned) };
     }
 
     // long info types
@@ -494,7 +494,7 @@ fn getAllInfo(ctx: *NativeContext, handle: *c.CURL) RuntimeError!Value {
     if (c.curl_easy_getinfo(handle, c.CURLINFO_EFFECTIVE_URL, &url_ptr) == c.CURLE_OK) {
         if (url_ptr != null) {
             const s = try ctx.createString(std.mem.span(url_ptr));
-            try arr.set(ctx.allocator, .{ .string = "url" }, .{ .string = s });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("url") }, .{ .string = Value.String.borrowed(s) });
         }
     }
 
@@ -502,73 +502,73 @@ fn getAllInfo(ctx: *NativeContext, handle: *c.CURL) RuntimeError!Value {
     if (c.curl_easy_getinfo(handle, c.CURLINFO_CONTENT_TYPE, &content_type_ptr) == c.CURLE_OK) {
         if (content_type_ptr != null) {
             const s = try ctx.createString(std.mem.span(content_type_ptr));
-            try arr.set(ctx.allocator, .{ .string = "content_type" }, .{ .string = s });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("content_type") }, .{ .string = Value.String.borrowed(s) });
         } else {
-            try arr.set(ctx.allocator, .{ .string = "content_type" }, .null);
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("content_type") }, .null);
         }
     }
 
     var http_code: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_RESPONSE_CODE, &http_code) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "http_code" }, .{ .int = @intCast(http_code) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("http_code") }, .{ .int = @intCast(http_code) });
 
     var header_size: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_HEADER_SIZE, &header_size) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "header_size" }, .{ .int = @intCast(header_size) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("header_size") }, .{ .int = @intCast(header_size) });
 
     var request_size: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_REQUEST_SIZE, &request_size) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "request_size" }, .{ .int = @intCast(request_size) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("request_size") }, .{ .int = @intCast(request_size) });
 
     var redirect_count: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_REDIRECT_COUNT, &redirect_count) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "redirect_count" }, .{ .int = @intCast(redirect_count) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("redirect_count") }, .{ .int = @intCast(redirect_count) });
 
     var total_time: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_TOTAL_TIME, &total_time) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "total_time" }, .{ .float = total_time });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("total_time") }, .{ .float = total_time });
 
     var namelookup_time: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_NAMELOOKUP_TIME, &namelookup_time) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "namelookup_time" }, .{ .float = namelookup_time });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("namelookup_time") }, .{ .float = namelookup_time });
 
     var connect_time: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_CONNECT_TIME, &connect_time) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "connect_time" }, .{ .float = connect_time });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("connect_time") }, .{ .float = connect_time });
 
     var pretransfer_time: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_PRETRANSFER_TIME, &pretransfer_time) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "pretransfer_time" }, .{ .float = pretransfer_time });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("pretransfer_time") }, .{ .float = pretransfer_time });
 
     var starttransfer_time: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_STARTTRANSFER_TIME, &starttransfer_time) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "starttransfer_time" }, .{ .float = starttransfer_time });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("starttransfer_time") }, .{ .float = starttransfer_time });
 
     var redirect_time: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_REDIRECT_TIME, &redirect_time) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "redirect_time" }, .{ .float = redirect_time });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("redirect_time") }, .{ .float = redirect_time });
 
     var primary_ip_ptr: [*c]u8 = null;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_PRIMARY_IP, &primary_ip_ptr) == c.CURLE_OK) {
         if (primary_ip_ptr != null) {
             const s = try ctx.createString(std.mem.span(primary_ip_ptr));
-            try arr.set(ctx.allocator, .{ .string = "primary_ip" }, .{ .string = s });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("primary_ip") }, .{ .string = Value.String.borrowed(s) });
         }
     }
 
     var primary_port: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_PRIMARY_PORT, &primary_port) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "primary_port" }, .{ .int = @intCast(primary_port) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("primary_port") }, .{ .int = @intCast(primary_port) });
 
     var ssl_verify: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_SSL_VERIFYRESULT, &ssl_verify) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "ssl_verify_result" }, .{ .int = @intCast(ssl_verify) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("ssl_verify_result") }, .{ .int = @intCast(ssl_verify) });
 
     var scheme_ptr: [*c]u8 = null;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_SCHEME, &scheme_ptr) == c.CURLE_OK) {
         if (scheme_ptr != null) {
             const s = try ctx.createString(std.mem.span(scheme_ptr));
-            try arr.set(ctx.allocator, .{ .string = "scheme" }, .{ .string = s });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("scheme") }, .{ .string = Value.String.borrowed(s) });
         }
     }
 
@@ -576,9 +576,9 @@ fn getAllInfo(ctx: *NativeContext, handle: *c.CURL) RuntimeError!Value {
     if (c.curl_easy_getinfo(handle, c.CURLINFO_REDIRECT_URL, &redirect_url_ptr) == c.CURLE_OK) {
         if (redirect_url_ptr != null) {
             const s = try ctx.createString(std.mem.span(redirect_url_ptr));
-            try arr.set(ctx.allocator, .{ .string = "redirect_url" }, .{ .string = s });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("redirect_url") }, .{ .string = Value.String.borrowed(s) });
         } else {
-            try arr.set(ctx.allocator, .{ .string = "redirect_url" }, .{ .string = "" });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("redirect_url") }, .{ .string = Value.String.borrowed("") });
         }
     }
 
@@ -586,84 +586,84 @@ fn getAllInfo(ctx: *NativeContext, handle: *c.CURL) RuntimeError!Value {
     if (c.curl_easy_getinfo(handle, c.CURLINFO_LOCAL_IP, &local_ip_ptr) == c.CURLE_OK) {
         if (local_ip_ptr != null) {
             const s = try ctx.createString(std.mem.span(local_ip_ptr));
-            try arr.set(ctx.allocator, .{ .string = "local_ip" }, .{ .string = s });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("local_ip") }, .{ .string = Value.String.borrowed(s) });
         }
     }
 
     var local_port: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_LOCAL_PORT, &local_port) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "local_port" }, .{ .int = @intCast(local_port) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("local_port") }, .{ .int = @intCast(local_port) });
 
     var filetime: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_FILETIME, &filetime) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "filetime" }, .{ .int = @intCast(filetime) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("filetime") }, .{ .int = @intCast(filetime) });
 
     var http_version: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_HTTP_VERSION, &http_version) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "http_version" }, .{ .int = @intCast(http_version) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("http_version") }, .{ .int = @intCast(http_version) });
 
     var protocol: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_PROTOCOL, &protocol) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "protocol" }, .{ .int = @intCast(protocol) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("protocol") }, .{ .int = @intCast(protocol) });
 
     var num_connects: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_NUM_CONNECTS, &num_connects) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "num_connects" }, .{ .int = @intCast(num_connects) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("num_connects") }, .{ .int = @intCast(num_connects) });
 
     var os_errno: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_OS_ERRNO, &os_errno) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "os_errno" }, .{ .int = @intCast(os_errno) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("os_errno") }, .{ .int = @intCast(os_errno) });
 
     var size_upload: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_SIZE_UPLOAD_T, &size_upload) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "size_upload" }, .{ .float = size_upload });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("size_upload") }, .{ .float = size_upload });
 
     var size_download: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_SIZE_DOWNLOAD_T, &size_download) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "size_download" }, .{ .float = size_download });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("size_download") }, .{ .float = size_download });
 
     var speed_download: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_SPEED_DOWNLOAD_T, &speed_download) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "speed_download" }, .{ .float = speed_download });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("speed_download") }, .{ .float = speed_download });
 
     var speed_upload: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_SPEED_UPLOAD_T, &speed_upload) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "speed_upload" }, .{ .float = speed_upload });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("speed_upload") }, .{ .float = speed_upload });
 
     var download_cl: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &download_cl) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "download_content_length" }, .{ .float = download_cl });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("download_content_length") }, .{ .float = download_cl });
 
     var upload_cl: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_CONTENT_LENGTH_UPLOAD_T, &upload_cl) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "upload_content_length" }, .{ .float = upload_cl });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("upload_content_length") }, .{ .float = upload_cl });
 
     var appconnect_time: f64 = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_APPCONNECT_TIME, &appconnect_time) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "appconnect_time" }, .{ .float = appconnect_time });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("appconnect_time") }, .{ .float = appconnect_time });
 
     // _us variants (microsecond integer versions, present since libcurl 7.61.0)
     var ttot_us: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_TOTAL_TIME_T, &ttot_us) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "total_time_us" }, .{ .int = @intCast(ttot_us) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("total_time_us") }, .{ .int = @intCast(ttot_us) });
     var nl_us: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_NAMELOOKUP_TIME_T, &nl_us) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "namelookup_time_us" }, .{ .int = @intCast(nl_us) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("namelookup_time_us") }, .{ .int = @intCast(nl_us) });
     var conn_us: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_CONNECT_TIME_T, &conn_us) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "connect_time_us" }, .{ .int = @intCast(conn_us) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("connect_time_us") }, .{ .int = @intCast(conn_us) });
     var pre_us: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_PRETRANSFER_TIME_T, &pre_us) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "pretransfer_time_us" }, .{ .int = @intCast(pre_us) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("pretransfer_time_us") }, .{ .int = @intCast(pre_us) });
     var start_us: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_STARTTRANSFER_TIME_T, &start_us) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "starttransfer_time_us" }, .{ .int = @intCast(start_us) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("starttransfer_time_us") }, .{ .int = @intCast(start_us) });
     var redirect_us: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_REDIRECT_TIME_T, &redirect_us) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "redirect_time_us" }, .{ .int = @intCast(redirect_us) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("redirect_time_us") }, .{ .int = @intCast(redirect_us) });
     var appc_us: c_long = 0;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_APPCONNECT_TIME_T, &appc_us) == c.CURLE_OK)
-        try arr.set(ctx.allocator, .{ .string = "appconnect_time_us" }, .{ .int = @intCast(appc_us) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("appconnect_time_us") }, .{ .int = @intCast(appc_us) });
 
     return .{ .array = arr };
 }
@@ -675,7 +675,7 @@ fn curlReset(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     c.curl_easy_reset(handle);
     try obj.set(ctx.allocator, "__return_transfer", .{ .bool = false });
     try obj.set(ctx.allocator, "__header_out", .{ .bool = false });
-    try obj.set(ctx.allocator, "__error", .{ .string = "" });
+    try obj.set(ctx.allocator, "__error", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "__errno", .{ .int = 0 });
     try obj.set(ctx.allocator, "__http_code", .{ .int = 0 });
 
@@ -698,7 +698,7 @@ fn curlStrerror(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const span = std.mem.span(msg);
     const owned = try ctx.allocator.dupe(u8, span);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn curlShareInit(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -814,7 +814,7 @@ fn curlMultiGetcontent(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     const easy = getHandle(args[0].object) orelse return .null;
     const wcb = multi_wcb_table.get(@intFromPtr(easy)) orelse return .null;
     const str = try ctx.createString(wcb.buffer.items);
-    return .{ .string = str };
+    return .{ .string = Value.String.borrowed(str) };
 }
 
 fn curlMultiInfoRead(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -824,8 +824,8 @@ fn curlMultiInfoRead(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     const msg = c.curl_multi_info_read(mh, &msgs_in_queue);
     if (msg == null) return .{ .bool = false };
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "msg" }, .{ .int = @intCast(msg.*.msg) });
-    try arr.set(ctx.allocator, .{ .string = "result" }, .{ .int = @intCast(msg.*.data.result) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("msg") }, .{ .int = @intCast(msg.*.msg) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("result") }, .{ .int = @intCast(msg.*.data.result) });
     // 'handle' would be the easy handle - callers compare it by identity; we
     // don't have a back-pointer to the PhpObject so omit it (PHP code that
     // needs it iterates its own handle list and matches on result instead)
@@ -847,7 +847,7 @@ fn curlMultiStrerror(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     if (args.len < 1 or args[0] != .int) return .null;
     const msg = c.curl_multi_strerror(@intCast(args[0].int));
     const str = try ctx.createString(std.mem.span(msg));
-    return .{ .string = str };
+    return .{ .string = Value.String.borrowed(str) };
 }
 
 fn curlMultiErrno(_: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -867,12 +867,12 @@ fn curlMultiSetopt(_: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn curlFileConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
-    const name: []const u8 = if (args.len >= 1 and args[0] == .string) args[0].string else "";
-    const mime: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else "";
-    const postname: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string else "";
-    try obj.set(ctx.allocator, "name", .{ .string = name });
-    try obj.set(ctx.allocator, "mime", .{ .string = mime });
-    try obj.set(ctx.allocator, "postname", .{ .string = postname });
+    const name: []const u8 = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else "";
+    const mime: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "";
+    const postname: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else "";
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(name) });
+    try obj.set(ctx.allocator, "mime", .{ .string = Value.String.borrowed(mime) });
+    try obj.set(ctx.allocator, "postname", .{ .string = Value.String.borrowed(postname) });
     return .null;
 }
 
@@ -905,12 +905,12 @@ fn curlFileSetPostFilename(ctx: *NativeContext, args: []const Value) RuntimeErro
 
 fn curlFileCreate(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = try ctx.createObject("CURLFile");
-    const name: []const u8 = if (args.len >= 1 and args[0] == .string) args[0].string else "";
-    const mime: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else "";
-    const postname: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string else "";
-    try obj.set(ctx.allocator, "name", .{ .string = name });
-    try obj.set(ctx.allocator, "mime", .{ .string = mime });
-    try obj.set(ctx.allocator, "postname", .{ .string = postname });
+    const name: []const u8 = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else "";
+    const mime: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "";
+    const postname: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else "";
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(name) });
+    try obj.set(ctx.allocator, "mime", .{ .string = Value.String.borrowed(mime) });
+    try obj.set(ctx.allocator, "postname", .{ .string = Value.String.borrowed(postname) });
     return .{ .object = obj };
 }
 
@@ -918,21 +918,21 @@ fn curlEscape(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
     if (args[0] != .object) return .{ .bool = false };
     const handle = getHandle(args[0].object) orelse return .{ .bool = false };
-    const s = args[1].string;
+    const s = args[1].string.bytes();
     const encoded = c.curl_easy_escape(handle, s.ptr, @intCast(s.len));
     if (encoded == null) return .{ .bool = false };
     defer c.curl_free(encoded);
     const span = std.mem.span(encoded);
     const owned = try ctx.allocator.dupe(u8, span);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn curlUnescape(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
     if (args[0] != .object) return .{ .bool = false };
     const handle = getHandle(args[0].object) orelse return .{ .bool = false };
-    const s = args[1].string;
+    const s = args[1].string.bytes();
     var out_len: c_int = 0;
     const decoded = c.curl_easy_unescape(handle, s.ptr, @intCast(s.len), &out_len);
     if (decoded == null) return .{ .bool = false };
@@ -940,7 +940,7 @@ fn curlUnescape(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const slice = decoded[0..@as(usize, @intCast(out_len))];
     const owned = try ctx.allocator.dupe(u8, slice);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn curlVersion(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -949,31 +949,31 @@ fn curlVersion(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
     // PHP emits in this exact order. include every key it does so
     // is_array+key checks line up
-    try arr.set(ctx.allocator, .{ .string = "version_number" }, .{ .int = @intCast(info.*.version_num) });
-    try arr.set(ctx.allocator, .{ .string = "age" }, .{ .int = @intCast(info.*.age) });
-    try arr.set(ctx.allocator, .{ .string = "features" }, .{ .int = @intCast(info.*.features) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("version_number") }, .{ .int = @intCast(info.*.version_num) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("age") }, .{ .int = @intCast(info.*.age) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("features") }, .{ .int = @intCast(info.*.features) });
 
     // feature_list - empty array unless we wanted to translate bitmask names
     const fl = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "feature_list" }, .{ .array = fl });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("feature_list") }, .{ .array = fl });
 
-    try arr.set(ctx.allocator, .{ .string = "ssl_version_number" }, .{ .int = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("ssl_version_number") }, .{ .int = 0 });
 
     if (info.*.version) |ver| {
         const s = try ctx.createString(std.mem.span(ver));
-        try arr.set(ctx.allocator, .{ .string = "version" }, .{ .string = s });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("version") }, .{ .string = Value.String.borrowed(s) });
     }
     if (info.*.host) |host| {
         const s = try ctx.createString(std.mem.span(host));
-        try arr.set(ctx.allocator, .{ .string = "host" }, .{ .string = s });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("host") }, .{ .string = Value.String.borrowed(s) });
     }
     if (info.*.ssl_version) |ssl| {
         const s = try ctx.createString(std.mem.span(ssl));
-        try arr.set(ctx.allocator, .{ .string = "ssl_version" }, .{ .string = s });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("ssl_version") }, .{ .string = Value.String.borrowed(s) });
     }
     if (info.*.libz_version) |zlib| {
         const s = try ctx.createString(std.mem.span(zlib));
-        try arr.set(ctx.allocator, .{ .string = "libz_version" }, .{ .string = s });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("libz_version") }, .{ .string = Value.String.borrowed(s) });
     }
 
     // protocols list - populate from null-terminated list of strings
@@ -982,18 +982,18 @@ fn curlVersion(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         var i: usize = 0;
         while (protos[i] != null) : (i += 1) {
             const s = try ctx.createString(std.mem.span(protos[i]));
-            try protocols_arr.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = s });
+            try protocols_arr.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = Value.String.borrowed(s) });
         }
     }
-    try arr.set(ctx.allocator, .{ .string = "protocols" }, .{ .array = protocols_arr });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("protocols") }, .{ .array = protocols_arr });
 
-    try arr.set(ctx.allocator, .{ .string = "ares" }, .{ .string = "" });
-    try arr.set(ctx.allocator, .{ .string = "ares_num" }, .{ .int = 0 });
-    try arr.set(ctx.allocator, .{ .string = "libidn" }, .{ .string = "" });
-    try arr.set(ctx.allocator, .{ .string = "iconv_ver_num" }, .{ .int = 0 });
-    try arr.set(ctx.allocator, .{ .string = "libssh_version" }, .{ .string = "" });
-    try arr.set(ctx.allocator, .{ .string = "brotli_ver_num" }, .{ .int = 0 });
-    try arr.set(ctx.allocator, .{ .string = "brotli_version" }, .{ .string = "" });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("ares") }, .{ .string = Value.String.borrowed("") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("ares_num") }, .{ .int = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("libidn") }, .{ .string = Value.String.borrowed("") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("iconv_ver_num") }, .{ .int = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("libssh_version") }, .{ .string = Value.String.borrowed("") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("brotli_ver_num") }, .{ .int = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("brotli_version") }, .{ .string = Value.String.borrowed("") });
 
     return .{ .array = arr };
 }

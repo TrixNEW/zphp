@@ -96,10 +96,10 @@ fn setErrorState(ctx: *NativeContext, obj: *PhpObject, conn: ?*mysql.MYSQL) !voi
         const msg_span = std.mem.span(mysql.mysql_error(c));
         const owned = try ctx.allocator.dupe(u8, msg_span);
         try ctx.vm.strings.append(ctx.allocator, owned);
-        try obj.set(ctx.allocator, "error", .{ .string = owned });
+        try obj.set(ctx.allocator, "error", .{ .string = Value.String.borrowed(owned) });
         try obj.set(ctx.allocator, "errno", .{ .int = @intCast(mysql.mysql_errno(c)) });
     } else {
-        try obj.set(ctx.allocator, "error", .{ .string = "" });
+        try obj.set(ctx.allocator, "error", .{ .string = Value.String.borrowed("") });
         try obj.set(ctx.allocator, "errno", .{ .int = 0 });
     }
 }
@@ -113,7 +113,7 @@ fn mysqliInit(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     } else {
         try obj.set(ctx.allocator, "__conn", .{ .int = 0 });
     }
-    try obj.set(ctx.allocator, "error", .{ .string = "" });
+    try obj.set(ctx.allocator, "error", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "errno", .{ .int = 0 });
     try obj.set(ctx.allocator, "__connected", .{ .bool = false });
     return .{ .object = obj };
@@ -148,8 +148,8 @@ fn doConnect(ctx: *NativeContext, obj: *PhpObject, host: ?[]const u8, user: ?[]c
     try ctx.vm.strings.append(ctx.allocator, si_owned);
     const hi_owned = try ctx.allocator.dupe(u8, host_info);
     try ctx.vm.strings.append(ctx.allocator, hi_owned);
-    try obj.set(ctx.allocator, "server_info", .{ .string = si_owned });
-    try obj.set(ctx.allocator, "host_info", .{ .string = hi_owned });
+    try obj.set(ctx.allocator, "server_info", .{ .string = Value.String.borrowed(si_owned) });
+    try obj.set(ctx.allocator, "host_info", .{ .string = Value.String.borrowed(hi_owned) });
     try obj.set(ctx.allocator, "server_version", .{ .int = @intCast(mysql.mysql_get_server_version(conn)) });
     try obj.set(ctx.allocator, "thread_id", .{ .int = @intCast(mysql.mysql_thread_id(conn)) });
     try obj.set(ctx.allocator, "client_version", .{ .int = @intCast(mysql.mysql_get_client_version()) });
@@ -159,7 +159,7 @@ fn doConnect(ctx: *NativeContext, obj: *PhpObject, host: ?[]const u8, user: ?[]c
 fn argOptString(args: []const Value, idx: usize) ?[]const u8 {
     if (args.len <= idx) return null;
     return switch (args[idx]) {
-        .string => |s| s,
+        .string => |s| s.bytes(),
         .null => null,
         else => null,
     };
@@ -176,7 +176,7 @@ fn argOptInt(args: []const Value, idx: usize, default: i64) i64 {
 
 fn mysqliConnect(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = try ctx.createObject("mysqli");
-    try obj.set(ctx.allocator, "error", .{ .string = "" });
+    try obj.set(ctx.allocator, "error", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "errno", .{ .int = 0 });
     try obj.set(ctx.allocator, "__connected", .{ .bool = false });
 
@@ -225,7 +225,7 @@ fn mysqliQuery(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // determine which arg holds the SQL
     const sql_arg: Value = if (args.len > 0 and args[0] == .object) (if (args.len > 1) args[1] else .null) else if (args.len > 0) args[0] else .null;
     if (sql_arg != .string) return .{ .bool = false };
-    const sql = sql_arg.string;
+    const sql = sql_arg.string.bytes();
     if (mysql.mysql_real_query(conn, sql.ptr, @intCast(sql.len)) != 0) {
         try setErrorState(ctx, link, conn);
         return .{ .bool = false };
@@ -271,7 +271,7 @@ fn fetchRow(ctx: *NativeContext, result_obj: *PhpObject, flags: u8) !Value {
             const len: usize = if (lens) |l| @intCast(l[i]) else std.mem.len(p);
             const owned = try ctx.allocator.dupe(u8, p[0..len]);
             try ctx.vm.strings.append(ctx.allocator, owned);
-            break :blk Value{ .string = owned };
+            break :blk Value{ .string = Value.String.borrowed(owned) };
         };
         if (flags & 2 != 0) try arr.set(ctx.allocator, .{ .int = @intCast(i) }, cell);
         if (flags & 1 != 0) {
@@ -280,7 +280,7 @@ fn fetchRow(ctx: *NativeContext, result_obj: *PhpObject, flags: u8) !Value {
             const fname = std.mem.span(fname_ptr);
             const owned_name = try ctx.allocator.dupe(u8, fname);
             try ctx.vm.strings.append(ctx.allocator, owned_name);
-            try arr.set(ctx.allocator, .{ .string = owned_name }, cell);
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(owned_name) }, cell);
         } else {
             _ = mysql.mysql_fetch_field(res);
         }
@@ -342,7 +342,7 @@ fn mysqliInsertId(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn mysqliError(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const link = linkObj(ctx, args, 0) orelse return .{ .string = "" };
+    const link = linkObj(ctx, args, 0) orelse return .{ .string = Value.String.borrowed("") };
     return link.get("error");
 }
 
@@ -361,19 +361,19 @@ fn mysqliConnectErrno(_: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn mysqliRealEscapeString(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const link = linkObj(ctx, args, 0) orelse return .{ .string = "" };
+    const link = linkObj(ctx, args, 0) orelse return .{ .string = Value.String.borrowed("") };
     const str_arg: Value = if (args.len > 0 and args[0] == .object) (if (args.len > 1) args[1] else .null) else if (args.len > 0) args[0] else .null;
-    if (str_arg != .string) return .{ .string = "" };
-    const conn = getConn(link) orelse return try fallbackEscape(ctx, str_arg.string);
-    if (!isConnected(link)) return try fallbackEscape(ctx, str_arg.string);
-    const src = str_arg.string;
+    if (str_arg != .string) return .{ .string = Value.String.borrowed("") };
+    const conn = getConn(link) orelse return try fallbackEscape(ctx, str_arg.string.bytes());
+    if (!isConnected(link)) return try fallbackEscape(ctx, str_arg.string.bytes());
+    const src = str_arg.string.bytes();
     const buf = try ctx.allocator.alloc(u8, src.len * 2 + 1);
     const written = mysql.mysql_real_escape_string(conn, buf.ptr, src.ptr, @intCast(src.len));
     const out = buf[0..@intCast(written)];
     const owned = try ctx.allocator.dupe(u8, out);
     ctx.allocator.free(buf);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn fallbackEscape(ctx: *NativeContext, src: []const u8) !Value {
@@ -396,7 +396,7 @@ fn fallbackEscape(ctx: *NativeContext, src: []const u8) !Value {
     }
     const owned = try ctx.allocator.dupe(u8, buf.items);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn mysqliSelectDb(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -405,7 +405,7 @@ fn mysqliSelectDb(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (!isConnected(link)) return .{ .bool = false };
     const db_arg: Value = if (args.len > 0 and args[0] == .object) (if (args.len > 1) args[1] else .null) else if (args.len > 0) args[0] else .null;
     if (db_arg != .string) return .{ .bool = false };
-    const db_z = try dupZ(ctx, db_arg.string);
+    const db_z = try dupZ(ctx, db_arg.string.bytes());
     const rc = mysql.mysql_select_db(conn, db_z.ptr);
     if (rc != 0) {
         try setErrorState(ctx, link, conn);
@@ -420,7 +420,7 @@ fn mysqliSetCharset(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     if (!isConnected(link)) return .{ .bool = false };
     const cs_arg: Value = if (args.len > 0 and args[0] == .object) (if (args.len > 1) args[1] else .null) else if (args.len > 0) args[0] else .null;
     if (cs_arg != .string) return .{ .bool = false };
-    const cs_z = try dupZ(ctx, cs_arg.string);
+    const cs_z = try dupZ(ctx, cs_arg.string.bytes());
     // mysql_set_charset was removed in libmysqlclient 8.x. mysql_options
     // with MYSQL_SET_CHARSET_NAME is the supported equivalent; it accepts a
     // C string pointer (cast through anyopaque)
@@ -428,20 +428,20 @@ fn mysqliSetCharset(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 }
 
 fn mysqliCharacterSetName(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const link = linkObj(ctx, args, 0) orelse return .{ .string = "" };
-    const conn = getConn(link) orelse return .{ .string = "" };
-    if (!isConnected(link)) return .{ .string = "" };
+    const link = linkObj(ctx, args, 0) orelse return .{ .string = Value.String.borrowed("") };
+    const conn = getConn(link) orelse return .{ .string = Value.String.borrowed("") };
+    if (!isConnected(link)) return .{ .string = Value.String.borrowed("") };
     const name = std.mem.span(mysql.mysql_character_set_name(conn));
     const owned = try ctx.allocator.dupe(u8, name);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn mysqliGetClientInfo(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const info = std.mem.span(mysql.mysql_get_client_info());
     const owned = try ctx.allocator.dupe(u8, info);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn mysqliGetClientVersion(_: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -454,13 +454,13 @@ fn isConnected(link: *PhpObject) bool {
 }
 
 fn mysqliGetServerInfo(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const link = linkObj(ctx, args, 0) orelse return .{ .string = "" };
-    const conn = getConn(link) orelse return .{ .string = "" };
-    if (!isConnected(link)) return .{ .string = "" };
+    const link = linkObj(ctx, args, 0) orelse return .{ .string = Value.String.borrowed("") };
+    const conn = getConn(link) orelse return .{ .string = Value.String.borrowed("") };
+    if (!isConnected(link)) return .{ .string = Value.String.borrowed("") };
     const info = std.mem.span(mysql.mysql_get_server_info(conn));
     const owned = try ctx.allocator.dupe(u8, info);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn mysqliGetServerVersion(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -471,13 +471,13 @@ fn mysqliGetServerVersion(ctx: *NativeContext, args: []const Value) RuntimeError
 }
 
 fn mysqliGetHostInfo(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const link = linkObj(ctx, args, 0) orelse return .{ .string = "" };
-    const conn = getConn(link) orelse return .{ .string = "" };
-    if (!isConnected(link)) return .{ .string = "" };
+    const link = linkObj(ctx, args, 0) orelse return .{ .string = Value.String.borrowed("") };
+    const conn = getConn(link) orelse return .{ .string = Value.String.borrowed("") };
+    if (!isConnected(link)) return .{ .string = Value.String.borrowed("") };
     const info = std.mem.span(mysql.mysql_get_host_info(conn));
     const owned = try ctx.allocator.dupe(u8, info);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn mysqliThreadId(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -556,7 +556,7 @@ fn mysqliConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     const v = ctx.vm.currentFrame().vars.get("$this") orelse return .null;
     if (v != .object) return .null;
     const obj = v.object;
-    try obj.set(ctx.allocator, "error", .{ .string = "" });
+    try obj.set(ctx.allocator, "error", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "errno", .{ .int = 0 });
     try obj.set(ctx.allocator, "__connected", .{ .bool = false });
 
@@ -620,15 +620,13 @@ pub const entries = .{
 pub fn register(vm: *VM, a: Allocator) !void {
     var mc = ClassDef{ .name = "mysqli" };
     inline for (.{
-        .{ "__construct", 6 },        .{ "connect", 6 },         .{ "real_connect", 6 },
-        .{ "close", 0 },              .{ "query", 1 },           .{ "real_query", 1 },
-        .{ "select_db", 1 },          .{ "set_charset", 1 },     .{ "character_set_name", 0 },
-        .{ "real_escape_string", 1 }, .{ "escape_string", 1 },
-        .{ "get_server_info", 0 },    .{ "get_server_version", 0 },
-        .{ "get_host_info", 0 },      .{ "get_client_info", 0 },
-        .{ "thread_id", 0 },          .{ "ping", 0 },
-        .{ "autocommit", 1 },         .{ "begin_transaction", 0 },
-        .{ "commit", 0 },             .{ "rollback", 0 },
+        .{ "__construct", 6 },        .{ "connect", 6 },       .{ "real_connect", 6 },
+        .{ "close", 0 },              .{ "query", 1 },         .{ "real_query", 1 },
+        .{ "select_db", 1 },          .{ "set_charset", 1 },   .{ "character_set_name", 0 },
+        .{ "real_escape_string", 1 }, .{ "escape_string", 1 }, .{ "get_server_info", 0 },
+        .{ "get_server_version", 0 }, .{ "get_host_info", 0 }, .{ "get_client_info", 0 },
+        .{ "thread_id", 0 },          .{ "ping", 0 },          .{ "autocommit", 1 },
+        .{ "begin_transaction", 0 },  .{ "commit", 0 },        .{ "rollback", 0 },
         .{ "prepare", 1 },            .{ "stat", 0 },
     }) |m| {
         try mc.methods.put(a, m[0], .{ .name = m[0], .arity = m[1] });
@@ -658,9 +656,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     var rc = ClassDef{ .name = "mysqli_result" };
     inline for (.{
-        .{ "fetch_assoc", 0 }, .{ "fetch_array", 1 }, .{ "fetch_row", 0 }, .{ "fetch_all", 1 },
-        .{ "fetch_object", 2 }, .{ "free", 0 }, .{ "close", 0 }, .{ "data_seek", 1 },
-        .{ "num_rows", 0 }, .{ "field_count", 0 },
+        .{ "fetch_assoc", 0 },  .{ "fetch_array", 1 }, .{ "fetch_row", 0 }, .{ "fetch_all", 1 },
+        .{ "fetch_object", 2 }, .{ "free", 0 },        .{ "close", 0 },     .{ "data_seek", 1 },
+        .{ "num_rows", 0 },     .{ "field_count", 0 },
     }) |m| {
         try rc.methods.put(a, m[0], .{ .name = m[0], .arity = m[1] });
     }

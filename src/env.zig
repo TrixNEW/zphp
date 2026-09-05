@@ -104,15 +104,15 @@ pub const EnvSnapshot = struct {
         while (iter.next()) |entry| {
             const key = a.dupe(u8, entry.key_ptr.*) catch continue;
             const val = a.dupe(u8, entry.value_ptr.*) catch continue;
-            arr.set(a, .{ .string = key }, .{ .string = val }) catch continue;
+            arr.set(a, .{ .string = Value.String.borrowed(key) }, .{ .string = Value.String.borrowed(val) }) catch continue;
         }
         return .{ .env_arr = arr, .allocator = a };
     }
 
     pub fn deinit(self: *EnvSnapshot) void {
         for (self.env_arr.entries.items) |entry| {
-            if (entry.key == .string) self.allocator.free(entry.key.string);
-            if (entry.value == .string) self.allocator.free(entry.value.string);
+            if (entry.key == .string) self.allocator.free(entry.key.string.bytes());
+            if (entry.value == .string) self.allocator.free(entry.value.string.bytes());
         }
         self.env_arr.deinit(self.allocator);
         self.allocator.destroy(self.env_arr);
@@ -140,7 +140,7 @@ pub fn populateEnvSuperglobal(vm: *VM, a: std.mem.Allocator, snapshot: ?*const E
         try vm.strings.append(a, key_owned);
         const val_owned = try a.dupe(u8, entry.value_ptr.*);
         try vm.strings.append(a, val_owned);
-        try env_arr.set(a, .{ .string = key_owned }, .{ .string = val_owned });
+        try env_arr.set(a, .{ .string = Value.String.borrowed(key_owned) }, .{ .string = Value.String.borrowed(val_owned) });
     }
 
     try vm.putRequestVar("$_ENV", .{ .array = env_arr });

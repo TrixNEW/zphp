@@ -37,8 +37,8 @@ pub const entries = .{
 // cost 10, which is incorrect but preserves the calling convention.
 fn native_crypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return Value{ .bool = false };
-    const password = args[0].string;
-    const salt: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else "";
+    const password = args[0].string.bytes();
+    const salt: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "";
 
     // bcrypt salt: $2y$NN$22-char-salt[31-char-hash]. crypt() must be
     // deterministic on the input salt - strHash generates its own random
@@ -49,7 +49,7 @@ fn native_crypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         if (cost >= 4 and cost <= 31) rounds_log = @intCast(cost);
 
         var salt_bytes: [16]u8 = undefined;
-        if (!bcryptB64Decode(&salt_bytes, salt[7..29])) return .{ .string = "*0" };
+        if (!bcryptB64Decode(&salt_bytes, salt[7..29])) return .{ .string = Value.String.borrowed("*0") };
 
         // PHP canonicalizes the salt encoding by re-encoding the 16 decoded
         // bytes, which forces the trailing unused bits in the last base64
@@ -73,12 +73,12 @@ fn native_crypt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             rounds_log % 10,
             salt_b64_buf,
             hash_b64_buf,
-        }) catch return .{ .string = "*0" };
-        return .{ .string = try ctx.createString(out) };
+        }) catch return .{ .string = Value.String.borrowed("*0") };
+        return .{ .string = Value.String.borrowed(try ctx.createString(out)) };
     }
 
     // PHP returns a special "*0" or "*1" failure indicator on bad salt
-    return .{ .string = "*0" };
+    return .{ .string = Value.String.borrowed("*0") };
 }
 
 const bcrypt_alphabet = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -137,26 +137,26 @@ fn bcryptB64Encode(out: []u8, data: []const u8) void {
 
 fn native_password_hash(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return Value{ .bool = false };
-    const password = args[0].string;
+    const password = args[0].string.bytes();
 
     // dispatch on the algo arg: bcrypt (default), argon2i, or argon2id.
     // argon2 family is routed to sodium_crypto_pwhash_str which produces the
     // PHP-compatible $argon2id$... encoding. without this, PASSWORD_ARGON2*
     // silently fell back to bcrypt
-    const algo: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else "2y";
+    const algo: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "2y";
     if (std.mem.eql(u8, algo, "argon2i") or std.mem.eql(u8, algo, "argon2id")) {
         // default-ish "interactive" cost; PHP's default is memory_cost=65536, time_cost=4
         var ops: i64 = 4;
         var mem_kb: i64 = 65536;
         if (args.len >= 3 and args[2] == .array) {
             const opts = args[2].array;
-            const t = opts.get(.{ .string = "time_cost" });
+            const t = opts.get(.{ .string = Value.String.borrowed("time_cost") });
             if (t == .int) ops = t.int;
-            const m = opts.get(.{ .string = "memory_cost" });
+            const m = opts.get(.{ .string = Value.String.borrowed("memory_cost") });
             if (m == .int) mem_kb = m.int;
         }
         const r = ctx.vm.callByName("sodium_crypto_pwhash_str", &.{
-            .{ .string = password },
+            .{ .string = args[0].string },
             .{ .int = ops },
             .{ .int = mem_kb * 1024 },
         }) catch return Value{ .bool = false };
@@ -167,7 +167,7 @@ fn native_password_hash(ctx: *NativeContext, args: []const Value) RuntimeError!V
     var rounds_log: u6 = 12;
     if (args.len >= 3 and args[2] == .array) {
         const opts = args[2].array;
-        const cost_val = opts.get(.{ .string = "cost" });
+        const cost_val = opts.get(.{ .string = Value.String.borrowed("cost") });
         if (cost_val == .int and cost_val.int >= 4 and cost_val.int <= 31) {
             rounds_log = @intCast(cost_val.int);
         }
@@ -186,19 +186,19 @@ fn native_password_hash(ctx: *NativeContext, args: []const Value) RuntimeError!V
     if (out.len >= 4 and out[0] == '$' and out[1] == '2' and out[2] == 'b' and out[3] == '$') {
         @as([*]u8, @ptrCast(@constCast(out.ptr)))[2] = 'y';
     }
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn native_password_verify(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return Value{ .bool = false };
-    const password = args[0].string;
-    const hash = args[1].string;
+    const password = args[0].string.bytes();
+    const hash = args[1].string.bytes();
 
     // argon2 family: delegate to libsodium
     if (std.mem.startsWith(u8, hash, "$argon2")) {
         const r = ctx.vm.callByName("sodium_crypto_pwhash_str_verify", &.{
-            .{ .string = hash },
-            .{ .string = password },
+            .{ .string = args[1].string },
+            .{ .string = args[0].string },
         }) catch return Value{ .bool = false };
         return r;
     }
@@ -231,16 +231,16 @@ fn native_password_get_info(ctx: *NativeContext, args: []const Value) RuntimeErr
     try ctx.vm.arrays.append(ctx.allocator, info);
 
     if (args.len == 0 or args[0] != .string) {
-        try info.set(ctx.allocator, .{ .string = "algo" }, .null);
-        try info.set(ctx.allocator, .{ .string = "algoName" }, .{ .string = "unknown" });
+        try info.set(ctx.allocator, .{ .string = Value.String.borrowed("algo") }, .null);
+        try info.set(ctx.allocator, .{ .string = Value.String.borrowed("algoName") }, .{ .string = Value.String.borrowed("unknown") });
         const empty = try ctx.allocator.create(PhpArray);
         empty.* = .{};
         try ctx.vm.arrays.append(ctx.allocator, empty);
-        try info.set(ctx.allocator, .{ .string = "options" }, .{ .array = empty });
+        try info.set(ctx.allocator, .{ .string = Value.String.borrowed("options") }, .{ .array = empty });
         return .{ .array = info };
     }
 
-    const hash = args[0].string;
+    const hash = args[0].string.bytes();
     var algo: Value = .null;
     var algo_name: []const u8 = "unknown";
     const options = try ctx.allocator.create(PhpArray);
@@ -248,21 +248,21 @@ fn native_password_get_info(ctx: *NativeContext, args: []const Value) RuntimeErr
     try ctx.vm.arrays.append(ctx.allocator, options);
 
     if (hash.len >= 7 and hash[0] == '$' and hash[1] == '2' and (hash[2] == 'y' or hash[2] == 'b' or hash[2] == 'a')) {
-        algo = .{ .string = try ctx.createString("2y") };
+        algo = .{ .string = Value.String.borrowed(try ctx.createString("2y")) };
         algo_name = "bcrypt";
         // parse cost: $2y$XX$
         const cost_start: usize = 4;
         if (hash.len >= 6 and hash[cost_start - 1] == '$') {
             const dollar_after = std.mem.indexOfScalarPos(u8, hash, cost_start, '$') orelse hash.len;
             if (std.fmt.parseInt(i64, hash[cost_start..dollar_after], 10)) |cost| {
-                try options.set(ctx.allocator, .{ .string = "cost" }, .{ .int = cost });
+                try options.set(ctx.allocator, .{ .string = Value.String.borrowed("cost") }, .{ .int = cost });
             } else |_| {}
         }
     }
 
-    try info.set(ctx.allocator, .{ .string = "algo" }, algo);
-    try info.set(ctx.allocator, .{ .string = "algoName" }, .{ .string = try ctx.createString(algo_name) });
-    try info.set(ctx.allocator, .{ .string = "options" }, .{ .array = options });
+    try info.set(ctx.allocator, .{ .string = Value.String.borrowed("algo") }, algo);
+    try info.set(ctx.allocator, .{ .string = Value.String.borrowed("algoName") }, .{ .string = Value.String.borrowed(try ctx.createString(algo_name)) });
+    try info.set(ctx.allocator, .{ .string = Value.String.borrowed("options") }, .{ .array = options });
     return .{ .array = info };
 }
 
@@ -271,19 +271,19 @@ fn native_password_algos(ctx: *NativeContext, _: []const Value) RuntimeError!Val
     const arr = try ctx.allocator.create(PhpArray);
     arr.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, arr);
-    try arr.append(ctx.allocator, .{ .string = "2y" });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("2y") });
     return .{ .array = arr };
 }
 
 fn native_password_needs_rehash(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return Value{ .bool = true };
-    const hash = args[0].string;
+    const hash = args[0].string.bytes();
 
     // PHP's default cost was 10 for years; 7.4+ raised it to 12
     var target_cost: u6 = 12;
     if (args.len >= 3 and args[2] == .array) {
         const opts = args[2].array;
-        const cost_val = opts.get(.{ .string = "cost" });
+        const cost_val = opts.get(.{ .string = Value.String.borrowed("cost") });
         if (cost_val == .int and cost_val.int >= 4 and cost_val.int <= 31) {
             target_cost = @intCast(cost_val.int);
         }
@@ -309,7 +309,7 @@ fn native_random_bytes(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     const buf = try ctx.allocator.alloc(u8, len);
     std.crypto.random.bytes(buf);
     try ctx.strings.append(ctx.allocator, buf);
-    return .{ .string = buf };
+    return .{ .string = Value.String.borrowed(buf) };
 }
 
 fn native_random_int(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -558,8 +558,8 @@ fn toHexString(ctx: *NativeContext, digest: []const u8) ![]const u8 {
 
 fn native_hash(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return Value{ .bool = false };
-    const algo_name = args[0].string;
-    const data = args[1].string;
+    const algo_name = args[0].string.bytes();
+    const data = args[1].string.bytes();
     const raw_output = args.len >= 3 and args[2].isTruthy();
 
     const algo = HashAlgo.fromString(algo_name) orelse {
@@ -571,16 +571,16 @@ fn native_hash(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     computeHash(algo, data, digest[0..dlen]);
 
     if (raw_output) {
-        return .{ .string = try ctx.createString(digest[0..dlen]) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(digest[0..dlen])) };
     }
-    return .{ .string = try toHexString(ctx, digest[0..dlen]) };
+    return .{ .string = Value.String.borrowed(try toHexString(ctx, digest[0..dlen])) };
 }
 
 fn native_hash_hmac(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string) return Value{ .bool = false };
-    const algo_name = args[0].string;
-    const data = args[1].string;
-    const key = args[2].string;
+    const algo_name = args[0].string.bytes();
+    const data = args[1].string.bytes();
+    const key = args[2].string.bytes();
     const raw_output = args.len >= 4 and args[3].isTruthy();
 
     const algo = HashAlgo.fromString(algo_name) orelse {
@@ -599,18 +599,18 @@ fn native_hash_hmac(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     computeHmac(algo, data, key, digest[0..dlen]);
 
     if (raw_output) {
-        return .{ .string = try ctx.createString(digest[0..dlen]) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(digest[0..dlen])) };
     }
-    return .{ .string = try toHexString(ctx, digest[0..dlen]) };
+    return .{ .string = Value.String.borrowed(try toHexString(ctx, digest[0..dlen])) };
 }
 
 fn native_hash_hkdf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const algo_name = args[0].string;
-    const ikm = args[1].string;
+    const algo_name = args[0].string.bytes();
+    const ikm = args[1].string.bytes();
     const length: i64 = if (args.len >= 3 and args[2] == .int) args[2].int else 0;
-    const info: []const u8 = if (args.len >= 4 and args[3] == .string) args[3].string else "";
-    const salt: []const u8 = if (args.len >= 5 and args[4] == .string) args[4].string else "";
+    const info: []const u8 = if (args.len >= 4 and args[3] == .string) args[3].string.bytes() else "";
+    const salt: []const u8 = if (args.len >= 5 and args[4] == .string) args[4].string.bytes() else "";
 
     const algo = HashAlgo.fromString(algo_name) orelse return .{ .bool = false };
     if (algo == .crc32) return .{ .bool = false };
@@ -646,14 +646,14 @@ fn native_hash_hkdf(ctx: *NativeContext, args: []const Value) RuntimeError!Value
         written += copy_len;
     }
     try ctx.vm.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn native_hash_algos(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     var arr = try ctx.createArray();
     const algos = [_][]const u8{ "md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3-224", "sha3-256", "sha3-384", "sha3-512", "crc32", "crc32b", "crc32c", "xxh32", "xxh64", "xxh3", "xxh128", "adler32", "fnv132", "fnv1a32", "fnv164", "fnv1a64", "joaat" };
     for (algos) |name| {
-        try arr.append(ctx.allocator, .{ .string = name });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(name) });
     }
     return .{ .array = arr };
 }
@@ -664,15 +664,15 @@ fn native_hash_hmac_algos(ctx: *NativeContext, _: []const Value) RuntimeError!Va
     var arr = try ctx.createArray();
     const algos = [_][]const u8{ "md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3-224", "sha3-256", "sha3-384", "sha3-512" };
     for (algos) |name| {
-        try arr.append(ctx.allocator, .{ .string = name });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(name) });
     }
     return .{ .array = arr };
 }
 
 fn native_hash_file(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return Value{ .bool = false };
-    const algo_name = args[0].string;
-    const filename = args[1].string;
+    const algo_name = args[0].string.bytes();
+    const filename = args[1].string.bytes();
     const raw_output = args.len >= 3 and args[2].isTruthy();
     const algo = HashAlgo.fromString(algo_name) orelse return Value{ .bool = false };
     const data = std.fs.cwd().readFileAlloc(ctx.allocator, filename, 10 * 1024 * 1024) catch return Value{ .bool = false };
@@ -680,8 +680,8 @@ fn native_hash_file(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     var digest: [64]u8 = undefined;
     const dlen = algo.digestLen();
     computeHash(algo, data, digest[0..dlen]);
-    if (raw_output) return .{ .string = try ctx.createString(digest[0..dlen]) };
-    return .{ .string = try toHexString(ctx, digest[0..dlen]) };
+    if (raw_output) return .{ .string = Value.String.borrowed(try ctx.createString(digest[0..dlen])) };
+    return .{ .string = Value.String.borrowed(try toHexString(ctx, digest[0..dlen])) };
 }
 
 fn native_md5_file(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -697,20 +697,20 @@ fn hashFileWithWarning(ctx: *NativeContext, args: []const Value, algo: []const u
     const raw = args.len >= 2 and args[1].isTruthy();
     // probe the file first so we can emit PHP's exact 'Failed to open stream'
     // warning text on missing files; hash_file returns false silently
-    std.fs.cwd().access(args[0].string, .{}) catch {
-        const msg = std.fmt.allocPrint(ctx.allocator, "{s}({s}): Failed to open stream: No such file or directory", .{ fn_name, args[0].string }) catch return .{ .bool = false };
+    std.fs.cwd().access(args[0].string.bytes(), .{}) catch {
+        const msg = std.fmt.allocPrint(ctx.allocator, "{s}({s}): Failed to open stream: No such file or directory", .{ fn_name, args[0].string.bytes() }) catch return .{ .bool = false };
         ctx.vm.strings.append(ctx.allocator, msg) catch {};
         ctx.vm.emitWarning(msg);
         return .{ .bool = false };
     };
-    const hf_args = [_]Value{ .{ .string = algo }, args[0], .{ .bool = raw } };
+    const hf_args = [_]Value{ .{ .string = Value.String.borrowed(algo) }, args[0], .{ .bool = raw } };
     return native_hash_file(ctx, &hf_args);
 }
 
 fn native_hash_equals(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const known = args[0].string;
-    const user = args[1].string;
+    const known = args[0].string.bytes();
+    const user = args[1].string.bytes();
     if (known.len != user.len) return .{ .bool = false };
     var result: u8 = 0;
     for (known, user) |a, b| result |= a ^ b;
@@ -721,16 +721,16 @@ const PhpObject = @import("../runtime/value.zig").PhpObject;
 
 fn native_hash_init(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const algo = HashAlgo.fromString(args[0].string) orelse return .{ .bool = false };
+    const algo = HashAlgo.fromString(args[0].string.bytes()) orelse return .{ .bool = false };
     _ = algo;
     const obj = try ctx.allocator.create(PhpObject);
     obj.* = .{ .class_name = "HashContext" };
     try ctx.vm.objects.append(ctx.allocator, obj);
-    try obj.set(ctx.allocator, "algo", .{ .string = try ctx.createString(args[0].string) });
+    try obj.set(ctx.allocator, "algo", .{ .string = Value.String.borrowed(try ctx.createString(args[0].string.bytes())) });
     // store accumulated bytes in a string buffer that grows
-    try obj.set(ctx.allocator, "buffer", .{ .string = "" });
+    try obj.set(ctx.allocator, "buffer", .{ .string = Value.String.borrowed("") });
     if (args.len >= 3 and args[2] == .string) {
-        try obj.set(ctx.allocator, "key", .{ .string = try ctx.createString(args[2].string) });
+        try obj.set(ctx.allocator, "key", .{ .string = Value.String.borrowed(try ctx.createString(args[2].string.bytes())) });
     }
     return .{ .object = obj };
 }
@@ -739,19 +739,19 @@ fn native_hash_update(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     if (args.len < 2 or args[0] != .object or args[1] != .string) return .{ .bool = false };
     const obj = args[0].object;
     const cur = obj.get("buffer");
-    const cur_str: []const u8 = if (cur == .string) cur.string else "";
-    const new_buf = try ctx.allocator.alloc(u8, cur_str.len + args[1].string.len);
+    const cur_str: []const u8 = if (cur == .string) cur.string.bytes() else "";
+    const new_buf = try ctx.allocator.alloc(u8, cur_str.len + args[1].string.bytes().len);
     @memcpy(new_buf[0..cur_str.len], cur_str);
-    @memcpy(new_buf[cur_str.len..], args[1].string);
+    @memcpy(new_buf[cur_str.len..], args[1].string.bytes());
     try ctx.vm.strings.append(ctx.allocator, new_buf);
-    try obj.set(ctx.allocator, "buffer", .{ .string = new_buf });
+    try obj.set(ctx.allocator, "buffer", .{ .string = Value.String.borrowed(new_buf) });
     return .{ .bool = true };
 }
 
 fn native_hash_update_file(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .object or args[1] != .string) return .{ .bool = false };
-    const data = std.fs.cwd().readFileAlloc(ctx.allocator, args[1].string, 64 * 1024 * 1024) catch return .{ .bool = false };
-    return native_hash_update(ctx, &.{ args[0], .{ .string = data } });
+    const data = std.fs.cwd().readFileAlloc(ctx.allocator, args[1].string.bytes(), 64 * 1024 * 1024) catch return .{ .bool = false };
+    return native_hash_update(ctx, &.{ args[0], .{ .string = Value.String.borrowed(data) } });
 }
 
 fn native_hash_final(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -760,19 +760,19 @@ fn native_hash_final(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     const algo_v = obj.get("algo");
     const buf_v = obj.get("buffer");
     if (algo_v != .string) return .{ .bool = false };
-    const data: []const u8 = if (buf_v == .string) buf_v.string else "";
-    const algo = HashAlgo.fromString(algo_v.string) orelse return .{ .bool = false };
+    const data: []const u8 = if (buf_v == .string) buf_v.string.bytes() else "";
+    const algo = HashAlgo.fromString(algo_v.string.bytes()) orelse return .{ .bool = false };
     const raw_output = args.len >= 2 and args[1].isTruthy();
     var digest: [64]u8 = undefined;
     const dlen = algo.digestLen();
     const key_v = obj.get("key");
-    if (key_v == .string and key_v.string.len > 0) {
-        computeHmac(algo, data, key_v.string, digest[0..dlen]);
+    if (key_v == .string and key_v.string.bytes().len > 0) {
+        computeHmac(algo, data, key_v.string.bytes(), digest[0..dlen]);
     } else {
         computeHash(algo, data, digest[0..dlen]);
     }
-    if (raw_output) return .{ .string = try ctx.createString(digest[0..dlen]) };
-    return .{ .string = try toHexString(ctx, digest[0..dlen]) };
+    if (raw_output) return .{ .string = Value.String.borrowed(try ctx.createString(digest[0..dlen])) };
+    return .{ .string = Value.String.borrowed(try toHexString(ctx, digest[0..dlen])) };
 }
 
 fn native_hash_copy(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -789,9 +789,9 @@ fn native_hash_copy(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
 fn native_hash_pbkdf2(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 4 or args[0] != .string or args[1] != .string or args[2] != .string) return .{ .bool = false };
-    const algo_name = args[0].string;
-    const password = args[1].string;
-    const salt = args[2].string;
+    const algo_name = args[0].string.bytes();
+    const password = args[1].string.bytes();
+    const salt = args[2].string.bytes();
     const iter_signed = Value.toInt(args[3]);
     if (iter_signed <= 0) {
         try ctx.vm.setPendingException("ValueError", "hash_pbkdf2(): Argument #4 ($iterations) must be greater than 0");
@@ -838,16 +838,16 @@ fn native_hash_pbkdf2(ctx: *NativeContext, args: []const Value) RuntimeError!Val
             for (0..dlen) |i| t_buf[i] ^= u_buf[i];
         }
         const take: usize = @min(dlen, out_bytes - written);
-        @memcpy(out[written..written + take], t_buf[0..take]);
+        @memcpy(out[written .. written + take], t_buf[0..take]);
         written += take;
     }
 
     if (raw_output) {
         try ctx.vm.strings.append(ctx.allocator, out);
-        return .{ .string = out };
+        return .{ .string = Value.String.borrowed(out) };
     }
     const hex = try toHexString(ctx, out);
     ctx.allocator.free(out);
-    if (length_arg > 0 and length_arg < hex.len) return .{ .string = hex[0..length_arg] };
-    return .{ .string = hex };
+    if (length_arg > 0 and length_arg < hex.len) return .{ .string = Value.String.borrowed(hex[0..length_arg]) };
+    return .{ .string = Value.String.borrowed(hex) };
 }

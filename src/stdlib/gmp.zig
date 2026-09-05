@@ -104,7 +104,7 @@ fn coerceArgToMpz(ctx: *NativeContext, v: Value) !?*ZphpMpz {
             return p;
         },
         .string => |s| {
-            const z = try dupZ(ctx, s);
+            const z = try dupZ(ctx, s.bytes());
             const rc = zphp_mpz_set_str(p, z.ptr, 0);
             if (rc != 0) {
                 zphp_mpz_destroy(p);
@@ -148,7 +148,7 @@ fn gmpInit(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // 0 = autodetect from prefix, 2..62 = explicit base
     if (args[0] == .string and args.len >= 2 and args[1] == .int) {
         const base: c_int = @intCast(args[1].int);
-        const z = try dupZ(ctx, args[0].string);
+        const z = try dupZ(ctx, args[0].string.bytes());
         if (zphp_mpz_set_str(dst, z.ptr, base) != 0) return .{ .bool = false };
         return .{ .object = obj };
     }
@@ -168,11 +168,11 @@ fn gmpStrval(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const src = (try coerceArgToMpz(ctx, args[0])) orelse return .null;
     defer zphp_mpz_destroy(src);
     const cstr = zphp_mpz_get_str(base, src);
-    if (cstr == null) return .{ .string = try dupString(ctx, "") };
+    if (cstr == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     const slice = cstr[0..cstrLen(cstr)];
     const owned = try dupString(ctx, slice);
     zphp_gmp_free(cstr);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn gmpIntval(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -256,23 +256,55 @@ fn gmpFact(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     return .{ .object = obj };
 }
 
-fn gmpAdd(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_add); }
-fn gmpSub(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_sub); }
-fn gmpMul(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_mul); }
-fn gmpAnd(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_and); }
-fn gmpOr(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_ior); }
-fn gmpXor(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_xor); }
-fn gmpGcd(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_gcd); }
-fn gmpLcm(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_lcm); }
-fn gmpDivQ(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_tdiv_q); }
-fn gmpDivR(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_tdiv_r); }
-fn gmpMod(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return binOpCall(ctx, args, zphp_mpz_mod); }
+fn gmpAdd(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_add);
+}
+fn gmpSub(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_sub);
+}
+fn gmpMul(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_mul);
+}
+fn gmpAnd(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_and);
+}
+fn gmpOr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_ior);
+}
+fn gmpXor(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_xor);
+}
+fn gmpGcd(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_gcd);
+}
+fn gmpLcm(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_lcm);
+}
+fn gmpDivQ(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_tdiv_q);
+}
+fn gmpDivR(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_tdiv_r);
+}
+fn gmpMod(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return binOpCall(ctx, args, zphp_mpz_mod);
+}
 
-fn gmpNeg(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return unOpCall(ctx, args, zphp_mpz_neg); }
-fn gmpAbs(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return unOpCall(ctx, args, zphp_mpz_abs); }
-fn gmpCom(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return unOpCall(ctx, args, zphp_mpz_com); }
-fn gmpSqrt(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return unOpCall(ctx, args, zphp_mpz_sqrt); }
-fn gmpNextprime(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return unOpCall(ctx, args, zphp_mpz_nextprime); }
+fn gmpNeg(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return unOpCall(ctx, args, zphp_mpz_neg);
+}
+fn gmpAbs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return unOpCall(ctx, args, zphp_mpz_abs);
+}
+fn gmpCom(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return unOpCall(ctx, args, zphp_mpz_com);
+}
+fn gmpSqrt(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return unOpCall(ctx, args, zphp_mpz_sqrt);
+}
+fn gmpNextprime(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return unOpCall(ctx, args, zphp_mpz_nextprime);
+}
 
 fn gmpCmp(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2) return .null;
@@ -504,13 +536,13 @@ fn gmpToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (ctx.vm.frame_count == 0) return .null;
     const v = ctx.vm.currentFrame().vars.get("$this") orelse return .null;
     if (v != .object) return .null;
-    const p = getMpz(v.object) orelse return .{ .string = try dupString(ctx, "0") };
+    const p = getMpz(v.object) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "0")) };
     const cstr = zphp_mpz_get_str(10, p);
-    if (cstr == null) return .{ .string = try dupString(ctx, "0") };
+    if (cstr == null) return .{ .string = Value.String.borrowed(try dupString(ctx, "0")) };
     const slice = cstr[0..cstrLen(cstr)];
     const owned = try dupString(ctx, slice);
     zphp_gmp_free(cstr);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {

@@ -39,10 +39,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
     var fi_def = ClassDef{ .name = "SplFileInfo" };
     for ([_][]const u8{
         "__construct", "getFilename", "getExtension", "getBasename",
-        "getPathname", "getPath", "getRealPath", "getSize",
-        "isDir", "isFile", "isLink", "isReadable", "isWritable",
-        "getMTime", "getCTime", "getATime", "getType", "__toString",
-        "openFile",
+        "getPathname", "getPath",     "getRealPath",  "getSize",
+        "isDir",       "isFile",      "isLink",       "isReadable",
+        "isWritable",  "getMTime",    "getCTime",     "getATime",
+        "getType",     "__toString",  "openFile",
     }) |m| {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 1 else if (std.mem.eql(u8, m, "openFile")) 1 else 0;
         try fi_def.methods.put(a, m, .{ .name = m, .arity = arity });
@@ -121,7 +121,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rdi_def.interfaces.append(a, "RecursiveIterator");
     for ([_][]const u8{
         "__construct", "hasChildren", "getChildren", "getSubPath", "getSubPathname",
-        "rewind", "current", "key", "next", "valid",
+        "rewind",      "current",     "key",         "next",       "valid",
     }) |m| {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 2 else 0;
         try rdi_def.methods.put(a, m, .{ .name = m, .arity = arity });
@@ -170,7 +170,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     var rii_def = ClassDef{ .name = "RecursiveIteratorIterator" };
     try rii_def.interfaces.append(a, "Iterator");
     for ([_][]const u8{
-        "__construct", "rewind", "current", "key", "next", "valid", "getDepth",
+        "__construct",      "rewind",         "current", "key", "next", "valid", "getDepth",
         "getInnerIterator", "getSubIterator",
     }) |m| {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 2 else 0;
@@ -469,7 +469,7 @@ fn createString(ctx: *NativeContext, s: []const u8) ![]const u8 {
 
 fn objGetStr(obj: *PhpObject, key: []const u8) []const u8 {
     const v = obj.get(key);
-    if (v == .string) return v.string;
+    if (v == .string) return v.string.bytes();
     return "";
 }
 
@@ -483,7 +483,7 @@ fn createFileInfoObj(ctx: *NativeContext, pathname: []const u8) !*PhpObject {
     const obj = try ctx.allocator.create(PhpObject);
     obj.* = .{ .class_name = "SplFileInfo" };
     try ctx.vm.objects.append(ctx.allocator, obj);
-    try obj.set(ctx.allocator, "__pathname", .{ .string = try createString(ctx, pathname) });
+    try obj.set(ctx.allocator, "__pathname", .{ .string = Value.String.borrowed(try createString(ctx, pathname)) });
     return obj;
 }
 
@@ -520,45 +520,45 @@ fn statPath(path: []const u8) ?std.fs.File.Stat {
 fn fiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 1 or args[0] != .string) return .null;
-    try obj.set(ctx.allocator, "__pathname", .{ .string = try createString(ctx, args[0].string) });
+    try obj.set(ctx.allocator, "__pathname", .{ .string = Value.String.borrowed(try createString(ctx, args[0].string.bytes())) });
     return .null;
 }
 
 fn fiGetFilename(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const path = objGetStr(obj, "__pathname");
-    return .{ .string = try createString(ctx, basename(path)) };
+    return .{ .string = Value.String.borrowed(try createString(ctx, basename(path))) };
 }
 
 fn fiGetExtension(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const name = basename(objGetStr(obj, "__pathname"));
     if (std.mem.lastIndexOfScalar(u8, name, '.')) |idx| {
-        return .{ .string = try createString(ctx, name[idx + 1 ..]) };
+        return .{ .string = Value.String.borrowed(try createString(ctx, name[idx + 1 ..])) };
     }
-    return .{ .string = "" };
+    return .{ .string = Value.String.borrowed("") };
 }
 
 fn fiGetBasename(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     var name = basename(objGetStr(obj, "__pathname"));
     if (args.len >= 1 and args[0] == .string) {
-        const suffix = args[0].string;
+        const suffix = args[0].string.bytes();
         if (std.mem.endsWith(u8, name, suffix)) {
             name = name[0 .. name.len - suffix.len];
         }
     }
-    return .{ .string = try createString(ctx, name) };
+    return .{ .string = Value.String.borrowed(try createString(ctx, name)) };
 }
 
 fn fiGetPathname(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
-    return .{ .string = objGetStr(obj, "__pathname") };
+    return .{ .string = Value.String.borrowed(objGetStr(obj, "__pathname")) };
 }
 
 fn fiGetPath(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
-    return .{ .string = try createString(ctx, dirname(objGetStr(obj, "__pathname"))) };
+    return .{ .string = Value.String.borrowed(try createString(ctx, dirname(objGetStr(obj, "__pathname")))) };
 }
 
 fn fiGetRealPath(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -566,7 +566,7 @@ fn fiGetRealPath(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const path = objGetStr(obj, "__pathname");
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const real = std.fs.cwd().realpath(path, &buf) catch return .{ .bool = false };
-    return .{ .string = try createString(ctx, real) };
+    return .{ .string = Value.String.borrowed(try createString(ctx, real)) };
 }
 
 fn fiGetSize(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -623,31 +623,31 @@ fn fiGetATime(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn fiGetType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "unknown" };
-    const stat = statPath(objGetStr(obj, "__pathname")) orelse return .{ .string = "unknown" };
-    return .{ .string = switch (stat.kind) {
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("unknown") };
+    const stat = statPath(objGetStr(obj, "__pathname")) orelse return .{ .string = Value.String.borrowed("unknown") };
+    return .{ .string = Value.String.borrowed(switch (stat.kind) {
         .directory => "dir",
         .file => "file",
         .sym_link => "link",
         else => "unknown",
-    } };
+    }) };
 }
 
 fn fiToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
-    return .{ .string = objGetStr(obj, "__pathname") };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
+    return .{ .string = Value.String.borrowed(objGetStr(obj, "__pathname")) };
 }
 
 fn fiOpenFile(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const path = objGetStr(this, "__pathname");
-    const mode: Value = if (args.len >= 1 and args[0] == .string) args[0] else .{ .string = "r" };
+    const mode: Value = if (args.len >= 1 and args[0] == .string) args[0] else .{ .string = Value.String.borrowed("r") };
     const class_name = try createString(ctx, "SplFileObject");
     const obj = try ctx.vm.allocator.create(@import("../runtime/value.zig").PhpObject);
     obj.* = .{ .class_name = class_name };
     try ctx.vm.objects.append(ctx.vm.allocator, obj);
     try ctx.vm.initObjectProperties(obj, class_name);
-    _ = try ctx.vm.callMethod(obj, "__construct", &.{ .{ .string = path }, mode });
+    _ = try ctx.vm.callMethod(obj, "__construct", &.{ .{ .string = Value.String.borrowed(path) }, mode });
     return .{ .object = obj };
 }
 
@@ -658,8 +658,8 @@ fn fiOpenFile(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn diConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 1 or args[0] != .string) return .null;
-    const path = args[0].string;
-    try obj.set(ctx.allocator, "__di_path", .{ .string = try createString(ctx, path) });
+    const path = args[0].string.bytes();
+    try obj.set(ctx.allocator, "__di_path", .{ .string = Value.String.borrowed(try createString(ctx, path)) });
     try obj.set(ctx.allocator, "__di_idx", .{ .int = 0 });
 
     const entries = try loadDirectoryEntries(ctx, path, 0);
@@ -686,9 +686,9 @@ fn loadDirectoryEntries(ctx: *NativeContext, path: []const u8, flags: i64) Runti
             const dot_entry = try ctx.allocator.create(PhpArray);
             dot_entry.* = .{};
             try ctx.vm.arrays.append(ctx.allocator, dot_entry);
-            try dot_entry.set(ctx.allocator, .{ .string = "name" }, .{ .string = dot_name });
-            try dot_entry.set(ctx.allocator, .{ .string = "path" }, .{ .string = dot_full });
-            try dot_entry.set(ctx.allocator, .{ .string = "is_dir" }, .{ .bool = true });
+            try dot_entry.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed(dot_name) });
+            try dot_entry.set(ctx.allocator, .{ .string = Value.String.borrowed("path") }, .{ .string = Value.String.borrowed(dot_full) });
+            try dot_entry.set(ctx.allocator, .{ .string = Value.String.borrowed("is_dir") }, .{ .bool = true });
             try arr.append(ctx.allocator, .{ .array = dot_entry });
         }
     }
@@ -704,9 +704,9 @@ fn loadDirectoryEntries(ctx: *NativeContext, path: []const u8, flags: i64) Runti
         const entry_arr = try ctx.allocator.create(PhpArray);
         entry_arr.* = .{};
         try ctx.vm.arrays.append(ctx.allocator, entry_arr);
-        try entry_arr.set(ctx.allocator, .{ .string = "name" }, .{ .string = try createString(ctx, entry.name) });
-        try entry_arr.set(ctx.allocator, .{ .string = "path" }, .{ .string = full });
-        try entry_arr.set(ctx.allocator, .{ .string = "is_dir" }, .{ .bool = is_dir });
+        try entry_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed(try createString(ctx, entry.name)) });
+        try entry_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("path") }, .{ .string = Value.String.borrowed(full) });
+        try entry_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("is_dir") }, .{ .bool = is_dir });
 
         try arr.append(ctx.allocator, .{ .array = entry_arr });
     }
@@ -719,7 +719,7 @@ fn syncCurrentEntry(ctx: *NativeContext, obj: *PhpObject) !void {
     if (idx >= entries.length()) return;
     const entry = entries.get(.{ .int = @intCast(idx) });
     if (entry != .array) return;
-    const path_val = entry.array.get(.{ .string = "path" });
+    const path_val = entry.array.get(.{ .string = Value.String.borrowed("path") });
     if (path_val == .string) {
         try obj.set(ctx.allocator, "__pathname", .{ .string = path_val.string });
     }
@@ -728,8 +728,8 @@ fn syncCurrentEntry(ctx: *NativeContext, obj: *PhpObject) !void {
 fn fsiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 1 or args[0] != .string) return .null;
-    const path = args[0].string;
-    try obj.set(ctx.allocator, "__di_path", .{ .string = try createString(ctx, path) });
+    const path = args[0].string.bytes();
+    try obj.set(ctx.allocator, "__di_path", .{ .string = Value.String.borrowed(try createString(ctx, path)) });
     try obj.set(ctx.allocator, "__di_idx", .{ .int = 0 });
     // FilesystemIterator skips dots by default
     const entries = try loadDirectoryEntries(ctx, path, SKIP_DOTS);
@@ -782,9 +782,9 @@ fn diIsDot(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (idx >= entries.length()) return .{ .bool = false };
     const entry = entries.get(.{ .int = @intCast(idx) });
     if (entry != .array) return .{ .bool = false };
-    const name = entry.array.get(.{ .string = "name" });
+    const name = entry.array.get(.{ .string = Value.String.borrowed("name") });
     if (name != .string) return .{ .bool = false };
-    return .{ .bool = std.mem.eql(u8, name.string, ".") or std.mem.eql(u8, name.string, "..") };
+    return .{ .bool = std.mem.eql(u8, name.string.bytes(), ".") or std.mem.eql(u8, name.string.bytes(), "..") };
 }
 
 // ==========================================
@@ -794,14 +794,14 @@ fn diIsDot(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn rdiConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 1 or args[0] != .string) return .null;
-    const path = args[0].string;
+    const path = args[0].string.bytes();
     const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else 0;
 
-    try obj.set(ctx.allocator, "__di_path", .{ .string = try createString(ctx, path) });
+    try obj.set(ctx.allocator, "__di_path", .{ .string = Value.String.borrowed(try createString(ctx, path)) });
     try obj.set(ctx.allocator, "__di_flags", .{ .int = flags });
     try obj.set(ctx.allocator, "__di_idx", .{ .int = 0 });
-    try obj.set(ctx.allocator, "__pathname", .{ .string = try createString(ctx, path) });
-    try obj.set(ctx.allocator, "__rdi_root", .{ .string = try createString(ctx, path) });
+    try obj.set(ctx.allocator, "__pathname", .{ .string = Value.String.borrowed(try createString(ctx, path)) });
+    try obj.set(ctx.allocator, "__rdi_root", .{ .string = Value.String.borrowed(try createString(ctx, path)) });
 
     const entries = try loadDirectoryEntries(ctx, path, flags);
     try obj.set(ctx.allocator, "__di_entries", .{ .array = entries });
@@ -821,14 +821,14 @@ fn rdiGetCurrentEntry(obj: *PhpObject) ?*PhpArray {
 fn rdiHasChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const entry = rdiGetCurrentEntry(obj) orelse return .{ .bool = false };
-    const is_dir = entry.get(.{ .string = "is_dir" });
+    const is_dir = entry.get(.{ .string = Value.String.borrowed("is_dir") });
     return .{ .bool = is_dir == .bool and is_dir.bool };
 }
 
 fn rdiGetChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const entry = rdiGetCurrentEntry(obj) orelse return .null;
-    const path_val = entry.get(.{ .string = "path" });
+    const path_val = entry.get(.{ .string = Value.String.borrowed("path") });
     if (path_val != .string) return .null;
     const flags = objGetInt(obj, "__di_flags");
 
@@ -843,7 +843,7 @@ fn rdiGetChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (rdi_root != .null) try child.set(ctx.allocator, "__rdi_root", rdi_root);
     try child.set(ctx.allocator, "subPath", .null);
 
-    const entries = try loadDirectoryEntries(ctx, path_val.string, flags);
+    const entries = try loadDirectoryEntries(ctx, path_val.string.bytes(), flags);
     try child.set(ctx.allocator, "__di_entries", .{ .array = entries });
     try syncCurrentEntry(ctx, child);
 
@@ -851,31 +851,31 @@ fn rdiGetChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn rdiGetSubPath(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
     // subpath is relative path from root to current directory
     const path = objGetStr(obj, "__di_path");
     const root = objGetStr(obj, "__rdi_root");
     if (root.len > 0 and std.mem.startsWith(u8, path, root)) {
         var sub = path[root.len..];
         if (sub.len > 0 and sub[0] == '/') sub = sub[1..];
-        return .{ .string = try createString(ctx, sub) };
+        return .{ .string = Value.String.borrowed(try createString(ctx, sub)) };
     }
-    return .{ .string = "" };
+    return .{ .string = Value.String.borrowed("") };
 }
 
 fn rdiGetSubPathname(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
-    const entry = rdiGetCurrentEntry(obj) orelse return .{ .string = "" };
-    const name = entry.get(.{ .string = "name" });
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
+    const entry = rdiGetCurrentEntry(obj) orelse return .{ .string = Value.String.borrowed("") };
+    const name = entry.get(.{ .string = Value.String.borrowed("name") });
     const sub_path = try rdiGetSubPath(ctx, &.{});
-    if (sub_path != .string or sub_path.string.len == 0) {
+    if (sub_path != .string or sub_path.string.bytes().len == 0) {
         if (name == .string) return .{ .string = name.string };
-        return .{ .string = "" };
+        return .{ .string = Value.String.borrowed("") };
     }
     if (name != .string) return sub_path;
-    const result = try std.fmt.allocPrint(ctx.allocator, "{s}/{s}", .{ sub_path.string, name.string });
+    const result = try std.fmt.allocPrint(ctx.allocator, "{s}/{s}", .{ sub_path.string.bytes(), name.string.bytes() });
     try ctx.vm.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn rdiRewind(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -885,17 +885,17 @@ fn rdiRewind(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn rdiCurrent(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const entry = rdiGetCurrentEntry(obj) orelse return .{ .bool = false };
-    const path_val = entry.get(.{ .string = "path" });
+    const path_val = entry.get(.{ .string = Value.String.borrowed("path") });
     if (path_val != .string) return .null;
-    const fi = try createFileInfoObj(ctx, path_val.string);
+    const fi = try createFileInfoObj(ctx, path_val.string.bytes());
     return .{ .object = fi };
 }
 
 fn rdiKey(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
-    const entry = rdiGetCurrentEntry(obj) orelse return .{ .string = "" };
-    const path_val = entry.get(.{ .string = "path" });
-    if (path_val != .string) return .{ .string = "" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
+    const entry = rdiGetCurrentEntry(obj) orelse return .{ .string = Value.String.borrowed("") };
+    const path_val = entry.get(.{ .string = Value.String.borrowed("path") });
+    if (path_val != .string) return .{ .string = Value.String.borrowed("") };
     return path_val;
 }
 
@@ -943,6 +943,7 @@ fn gwCurrent(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const gen = gwGenerator(this) orelse return .null;
     if (gen.state == .created) try ctx.vm.resumeGenerator(gen, .null);
+    ctx.returnShared(gen.current_value);
     return gen.current_value;
 }
 
@@ -950,6 +951,7 @@ fn gwKey(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const gen = gwGenerator(this) orelse return .null;
     if (gen.state == .created) try ctx.vm.resumeGenerator(gen, .null);
+    ctx.returnShared(gen.current_key);
     return gen.current_key;
 }
 
@@ -1603,7 +1605,7 @@ fn rxConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (inner != .object) return .null;
     if (args.len < 2 or args[1] != .string) return .null;
     try obj.set(ctx.allocator, "__fi_inner", inner);
-    try obj.set(ctx.allocator, "__rx_regex", .{ .string = try createString(ctx, args[1].string) });
+    try obj.set(ctx.allocator, "__rx_regex", .{ .string = Value.String.borrowed(try createString(ctx, args[1].string.bytes())) });
     const mode: i64 = if (args.len >= 3) Value.toInt(args[2]) else 0;
     const flags: i64 = if (args.len >= 4) Value.toInt(args[3]) else 0;
     const preg_flags: i64 = if (args.len >= 5) Value.toInt(args[4]) else 0;
@@ -1621,7 +1623,7 @@ fn rxSubjectFromInner(ctx: *NativeContext, obj: *PhpObject) RuntimeError!?[]cons
         try ctx.vm.callMethod(inner_v.object, "key", &.{})
     else
         try ctx.vm.callMethod(inner_v.object, "current", &.{});
-    if (subject_val == .string) return subject_val.string;
+    if (subject_val == .string) return subject_val.string.bytes();
     if (subject_val == .int or subject_val == .float or subject_val == .bool) {
         var buf: std.ArrayListUnmanaged(u8) = .{};
         try subject_val.format(&buf, ctx.allocator);
@@ -1653,7 +1655,7 @@ fn rxAccept(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const matches_arr = try ctx.allocator.create(PhpArray);
     matches_arr.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, matches_arr);
-    const result = try ctx.vm.callByName("preg_match", &.{ .{ .string = regex }, .{ .string = subject }, .{ .array = matches_arr } });
+    const result = try ctx.vm.callByName("preg_match", &.{ .{ .string = Value.String.borrowed(regex) }, .{ .string = Value.String.borrowed(subject) }, .{ .array = matches_arr } });
     const matched = result == .int and result.int == 1;
     try obj.set(ctx.allocator, "__rx_match", .{ .array = matches_arr });
     return .{ .bool = if (invert) !matched else matched };
@@ -1676,12 +1678,12 @@ fn rxCurrent(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         const subject = (try rxSubjectFromInner(ctx, obj)) orelse return .null;
         const regex = objGetStr(obj, "__rx_regex");
         if (mode == 3) {
-            return ctx.vm.callByName("preg_split", &.{ .{ .string = regex }, .{ .string = subject } });
+            return ctx.vm.callByName("preg_split", &.{ .{ .string = Value.String.borrowed(regex) }, .{ .string = Value.String.borrowed(subject) } });
         } else {
             const out_arr = try ctx.allocator.create(PhpArray);
             out_arr.* = .{};
             try ctx.vm.arrays.append(ctx.allocator, out_arr);
-            _ = try ctx.vm.callByName("preg_match_all", &.{ .{ .string = regex }, .{ .string = subject }, .{ .array = out_arr } });
+            _ = try ctx.vm.callByName("preg_match_all", &.{ .{ .string = Value.String.borrowed(regex) }, .{ .string = Value.String.borrowed(subject) }, .{ .array = out_arr } });
             return .{ .array = out_arr };
         }
     }
@@ -1689,8 +1691,8 @@ fn rxCurrent(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn rxGetRegex(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
-    return .{ .string = objGetStr(obj, "__rx_regex") };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
+    return .{ .string = Value.String.borrowed(objGetStr(obj, "__rx_regex")) };
 }
 
 fn rxGetMode(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -1760,8 +1762,7 @@ fn ciCacheCurrent(ctx: *NativeContext, obj: *PhpObject, inner: *PhpObject) !void
         if ((flags & 256) != 0) {
             const cache_v = obj.get("__ci_cache");
             if (cache_v == .array) {
-                if (key == .string) try cache_v.array.set(ctx.allocator, .{ .string = key.string }, cur)
-                else if (key == .int) try cache_v.array.set(ctx.allocator, .{ .int = key.int }, cur);
+                if (key == .string) try cache_v.array.set(ctx.allocator, .{ .string = key.string }, cur) else if (key == .int) try cache_v.array.set(ctx.allocator, .{ .int = key.int }, cur);
             }
         }
         _ = try ctx.vm.callMethod(inner, "next", &.{});
@@ -1807,7 +1808,7 @@ fn ciHasNext(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn ciToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
     const flags = objGetInt(obj, "__ci_flags");
     const target = if ((flags & 4) != 0) obj.get("__ci_key") else if ((flags & 16) != 0) blk: {
         const inner = iiGetInnerObj(obj) orelse break :blk obj.get("__ci_current");
@@ -1819,7 +1820,7 @@ fn ciToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const s = try ctx.allocator.dupe(u8, buf.items);
     buf.deinit(ctx.allocator);
     try ctx.vm.strings.append(ctx.allocator, s);
-    return .{ .string = s };
+    return .{ .string = Value.String.borrowed(s) };
 }
 
 fn ciGetCache(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -1988,8 +1989,7 @@ fn miCurrent(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         if (try miCallValid(ctx, e.value)) v = try miCallCurrent(ctx, e.value);
         if (assoc and keys_v == .array and i < keys_v.array.entries.items.len) {
             const k = keys_v.array.entries.items[i].value;
-            if (k == .string) try result.set(ctx.allocator, .{ .string = k.string }, v)
-            else try result.append(ctx.allocator, v);
+            if (k == .string) try result.set(ctx.allocator, .{ .string = k.string }, v) else try result.append(ctx.allocator, v);
         } else {
             try result.set(ctx.allocator, .{ .int = idx }, v);
             idx += 1;
@@ -2014,8 +2014,7 @@ fn miKey(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         if (try miCallValid(ctx, e.value)) v = try miCallKey(ctx, e.value);
         if (assoc and keys_v == .array and i < keys_v.array.entries.items.len) {
             const k = keys_v.array.entries.items[i].value;
-            if (k == .string) try result.set(ctx.allocator, .{ .string = k.string }, v)
-            else try result.append(ctx.allocator, v);
+            if (k == .string) try result.set(ctx.allocator, .{ .string = k.string }, v) else try result.append(ctx.allocator, v);
         } else {
             try result.set(ctx.allocator, .{ .int = idx }, v);
             idx += 1;
@@ -2140,18 +2139,18 @@ fn rtiCurrent(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const entry = try rtiGetEntry(ctx, args);
     const postfix = try rtiGetPostfix(ctx, args);
     var buf: std.ArrayListUnmanaged(u8) = .{};
-    if (prefix == .string) try buf.appendSlice(ctx.allocator, prefix.string);
-    if (entry == .string) try buf.appendSlice(ctx.allocator, entry.string);
-    if (postfix == .string) try buf.appendSlice(ctx.allocator, postfix.string);
+    if (prefix == .string) try buf.appendSlice(ctx.allocator, prefix.string.bytes());
+    if (entry == .string) try buf.appendSlice(ctx.allocator, entry.string.bytes());
+    if (postfix == .string) try buf.appendSlice(ctx.allocator, postfix.string.bytes());
     const s = try ctx.allocator.dupe(u8, buf.items);
     buf.deinit(ctx.allocator);
     try ctx.vm.strings.append(ctx.allocator, s);
     _ = obj;
-    return .{ .string = s };
+    return .{ .string = Value.String.borrowed(s) };
 }
 
 fn rtiGetPrefix(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
     const depth_v = try ctx.vm.callMethod(obj, "getDepth", &.{});
     const depth: i64 = if (depth_v == .int) depth_v.int else 0;
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -2163,13 +2162,13 @@ fn rtiGetPrefix(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const s = try ctx.allocator.dupe(u8, buf.items);
     buf.deinit(ctx.allocator);
     try ctx.vm.strings.append(ctx.allocator, s);
-    return .{ .string = s };
+    return .{ .string = Value.String.borrowed(s) };
 }
 
 fn rtiGetEntry(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
     // delegate to inner current
-    const inner = riiCurrentIterator(obj) orelse return .{ .string = "" };
+    const inner = riiCurrentIterator(obj) orelse return .{ .string = Value.String.borrowed("") };
     const cur = try ctx.vm.callMethod(inner, "current", &.{});
     if (cur == .string) return cur;
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -2177,11 +2176,11 @@ fn rtiGetEntry(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const s = try ctx.allocator.dupe(u8, buf.items);
     buf.deinit(ctx.allocator);
     try ctx.vm.strings.append(ctx.allocator, s);
-    return .{ .string = s };
+    return .{ .string = Value.String.borrowed(s) };
 }
 
 fn rtiGetPostfix(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = "" };
+    return .{ .string = Value.String.borrowed("") };
 }
 
 // ==========================================
@@ -2191,7 +2190,7 @@ fn rtiGetPostfix(_: *NativeContext, _: []const Value) RuntimeError!Value {
 fn giConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 1 or args[0] != .string) return .null;
-    try obj.set(ctx.allocator, "__gi_pattern", .{ .string = try createString(ctx, args[0].string) });
+    try obj.set(ctx.allocator, "__gi_pattern", .{ .string = Value.String.borrowed(try createString(ctx, args[0].string.bytes())) });
     const result = try ctx.vm.callByName("glob", &.{args[0]});
     if (result == .array) {
         try obj.set(ctx.allocator, "__gi_results", result);
@@ -2234,7 +2233,7 @@ fn giCurrent(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (pos < 0 or pos >= results.array.length()) return .null;
     const path = results.array.get(.{ .int = pos });
     if (path != .string) return .null;
-    const fi = try createFileInfoObj(ctx, path.string);
+    const fi = try createFileInfoObj(ctx, path.string.bytes());
     fi.class_name = "GlobIterator";
     return .{ .object = fi };
 }

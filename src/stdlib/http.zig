@@ -31,7 +31,7 @@ pub const entries = .{
 fn isCallable(v: Value) bool {
     return switch (v) {
         .object => true,
-        .string => |s| s.len > 0,
+        .string => |s| s.bytes().len > 0,
         .array => |a| a.entries.items.len == 2,
         else => false,
     };
@@ -43,7 +43,7 @@ fn native_ob_start(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
         // verify the handler resolves to a real callable; PHP returns false
         // and does not start a buffer when the handler can't be found
         if (args[0] == .string) {
-            const name = args[0].string;
+            const name = args[0].string.bytes();
             if (!ctx.vm.functions.contains(name) and !ctx.vm.native_fns.contains(name)) return .{ .bool = false };
         } else if (!isCallable(args[0])) {
             return .{ .bool = false };
@@ -56,8 +56,8 @@ fn native_ob_start(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 
 fn applyCallback(ctx: *NativeContext, level: OutputBufferLevel, content: []const u8) RuntimeError![]const u8 {
     if (level.callback) |cb| {
-        const result = try ctx.invokeCallable(cb, &.{.{ .string = content }});
-        if (result == .string) return result.string;
+        const result = try ctx.invokeCallable(cb, &.{.{ .string = Value.String.borrowed(content) }});
+        if (result == .string) return result.string.bytes();
         if (result == .null or result == .bool) return content;
     }
     return content;
@@ -68,7 +68,7 @@ fn native_ob_get_clean(ctx: *NativeContext, _: []const Value) RuntimeError!Value
     const level = ctx.vm.ob_stack.pop().?;
     const raw = try ctx.createString(ctx.vm.output.items[level.start..]);
     ctx.vm.output.shrinkRetainingCapacity(level.start);
-    return .{ .string = raw };
+    return .{ .string = Value.String.borrowed(raw) };
 }
 
 fn native_ob_end_clean(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -81,7 +81,7 @@ fn native_ob_end_clean(ctx: *NativeContext, _: []const Value) RuntimeError!Value
 fn native_ob_get_contents(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (ctx.vm.ob_stack.items.len == 0) return .{ .bool = false };
     const level = ctx.vm.ob_stack.getLast();
-    return .{ .string = try ctx.createString(ctx.vm.output.items[level.start..]) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(ctx.vm.output.items[level.start..])) };
 }
 
 fn native_ob_get_level(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -110,7 +110,7 @@ fn native_ob_get_flush(ctx: *NativeContext, _: []const Value) RuntimeError!Value
     const transformed = try applyCallback(ctx, level, raw);
     const owned = try ctx.createString(transformed);
     try ctx.vm.output.appendSlice(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn native_ob_flush(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -164,26 +164,26 @@ fn native_ob_get_status(ctx: *NativeContext, args: []const Value) RuntimeError!V
     }
     if (!full_status) {
         const arr = try ctx.createArray();
-        try arr.set(ctx.allocator, .{ .string = "name" }, .{ .string = "default output handler" });
-        try arr.set(ctx.allocator, .{ .string = "type" }, .{ .int = 0 });
-        try arr.set(ctx.allocator, .{ .string = "flags" }, .{ .int = 112 });
-        try arr.set(ctx.allocator, .{ .string = "level" }, .{ .int = @intCast(stack_len - 1) });
-        try arr.set(ctx.allocator, .{ .string = "chunk_size" }, .{ .int = 0 });
-        try arr.set(ctx.allocator, .{ .string = "buffer_size" }, .{ .int = 16384 });
-        try arr.set(ctx.allocator, .{ .string = "buffer_used" }, .{ .int = 0 });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed("default output handler") });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("type") }, .{ .int = 0 });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("flags") }, .{ .int = 112 });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("level") }, .{ .int = @intCast(stack_len - 1) });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("chunk_size") }, .{ .int = 0 });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("buffer_size") }, .{ .int = 16384 });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("buffer_used") }, .{ .int = 0 });
         return .{ .array = arr };
     }
     const result = try ctx.createArray();
     var i: usize = 0;
     while (i < stack_len) : (i += 1) {
         const sub = try ctx.createArray();
-        try sub.set(ctx.allocator, .{ .string = "name" }, .{ .string = "default output handler" });
-        try sub.set(ctx.allocator, .{ .string = "type" }, .{ .int = 0 });
-        try sub.set(ctx.allocator, .{ .string = "flags" }, .{ .int = 112 });
-        try sub.set(ctx.allocator, .{ .string = "level" }, .{ .int = @intCast(i) });
-        try sub.set(ctx.allocator, .{ .string = "chunk_size" }, .{ .int = 0 });
-        try sub.set(ctx.allocator, .{ .string = "buffer_size" }, .{ .int = 16384 });
-        try sub.set(ctx.allocator, .{ .string = "buffer_used" }, .{ .int = 0 });
+        try sub.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed("default output handler") });
+        try sub.set(ctx.allocator, .{ .string = Value.String.borrowed("type") }, .{ .int = 0 });
+        try sub.set(ctx.allocator, .{ .string = Value.String.borrowed("flags") }, .{ .int = 112 });
+        try sub.set(ctx.allocator, .{ .string = Value.String.borrowed("level") }, .{ .int = @intCast(i) });
+        try sub.set(ctx.allocator, .{ .string = Value.String.borrowed("chunk_size") }, .{ .int = 0 });
+        try sub.set(ctx.allocator, .{ .string = Value.String.borrowed("buffer_size") }, .{ .int = 16384 });
+        try sub.set(ctx.allocator, .{ .string = Value.String.borrowed("buffer_used") }, .{ .int = 0 });
         try result.append(ctx.allocator, .{ .array = sub });
     }
     return .{ .array = result };
@@ -192,14 +192,14 @@ fn native_ob_get_status(ctx: *NativeContext, args: []const Value) RuntimeError!V
 fn native_ob_list_handlers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
     for (0..ctx.vm.ob_stack.items.len) |_| {
-        try arr.append(ctx.allocator, .{ .string = "default output handler" });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("default output handler") });
     }
     return .{ .array = arr };
 }
 
 fn native_header(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .null;
-    const hdr = args[0].string;
+    const hdr = args[0].string.bytes();
     const replace = args.len < 2 or args[1] != .bool or args[1].bool;
 
     if (startsWithIgnoreCase(hdr, "Content-Type:")) {
@@ -247,8 +247,8 @@ fn native_http_response_code(ctx: *NativeContext, args: []const Value) RuntimeEr
 
 fn native_setcookie(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const name = args[0].string;
-    const value = if (args.len >= 2 and args[1] == .string) args[1].string else "";
+    const name = args[0].string.bytes();
+    const value = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "";
 
     var buf = std.ArrayListUnmanaged(u8){};
     try buf.appendSlice(ctx.allocator, "Set-Cookie: ");
@@ -276,7 +276,7 @@ fn native_header_remove(ctx: *NativeContext, args: []const Value) RuntimeError!V
         }
         return .null;
     }
-    if (args[0] == .string) removeHeaderByName(ctx, args[0].string);
+    if (args[0] == .string) removeHeaderByName(ctx, args[0].string.bytes());
     return .null;
 }
 
@@ -290,28 +290,28 @@ fn native_headers_list(ctx: *NativeContext, _: []const Value) RuntimeError!Value
 }
 
 fn appendCookieOptionsArray(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, opts: *PhpArray) !void {
-    const expires = opts.get(.{ .string = "expires" });
+    const expires = opts.get(.{ .string = Value.String.borrowed("expires") });
     if (expires == .int and expires.int > 0) {
         try appendMaxAge(buf, a, expires.int);
     }
-    const path = opts.get(.{ .string = "path" });
+    const path = opts.get(.{ .string = Value.String.borrowed("path") });
     if (path == .string) {
         try buf.appendSlice(a, "; Path=");
-        try buf.appendSlice(a, path.string);
+        try buf.appendSlice(a, path.string.bytes());
     }
-    const domain = opts.get(.{ .string = "domain" });
+    const domain = opts.get(.{ .string = Value.String.borrowed("domain") });
     if (domain == .string) {
         try buf.appendSlice(a, "; Domain=");
-        try buf.appendSlice(a, domain.string);
+        try buf.appendSlice(a, domain.string.bytes());
     }
-    const secure = opts.get(.{ .string = "secure" });
+    const secure = opts.get(.{ .string = Value.String.borrowed("secure") });
     if (secure == .bool and secure.bool) try buf.appendSlice(a, "; Secure");
-    const httponly = opts.get(.{ .string = "httponly" });
+    const httponly = opts.get(.{ .string = Value.String.borrowed("httponly") });
     if (httponly == .bool and httponly.bool) try buf.appendSlice(a, "; HttpOnly");
-    const samesite = opts.get(.{ .string = "samesite" });
+    const samesite = opts.get(.{ .string = Value.String.borrowed("samesite") });
     if (samesite == .string) {
         try buf.appendSlice(a, "; SameSite=");
-        try buf.appendSlice(a, samesite.string);
+        try buf.appendSlice(a, samesite.string.bytes());
     }
 }
 
@@ -321,11 +321,11 @@ fn appendCookieOptionsPositional(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Al
     }
     if (args.len >= 4 and args[3] == .string) {
         try buf.appendSlice(a, "; Path=");
-        try buf.appendSlice(a, args[3].string);
+        try buf.appendSlice(a, args[3].string.bytes());
     }
     if (args.len >= 5 and args[4] == .string) {
         try buf.appendSlice(a, "; Domain=");
-        try buf.appendSlice(a, args[4].string);
+        try buf.appendSlice(a, args[4].string.bytes());
     }
     if (args.len >= 6 and args[5].isTruthy()) try buf.appendSlice(a, "; Secure");
     if (args.len >= 7 and args[6].isTruthy()) try buf.appendSlice(a, "; HttpOnly");
@@ -360,10 +360,10 @@ fn getResponseHeaders(ctx: *NativeContext) ?*PhpArray {
 
 fn appendResponseHeader(ctx: *NativeContext, hdr: []const u8) !void {
     if (ctx.vm.response_headers) |arr| {
-        try arr.append(ctx.allocator, .{ .string = hdr });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(hdr) });
     } else {
         const arr = try ctx.createArray();
-        try arr.append(ctx.allocator, .{ .string = hdr });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(hdr) });
         ctx.vm.response_headers = arr;
     }
 }
@@ -375,7 +375,7 @@ fn removeHeaderByName(ctx: *NativeContext, name: []const u8) void {
     while (i < arr.entries.items.len) {
         const entry = arr.entries.items[i];
         if (entry.value == .string) {
-            const hdr = entry.value.string;
+            const hdr = entry.value.string.bytes();
             if (hdr.len > name.len and hdr[name.len] == ':' and std.ascii.eqlIgnoreCase(hdr[0..name.len], name)) {
                 _ = arr.entries.orderedRemove(i);
                 removed = true;

@@ -113,7 +113,10 @@ fn formatPhpFloat(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, f: f64
                 var has_dot = false;
                 var search = written;
                 while (search > 0) : (search -= 1) {
-                    if (buf.items[search - 1] == '.') { has_dot = true; break; }
+                    if (buf.items[search - 1] == '.') {
+                        has_dot = true;
+                        break;
+                    }
                     if (buf.items[search - 1] == '-' or buf.items[search - 1] == '+') break;
                 }
                 if (!has_dot) try buf.appendSlice(a, ".0");
@@ -137,8 +140,8 @@ fn formatPhpFloat(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, f: f64
 }
 
 fn native_serialize(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
-    if (args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) {
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
+    if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) {
         try ctx.vm.setPendingException("Exception", "Serialization of 'Closure' is not allowed");
         return error.RuntimeError;
     }
@@ -169,7 +172,7 @@ pub fn serializeToString(ctx: *NativeContext, val: Value) RuntimeError!Value {
     try serializeValue(ctx, &buf, &sctx, val);
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 pub fn unserializeFromString(ctx: *NativeContext, s: []const u8) ?Value {
@@ -270,7 +273,7 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
             try formatPhpFloat(buf, a, f);
             try buf.append(a, ';');
         },
-        .string => |str| try emitLenString(buf, a, str),
+        .string => |str| try emitLenString(buf, a, str.bytes()),
         .array => |arr| {
             // cycle guard: arrays only appear circular when zphp's limited
             // by-reference support has aliased one into itself; emit a back
@@ -298,7 +301,7 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
                         try buf.appendSlice(a, ki);
                         try buf.append(a, ';');
                     },
-                    .string => |s| try emitLenString(buf, a, s),
+                    .string => |s| try emitLenString(buf, a, s.bytes()),
                 }
                 try serializeValue(ctx, buf, sctx, entry.value);
             }
@@ -321,7 +324,7 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
             if (ctx.vm.classes.get(obj.class_name)) |cdef| {
                 if (cdef.is_enum) {
                     const name_val = obj.get("name");
-                    const case_name: []const u8 = if (name_val == .string) name_val.string else "";
+                    const case_name: []const u8 = if (name_val == .string) name_val.string.bytes() else "";
                     const total_len = obj.class_name.len + 1 + case_name.len;
                     try buf.appendSlice(a, "E:");
                     var tmp: [20]u8 = undefined;
@@ -371,7 +374,7 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
             // falls through to default object serialization
             if (!ctx.vm.hasMethod(obj.class_name, "__serialize") and ctx.vm.isInstanceOf(obj.class_name, "Serializable") and ctx.vm.hasMethod(obj.class_name, "serialize")) {
                 const ser_result = try ctx.vm.callMethod(obj, "serialize", &.{});
-                const payload: []const u8 = if (ser_result == .string) ser_result.string else "";
+                const payload: []const u8 = if (ser_result == .string) ser_result.string.bytes() else "";
                 try buf.appendSlice(a, "C:");
                 var tmp: [20]u8 = undefined;
                 const nl = std.fmt.bufPrint(&tmp, "{d}", .{obj.class_name.len}) catch return;
@@ -409,7 +412,7 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
                                 try buf.appendSlice(a, ki);
                                 try buf.append(a, ';');
                             },
-                            .string => |s| try emitLenString(buf, a, s),
+                            .string => |s| try emitLenString(buf, a, s.bytes()),
                         }
                         try serializeValue(ctx, buf, sctx, entry.value);
                     }
@@ -447,7 +450,7 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
             if (sleep_props) |sp| {
                 for (sp.entries.items) |entry| {
                     if (entry.value != .string) continue;
-                    const name = entry.value.string;
+                    const name = entry.value.string.bytes();
                     const vis: ClassDef.Visibility = if (class_def) |c| findPropertyVisibility(c, name) else .public;
                     try emitObjectPropertyKey(buf, a, obj.class_name, name, vis);
                     const v = obj.get(name);
@@ -482,7 +485,7 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
 
 fn native_unserialize(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return Value{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     // PHP returns false silently for empty input - no warning
     if (s.len == 0) return Value{ .bool = false };
     var uctx = UnserCtx{};
@@ -491,18 +494,18 @@ fn native_unserialize(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     defer name_storage.deinit(ctx.allocator);
     if (args.len >= 2 and args[1] == .array) {
         const opts = args[1].array;
-        const ac = opts.get(.{ .string = "allowed_classes" });
+        const ac = opts.get(.{ .string = Value.String.borrowed("allowed_classes") });
         switch (ac) {
             .bool => |b| uctx.allowed = if (b) .all else .none,
             .array => |a| {
                 for (a.entries.items) |entry| {
-                    if (entry.value == .string) try name_storage.append(ctx.allocator, entry.value.string);
+                    if (entry.value == .string) try name_storage.append(ctx.allocator, entry.value.string.bytes());
                 }
                 uctx.allowed = .{ .list = name_storage.items };
             },
             else => {},
         }
-        const md = opts.get(.{ .string = "max_depth" });
+        const md = opts.get(.{ .string = Value.String.borrowed("max_depth") });
         if (md == .int and md.int >= 0) uctx.max_depth = @intCast(md.int);
     }
     const result = unserializeValue(ctx, &uctx, s, 0) catch {
@@ -579,7 +582,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
         },
         's' => {
             const r = try parseString(s, pos);
-            const v: Value = .{ .string = try ctx.createString(r.str) };
+            const v: Value = .{ .string = Value.String.borrowed(try ctx.createString(r.str)) };
             try uctx.slots.append(ctx.allocator, v);
             return .{ .value = v, .pos = r.pos };
         },
@@ -667,7 +670,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             }
             const obj = try ctx.createObject(class_name);
             if (!class_allowed) {
-                try obj.set(ctx.allocator, "__PHP_Incomplete_Class_Name", .{ .string = try ctx.createString(orig_class) });
+                try obj.set(ctx.allocator, "__PHP_Incomplete_Class_Name", .{ .string = Value.String.borrowed(try ctx.createString(orig_class)) });
             }
             if (obj.slots == null) {
                 if (ctx.vm.classes.get(class_name)) |cls| {
@@ -711,7 +714,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
                 p = val_result.pos;
                 if (collected) |arr| {
                     const k: PhpArray.Key = switch (key_result.value) {
-                        .string => |str| .{ .string = stripVisibilityPrefix(str) },
+                        .string => |str| .{ .string = Value.String.borrowed(stripVisibilityPrefix(str.bytes())) },
                         .int => |n| .{ .int = n },
                         else => continue,
                     };
@@ -719,7 +722,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
                 } else if (fixed_data) |arr| {
                     if (key_result.value == .int) try arr.set(ctx.allocator, .{ .int = key_result.value.int }, val_result.value);
                 } else if (key_result.value == .string) {
-                    const stripped = stripVisibilityPrefix(key_result.value.string);
+                    const stripped = stripVisibilityPrefix(key_result.value.string.bytes());
                     // when restoring into a kept class, assigning an
                     // __PHP_Incomplete_Class value to a typed property whose
                     // declared type isn't compatible is a TypeError in PHP
@@ -778,10 +781,10 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
 
             if (class_allowed and ctx.vm.hasMethod(class_name, "unserialize")) {
                 const payload_str = try ctx.createString(payload);
-                _ = try ctx.vm.callMethod(obj, "unserialize", &.{.{ .string = payload_str }});
+                _ = try ctx.vm.callMethod(obj, "unserialize", &.{.{ .string = Value.String.borrowed(payload_str) }});
             } else if (!class_allowed) {
-                try obj.set(ctx.allocator, "__PHP_Incomplete_Class_Name", .{ .string = try ctx.createString(orig_class) });
-                try obj.set(ctx.allocator, "__serialized_data", .{ .string = try ctx.createString(payload) });
+                try obj.set(ctx.allocator, "__PHP_Incomplete_Class_Name", .{ .string = Value.String.borrowed(try ctx.createString(orig_class)) });
+                try obj.set(ctx.allocator, "__serialized_data", .{ .string = Value.String.borrowed(try ctx.createString(payload)) });
             }
             return .{ .value = .{ .object = obj }, .pos = p };
         },
@@ -815,4 +818,3 @@ fn parseString(s: []const u8, pos: usize) !StringResult {
     if (end + 1 >= s.len or s[end] != '"' or s[end + 1] != ';') return error.RuntimeError;
     return .{ .str = str, .pos = end + 2 };
 }
-

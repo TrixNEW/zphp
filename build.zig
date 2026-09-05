@@ -30,8 +30,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.linkSystemLibrary("z", .{ .preferred_link_mode = .static });
     exe_mod.linkSystemLibrary("mysqlclient", .{});
     exe_mod.linkSystemLibrary("pq", .{});
-    exe_mod.linkSystemLibrary("ssl", .{ .preferred_link_mode = .static, .use_pkg_config = .no });
-    exe_mod.linkSystemLibrary("crypto", .{ .preferred_link_mode = .static, .use_pkg_config = .no });
+    addOpenSsl(b, exe_mod);
     exe_mod.linkSystemLibrary("nghttp2", .{ .preferred_link_mode = .static });
     exe_mod.linkSystemLibrary("curl", .{});
     addLibxml2(b, exe_mod);
@@ -80,8 +79,7 @@ pub fn build(b: *std.Build) void {
     test_mod.linkSystemLibrary("z", .{ .preferred_link_mode = .static });
     test_mod.linkSystemLibrary("mysqlclient", .{});
     test_mod.linkSystemLibrary("pq", .{});
-    test_mod.linkSystemLibrary("ssl", .{ .preferred_link_mode = .static, .use_pkg_config = .no });
-    test_mod.linkSystemLibrary("crypto", .{ .preferred_link_mode = .static, .use_pkg_config = .no });
+    addOpenSsl(b, test_mod);
     test_mod.linkSystemLibrary("nghttp2", .{ .preferred_link_mode = .static });
     test_mod.linkSystemLibrary("curl", .{});
     addLibxml2(b, test_mod);
@@ -124,6 +122,14 @@ fn addLibxml2(b: *std.Build, mod: *std.Build.Module) void {
         const sub = std.fs.path.join(b.allocator, &.{ inc, "libxml2" }) catch return;
         mod.addSystemIncludePath(.{ .cwd_relative = sub });
         mod.addSystemIncludePath(.{ .cwd_relative = inc });
+    }
+}
+
+fn addOpenSsl(b: *std.Build, mod: *std.Build.Module) void {
+    mod.linkSystemLibrary("ssl", .{ .preferred_link_mode = .static, .use_pkg_config = .no });
+    mod.linkSystemLibrary("crypto", .{ .preferred_link_mode = .static, .use_pkg_config = .no });
+    if (pkgConfigVariable(b, "openssl", "libdir")) |lib| {
+        mod.addLibraryPath(.{ .cwd_relative = lib });
     }
 }
 

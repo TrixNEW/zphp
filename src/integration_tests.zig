@@ -12,7 +12,10 @@ fn expectOutput(source: []const u8, expected: []const u8) !void {
     defer result.deinit();
 
     const vm = try VM.initOnHeap(alloc);
-    defer { vm.deinit(); alloc.destroy(vm); }
+    defer {
+        vm.deinit();
+        alloc.destroy(vm);
+    }
     vm.interpret(&result) catch |err| {
         if (!vm.exit_requested) return err;
     };

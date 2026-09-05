@@ -51,7 +51,7 @@ const default_name = "PHPSESSID";
 
 fn currentSessionDir(ctx: *NativeContext) []const u8 {
     const v = getSessionVar(ctx, "__session_save_path");
-    if (v != null and v.? == .string and v.?.string.len > 0) return v.?.string;
+    if (v != null and v.? == .string and v.?.string.bytes().len > 0) return v.?.string.bytes();
     return default_session_dir;
 }
 
@@ -61,7 +61,7 @@ fn getSessionVar(ctx: *NativeContext, key: []const u8) ?Value {
 }
 
 fn setSessionVar(ctx: *NativeContext, key: []const u8, val: Value) !void {
-    try ctx.vm.frames[0].vars.put(ctx.allocator, key, val);
+    try ctx.vm.putGlobalVar(key, val);
 }
 
 const session_id_alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -121,14 +121,14 @@ fn saveSessionData(ctx: *NativeContext, sid: []const u8) !void {
 
     const path = try sessionPath(ctx, sid);
     defer ctx.allocator.free(path);
-    std.fs.cwd().writeFile(.{ .sub_path = path, .data = serialized.string }) catch return;
+    std.fs.cwd().writeFile(.{ .sub_path = path, .data = serialized.string.bytes() }) catch return;
 }
 
 fn getCookieSessionId(ctx: *NativeContext) ?[]const u8 {
     const cookie_val = ctx.vm.request_vars.get("$_COOKIE") orelse return null;
     if (cookie_val != .array) return null;
-    const val = cookie_val.array.get(.{ .string = default_name });
-    if (val == .string) return val.string;
+    const val = cookie_val.array.get(.{ .string = Value.String.borrowed(default_name) });
+    if (val == .string) return val.string.bytes();
     return null;
 }
 
@@ -140,11 +140,11 @@ fn setSessionCookie(ctx: *NativeContext, sid: []const u8) !void {
     const key = "__response_headers";
     const existing = ctx.vm.frames[0].vars.get(key);
     if (existing != null and existing.? == .array) {
-        try existing.?.array.append(ctx.allocator, .{ .string = hdr });
+        try existing.?.array.append(ctx.allocator, .{ .string = Value.String.borrowed(hdr) });
     } else {
         const arr = try ctx.createArray();
-        try arr.append(ctx.allocator, .{ .string = hdr });
-        try ctx.vm.frames[0].vars.put(ctx.allocator, key, .{ .array = arr });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(hdr) });
+        try ctx.vm.putGlobalVar(key, .{ .array = arr });
     }
 }
 
@@ -160,8 +160,8 @@ fn native_session_start(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
     // prefer an existing id cached on this request (e.g. from a prior
     // session_write_close), otherwise honour the cookie if it's well-formed.
     if (getSessionVar(ctx, "__session_id")) |existing_sid| {
-        if (existing_sid == .string and isValidSessionId(existing_sid.string)) {
-            sid = existing_sid.string;
+        if (existing_sid == .string and isValidSessionId(existing_sid.string.bytes())) {
+            sid = existing_sid.string.bytes();
         } else if (getCookieSessionId(ctx)) |cookie_sid| {
             if (isValidSessionId(cookie_sid)) {
                 sid = cookie_sid;
@@ -185,12 +185,12 @@ fn native_session_start(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
         is_new = true;
     }
 
-    try setSessionVar(ctx, "__session_id", .{ .string = sid });
+    try setSessionVar(ctx, "__session_id", .{ .string = Value.String.borrowed(sid) });
     try setSessionVar(ctx, "__session_active", .{ .bool = true });
 
     const arr = try loadSessionData(ctx, sid);
-    try ctx.vm.request_vars.put(ctx.allocator, "$_SESSION", .{ .array = arr });
-    try ctx.vm.frames[0].vars.put(ctx.allocator, "$_SESSION", .{ .array = arr });
+    try ctx.vm.putRequestVar("$_SESSION", .{ .array = arr });
+    try ctx.vm.putGlobalVar("$_SESSION", .{ .array = arr });
 
     if (is_new) try setSessionCookie(ctx, sid);
 
@@ -200,18 +200,18 @@ fn native_session_start(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
 fn native_session_id(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len >= 1 and args[0] == .string) {
         try setSessionVar(ctx, "__session_id", args[0]);
-        return .{ .string = args[0].string };
+        return .{ .string = Value.String.borrowed(args[0].string.bytes()) };
     }
-    const v = getSessionVar(ctx, "__session_id") orelse return .{ .string = "" };
+    const v = getSessionVar(ctx, "__session_id") orelse return .{ .string = Value.String.borrowed("") };
     if (v == .string) return v;
-    return .{ .string = "" };
+    return .{ .string = Value.String.borrowed("") };
 }
 
 fn native_session_destroy(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const sid_val = getSessionVar(ctx, "__session_id") orelse return .{ .bool = false };
     if (sid_val != .string) return .{ .bool = false };
 
-    const path = try sessionPath(ctx, sid_val.string);
+    const path = try sessionPath(ctx, sid_val.string.bytes());
     defer ctx.allocator.free(path);
     std.fs.cwd().deleteFile(path) catch {};
 
@@ -227,12 +227,12 @@ fn native_session_regenerate_id(ctx: *NativeContext, args: []const Value) Runtim
 
     // migrate current $_SESSION contents to the new ID so session data survives
     // regeneration (this is how every PHP framework uses it post-login).
-    try setSessionVar(ctx, "__session_id", .{ .string = new_sid });
+    try setSessionVar(ctx, "__session_id", .{ .string = Value.String.borrowed(new_sid) });
     saveSessionData(ctx, new_sid) catch {};
 
     const delete_old = args.len >= 1 and args[0].isTruthy();
     if (delete_old) {
-        const path = try sessionPath(ctx, old_sid_val.string);
+        const path = try sessionPath(ctx, old_sid_val.string.bytes());
         defer ctx.allocator.free(path);
         std.fs.cwd().deleteFile(path) catch {};
     }
@@ -242,7 +242,7 @@ fn native_session_regenerate_id(ctx: *NativeContext, args: []const Value) Runtim
 }
 
 fn native_session_name(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = default_name };
+    return .{ .string = Value.String.borrowed(default_name) };
 }
 
 fn native_session_status(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -256,26 +256,26 @@ fn native_session_write_close(ctx: *NativeContext, _: []const Value) RuntimeErro
     if (sid_val != .string) return .null;
     const active = getSessionVar(ctx, "__session_active");
     if (active == null or active.? != .bool or !active.?.bool) return .null;
-    try saveSessionData(ctx, sid_val.string);
+    try saveSessionData(ctx, sid_val.string.bytes());
     try setSessionVar(ctx, "__session_active", .{ .bool = false });
     return .null;
 }
 
 fn native_session_unset(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
-    try ctx.vm.request_vars.put(ctx.allocator, "$_SESSION", .{ .array = arr });
-    try ctx.vm.frames[0].vars.put(ctx.allocator, "$_SESSION", .{ .array = arr });
+    try ctx.vm.putRequestVar("$_SESSION", .{ .array = arr });
+    try ctx.vm.putGlobalVar("$_SESSION", .{ .array = arr });
     return .null;
 }
 
 fn native_session_save_path(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const current = currentSessionDir(ctx);
-    if (args.len >= 1 and args[0] == .string and args[0].string.len > 0) {
+    if (args.len >= 1 and args[0] == .string and args[0].string.bytes().len > 0) {
         try setSessionVar(ctx, "__session_save_path", args[0]);
     }
     const dup = try ctx.allocator.dupe(u8, current);
     try ctx.vm.strings.append(ctx.allocator, dup);
-    return .{ .string = dup };
+    return .{ .string = Value.String.borrowed(dup) };
 }
 
 fn native_session_module_name(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -283,12 +283,12 @@ fn native_session_module_name(ctx: *NativeContext, args: []const Value) RuntimeE
     if (args.len >= 1) {
         // accept and ignore - we only implement the 'files' handler
     }
-    return .{ .string = "files" };
+    return .{ .string = Value.String.borrowed("files") };
 }
 
 fn native_session_cache_limiter(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len >= 1 and args[0] == .string) return args[0];
-    return .{ .string = "nocache" };
+    return .{ .string = Value.String.borrowed("nocache") };
 }
 
 fn native_session_cache_expire(_: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -298,12 +298,12 @@ fn native_session_cache_expire(_: *NativeContext, args: []const Value) RuntimeEr
 
 fn native_session_create_id(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const sid = try generateId(ctx);
-    if (args.len >= 1 and args[0] == .string and args[0].string.len > 0) {
-        const combined = try std.mem.concat(ctx.allocator, u8, &.{ args[0].string, sid });
+    if (args.len >= 1 and args[0] == .string and args[0].string.bytes().len > 0) {
+        const combined = try std.mem.concat(ctx.allocator, u8, &.{ args[0].string.bytes(), sid });
         try ctx.vm.strings.append(ctx.allocator, combined);
-        return .{ .string = combined };
+        return .{ .string = Value.String.borrowed(combined) };
     }
-    return .{ .string = sid };
+    return .{ .string = Value.String.borrowed(sid) };
 }
 
 fn native_session_gc(_: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -320,9 +320,9 @@ fn native_session_abort(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
 fn native_session_reset(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const sid_val = getSessionVar(ctx, "__session_id") orelse return .{ .bool = false };
     if (sid_val != .string) return .{ .bool = false };
-    const arr = try loadSessionData(ctx, sid_val.string);
-    try ctx.vm.request_vars.put(ctx.allocator, "$_SESSION", .{ .array = arr });
-    try ctx.vm.frames[0].vars.put(ctx.allocator, "$_SESSION", .{ .array = arr });
+    const arr = try loadSessionData(ctx, sid_val.string.bytes());
+    try ctx.vm.putRequestVar("$_SESSION", .{ .array = arr });
+    try ctx.vm.putGlobalVar("$_SESSION", .{ .array = arr });
     return .{ .bool = true };
 }
 
@@ -332,27 +332,27 @@ fn native_session_set_cookie_params(_: *NativeContext, _: []const Value) Runtime
 
 fn native_session_get_cookie_params(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "lifetime" }, .{ .int = 0 });
-    try arr.set(ctx.allocator, .{ .string = "path" }, .{ .string = "/" });
-    try arr.set(ctx.allocator, .{ .string = "domain" }, .{ .string = "" });
-    try arr.set(ctx.allocator, .{ .string = "secure" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "httponly" }, .{ .bool = true });
-    try arr.set(ctx.allocator, .{ .string = "samesite" }, .{ .string = "Lax" });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("lifetime") }, .{ .int = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("path") }, .{ .string = Value.String.borrowed("/") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("domain") }, .{ .string = Value.String.borrowed("") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("secure") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("httponly") }, .{ .bool = true });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("samesite") }, .{ .string = Value.String.borrowed("Lax") });
     return .{ .array = arr };
 }
 
 fn native_session_encode(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const session_val = ctx.vm.frames[0].vars.get("$_SESSION") orelse return .{ .string = "" };
-    if (session_val != .array) return .{ .string = "" };
+    const session_val = ctx.vm.frames[0].vars.get("$_SESSION") orelse return .{ .string = Value.String.borrowed("") };
+    if (session_val != .array) return .{ .string = Value.String.borrowed("") };
     return try serialize_mod.serializeToString(ctx, session_val);
 }
 
 fn native_session_decode(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const parsed = serialize_mod.unserializeFromString(ctx, args[0].string) orelse return .{ .bool = false };
+    const parsed = serialize_mod.unserializeFromString(ctx, args[0].string.bytes()) orelse return .{ .bool = false };
     if (parsed != .array) return .{ .bool = false };
-    try ctx.vm.request_vars.put(ctx.allocator, "$_SESSION", parsed);
-    try ctx.vm.frames[0].vars.put(ctx.allocator, "$_SESSION", parsed);
+    try ctx.vm.putRequestVar("$_SESSION", parsed);
+    try ctx.vm.putGlobalVar("$_SESSION", parsed);
     return .{ .bool = true };
 }
 
@@ -362,5 +362,5 @@ pub fn finalizeSession(ctx: *NativeContext) void {
     if (active == null or active.? != .bool or !active.?.bool) return;
     const sid_val = getSessionVar(ctx, "__session_id") orelse return;
     if (sid_val != .string) return;
-    saveSessionData(ctx, sid_val.string) catch {};
+    saveSessionData(ctx, sid_val.string.bytes()) catch {};
 }

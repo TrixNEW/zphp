@@ -114,7 +114,7 @@ fn connectTcp(host: []const u8, port: u16, allocator: std.mem.Allocator) !posix.
 
 fn native_ftp_connect(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const host = args[0].string;
+    const host = args[0].string.bytes();
     const port: u16 = if (args.len > 1 and args[1] == .int) @intCast(args[1].int) else 21;
     const fd = connectTcp(host, port, ctx.allocator) catch return .{ .bool = false };
     const reply = readReply(ctx.allocator, fd) catch {
@@ -129,7 +129,7 @@ fn native_ftp_connect(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     const obj = try ctx.createObject("FTPHandle");
     try obj.set(ctx.allocator, "__fd", .{ .int = @intCast(fd) });
     try obj.set(ctx.allocator, "__pasv", .{ .bool = true });
-    try obj.set(ctx.allocator, "__host", .{ .string = try ctx.allocator.dupe(u8, host) });
+    try obj.set(ctx.allocator, "__host", .{ .string = Value.String.borrowed(try ctx.allocator.dupe(u8, host)) });
     return .{ .object = obj };
 }
 
@@ -142,13 +142,13 @@ fn native_ftp_login(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     const o = getHandle(args) orelse return .{ .bool = false };
     if (args.len < 3 or args[1] != .string or args[2] != .string) return .{ .bool = false };
     const fd = getFd(o) orelse return .{ .bool = false };
-    const user_line = try std.fmt.allocPrint(ctx.allocator, "USER {s}", .{args[1].string});
+    const user_line = try std.fmt.allocPrint(ctx.allocator, "USER {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(user_line);
     const r1 = runCmd(ctx.allocator, fd, user_line) catch return .{ .bool = false };
     defer ctx.allocator.free(r1.body);
     if (r1.code == 230) return .{ .bool = true };
     if (r1.code != 331) return .{ .bool = false };
-    const pass_line = try std.fmt.allocPrint(ctx.allocator, "PASS {s}", .{args[2].string});
+    const pass_line = try std.fmt.allocPrint(ctx.allocator, "PASS {s}", .{args[2].string.bytes()});
     defer ctx.allocator.free(pass_line);
     const r2 = runCmd(ctx.allocator, fd, pass_line) catch return .{ .bool = false };
     defer ctx.allocator.free(r2.body);
@@ -185,12 +185,12 @@ fn native_ftp_pwd(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (end <= start) return .{ .bool = false };
     const path = try ctx.allocator.dupe(u8, r.body[start + 1 .. end]);
     try ctx.strings.append(ctx.allocator, path);
-    return .{ .string = path };
+    return .{ .string = Value.String.borrowed(path) };
 }
 
 fn native_ftp_chdir(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
-    const line = try std.fmt.allocPrint(ctx.allocator, "CWD {s}", .{args[1].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "CWD {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(line);
     return .{ .bool = try cmdResult(ctx, args, line, &[_]u16{ 200, 250 }) };
 }
@@ -203,26 +203,26 @@ fn native_ftp_mkdir(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     const o = getHandle(args) orelse return .{ .bool = false };
     const fd = getFd(o) orelse return .{ .bool = false };
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
-    const line = try std.fmt.allocPrint(ctx.allocator, "MKD {s}", .{args[1].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "MKD {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(line);
     const r = runCmd(ctx.allocator, fd, line) catch return .{ .bool = false };
     defer ctx.allocator.free(r.body);
     if (r.code != 257) return .{ .bool = false };
-    const path = try ctx.allocator.dupe(u8, args[1].string);
+    const path = try ctx.allocator.dupe(u8, args[1].string.bytes());
     try ctx.strings.append(ctx.allocator, path);
-    return .{ .string = path };
+    return .{ .string = Value.String.borrowed(path) };
 }
 
 fn native_ftp_rmdir(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
-    const line = try std.fmt.allocPrint(ctx.allocator, "RMD {s}", .{args[1].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "RMD {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(line);
     return .{ .bool = try cmdResult(ctx, args, line, &[_]u16{250}) };
 }
 
 fn native_ftp_delete(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
-    const line = try std.fmt.allocPrint(ctx.allocator, "DELE {s}", .{args[1].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "DELE {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(line);
     return .{ .bool = try cmdResult(ctx, args, line, &[_]u16{250}) };
 }
@@ -231,12 +231,12 @@ fn native_ftp_rename(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     const o = getHandle(args) orelse return .{ .bool = false };
     const fd = getFd(o) orelse return .{ .bool = false };
     if (args.len < 3 or args[1] != .string or args[2] != .string) return .{ .bool = false };
-    const l1 = try std.fmt.allocPrint(ctx.allocator, "RNFR {s}", .{args[1].string});
+    const l1 = try std.fmt.allocPrint(ctx.allocator, "RNFR {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(l1);
     const r1 = runCmd(ctx.allocator, fd, l1) catch return .{ .bool = false };
     defer ctx.allocator.free(r1.body);
     if (r1.code != 350) return .{ .bool = false };
-    const l2 = try std.fmt.allocPrint(ctx.allocator, "RNTO {s}", .{args[2].string});
+    const l2 = try std.fmt.allocPrint(ctx.allocator, "RNTO {s}", .{args[2].string.bytes()});
     defer ctx.allocator.free(l2);
     const r2 = runCmd(ctx.allocator, fd, l2) catch return .{ .bool = false };
     defer ctx.allocator.free(r2.body);
@@ -248,7 +248,7 @@ fn native_ftp_size(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     const fd = getFd(o) orelse return .{ .int = -1 };
     if (args.len < 2 or args[1] != .string) return .{ .int = -1 };
     _ = runCmd(ctx.allocator, fd, "TYPE I") catch return .{ .int = -1 };
-    const line = try std.fmt.allocPrint(ctx.allocator, "SIZE {s}", .{args[1].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "SIZE {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(line);
     const r = runCmd(ctx.allocator, fd, line) catch return .{ .int = -1 };
     defer ctx.allocator.free(r.body);
@@ -265,7 +265,7 @@ fn native_ftp_mdtm(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     const o = getHandle(args) orelse return .{ .int = -1 };
     const fd = getFd(o) orelse return .{ .int = -1 };
     if (args.len < 2 or args[1] != .string) return .{ .int = -1 };
-    const line = try std.fmt.allocPrint(ctx.allocator, "MDTM {s}", .{args[1].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "MDTM {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(line);
     const r = runCmd(ctx.allocator, fd, line) catch return .{ .int = -1 };
     defer ctx.allocator.free(r.body);
@@ -355,7 +355,7 @@ fn dataTransfer(ctx: *NativeContext, ctrl: posix.socket_t, list_cmd: []const u8,
 fn native_ftp_nlist(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const o = getHandle(args) orelse return .{ .bool = false };
     const fd = getFd(o) orelse return .{ .bool = false };
-    const path = if (args.len > 1 and args[1] == .string) args[1].string else ".";
+    const path = if (args.len > 1 and args[1] == .string) args[1].string.bytes() else ".";
     const line = try std.fmt.allocPrint(ctx.allocator, "NLST {s}", .{path});
     defer ctx.allocator.free(line);
     const data = dataTransfer(ctx, fd, line, "TYPE A") catch return .{ .bool = false };
@@ -365,7 +365,7 @@ fn native_ftp_nlist(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     while (iter.next()) |item| {
         const s = try ctx.allocator.dupe(u8, item);
         try ctx.strings.append(ctx.allocator, s);
-        try arr.set(ctx.allocator, .{ .int = arr.next_int_key }, .{ .string = s });
+        try arr.set(ctx.allocator, .{ .int = arr.next_int_key }, .{ .string = Value.String.borrowed(s) });
     }
     return .{ .array = arr };
 }
@@ -373,7 +373,7 @@ fn native_ftp_nlist(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 fn native_ftp_rawlist(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const o = getHandle(args) orelse return .{ .bool = false };
     const fd = getFd(o) orelse return .{ .bool = false };
-    const path = if (args.len > 1 and args[1] == .string) args[1].string else ".";
+    const path = if (args.len > 1 and args[1] == .string) args[1].string.bytes() else ".";
     const line = try std.fmt.allocPrint(ctx.allocator, "LIST {s}", .{path});
     defer ctx.allocator.free(line);
     const data = dataTransfer(ctx, fd, line, "TYPE A") catch return .{ .bool = false };
@@ -383,7 +383,7 @@ fn native_ftp_rawlist(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     while (iter.next()) |item| {
         const s = try ctx.allocator.dupe(u8, item);
         try ctx.strings.append(ctx.allocator, s);
-        try arr.set(ctx.allocator, .{ .int = arr.next_int_key }, .{ .string = s });
+        try arr.set(ctx.allocator, .{ .int = arr.next_int_key }, .{ .string = Value.String.borrowed(s) });
     }
     return .{ .array = arr };
 }
@@ -392,14 +392,14 @@ fn native_ftp_raw(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const o = getHandle(args) orelse return .{ .bool = false };
     const fd = getFd(o) orelse return .{ .bool = false };
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
-    const r = runCmd(ctx.allocator, fd, args[1].string) catch return .{ .bool = false };
+    const r = runCmd(ctx.allocator, fd, args[1].string.bytes()) catch return .{ .bool = false };
     defer ctx.allocator.free(r.body);
     const arr = try ctx.createArray();
     var iter = std.mem.tokenizeAny(u8, r.body, "\r\n");
     while (iter.next()) |item| {
         const s = try ctx.allocator.dupe(u8, item);
         try ctx.strings.append(ctx.allocator, s);
-        try arr.set(ctx.allocator, .{ .int = arr.next_int_key }, .{ .string = s });
+        try arr.set(ctx.allocator, .{ .int = arr.next_int_key }, .{ .string = Value.String.borrowed(s) });
     }
     return .{ .array = arr };
 }
@@ -410,11 +410,11 @@ fn native_ftp_get(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[1] != .string or args[2] != .string) return .{ .bool = false };
     const mode: i64 = if (args.len > 3 and args[3] == .int) args[3].int else 2; // FTP_BINARY
     const tcmd: []const u8 = if (mode == 1) "TYPE A" else "TYPE I";
-    const line = try std.fmt.allocPrint(ctx.allocator, "RETR {s}", .{args[2].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "RETR {s}", .{args[2].string.bytes()});
     defer ctx.allocator.free(line);
     const data = dataTransfer(ctx, fd, line, tcmd) catch return .{ .bool = false };
     defer ctx.allocator.free(data);
-    var f = std.fs.cwd().createFile(args[1].string, .{ .truncate = true }) catch return .{ .bool = false };
+    var f = std.fs.cwd().createFile(args[1].string.bytes(), .{ .truncate = true }) catch return .{ .bool = false };
     defer f.close();
     f.writeAll(data) catch return .{ .bool = false };
     return .{ .bool = true };
@@ -429,14 +429,14 @@ fn native_ftp_put(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     _ = runCmd(ctx.allocator, fd, tcmd) catch return .{ .bool = false };
     const data_fd = enterPasv(ctx.allocator, fd) catch return .{ .bool = false };
     defer posix.close(data_fd);
-    const line = try std.fmt.allocPrint(ctx.allocator, "STOR {s}", .{args[1].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "STOR {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(line);
     sendCmd(fd, line) catch return .{ .bool = false };
     const r1 = readReply(ctx.allocator, fd) catch return .{ .bool = false };
     defer ctx.allocator.free(r1.body);
     if (r1.code != 150 and r1.code != 125) return .{ .bool = false };
 
-    var f = std.fs.cwd().openFile(args[2].string, .{}) catch return .{ .bool = false };
+    var f = std.fs.cwd().openFile(args[2].string.bytes(), .{}) catch return .{ .bool = false };
     defer f.close();
     var buf: [8192]u8 = undefined;
     while (true) {
@@ -469,7 +469,7 @@ fn native_ftp_systype(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     const sys = iter.next() orelse return .{ .bool = false };
     const s = try ctx.allocator.dupe(u8, sys);
     try ctx.strings.append(ctx.allocator, s);
-    return .{ .string = s };
+    return .{ .string = Value.String.borrowed(s) };
 }
 
 fn native_ftp_set_option(_: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -488,21 +488,21 @@ fn native_ftp_alloc(_: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn native_ftp_site(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
-    const line = try std.fmt.allocPrint(ctx.allocator, "SITE {s}", .{args[1].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "SITE {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(line);
     return .{ .bool = try cmdResult(ctx, args, line, &[_]u16{ 200, 250 }) };
 }
 
 fn native_ftp_exec(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
-    const line = try std.fmt.allocPrint(ctx.allocator, "SITE EXEC {s}", .{args[1].string});
+    const line = try std.fmt.allocPrint(ctx.allocator, "SITE EXEC {s}", .{args[1].string.bytes()});
     defer ctx.allocator.free(line);
     return .{ .bool = try cmdResult(ctx, args, line, &[_]u16{ 200, 250 }) };
 }
 
 fn native_ftp_chmod(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[1] != .int or args[2] != .string) return .{ .bool = false };
-    const line = try std.fmt.allocPrint(ctx.allocator, "SITE CHMOD {o} {s}", .{ @as(u64, @intCast(args[1].int)), args[2].string });
+    const line = try std.fmt.allocPrint(ctx.allocator, "SITE CHMOD {o} {s}", .{ @as(u64, @intCast(args[1].int)), args[2].string.bytes() });
     defer ctx.allocator.free(line);
     if (try cmdResult(ctx, args, line, &[_]u16{ 200, 250 })) return .{ .int = args[1].int };
     return .{ .bool = false };

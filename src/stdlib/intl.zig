@@ -232,7 +232,7 @@ fn normalizerNormalize(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     const form: i64 = if (args.len > 1 and args[1] == .int) args[1].int else 1;
     const norm = getNormalizer(form) orelse return .{ .bool = false };
 
-    const u16src = try utf8ToU16(ctx, args[0].string);
+    const u16src = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(u16src);
 
     const cap: i32 = @intCast(u16src.len * 2 + 8);
@@ -243,14 +243,14 @@ fn normalizerNormalize(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     if (intlRecord(ctx.vm, status)) return .{ .bool = false };
 
     const out = try u16ToUtf8(ctx, buf[0..@intCast(actual)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn normalizerIsNormalized(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const form: i64 = if (args.len > 1 and args[1] == .int) args[1].int else 1;
     const norm = getNormalizer(form) orelse return .{ .bool = false };
-    const u16src = try utf8ToU16(ctx, args[0].string);
+    const u16src = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(u16src);
     var status: UErrorCode = U_ZERO_ERROR;
     const ok = zphp_unorm2_isNormalized(norm, u16src.ptr, @intCast(u16src.len), &status);
@@ -262,14 +262,14 @@ fn normalizerIsNormalized(ctx: *NativeContext, args: []const Value) RuntimeError
 
 fn localeGetDefault(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const def = zphp_uloc_getDefault();
-    return .{ .string = try dupString(ctx, def[0..cstrLen(def)]) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, def[0..cstrLen(def)])) };
 }
 
 fn localeSetDefault(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     var buf: [256]u8 = undefined;
-    const n = @min(args[0].string.len, buf.len - 1);
-    @memcpy(buf[0..n], args[0].string[0..n]);
+    const n = @min(args[0].string.bytes().len, buf.len - 1);
+    @memcpy(buf[0..n], args[0].string.bytes()[0..n]);
     buf[n] = 0;
     var status: UErrorCode = U_ZERO_ERROR;
     zphp_uloc_setDefault(@ptrCast(&buf), &status);
@@ -280,12 +280,12 @@ const KeywordFn = *const fn (loc: [*:0]const u8, buf: [*]u8, cap: i32, err: *UEr
 
 fn locKeywordCall(ctx: *NativeContext, args: []const Value, comptime fn_ptr: KeywordFn) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
-    const loc_z = try dupZ(ctx, args[0].string);
+    const loc_z = try dupZ(ctx, args[0].string.bytes());
     var buf: [128]u8 = undefined;
     var status: UErrorCode = U_ZERO_ERROR;
     const n = fn_ptr(loc_z.ptr, &buf, @intCast(buf.len), &status);
-    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = try dupString(ctx, "") };
-    return .{ .string = try dupString(ctx, buf[0..@intCast(n)]) };
+    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, buf[0..@intCast(n)])) };
 }
 
 fn localeGetPrimaryLanguage(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -299,33 +299,41 @@ fn localeGetScript(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 }
 fn localeCanonicalize(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
-    const loc_z = try dupZ(ctx, args[0].string);
+    const loc_z = try dupZ(ctx, args[0].string.bytes());
     var buf: [256]u8 = undefined;
     var status: UErrorCode = U_ZERO_ERROR;
     const n = zphp_uloc_canonicalize(loc_z.ptr, &buf, @intCast(buf.len), &status);
-    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = try dupString(ctx, "") };
-    return .{ .string = try dupString(ctx, buf[0..@intCast(n)]) };
+    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, buf[0..@intCast(n)])) };
 }
 
 const DisplayFn = *const fn (loc: [*:0]const u8, inLoc: [*:0]const u8, buf: [*]UChar, cap: i32, err: *UErrorCode) callconv(.c) i32;
 
 fn displayCall(ctx: *NativeContext, args: []const Value, comptime fn_ptr: DisplayFn) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
-    const tgt_z = try dupZ(ctx, args[0].string);
-    const in_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string) try dupZ(ctx, args[1].string) else null;
+    const tgt_z = try dupZ(ctx, args[0].string.bytes());
+    const in_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string) try dupZ(ctx, args[1].string.bytes()) else null;
     const in_ptr: [*:0]const u8 = if (in_z) |z| z.ptr else zphp_uloc_getDefault();
     var buf: [256]UChar = undefined;
     var status: UErrorCode = U_ZERO_ERROR;
     const n = fn_ptr(tgt_z.ptr, in_ptr, &buf, @intCast(buf.len), &status);
-    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = try dupString(ctx, "") };
+    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     const out = try u16ToUtf8(ctx, buf[0..@intCast(n)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
-fn localeGetDisplayName(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return displayCall(ctx, args, zphp_uloc_getDisplayName); }
-fn localeGetDisplayLanguage(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return displayCall(ctx, args, zphp_uloc_getDisplayLanguage); }
-fn localeGetDisplayRegion(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return displayCall(ctx, args, zphp_uloc_getDisplayCountry); }
-fn localeGetDisplayScript(ctx: *NativeContext, args: []const Value) RuntimeError!Value { return displayCall(ctx, args, zphp_uloc_getDisplayScript); }
+fn localeGetDisplayName(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return displayCall(ctx, args, zphp_uloc_getDisplayName);
+}
+fn localeGetDisplayLanguage(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return displayCall(ctx, args, zphp_uloc_getDisplayLanguage);
+}
+fn localeGetDisplayRegion(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return displayCall(ctx, args, zphp_uloc_getDisplayCountry);
+}
+fn localeGetDisplayScript(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
+    return displayCall(ctx, args, zphp_uloc_getDisplayScript);
+}
 
 // ---------------- Collator ----------------
 
@@ -346,18 +354,18 @@ fn openCollatorFor(ctx: *NativeContext, locale: []const u8) !?*UCollator {
 fn collConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
-    const c = (try openCollatorFor(ctx, args[0].string)) orelse return .null;
+    const c = (try openCollatorFor(ctx, args[0].string.bytes())) orelse return .null;
     try obj.set(ctx.allocator, "__coll", .{ .int = @intCast(@intFromPtr(c)) });
-    try obj.set(ctx.allocator, "__locale", .{ .string = try dupString(ctx, args[0].string) });
+    try obj.set(ctx.allocator, "__locale", .{ .string = args[0].string });
     return .null;
 }
 
 fn collCreateStatic(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
     const obj = try ctx.createObject("Collator");
-    const c = (try openCollatorFor(ctx, args[0].string)) orelse return .null;
+    const c = (try openCollatorFor(ctx, args[0].string.bytes())) orelse return .null;
     try obj.set(ctx.allocator, "__coll", .{ .int = @intCast(@intFromPtr(c)) });
-    try obj.set(ctx.allocator, "__locale", .{ .string = try dupString(ctx, args[0].string) });
+    try obj.set(ctx.allocator, "__locale", .{ .string = args[0].string });
     return .{ .object = obj };
 }
 
@@ -365,9 +373,9 @@ fn collCompare(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const c = getCollator(obj) orelse return .{ .bool = false };
-    const a = try utf8ToU16(ctx, args[0].string);
+    const a = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(a);
-    const b = try utf8ToU16(ctx, args[1].string);
+    const b = try utf8ToU16(ctx, args[1].string.bytes());
     defer ctx.allocator.free(b);
     return .{ .int = @intCast(zphp_ucol_strcoll(c, a.ptr, @intCast(a.len), b.ptr, @intCast(b.len))) };
 }
@@ -387,10 +395,10 @@ fn collGetStrength(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn collGetLocale(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = try dupString(ctx, "") };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     const v = obj.get("__locale");
     if (v == .string) return v;
-    return .{ .string = try dupString(ctx, "") };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
 }
 
 fn collSort(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -404,8 +412,8 @@ fn collSort(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     const lessThan = struct {
         fn lt(sc: *SortContext, ka: PhpArray.Entry, kb: PhpArray.Entry) bool {
-            const sa = if (ka.value == .string) ka.value.string else "";
-            const sb = if (kb.value == .string) kb.value.string else "";
+            const sa = if (ka.value == .string) ka.value.string.bytes() else "";
+            const sb = if (kb.value == .string) kb.value.string.bytes() else "";
             const ua = utf8ToU16(sc.ctx, sa) catch return false;
             defer sc.ctx.allocator.free(ua);
             const ub = utf8ToU16(sc.ctx, sb) catch return false;
@@ -454,8 +462,8 @@ fn nfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
     const style: i32 = if (args[1] == .int) @intCast(args[1].int) else 1;
-    const pattern: ?[]const u8 = if (args.len >= 3 and args[2] == .string) args[2].string else null;
-    const f = (try openNumFmt(ctx, args[0].string, style, pattern)) orelse return .null;
+    const pattern: ?[]const u8 = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else null;
+    const f = (try openNumFmt(ctx, args[0].string.bytes(), style, pattern)) orelse return .null;
     try obj.set(ctx.allocator, "__nfmt", .{ .int = @intCast(@intFromPtr(f)) });
     return .null;
 }
@@ -464,8 +472,8 @@ fn nfCreateStatic(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return .null;
     const obj = try ctx.createObject("NumberFormatter");
     const style: i32 = if (args[1] == .int) @intCast(args[1].int) else 1;
-    const pattern: ?[]const u8 = if (args.len >= 3 and args[2] == .string) args[2].string else null;
-    const f = (try openNumFmt(ctx, args[0].string, style, pattern)) orelse return .null;
+    const pattern: ?[]const u8 = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else null;
+    const f = (try openNumFmt(ctx, args[0].string.bytes(), style, pattern)) orelse return .null;
     try obj.set(ctx.allocator, "__nfmt", .{ .int = @intCast(@intFromPtr(f)) });
     return .{ .object = obj };
 }
@@ -486,7 +494,7 @@ fn nfFormat(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     }
     if (intlRecord(ctx.vm, status)) return .{ .bool = false };
     const out = try u16ToUtf8(ctx, buf[0..@intCast(n)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn nfFormatCurrency(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -498,21 +506,21 @@ fn nfFormatCurrency(ctx: *NativeContext, args: []const Value) RuntimeError!Value
         .float => |fl| fl,
         else => return .{ .bool = false },
     };
-    const ccy_u16 = try utf8ToU16(ctx, args[1].string);
+    const ccy_u16 = try utf8ToU16(ctx, args[1].string.bytes());
     defer ctx.allocator.free(ccy_u16);
     var buf: [128]UChar = undefined;
     var status: UErrorCode = U_ZERO_ERROR;
     const n = zphp_unum_formatDoubleCurrency(f, amount, ccy_u16.ptr, &buf, @intCast(buf.len), null, &status);
     if (intlRecord(ctx.vm, status)) return .{ .bool = false };
     const out = try u16ToUtf8(ctx, buf[0..@intCast(n)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn nfParse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const f = getNumFmt(obj) orelse return .{ .bool = false };
-    const u16src = try utf8ToU16(ctx, args[0].string);
+    const u16src = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(u16src);
     var pos: i32 = 0;
     var status: UErrorCode = U_ZERO_ERROR;
@@ -554,7 +562,7 @@ fn getTranslit(obj: *const PhpObject) ?*UTransliterator {
 
 fn transCreateStatic(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
-    const id_u16 = try utf8ToU16(ctx, args[0].string);
+    const id_u16 = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(id_u16);
     var status: UErrorCode = U_ZERO_ERROR;
     const dir: i32 = if (args.len > 1 and args[1] == .int and args[1].int == 1) 1 else 0;
@@ -562,7 +570,7 @@ fn transCreateStatic(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     if (status > U_ZERO_ERROR or t == null) return .null;
     const obj = try ctx.createObject("Transliterator");
     try obj.set(ctx.allocator, "__trans", .{ .int = @intCast(@intFromPtr(t.?)) });
-    try obj.set(ctx.allocator, "id", .{ .string = try dupString(ctx, args[0].string) });
+    try obj.set(ctx.allocator, "id", .{ .string = args[0].string });
     return .{ .object = obj };
 }
 
@@ -570,7 +578,7 @@ fn transTransliterate(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const t = getTranslit(obj) orelse return .{ .bool = false };
-    const u16src = try utf8ToU16(ctx, args[0].string);
+    const u16src = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(u16src);
 
     const cap: i32 = @intCast(u16src.len * 4 + 16);
@@ -584,7 +592,7 @@ fn transTransliterate(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     zphp_utrans_transUChars(t, buf.ptr, &text_len, cap, 0, &limit, &status);
     if (intlRecord(ctx.vm, status)) return .{ .bool = false };
     const out = try u16ToUtf8(ctx, buf[0..@intCast(text_len)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 // ---------------- IntlDateFormatter ----------------
@@ -627,11 +635,11 @@ fn dfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const date_style: i32 = if (args[1] == .int) @intCast(args[1].int) else 0;
     const time_style: i32 = if (args[2] == .int) @intCast(args[2].int) else 0;
-    const tz_opt: ?[]const u8 = if (args.len > 3 and args[3] == .string and args[3].string.len > 0) args[3].string else defaultTzName(ctx);
+    const tz_opt: ?[]const u8 = if (args.len > 3 and args[3] == .string and args[3].string.bytes().len > 0) args[3].string.bytes() else defaultTzName(ctx);
     // skip args[4] (calendar) for now
-    const pat_opt: ?[]const u8 = if (args.len > 5 and args[5] == .string and args[5].string.len > 0) args[5].string else null;
+    const pat_opt: ?[]const u8 = if (args.len > 5 and args[5] == .string and args[5].string.bytes().len > 0) args[5].string.bytes() else null;
 
-    const f = (try openDateFmt(ctx, args[0].string, date_style, time_style, tz_opt, pat_opt)) orelse return .null;
+    const f = (try openDateFmt(ctx, args[0].string.bytes(), date_style, time_style, tz_opt, pat_opt)) orelse return .null;
     try obj.set(ctx.allocator, "__dfmt", .{ .int = @intCast(@intFromPtr(f)) });
     return .null;
 }
@@ -641,9 +649,9 @@ fn dfCreateStatic(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = try ctx.createObject("IntlDateFormatter");
     const date_style: i32 = if (args[1] == .int) @intCast(args[1].int) else 0;
     const time_style: i32 = if (args[2] == .int) @intCast(args[2].int) else 0;
-    const tz_opt: ?[]const u8 = if (args.len > 3 and args[3] == .string and args[3].string.len > 0) args[3].string else defaultTzName(ctx);
-    const pat_opt: ?[]const u8 = if (args.len > 5 and args[5] == .string and args[5].string.len > 0) args[5].string else null;
-    const f = (try openDateFmt(ctx, args[0].string, date_style, time_style, tz_opt, pat_opt)) orelse return .null;
+    const tz_opt: ?[]const u8 = if (args.len > 3 and args[3] == .string and args[3].string.bytes().len > 0) args[3].string.bytes() else defaultTzName(ctx);
+    const pat_opt: ?[]const u8 = if (args.len > 5 and args[5] == .string and args[5].string.bytes().len > 0) args[5].string.bytes() else null;
+    const f = (try openDateFmt(ctx, args[0].string.bytes(), date_style, time_style, tz_opt, pat_opt)) orelse return .null;
     try obj.set(ctx.allocator, "__dfmt", .{ .int = @intCast(@intFromPtr(f)) });
     return .{ .object = obj };
 }
@@ -669,14 +677,14 @@ fn dfFormat(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const n = zphp_udat_format(f, millis, &buf, @intCast(buf.len), null, &status);
     if (intlRecord(ctx.vm, status)) return .{ .bool = false };
     const out = try u16ToUtf8(ctx, buf[0..@intCast(n)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn dfParse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const f = getDateFmt(obj) orelse return .{ .bool = false };
-    const u16src = try utf8ToU16(ctx, args[0].string);
+    const u16src = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(u16src);
     var pos: i32 = 0;
     var status: UErrorCode = U_ZERO_ERROR;
@@ -693,14 +701,14 @@ fn dfGetPattern(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const n = zphp_udat_toPattern(f, 0, &buf, @intCast(buf.len), &status);
     if (intlRecord(ctx.vm, status)) return .{ .bool = false };
     const out = try u16ToUtf8(ctx, buf[0..@intCast(n)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn dfSetPattern(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const f = getDateFmt(obj) orelse return .{ .bool = false };
-    const u16src = try utf8ToU16(ctx, args[0].string);
+    const u16src = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(u16src);
     zphp_udat_applyPattern(f, 0, u16src.ptr, @intCast(u16src.len));
     return .{ .bool = true };
@@ -720,7 +728,7 @@ fn idnConvert(ctx: *NativeContext, args: []const Value, to_ascii: bool) RuntimeE
     defer ctx.allocator.free(info_buf);
     zphp_uidna_info_init(@ptrCast(info_buf.ptr));
 
-    const u16src = try utf8ToU16(ctx, args[0].string);
+    const u16src = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(u16src);
     var dest: [512]UChar = undefined;
     status = U_ZERO_ERROR;
@@ -730,7 +738,7 @@ fn idnConvert(ctx: *NativeContext, args: []const Value, to_ascii: bool) RuntimeE
         zphp_uidna_nameToUnicode(idna, u16src.ptr, @intCast(u16src.len), &dest, @intCast(dest.len), @ptrCast(info_buf.ptr), &status);
     if (status > U_ZERO_ERROR or n < 0) return .{ .bool = false };
     const out = try u16ToUtf8(ctx, dest[0..@intCast(n)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn idnToAscii(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -749,7 +757,7 @@ fn buildArgEntries(ctx: *NativeContext, arr: *PhpArray, owned_u16: *std.ArrayLis
         var ent = ArgEntry{ .type = ARG_STRING, .ival = 0, .dval = 0, .sval = null, .slen = 0, .name = null, .name_len = 0 };
 
         if (e.key == .string) {
-            const name_u16 = try utf8ToU16(ctx, e.key.string);
+            const name_u16 = try utf8ToU16(ctx, e.key.string.bytes());
             try owned_u16.append(ctx.allocator, name_u16);
             ent.name = name_u16.ptr;
             ent.name_len = @intCast(name_u16.len);
@@ -766,7 +774,7 @@ fn buildArgEntries(ctx: *NativeContext, arr: *PhpArray, owned_u16: *std.ArrayLis
             },
             .string => |s| {
                 ent.type = ARG_STRING;
-                const u16s = try utf8ToU16(ctx, s);
+                const u16s = try utf8ToU16(ctx, s.bytes());
                 try owned_u16.append(ctx.allocator, u16s);
                 ent.sval = u16s.ptr;
                 ent.slen = @intCast(u16s.len);
@@ -806,7 +814,10 @@ fn msgFormatCommon(ctx: *NativeContext, locale: []const u8, pattern: []const u8,
     defer ctx.allocator.free(arg_entries);
 
     var any_named = false;
-    for (arr.entries.items) |e| if (e.key == .string) { any_named = true; break; };
+    for (arr.entries.items) |e| if (e.key == .string) {
+        any_named = true;
+        break;
+    };
 
     var status: UErrorCode = U_ZERO_ERROR;
     var buf: [4096]UChar = undefined;
@@ -817,22 +828,22 @@ fn msgFormatCommon(ctx: *NativeContext, locale: []const u8, pattern: []const u8,
 
     if (status > U_ZERO_ERROR or n < 0) return .{ .bool = false };
     const out = try u16ToUtf8(ctx, buf[0..@intCast(n)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn mfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .null;
     const obj = getThis(ctx) orelse return .null;
-    try obj.set(ctx.allocator, "__locale", .{ .string = try dupString(ctx, args[0].string) });
-    try obj.set(ctx.allocator, "__pattern", .{ .string = try dupString(ctx, args[1].string) });
+    try obj.set(ctx.allocator, "__locale", .{ .string = args[0].string });
+    try obj.set(ctx.allocator, "__pattern", .{ .string = args[1].string });
     return .null;
 }
 
 fn mfCreate(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
     const obj = try ctx.createObject("MessageFormatter");
-    try obj.set(ctx.allocator, "__locale", .{ .string = try dupString(ctx, args[0].string) });
-    try obj.set(ctx.allocator, "__pattern", .{ .string = try dupString(ctx, args[1].string) });
+    try obj.set(ctx.allocator, "__locale", .{ .string = args[0].string });
+    try obj.set(ctx.allocator, "__pattern", .{ .string = args[1].string });
     return .{ .object = obj };
 }
 
@@ -842,33 +853,33 @@ fn mfFormat(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const loc = obj.get("__locale");
     const pat = obj.get("__pattern");
     if (loc != .string or pat != .string) return .{ .bool = false };
-    return msgFormatCommon(ctx, loc.string, pat.string, args[0]);
+    return msgFormatCommon(ctx, loc.string.bytes(), pat.string.bytes(), args[0]);
 }
 
 fn mfFormatMessage(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 3 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    return msgFormatCommon(ctx, args[0].string, args[1].string, args[2]);
+    return msgFormatCommon(ctx, args[0].string.bytes(), args[1].string.bytes(), args[2]);
 }
 
 fn mfGetPattern(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = try dupString(ctx, "") };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     const v = obj.get("__pattern");
     if (v == .string) return v;
-    return .{ .string = try dupString(ctx, "") };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
 }
 
 fn mfSetPattern(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
-    try obj.set(ctx.allocator, "__pattern", .{ .string = try dupString(ctx, args[0].string) });
+    try obj.set(ctx.allocator, "__pattern", .{ .string = args[0].string });
     return .{ .bool = true };
 }
 
 fn mfGetLocale(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = try dupString(ctx, "") };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     const v = obj.get("__locale");
     if (v == .string) return v;
-    return .{ .string = try dupString(ctx, "") };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
 }
 
 // ---------------- IntlCalendar ----------------
@@ -893,9 +904,9 @@ fn openCalendar(ctx: *NativeContext, tz_opt: ?[]const u8, locale: []const u8, ca
 
 fn calCreateInstance(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var tz_opt: ?[]const u8 = null;
-    if (args.len > 0 and args[0] == .string) tz_opt = args[0].string;
+    if (args.len > 0 and args[0] == .string) tz_opt = args[0].string.bytes();
     var locale: []const u8 = "";
-    if (args.len > 1 and args[1] == .string) locale = args[1].string;
+    if (args.len > 1 and args[1] == .string) locale = args[1].string.bytes();
     if (locale.len == 0) {
         const def = zphp_uloc_getDefault();
         locale = def[0..cstrLen(def)];
@@ -903,7 +914,7 @@ fn calCreateInstance(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     const cal = (try openCalendar(ctx, tz_opt, locale, 0)) orelse return .null;
     const obj = try ctx.createObject("IntlGregorianCalendar");
     try obj.set(ctx.allocator, "__cal", .{ .int = @intCast(@intFromPtr(cal)) });
-    try obj.set(ctx.allocator, "__locale", .{ .string = try dupString(ctx, locale) });
+    try obj.set(ctx.allocator, "__locale", .{ .string = Value.String.borrowed(try dupString(ctx, locale)) });
     return .{ .object = obj };
 }
 
@@ -918,16 +929,16 @@ fn calConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // tz/locale form
     if (args.len <= 2 and (args.len == 0 or args[0] == .string or args[0] == .null)) {
         var tz_opt: ?[]const u8 = null;
-        if (args.len > 0 and args[0] == .string) tz_opt = args[0].string;
+        if (args.len > 0 and args[0] == .string) tz_opt = args[0].string.bytes();
         var locale: []const u8 = "";
-        if (args.len > 1 and args[1] == .string) locale = args[1].string;
+        if (args.len > 1 and args[1] == .string) locale = args[1].string.bytes();
         if (locale.len == 0) {
             const def = zphp_uloc_getDefault();
             locale = def[0..cstrLen(def)];
         }
         const cal = (try openCalendar(ctx, tz_opt, locale, 0)) orelse return .null;
         try obj.set(ctx.allocator, "__cal", .{ .int = @intCast(@intFromPtr(cal)) });
-        try obj.set(ctx.allocator, "__locale", .{ .string = try dupString(ctx, locale) });
+        try obj.set(ctx.allocator, "__locale", .{ .string = Value.String.borrowed(try dupString(ctx, locale)) });
         return .null;
     }
 
@@ -936,7 +947,7 @@ fn calConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const def_locale = def_locale_ptr[0..cstrLen(def_locale_ptr)];
     const cal = (try openCalendar(ctx, null, def_locale, 0)) orelse return .null;
     try obj.set(ctx.allocator, "__cal", .{ .int = @intCast(@intFromPtr(cal)) });
-    try obj.set(ctx.allocator, "__locale", .{ .string = try dupString(ctx, def_locale) });
+    try obj.set(ctx.allocator, "__locale", .{ .string = Value.String.borrowed(try dupString(ctx, def_locale)) });
     if (args.len >= 3 and args[0] == .int and args[1] == .int and args[2] == .int) {
         var status: UErrorCode = U_ZERO_ERROR;
         if (args.len >= 6 and args[3] == .int and args[4] == .int and args[5] == .int) {
@@ -1063,16 +1074,16 @@ fn calGetTimeZoneId(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     var buf: [128]UChar = undefined;
     var status: UErrorCode = U_ZERO_ERROR;
     const n = zphp_ucal_getTimeZoneID(cal, &buf, @intCast(buf.len), &status);
-    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = try dupString(ctx, "") };
+    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     const out = try u16ToUtf8(ctx, buf[0..@intCast(n)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn calSetTimeZone(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const cal = getCal(obj) orelse return .{ .bool = false };
-    const u16src = try utf8ToU16(ctx, args[0].string);
+    const u16src = try utf8ToU16(ctx, args[0].string.bytes());
     defer ctx.allocator.free(u16src);
     var status: UErrorCode = U_ZERO_ERROR;
     zphp_ucal_setTimeZone(cal, u16src.ptr, @intCast(u16src.len), &status);
@@ -1112,8 +1123,8 @@ fn calGetType(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     var buf: [64]u8 = undefined;
     var status: UErrorCode = U_ZERO_ERROR;
     const n = zphp_ucal_getType(cal, &buf, @intCast(buf.len), &status);
-    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = try dupString(ctx, "") };
-    return .{ .string = try dupString(ctx, buf[0..@intCast(n)]) };
+    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, buf[0..@intCast(n)])) };
 }
 
 fn calGetLocale(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -1123,8 +1134,8 @@ fn calGetLocale(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var status: UErrorCode = U_ZERO_ERROR;
     const ltype: c_int = if (args.len > 0 and args[0] == .int) @intCast(args[0].int) else 0;
     const n = zphp_ucal_getLocaleByType(cal, ltype, &buf, @intCast(buf.len), &status);
-    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = try dupString(ctx, "") };
-    return .{ .string = try dupString(ctx, buf[0..@intCast(n)]) };
+    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, buf[0..@intCast(n)])) };
 }
 
 fn calGetActualMaximum(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -1199,32 +1210,32 @@ fn brkMakeInstance(ctx: *NativeContext, brk_type: c_int, locale: []const u8) Run
     const obj = try ctx.createObject("IntlBreakIterator");
     try obj.set(ctx.allocator, "__brk", .{ .int = @intCast(@intFromPtr(w)) });
     try obj.set(ctx.allocator, "__type", .{ .int = @intCast(brk_type) });
-    try obj.set(ctx.allocator, "__locale", .{ .string = try dupString(ctx, locale) });
+    try obj.set(ctx.allocator, "__locale", .{ .string = Value.String.borrowed(try dupString(ctx, locale)) });
     return .{ .object = obj };
 }
 
 fn brkCreateWord(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const locale = if (args.len > 0 and args[0] == .string) args[0].string else "";
+    const locale = if (args.len > 0 and args[0] == .string) args[0].string.bytes() else "";
     return brkMakeInstance(ctx, 1, locale);
 }
 
 fn brkCreateChar(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const locale = if (args.len > 0 and args[0] == .string) args[0].string else "";
+    const locale = if (args.len > 0 and args[0] == .string) args[0].string.bytes() else "";
     return brkMakeInstance(ctx, 0, locale);
 }
 
 fn brkCreateLine(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const locale = if (args.len > 0 and args[0] == .string) args[0].string else "";
+    const locale = if (args.len > 0 and args[0] == .string) args[0].string.bytes() else "";
     return brkMakeInstance(ctx, 2, locale);
 }
 
 fn brkCreateSentence(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const locale = if (args.len > 0 and args[0] == .string) args[0].string else "";
+    const locale = if (args.len > 0 and args[0] == .string) args[0].string.bytes() else "";
     return brkMakeInstance(ctx, 3, locale);
 }
 
 fn brkCreateTitle(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const locale = if (args.len > 0 and args[0] == .string) args[0].string else "";
+    const locale = if (args.len > 0 and args[0] == .string) args[0].string.bytes() else "";
     return brkMakeInstance(ctx, 4, locale);
 }
 
@@ -1233,12 +1244,12 @@ fn brkSetText(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const w = getBrk(obj) orelse return .{ .bool = false };
     var status: UErrorCode = U_ZERO_ERROR;
-    const txt = args[0].string;
+    const txt = args[0].string.bytes();
     const ptr: [*]const u8 = if (txt.len > 0) txt.ptr else @ptrCast(""[0..]);
     zphp_ubrk_setText(w, ptr, @intCast(txt.len), &status);
     if (intlRecord(ctx.vm, status)) return .{ .bool = false };
     // also store the text so getText round-trips without losing it
-    try obj.set(ctx.allocator, "__text", .{ .string = try dupString(ctx, txt) });
+    try obj.set(ctx.allocator, "__text", .{ .string = Value.String.borrowed(try dupString(ctx, txt)) });
     return .{ .bool = true };
 }
 
@@ -1246,7 +1257,7 @@ fn brkGetText(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const v = obj.get("__text");
     if (v == .string) return v;
-    return .{ .string = try dupString(ctx, "") };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
 }
 
 fn brkFirst(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -1326,14 +1337,14 @@ fn brkGetRuleStatus(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn brkGetLocale(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = try dupString(ctx, "") };
-    const w = getBrk(obj) orelse return .{ .string = try dupString(ctx, "") };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    const w = getBrk(obj) orelse return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
     var buf: [128]u8 = undefined;
     var status: UErrorCode = U_ZERO_ERROR;
     const ltype: c_int = if (args.len > 0 and args[0] == .int) @intCast(args[0].int) else 0;
     const n = zphp_ubrk_getLocaleByType(w, ltype, &buf, @intCast(buf.len), &status);
-    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = try dupString(ctx, "") };
-    return .{ .string = try dupString(ctx, buf[0..@intCast(n)]) };
+    if (status > U_ZERO_ERROR or n <= 0) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, buf[0..@intCast(n)])) };
 }
 
 // ---------------- registration ----------------
@@ -1396,7 +1407,7 @@ fn errorNameForCode(code: i32) []const u8 {
 }
 
 fn intlGetErrorMessage(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = errorNameForCode(ctx.vm.last_intl_error_code) };
+    return .{ .string = Value.String.borrowed(errorNameForCode(ctx.vm.last_intl_error_code)) };
 }
 
 fn intlGetErrorCode(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -1410,9 +1421,9 @@ fn intlIsFailure(_: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn intlErrorName(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 1) return .{ .string = "U_ZERO_ERROR" };
+    if (args.len < 1) return .{ .string = Value.String.borrowed("U_ZERO_ERROR") };
     const c: i32 = @intCast(Value.toInt(args[0]));
-    return .{ .string = errorNameForCode(c) };
+    return .{ .string = Value.String.borrowed(errorNameForCode(c)) };
 }
 
 pub const entries = .{
@@ -1454,7 +1465,7 @@ pub const entries = .{
 // BreakIterator and counts boundary crossings
 fn graphemeStrlen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const w = (try openBrk(ctx, 0, "")) orelse return .{ .bool = false };
     defer zphp_ubrk_close(w);
     var status: UErrorCode = U_ZERO_ERROR;
@@ -1469,7 +1480,7 @@ fn graphemeStrlen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 // grapheme-aware substring. start and length are in grapheme units.
 fn graphemeSubstr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const start: i64 = Value.toInt(args[1]);
     const length_arg: ?i64 = if (args.len >= 3 and args[2] != .null) Value.toInt(args[2]) else null;
 
@@ -1505,7 +1516,7 @@ fn graphemeSubstr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         if (end_byte < start_byte) end_byte = start_byte;
     }
 
-    return .{ .string = try dupString(ctx, s[start_byte..end_byte]) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, s[start_byte..end_byte])) };
 }
 
 // grapheme_extract($haystack, $size, $type, $offset): extract a run of grapheme
@@ -1516,7 +1527,7 @@ fn graphemeSubstr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 // value (e.g. symfony/string startsWith) are unaffected
 fn graphemeExtract(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const size: i64 = Value.toInt(args[1]);
     const extr_type: i64 = if (args.len >= 3 and args[2] != .null) Value.toInt(args[2]) else 0;
     const start_off: i64 = if (args.len >= 4 and args[3] != .null) Value.toInt(args[3]) else 0;
@@ -1561,7 +1572,7 @@ fn graphemeExtract(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
         taken += 1;
         chars += cl_chars;
     }
-    return .{ .string = try dupString(ctx, s[begin_byte..end_byte]) };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, s[begin_byte..end_byte])) };
 }
 
 // grapheme cluster boundary byte offsets for s: [0, ..., s.len]. count of
@@ -1632,8 +1643,8 @@ fn graphemeOffsetError(ctx: *NativeContext, comptime fname: []const u8) RuntimeE
 
 fn graphemePositionImpl(ctx: *NativeContext, args: []const Value, comptime fname: []const u8, case_insensitive: bool, reverse: bool) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return Value{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     const offset: i64 = if (args.len >= 3 and args[2] != .null) Value.toInt(args[2]) else 0;
 
     var bounds = (try collectGraphemeBounds(ctx, haystack)) orelse return Value{ .bool = false };
@@ -1706,13 +1717,13 @@ fn graphemeStrripos(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
 fn graphemeStrstrImpl(ctx: *NativeContext, args: []const Value, case_insensitive: bool) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return Value{ .bool = false };
-    const haystack = args[0].string;
-    const needle = args[1].string;
+    const haystack = args[0].string.bytes();
+    const needle = args[1].string.bytes();
     const before_needle = args.len >= 3 and args[2].isTruthy();
 
     if (needle.len == 0) {
-        if (before_needle) return .{ .string = try dupString(ctx, "") };
-        return .{ .string = try dupString(ctx, haystack) };
+        if (before_needle) return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
+        return .{ .string = Value.String.borrowed(try dupString(ctx, haystack)) };
     }
 
     var bounds = (try collectGraphemeBounds(ctx, haystack)) orelse return Value{ .bool = false };
@@ -1734,8 +1745,8 @@ fn graphemeStrstrImpl(ctx: *NativeContext, args: []const Value, case_insensitive
     var from: usize = 0;
     while (std.mem.indexOfPos(u8, h_search, from, n_search)) |p| : (from = p + 1) {
         if (graphemeIndexOfByte(bounds.items, p) == null) continue;
-        if (before_needle) return .{ .string = try dupString(ctx, haystack[0..p]) };
-        return .{ .string = try dupString(ctx, haystack[p..]) };
+        if (before_needle) return .{ .string = Value.String.borrowed(try dupString(ctx, haystack[0..p])) };
+        return .{ .string = Value.String.borrowed(try dupString(ctx, haystack[p..])) };
     }
     return .{ .bool = false };
 }
@@ -1750,7 +1761,7 @@ fn graphemeStristr(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 
 fn graphemeStrSplit(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const length: i64 = if (args.len >= 2 and args[1] != .null) Value.toInt(args[1]) else 1;
     if (length < 1 or length > 1073741823) {
         try ctx.vm.setPendingException("ValueError", "grapheme_str_split(): Argument #2 ($length) must be greater than 0 and less than or equal to 1073741823");
@@ -1768,7 +1779,7 @@ fn graphemeStrSplit(ctx: *NativeContext, args: []const Value) RuntimeError!Value
         const end = @min(i + step, n_g);
         const a: usize = @intCast(bounds.items[i]);
         const b: usize = @intCast(bounds.items[end]);
-        try arr.append(ctx.allocator, .{ .string = try dupString(ctx, s[a..b]) });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, s[a..b])) });
     }
     return .{ .array = arr };
 }
@@ -1798,7 +1809,7 @@ fn transliteratorTransliterate(ctx: *NativeContext, args: []const Value) Runtime
     }
 
     const t = getTranslit(t_obj.?) orelse return .{ .bool = false };
-    const u16src = try utf8ToU16(ctx, args[1].string);
+    const u16src = try utf8ToU16(ctx, args[1].string.bytes());
     defer ctx.allocator.free(u16src);
 
     const cap: i32 = @intCast(u16src.len * 4 + 16);
@@ -1812,7 +1823,7 @@ fn transliteratorTransliterate(ctx: *NativeContext, args: []const Value) Runtime
     zphp_utrans_transUChars(t, buf.ptr, &text_len, cap, 0, &limit, &status);
     if (intlRecord(ctx.vm, status)) return .{ .bool = false };
     const out = try u16ToUtf8(ctx, buf[0..@intCast(text_len)]);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 pub fn register(vm: *VM, a: Allocator) !void {
@@ -1871,8 +1882,8 @@ fn intlCharCodepoint(v: Value) ?u32 {
         if (v.int < 0 or v.int > 0x10ffff) return null;
         return @intCast(v.int);
     }
-    if (v != .string or v.string.len == 0) return null;
-    const s = v.string;
+    if (v != .string or v.string.bytes().len == 0) return null;
+    const s = v.string.bytes();
     const len = std.unicode.utf8ByteSequenceLength(s[0]) catch return null;
     if (len > s.len) return null;
     return std.unicode.utf8Decode(s[0..len]) catch null;
@@ -1891,7 +1902,7 @@ fn intlCharChr(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const n = std.unicode.utf8Encode(@intCast(cp), &buf) catch return .null;
     const owned = try ctx.allocator.dupe(u8, buf[0..n]);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn intlBoolPredicate(args: []const Value, comptime pred: fn (u32) bool) Value {
@@ -1903,34 +1914,76 @@ fn intlBoolPredicate(args: []const Value, comptime pred: fn (u32) bool) Value {
 fn isAlphaCp(cp: u32) bool {
     return (cp >= 'A' and cp <= 'Z') or (cp >= 'a' and cp <= 'z') or cp >= 0x80;
 }
-fn isDigitCp(cp: u32) bool { return cp >= '0' and cp <= '9'; }
-fn isAlnumCp(cp: u32) bool { return isAlphaCp(cp) or isDigitCp(cp); }
-fn isUpperCp(cp: u32) bool { return cp >= 'A' and cp <= 'Z'; }
-fn isLowerCp(cp: u32) bool { return cp >= 'a' and cp <= 'z'; }
+fn isDigitCp(cp: u32) bool {
+    return cp >= '0' and cp <= '9';
+}
+fn isAlnumCp(cp: u32) bool {
+    return isAlphaCp(cp) or isDigitCp(cp);
+}
+fn isUpperCp(cp: u32) bool {
+    return cp >= 'A' and cp <= 'Z';
+}
+fn isLowerCp(cp: u32) bool {
+    return cp >= 'a' and cp <= 'z';
+}
 fn isSpaceCp(cp: u32) bool {
     return cp == ' ' or cp == '\t' or cp == '\n' or cp == '\r' or cp == 0x0b or cp == 0x0c or cp == 0xa0 or cp == 0x1680 or (cp >= 0x2000 and cp <= 0x200a) or cp == 0x2028 or cp == 0x2029 or cp == 0x202f or cp == 0x205f or cp == 0x3000;
 }
-fn isCntrlCp(cp: u32) bool { return cp < 0x20 or cp == 0x7f or (cp >= 0x80 and cp < 0xa0); }
-fn isBlankCp(cp: u32) bool { return cp == ' ' or cp == '\t'; }
+fn isCntrlCp(cp: u32) bool {
+    return cp < 0x20 or cp == 0x7f or (cp >= 0x80 and cp < 0xa0);
+}
+fn isBlankCp(cp: u32) bool {
+    return cp == ' ' or cp == '\t';
+}
 fn isPunctCp(cp: u32) bool {
     return (cp >= 0x21 and cp <= 0x2f) or (cp >= 0x3a and cp <= 0x40) or (cp >= 0x5b and cp <= 0x60) or (cp >= 0x7b and cp <= 0x7e);
 }
-fn isGraphCp(cp: u32) bool { return cp > 0x20 and cp != 0x7f and !isCntrlCp(cp); }
-fn isPrintCp(cp: u32) bool { return isGraphCp(cp) or cp == ' '; }
-fn isXDigitCp(cp: u32) bool { return isDigitCp(cp) or (cp >= 'a' and cp <= 'f') or (cp >= 'A' and cp <= 'F'); }
+fn isGraphCp(cp: u32) bool {
+    return cp > 0x20 and cp != 0x7f and !isCntrlCp(cp);
+}
+fn isPrintCp(cp: u32) bool {
+    return isGraphCp(cp) or cp == ' ';
+}
+fn isXDigitCp(cp: u32) bool {
+    return isDigitCp(cp) or (cp >= 'a' and cp <= 'f') or (cp >= 'A' and cp <= 'F');
+}
 
-fn intlCharIsalpha(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isAlphaCp); }
-fn intlCharIsdigit(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isDigitCp); }
-fn intlCharIsalnum(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isAlnumCp); }
-fn intlCharIsupper(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isUpperCp); }
-fn intlCharIslower(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isLowerCp); }
-fn intlCharIsspace(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isSpaceCp); }
-fn intlCharIscntrl(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isCntrlCp); }
-fn intlCharIsblank(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isBlankCp); }
-fn intlCharIspunct(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isPunctCp); }
-fn intlCharIsgraph(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isGraphCp); }
-fn intlCharIsprint(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isPrintCp); }
-fn intlCharIsxdigit(_: *NativeContext, args: []const Value) RuntimeError!Value { return intlBoolPredicate(args, isXDigitCp); }
+fn intlCharIsalpha(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isAlphaCp);
+}
+fn intlCharIsdigit(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isDigitCp);
+}
+fn intlCharIsalnum(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isAlnumCp);
+}
+fn intlCharIsupper(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isUpperCp);
+}
+fn intlCharIslower(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isLowerCp);
+}
+fn intlCharIsspace(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isSpaceCp);
+}
+fn intlCharIscntrl(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isCntrlCp);
+}
+fn intlCharIsblank(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isBlankCp);
+}
+fn intlCharIspunct(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isPunctCp);
+}
+fn intlCharIsgraph(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isGraphCp);
+}
+fn intlCharIsprint(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isPrintCp);
+}
+fn intlCharIsxdigit(_: *NativeContext, args: []const Value) RuntimeError!Value {
+    return intlBoolPredicate(args, isXDigitCp);
+}
 
 fn intlCharTolower(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .null;
@@ -1975,14 +2028,14 @@ fn registerBreakIteratorClass(vm: *VM, a: Allocator) !void {
         try def.static_props.put(a, "DONE", .{ .int = -1 });
         // rule status tag ranges (PHP exposes these constants on the class)
         const tag_consts = .{
-            .{ "WORD_NONE", 0 }, .{ "WORD_NONE_LIMIT", 100 },
-            .{ "WORD_NUMBER", 100 }, .{ "WORD_NUMBER_LIMIT", 200 },
-            .{ "WORD_LETTER", 200 }, .{ "WORD_LETTER_LIMIT", 300 },
-            .{ "WORD_KANA", 300 }, .{ "WORD_KANA_LIMIT", 400 },
-            .{ "WORD_IDEO", 400 }, .{ "WORD_IDEO_LIMIT", 500 },
-            .{ "LINE_SOFT", 0 }, .{ "LINE_SOFT_LIMIT", 100 },
-            .{ "LINE_HARD", 100 }, .{ "LINE_HARD_LIMIT", 200 },
-            .{ "SENTENCE_TERM", 0 }, .{ "SENTENCE_TERM_LIMIT", 100 },
+            .{ "WORD_NONE", 0 },      .{ "WORD_NONE_LIMIT", 100 },
+            .{ "WORD_NUMBER", 100 },  .{ "WORD_NUMBER_LIMIT", 200 },
+            .{ "WORD_LETTER", 200 },  .{ "WORD_LETTER_LIMIT", 300 },
+            .{ "WORD_KANA", 300 },    .{ "WORD_KANA_LIMIT", 400 },
+            .{ "WORD_IDEO", 400 },    .{ "WORD_IDEO_LIMIT", 500 },
+            .{ "LINE_SOFT", 0 },      .{ "LINE_SOFT_LIMIT", 100 },
+            .{ "LINE_HARD", 100 },    .{ "LINE_HARD_LIMIT", 200 },
+            .{ "SENTENCE_TERM", 0 },  .{ "SENTENCE_TERM_LIMIT", 100 },
             .{ "SENTENCE_SEP", 100 }, .{ "SENTENCE_SEP_LIMIT", 200 },
         };
         inline for (tag_consts) |k| {
@@ -2045,27 +2098,27 @@ fn registerIntlCalendarClass(vm: *VM, a: Allocator) !void {
         // calendar field constants. these double as both class constants and
         // PHP integer values the user passes to get()/set()/add()
         const fields = .{
-            .{ "FIELD_ERA", 0 },             .{ "FIELD_YEAR", 1 },
-            .{ "FIELD_MONTH", 2 },           .{ "FIELD_WEEK_OF_YEAR", 3 },
-            .{ "FIELD_WEEK_OF_MONTH", 4 },   .{ "FIELD_DATE", 5 },
+            .{ "FIELD_ERA", 0 },                  .{ "FIELD_YEAR", 1 },
+            .{ "FIELD_MONTH", 2 },                .{ "FIELD_WEEK_OF_YEAR", 3 },
+            .{ "FIELD_WEEK_OF_MONTH", 4 },        .{ "FIELD_DATE", 5 },
             // PHP exposes FIELD_DAY_OF_MONTH as the canonical name (FIELD_DATE
             // is the ICU spelling); both have value 5
-            .{ "FIELD_DAY_OF_MONTH", 5 },
-            .{ "FIELD_DAY_OF_YEAR", 6 },     .{ "FIELD_DAY_OF_WEEK", 7 },
-            .{ "FIELD_DAY_OF_WEEK_IN_MONTH", 8 }, .{ "FIELD_AM_PM", 9 },
-            .{ "FIELD_HOUR", 10 },           .{ "FIELD_HOUR_OF_DAY", 11 },
-            .{ "FIELD_MINUTE", 12 },         .{ "FIELD_SECOND", 13 },
-            .{ "FIELD_MILLISECOND", 14 },    .{ "FIELD_ZONE_OFFSET", 15 },
-            .{ "FIELD_DST_OFFSET", 16 },     .{ "FIELD_YEAR_WOY", 17 },
-            .{ "FIELD_DOW_LOCAL", 18 },      .{ "FIELD_EXTENDED_YEAR", 19 },
-            .{ "FIELD_JULIAN_DAY", 20 },     .{ "FIELD_MILLISECONDS_IN_DAY", 21 },
-            .{ "FIELD_IS_LEAP_MONTH", 22 },
-            .{ "DOW_SUNDAY", 1 }, .{ "DOW_MONDAY", 2 }, .{ "DOW_TUESDAY", 3 },
-            .{ "DOW_WEDNESDAY", 4 }, .{ "DOW_THURSDAY", 5 }, .{ "DOW_FRIDAY", 6 },
-            .{ "DOW_SATURDAY", 7 },
-            .{ "DOW_TYPE_WEEKDAY", 0 }, .{ "DOW_TYPE_WEEKEND", 1 },
-            .{ "DOW_TYPE_WEEKEND_OFFSET", 2 }, .{ "DOW_TYPE_WEEKEND_CEASE", 3 },
-            .{ "WALLTIME_FIRST", 1 }, .{ "WALLTIME_LAST", 0 }, .{ "WALLTIME_NEXT_VALID", 2 },
+            .{ "FIELD_DAY_OF_MONTH", 5 },         .{ "FIELD_DAY_OF_YEAR", 6 },
+            .{ "FIELD_DAY_OF_WEEK", 7 },          .{ "FIELD_DAY_OF_WEEK_IN_MONTH", 8 },
+            .{ "FIELD_AM_PM", 9 },                .{ "FIELD_HOUR", 10 },
+            .{ "FIELD_HOUR_OF_DAY", 11 },         .{ "FIELD_MINUTE", 12 },
+            .{ "FIELD_SECOND", 13 },              .{ "FIELD_MILLISECOND", 14 },
+            .{ "FIELD_ZONE_OFFSET", 15 },         .{ "FIELD_DST_OFFSET", 16 },
+            .{ "FIELD_YEAR_WOY", 17 },            .{ "FIELD_DOW_LOCAL", 18 },
+            .{ "FIELD_EXTENDED_YEAR", 19 },       .{ "FIELD_JULIAN_DAY", 20 },
+            .{ "FIELD_MILLISECONDS_IN_DAY", 21 }, .{ "FIELD_IS_LEAP_MONTH", 22 },
+            .{ "DOW_SUNDAY", 1 },                 .{ "DOW_MONDAY", 2 },
+            .{ "DOW_TUESDAY", 3 },                .{ "DOW_WEDNESDAY", 4 },
+            .{ "DOW_THURSDAY", 5 },               .{ "DOW_FRIDAY", 6 },
+            .{ "DOW_SATURDAY", 7 },               .{ "DOW_TYPE_WEEKDAY", 0 },
+            .{ "DOW_TYPE_WEEKEND", 1 },           .{ "DOW_TYPE_WEEKEND_OFFSET", 2 },
+            .{ "DOW_TYPE_WEEKEND_CEASE", 3 },     .{ "WALLTIME_FIRST", 1 },
+            .{ "WALLTIME_LAST", 0 },              .{ "WALLTIME_NEXT_VALID", 2 },
         };
         inline for (fields) |k| {
             try def.constant_order.append(a, k[0]);
@@ -2135,10 +2188,9 @@ fn registerDateFormatterClass(vm: *VM, a: Allocator) !void {
     try def.methods.put(a, "setPattern", .{ .name = "setPattern", .arity = 1 });
 
     const dfs = .{
-        .{ "FULL", 0 }, .{ "LONG", 1 }, .{ "MEDIUM", 2 }, .{ "SHORT", 3 }, .{ "NONE", -1 },
-        .{ "RELATIVE_FULL", 128 }, .{ "RELATIVE_LONG", 129 },
-        .{ "RELATIVE_MEDIUM", 130 }, .{ "RELATIVE_SHORT", 131 },
-        .{ "GREGORIAN", 1 }, .{ "TRADITIONAL", 0 },
+        .{ "FULL", 0 },            .{ "LONG", 1 },            .{ "MEDIUM", 2 },            .{ "SHORT", 3 },            .{ "NONE", -1 },
+        .{ "RELATIVE_FULL", 128 }, .{ "RELATIVE_LONG", 129 }, .{ "RELATIVE_MEDIUM", 130 }, .{ "RELATIVE_SHORT", 131 }, .{ "GREGORIAN", 1 },
+        .{ "TRADITIONAL", 0 },
     };
     inline for (dfs) |k| {
         try def.constant_order.append(a, k[0]);
@@ -2162,10 +2214,15 @@ fn registerNormalizerClass(vm: *VM, a: Allocator) !void {
 
     const ncs = .{
         .{ "NONE", 1 },
-        .{ "FORM_D", 2 }, .{ "NFD", 2 },
-        .{ "FORM_KD", 3 }, .{ "NFKD", 3 },
-        .{ "FORM_C", 4 }, .{ "NFC", 4 }, .{ "FORM_DEFAULT", 4 },
-        .{ "FORM_KC", 5 }, .{ "NFKC", 5 },
+        .{ "FORM_D", 2 },
+        .{ "NFD", 2 },
+        .{ "FORM_KD", 3 },
+        .{ "NFKD", 3 },
+        .{ "FORM_C", 4 },
+        .{ "NFC", 4 },
+        .{ "FORM_DEFAULT", 4 },
+        .{ "FORM_KC", 5 },
+        .{ "NFKC", 5 },
         .{ "FORM_KC_CF", 48 },
     };
     inline for (ncs) |k| {
@@ -2182,10 +2239,10 @@ fn registerNormalizerClass(vm: *VM, a: Allocator) !void {
 fn registerLocaleClass(vm: *VM, a: Allocator) !void {
     var def = ClassDef{ .name = "Locale" };
     inline for (.{
-        "getDefault", "setDefault", "getPrimaryLanguage", "getRegion", "getScript",
-        "canonicalize", "getDisplayName", "getDisplayLanguage", "getDisplayRegion",
-        "getDisplayScript", "composeLocale", "parseLocale",
-        "getAllVariants", "getKeywords", "filterMatches", "lookup", "acceptFromHttp",
+        "getDefault",    "setDefault",     "getPrimaryLanguage", "getRegion",        "getScript",
+        "canonicalize",  "getDisplayName", "getDisplayLanguage", "getDisplayRegion", "getDisplayScript",
+        "composeLocale", "parseLocale",    "getAllVariants",     "getKeywords",      "filterMatches",
+        "lookup",        "acceptFromHttp",
     }) |m| {
         try def.methods.put(a, m, .{ .name = m, .arity = 0, .is_static = true });
     }
@@ -2215,36 +2272,36 @@ fn localeComposeLocale(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(ctx.allocator);
     // PHP's composeLocale stitches subtags in order: language[_script]_region[_variants]@keyword=value;...
-    const lang = arr.get(.{ .string = "language" });
-    if (lang == .string) try buf.appendSlice(ctx.allocator, lang.string);
-    const script = arr.get(.{ .string = "script" });
-    if (script == .string and script.string.len > 0) {
+    const lang = arr.get(.{ .string = Value.String.borrowed("language") });
+    if (lang == .string) try buf.appendSlice(ctx.allocator, lang.string.bytes());
+    const script = arr.get(.{ .string = Value.String.borrowed("script") });
+    if (script == .string and script.string.bytes().len > 0) {
         try buf.append(ctx.allocator, '_');
-        try buf.appendSlice(ctx.allocator, script.string);
+        try buf.appendSlice(ctx.allocator, script.string.bytes());
     }
-    const region = arr.get(.{ .string = "region" });
-    if (region == .string and region.string.len > 0) {
+    const region = arr.get(.{ .string = Value.String.borrowed("region") });
+    if (region == .string and region.string.bytes().len > 0) {
         try buf.append(ctx.allocator, '_');
-        try buf.appendSlice(ctx.allocator, region.string);
+        try buf.appendSlice(ctx.allocator, region.string.bytes());
     }
     var i: usize = 0;
     while (i < 16) : (i += 1) {
         var key_buf: [16]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "variant{d}", .{i}) catch break;
-        const v = arr.get(.{ .string = key });
-        if (v == .string and v.string.len > 0) {
+        const v = arr.get(.{ .string = Value.String.borrowed(key) });
+        if (v == .string and v.string.bytes().len > 0) {
             try buf.append(ctx.allocator, '_');
-            try buf.appendSlice(ctx.allocator, v.string);
+            try buf.appendSlice(ctx.allocator, v.string.bytes());
         } else break;
     }
     const owned = try ctx.allocator.dupe(u8, buf.items);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn localeParseLocale(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const out = try ctx.createArray();
     // split on '_' / '-' separators
     var parts: [8][]const u8 = undefined;
@@ -2263,26 +2320,29 @@ fn localeParseLocale(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
         parts[n] = s[start..];
         n += 1;
     }
-    if (n >= 1) try out.set(ctx.allocator, .{ .string = "language" }, .{ .string = parts[0] });
+    if (n >= 1) try out.set(ctx.allocator, .{ .string = Value.String.borrowed("language") }, .{ .string = Value.String.borrowed(parts[0]) });
     var idx: usize = 1;
     // 4-letter title-case token is the script (e.g. Latn, Cyrl)
     if (n > idx and parts[idx].len == 4) {
-        try out.set(ctx.allocator, .{ .string = "script" }, .{ .string = parts[idx] });
+        try out.set(ctx.allocator, .{ .string = Value.String.borrowed("script") }, .{ .string = Value.String.borrowed(parts[idx]) });
         idx += 1;
     }
     // next 2-letter or 3-digit token is the region
     if (n > idx and (parts[idx].len == 2 or parts[idx].len == 3)) {
-        try out.set(ctx.allocator, .{ .string = "region" }, .{ .string = parts[idx] });
+        try out.set(ctx.allocator, .{ .string = Value.String.borrowed("region") }, .{ .string = Value.String.borrowed(parts[idx]) });
         idx += 1;
     }
     // remaining are variants
     var vi: usize = 0;
-    while (idx < n) : ({ idx += 1; vi += 1; }) {
+    while (idx < n) : ({
+        idx += 1;
+        vi += 1;
+    }) {
         var key_buf: [16]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "variant{d}", .{vi}) catch break;
         const owned_key = try ctx.allocator.dupe(u8, key);
         try ctx.vm.strings.append(ctx.allocator, owned_key);
-        try out.set(ctx.allocator, .{ .string = owned_key }, .{ .string = parts[idx] });
+        try out.set(ctx.allocator, .{ .string = Value.String.borrowed(owned_key) }, .{ .string = Value.String.borrowed(parts[idx]) });
     }
     return .{ .array = out };
 }
@@ -2296,7 +2356,7 @@ fn localeGetAllVariants(ctx: *NativeContext, args: []const Value) RuntimeError!V
     while (i < 16) : (i += 1) {
         var key_buf: [16]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "variant{d}", .{i}) catch break;
-        const v = parsed.array.get(.{ .string = key });
+        const v = parsed.array.get(.{ .string = Value.String.borrowed(key) });
         if (v == .string) try out.append(ctx.allocator, v) else break;
     }
     return .{ .array = out };
@@ -2308,26 +2368,29 @@ fn localeGetKeywords(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn localeFilterMatches(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    return .{ .bool = std.ascii.eqlIgnoreCase(args[0].string, args[1].string) };
+    return .{ .bool = std.ascii.eqlIgnoreCase(args[0].string.bytes(), args[1].string.bytes()) };
 }
 
 fn localeLookup(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 2 or args[1] != .string) return .{ .string = "" };
+    if (args.len < 2 or args[1] != .string) return .{ .string = Value.String.borrowed("") };
     return args[1];
 }
 
 fn localeAcceptFromHttp(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // best-effort: take the first locale from a comma-separated header
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     var first_end: usize = s.len;
     for (s, 0..) |c, i| {
-        if (c == ',' or c == ';') { first_end = i; break; }
+        if (c == ',' or c == ';') {
+            first_end = i;
+            break;
+        }
     }
     const slice = std.mem.trim(u8, s[0..first_end], " \t");
     const owned = try ctx.allocator.dupe(u8, slice);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn registerCollatorClass(vm: *VM, a: Allocator) !void {
@@ -2341,11 +2404,12 @@ fn registerCollatorClass(vm: *VM, a: Allocator) !void {
     try def.methods.put(a, "sort", .{ .name = "sort", .arity = 1 });
 
     const cs = .{
-        .{ "PRIMARY", 0 }, .{ "SECONDARY", 1 }, .{ "TERTIARY", 2 },
-        .{ "QUATERNARY", 3 }, .{ "IDENTICAL", 15 }, .{ "DEFAULT_STRENGTH", 2 },
-        .{ "DEFAULT_VALUE", -1 }, .{ "OFF", 16 }, .{ "ON", 17 }, .{ "SHIFTED", 20 },
-        .{ "NON_IGNORABLE", 21 }, .{ "LOWER_FIRST", 24 }, .{ "UPPER_FIRST", 25 },
-        .{ "SORT_REGULAR", 0 }, .{ "SORT_STRING", 1 }, .{ "SORT_NUMERIC", 2 },
+        .{ "PRIMARY", 0 },        .{ "SECONDARY", 1 },      .{ "TERTIARY", 2 },
+        .{ "QUATERNARY", 3 },     .{ "IDENTICAL", 15 },     .{ "DEFAULT_STRENGTH", 2 },
+        .{ "DEFAULT_VALUE", -1 }, .{ "OFF", 16 },           .{ "ON", 17 },
+        .{ "SHIFTED", 20 },       .{ "NON_IGNORABLE", 21 }, .{ "LOWER_FIRST", 24 },
+        .{ "UPPER_FIRST", 25 },   .{ "SORT_REGULAR", 0 },   .{ "SORT_STRING", 1 },
+        .{ "SORT_NUMERIC", 2 },
     };
     inline for (cs) |k| {
         try def.constant_order.append(a, k[0]);
@@ -2374,25 +2438,20 @@ fn registerNumberFormatterClass(vm: *VM, a: Allocator) !void {
     try def.methods.put(a, "getAttribute", .{ .name = "getAttribute", .arity = 1 });
 
     const nfs = .{
-        .{ "PATTERN_DECIMAL", 0 }, .{ "DECIMAL", 1 }, .{ "CURRENCY", 2 },
-        .{ "PERCENT", 3 }, .{ "SCIENTIFIC", 4 }, .{ "SPELLOUT", 5 },
-        .{ "ORDINAL", 6 }, .{ "DURATION", 7 }, .{ "PATTERN_RULEBASED", 9 },
-        .{ "IGNORE", 0 }, .{ "DEFAULT_STYLE", 1 },
-        .{ "ROUND_CEILING", 0 }, .{ "ROUND_FLOOR", 1 },
-        .{ "ROUND_DOWN", 2 }, .{ "ROUND_UP", 3 },
-        .{ "ROUND_HALFEVEN", 4 }, .{ "ROUND_HALFDOWN", 5 }, .{ "ROUND_HALFUP", 6 },
-        .{ "PAD_BEFORE_PREFIX", 0 }, .{ "PAD_AFTER_PREFIX", 1 },
-        .{ "PAD_BEFORE_SUFFIX", 2 }, .{ "PAD_AFTER_SUFFIX", 3 },
-        .{ "PARSE_INT_ONLY", 0 }, .{ "GROUPING_USED", 1 },
-        .{ "DECIMAL_ALWAYS_SHOWN", 2 }, .{ "MAX_INTEGER_DIGITS", 3 },
-        .{ "MIN_INTEGER_DIGITS", 4 }, .{ "INTEGER_DIGITS", 5 },
-        .{ "MAX_FRACTION_DIGITS", 6 }, .{ "MIN_FRACTION_DIGITS", 7 },
-        .{ "FRACTION_DIGITS", 8 }, .{ "MULTIPLIER", 9 },
-        .{ "GROUPING_SIZE", 10 }, .{ "ROUNDING_MODE", 11 },
-        .{ "ROUNDING_INCREMENT", 12 }, .{ "FORMAT_WIDTH", 13 },
-        .{ "PADDING_POSITION", 14 }, .{ "SECONDARY_GROUPING_SIZE", 15 },
-        .{ "SIGNIFICANT_DIGITS_USED", 16 }, .{ "MIN_SIGNIFICANT_DIGITS", 17 },
-        .{ "MAX_SIGNIFICANT_DIGITS", 18 }, .{ "LENIENT_PARSE", 19 },
+        .{ "PATTERN_DECIMAL", 0 },         .{ "DECIMAL", 1 },                  .{ "CURRENCY", 2 },
+        .{ "PERCENT", 3 },                 .{ "SCIENTIFIC", 4 },               .{ "SPELLOUT", 5 },
+        .{ "ORDINAL", 6 },                 .{ "DURATION", 7 },                 .{ "PATTERN_RULEBASED", 9 },
+        .{ "IGNORE", 0 },                  .{ "DEFAULT_STYLE", 1 },            .{ "ROUND_CEILING", 0 },
+        .{ "ROUND_FLOOR", 1 },             .{ "ROUND_DOWN", 2 },               .{ "ROUND_UP", 3 },
+        .{ "ROUND_HALFEVEN", 4 },          .{ "ROUND_HALFDOWN", 5 },           .{ "ROUND_HALFUP", 6 },
+        .{ "PAD_BEFORE_PREFIX", 0 },       .{ "PAD_AFTER_PREFIX", 1 },         .{ "PAD_BEFORE_SUFFIX", 2 },
+        .{ "PAD_AFTER_SUFFIX", 3 },        .{ "PARSE_INT_ONLY", 0 },           .{ "GROUPING_USED", 1 },
+        .{ "DECIMAL_ALWAYS_SHOWN", 2 },    .{ "MAX_INTEGER_DIGITS", 3 },       .{ "MIN_INTEGER_DIGITS", 4 },
+        .{ "INTEGER_DIGITS", 5 },          .{ "MAX_FRACTION_DIGITS", 6 },      .{ "MIN_FRACTION_DIGITS", 7 },
+        .{ "FRACTION_DIGITS", 8 },         .{ "MULTIPLIER", 9 },               .{ "GROUPING_SIZE", 10 },
+        .{ "ROUNDING_MODE", 11 },          .{ "ROUNDING_INCREMENT", 12 },      .{ "FORMAT_WIDTH", 13 },
+        .{ "PADDING_POSITION", 14 },       .{ "SECONDARY_GROUPING_SIZE", 15 }, .{ "SIGNIFICANT_DIGITS_USED", 16 },
+        .{ "MIN_SIGNIFICANT_DIGITS", 17 }, .{ "MAX_SIGNIFICANT_DIGITS", 18 },  .{ "LENIENT_PARSE", 19 },
     };
     inline for (nfs) |k| {
         try def.constant_order.append(a, k[0]);
@@ -2447,7 +2506,7 @@ fn intlTimeZoneCreate(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 
 fn intlTimeZoneCreateDefault(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = try ctx.createObject("IntlTimeZone");
-    try obj.set(ctx.allocator, "__id", .{ .string = ctx.vm.default_tz_name });
+    try obj.set(ctx.allocator, "__id", .{ .string = Value.String.borrowed(ctx.vm.default_tz_name) });
     return .{ .object = obj };
 }
 

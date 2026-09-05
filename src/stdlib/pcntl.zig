@@ -3,6 +3,7 @@ const posix = std.posix;
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
+const VM = @import("../runtime/vm.zig").VM;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
 pub const entries = .{
@@ -93,7 +94,7 @@ fn native_pcntl_waitpid(ctx: *NativeContext, args: []const Value) RuntimeError!V
 
 fn native_pcntl_exec(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const path_z = try ctx.allocator.dupeZ(u8, args[0].string);
+    const path_z = try ctx.allocator.dupeZ(u8, args[0].string.bytes());
     defer ctx.allocator.free(path_z);
 
     var argv = std.ArrayListUnmanaged(?[*:0]const u8){};
@@ -101,11 +102,11 @@ fn native_pcntl_exec(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
         for (argv.items) |a| if (a) |s| ctx.allocator.free(std.mem.span(s));
         argv.deinit(ctx.allocator);
     }
-    try argv.append(ctx.allocator, (try ctx.allocator.dupeZ(u8, args[0].string)).ptr);
+    try argv.append(ctx.allocator, (try ctx.allocator.dupeZ(u8, args[0].string.bytes())).ptr);
     if (args.len > 1 and args[1] == .array) {
         for (args[1].array.entries.items) |entry| {
             const s = switch (entry.value) {
-                .string => |str| str,
+                .string => |str| str.bytes(),
                 else => continue,
             };
             try argv.append(ctx.allocator, (try ctx.allocator.dupeZ(u8, s)).ptr);
@@ -121,12 +122,12 @@ fn native_pcntl_exec(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     if (args.len > 2 and args[2] == .array) {
         for (args[2].array.entries.items) |entry| {
             const k = switch (entry.key) {
-                .string => |s| s,
+                .string => |s| s.bytes(),
                 .int => |i| try std.fmt.allocPrint(ctx.allocator, "{d}", .{i}),
             };
             defer if (entry.key == .int) ctx.allocator.free(k);
             const v = switch (entry.value) {
-                .string => |s| s,
+                .string => |s| s.bytes(),
                 else => continue,
             };
             const tmp = try std.fmt.allocPrint(ctx.allocator, "{s}={s}", .{ k, v });
@@ -150,7 +151,14 @@ fn native_pcntl_alarm(_: *NativeContext, args: []const Value) RuntimeError!Value
     return .{ .int = @intCast(prev) };
 }
 
-fn native_pcntl_signal(_: *NativeContext, args: []const Value) RuntimeError!Value {
+pub fn releaseHandlers(vm: *VM) void {
+    for (&signal_handlers) |*slot| {
+        vm.releaseValue(slot.*);
+        slot.* = .null;
+    }
+}
+
+fn native_pcntl_signal(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .int) return .{ .bool = false };
     const sig: usize = @intCast(args[0].int);
     if (sig == 0 or sig >= MAX_SIG) return .{ .bool = false };
@@ -168,10 +176,14 @@ fn native_pcntl_signal(_: *NativeContext, args: []const Value) RuntimeError!Valu
             .flags = 0,
         };
         posix.sigaction(@intCast(sig), &sa, null);
+        ctx.vm.releaseValue(signal_handlers[sig]);
         signal_handlers[sig] = .null;
         return .{ .bool = true };
     }
 
+    // the handler table owns its callables
+    VM.retainValue(args[1]);
+    ctx.vm.releaseValue(signal_handlers[sig]);
     signal_handlers[sig] = args[1];
 
     var sa = posix.Sigaction{
@@ -201,7 +213,7 @@ fn native_pcntl_signal_dispatch(ctx: *NativeContext, _: []const Value) RuntimeEr
         const sig_val = Value{ .int = @intCast(i) };
         const sigi_val = Value{ .int = @intCast(i) };
         const info_arr = try ctx.createArray();
-        try info_arr.set(ctx.allocator, .{ .string = "signo" }, sigi_val);
+        try info_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("signo") }, sigi_val);
         const argv = [_]Value{ sig_val, .{ .array = info_arr } };
         _ = ctx.invokeCallable(cb, &argv) catch continue;
     }
@@ -263,13 +275,13 @@ fn native_pcntl_get_last_error(_: *NativeContext, _: []const Value) RuntimeError
 }
 
 fn native_pcntl_strerror(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len < 1 or args[0] != .int) return .{ .string = "" };
-    const s = strerror(@intCast(args[0].int)) orelse return .{ .string = "" };
+    if (args.len < 1 or args[0] != .int) return .{ .string = Value.String.borrowed("") };
+    const s = strerror(@intCast(args[0].int)) orelse return .{ .string = Value.String.borrowed("") };
     var i: usize = 0;
     while (s[i] != 0) : (i += 1) {}
     const owned = try ctx.allocator.dupe(u8, s[0..i]);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn native_pcntl_sigprocmask(_: *NativeContext, _: []const Value) RuntimeError!Value {

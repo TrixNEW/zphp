@@ -54,7 +54,7 @@ fn wsSend(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (closed == .bool and closed.bool) return .null;
     var writer = getWriter(obj) orelse return .null;
     if (args.len < 1 or args[0] != .string) return .null;
-    ws.writeFrame(&writer, .text, args[0].string) catch return .null;
+    ws.writeFrame(&writer, .text, args[0].string.bytes()) catch return .null;
     return .null;
 }
 

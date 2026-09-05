@@ -785,7 +785,10 @@ fn processHttpRead(w: *Worker, c: *Connection) void {
         c.state = .closing;
         return;
     };
-    if (n == 0) { c.state = .closing; return; }
+    if (n == 0) {
+        c.state = .closing;
+        return;
+    }
     c.buffered += n;
 
     const raw = c.buf[0..c.buffered];
@@ -872,7 +875,7 @@ fn processHttpRead(w: *Worker, c: *Connection) void {
             else
                 null;
             const exc_msg: ?[]const u8 = if (w.vm.pending_exception) |ex|
-                if (ex == .object) (if (ex.object.get("message") == .string) ex.object.get("message").string else null) else null
+                if (ex == .object) (if (ex.object.get("message") == .string) ex.object.get("message").string.bytes() else null) else null
             else
                 null;
             const body: []const u8 = std.fmt.bufPrint(&err_buf, "500 Internal Server Error\nzig_err={s}\nerror_msg={s}\nexception={s}: {s}\n", .{
@@ -926,11 +929,17 @@ fn processH2Read(w: *Worker, conn: *Connection) void {
         conn.state = .closing;
         return;
     };
-    if (n == 0) { conn.state = .closing; return; }
+    if (n == 0) {
+        conn.state = .closing;
+        return;
+    }
     conn.buffered += n;
 
     const consumed = session.recv(conn.buf[0..conn.buffered]);
-    if (consumed < 0) { conn.state = .closing; return; }
+    if (consumed < 0) {
+        conn.state = .closing;
+        return;
+    }
     const uconsumed: usize = @intCast(consumed);
     if (uconsumed > 0) shiftBuffer(conn, uconsumed);
 
@@ -938,7 +947,9 @@ fn processH2Read(w: *Worker, conn: *Connection) void {
         handleH2Request(w, conn, session, stream);
     }
 
-    session.flush() catch { conn.state = .closing; };
+    session.flush() catch {
+        conn.state = .closing;
+    };
 }
 
 fn handleH2Request(w: *Worker, conn: *Connection, session: *h2.H2Session, stream: *h2.H2Stream) void {
@@ -983,12 +994,12 @@ fn handleH2Request(w: *Worker, conn: *Connection, session: *h2.H2Session, stream
     };
     // override SERVER_PROTOCOL for h2
     if (w.vm.request_vars.get("$_SERVER")) |sv| {
-        if (sv == .array) sv.array.set(w.allocator, .{ .string = "SERVER_PROTOCOL" }, .{ .string = "HTTP/2.0" }) catch {};
+        if (sv == .array) sv.array.set(w.allocator, .{ .string = Value.String.borrowed("SERVER_PROTOCOL") }, .{ .string = Value.String.borrowed("HTTP/2.0") }) catch {};
     }
     // set Host from :authority if not already set by header
     if (stream.authority.len > 0) {
         if (w.vm.request_vars.get("$_SERVER")) |sv| {
-            if (sv == .array) sv.array.set(w.allocator, .{ .string = "HTTP_HOST" }, .{ .string = stream.authority }) catch {};
+            if (sv == .array) sv.array.set(w.allocator, .{ .string = Value.String.borrowed("HTTP_HOST") }, .{ .string = Value.String.borrowed(stream.authority) }) catch {};
         }
     }
 
@@ -1092,7 +1103,10 @@ fn processWsRead(w: *Worker, c: *Connection) void {
         c.state = .closing;
         return;
     };
-    if (n == 0) { c.state = .closing; return; }
+    if (n == 0) {
+        c.state = .closing;
+        return;
+    }
     c.buffered += n;
 
     // parse all complete frames from buffer, defer shift to end
@@ -1115,7 +1129,7 @@ fn processWsRead(w: *Worker, c: *Connection) void {
                     break;
                 };
                 const ws_val = Value{ .object = c.ws_obj.? };
-                _ = w.vm.callByName("ws_onMessage", &.{ ws_val, Value{ .string = data } }) catch {};
+                _ = w.vm.callByName("ws_onMessage", &.{ ws_val, Value{ .string = Value.String.borrowed(data) } }) catch {};
             },
             .ping => {
                 ws_proto.writeFrame(c, .pong, parsed.frame.payload) catch {
@@ -1161,7 +1175,10 @@ fn parseRequest(raw: []const u8) Request {
     var pos = line_end + 2;
     while (pos < raw.len) {
         const hdr_end = std.mem.indexOfPos(u8, raw, pos, "\r\n") orelse break;
-        if (hdr_end == pos) { pos = hdr_end + 2; break; }
+        if (hdr_end == pos) {
+            pos = hdr_end + 2;
+            break;
+        }
         const hdr_line = raw[pos..hdr_end];
         if (std.mem.indexOf(u8, hdr_line, ": ")) |sep| {
             if (req.header_count < 64) {
@@ -1181,13 +1198,13 @@ fn populateSuperglobals(vm: *VM, req: *const Request, conn: std.net.Server.Conne
     server_arr.* = .{};
     try vm.arrays.append(a, server_arr);
 
-    try server_arr.set(a, .{ .string = "REQUEST_METHOD" }, .{ .string = req.method });
-    try server_arr.set(a, .{ .string = "REQUEST_URI" }, .{ .string = req.uri });
-    try server_arr.set(a, .{ .string = "QUERY_STRING" }, .{ .string = req.query_string });
-    try server_arr.set(a, .{ .string = "SERVER_PROTOCOL" }, .{ .string = "HTTP/1.1" });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("REQUEST_METHOD") }, .{ .string = Value.String.borrowed(req.method) });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("REQUEST_URI") }, .{ .string = Value.String.borrowed(req.uri) });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("QUERY_STRING") }, .{ .string = Value.String.borrowed(req.query_string) });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("SERVER_PROTOCOL") }, .{ .string = Value.String.borrowed("HTTP/1.1") });
     var port_buf: [8]u8 = undefined;
     const port_str = std.fmt.bufPrint(&port_buf, "{d}", .{port}) catch "8080";
-    try server_arr.set(a, .{ .string = "SERVER_PORT" }, .{ .string = port_str });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("SERVER_PORT") }, .{ .string = Value.String.borrowed(port_str) });
     // PHP-FPM behind apache/nginx with mod_rewrite (the conventional deploy
     // shape) sets SCRIPT_NAME to the front controller (e.g. /index.php) for
     // EVERY request, regardless of the URL the user hit. WordPress, Laravel,
@@ -1218,23 +1235,23 @@ fn populateSuperglobals(vm: *VM, req: *const Request, conn: std.net.Server.Conne
         php_self = req.path;
         path_info = "";
     }
-    try server_arr.set(a, .{ .string = "SCRIPT_NAME" }, .{ .string = script_name });
-    try server_arr.set(a, .{ .string = "SCRIPT_FILENAME" }, .{ .string = script_filename });
-    try server_arr.set(a, .{ .string = "DOCUMENT_ROOT" }, .{ .string = doc_root });
-    try server_arr.set(a, .{ .string = "PHP_SELF" }, .{ .string = php_self });
-    try server_arr.set(a, .{ .string = "PATH_INFO" }, .{ .string = path_info });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("SCRIPT_NAME") }, .{ .string = Value.String.borrowed(script_name) });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("SCRIPT_FILENAME") }, .{ .string = Value.String.borrowed(script_filename) });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("DOCUMENT_ROOT") }, .{ .string = Value.String.borrowed(doc_root) });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("PHP_SELF") }, .{ .string = Value.String.borrowed(php_self) });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("PATH_INFO") }, .{ .string = Value.String.borrowed(path_info) });
     // SCRIPT_FILENAME + DOCUMENT_ROOT + GATEWAY_INTERFACE + SERVER_SOFTWARE -
     // WordPress / Symfony / Laravel all read these during request setup
-    try server_arr.set(a, .{ .string = "SERVER_SOFTWARE" }, .{ .string = "zphp" });
-    try server_arr.set(a, .{ .string = "GATEWAY_INTERFACE" }, .{ .string = "CGI/1.1" });
-    try server_arr.set(a, .{ .string = "SERVER_NAME" }, .{ .string = "localhost" });
-    try server_arr.set(a, .{ .string = "HTTPS" }, .{ .string = "" });
-    try server_arr.set(a, .{ .string = "REQUEST_SCHEME" }, .{ .string = "http" });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("SERVER_SOFTWARE") }, .{ .string = Value.String.borrowed("zphp") });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("GATEWAY_INTERFACE") }, .{ .string = Value.String.borrowed("CGI/1.1") });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("SERVER_NAME") }, .{ .string = Value.String.borrowed("localhost") });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("HTTPS") }, .{ .string = Value.String.borrowed("") });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("REQUEST_SCHEME") }, .{ .string = Value.String.borrowed("http") });
 
-    if (req.getHeader("Host")) |host| try server_arr.set(a, .{ .string = "HTTP_HOST" }, .{ .string = host });
-    if (req.getHeader("User-Agent")) |ua| try server_arr.set(a, .{ .string = "HTTP_USER_AGENT" }, .{ .string = ua });
-    if (req.getHeader("Content-Type")) |ct| try server_arr.set(a, .{ .string = "CONTENT_TYPE" }, .{ .string = ct });
-    if (req.getHeader("Content-Length")) |cl| try server_arr.set(a, .{ .string = "CONTENT_LENGTH" }, .{ .string = cl });
+    if (req.getHeader("Host")) |host| try server_arr.set(a, .{ .string = Value.String.borrowed("HTTP_HOST") }, .{ .string = Value.String.borrowed(host) });
+    if (req.getHeader("User-Agent")) |ua| try server_arr.set(a, .{ .string = Value.String.borrowed("HTTP_USER_AGENT") }, .{ .string = Value.String.borrowed(ua) });
+    if (req.getHeader("Content-Type")) |ct| try server_arr.set(a, .{ .string = Value.String.borrowed("CONTENT_TYPE") }, .{ .string = Value.String.borrowed(ct) });
+    if (req.getHeader("Content-Length")) |cl| try server_arr.set(a, .{ .string = Value.String.borrowed("CONTENT_LENGTH") }, .{ .string = Value.String.borrowed(cl) });
 
     const addr_bytes = conn.address.in.sa.addr;
     var addr_buf: [16]u8 = undefined;
@@ -1246,7 +1263,7 @@ fn populateSuperglobals(vm: *VM, req: *const Request, conn: std.net.Server.Conne
     }) catch "0.0.0.0";
     const addr_owned = try a.dupe(u8, addr_str);
     try vm.strings.append(a, addr_owned);
-    try server_arr.set(a, .{ .string = "REMOTE_ADDR" }, .{ .string = addr_owned });
+    try server_arr.set(a, .{ .string = Value.String.borrowed("REMOTE_ADDR") }, .{ .string = Value.String.borrowed(addr_owned) });
 
     try vm.putRequestVar("$_SERVER", .{ .array = server_arr });
 
@@ -1295,7 +1312,7 @@ fn populateSuperglobals(vm: *VM, req: *const Request, conn: std.net.Server.Conne
     if (req.body.len > 0) {
         const body_copy = try a.dupe(u8, req.body);
         try vm.strings.append(a, body_copy);
-        try vm.putRequestVar("__raw_body", .{ .string = body_copy });
+        try vm.putRequestVar("__raw_body", .{ .string = Value.String.borrowed(body_copy) });
     }
 }
 
@@ -1309,11 +1326,11 @@ fn parseQueryString(a: Allocator, vm: *VM, arr: *PhpArray, qs: []const u8) !void
             try vm.strings.append(a, key);
             const val = try urlDecode(a, pair[eq + 1 ..]);
             try vm.strings.append(a, val);
-            try arr.set(a, .{ .string = key }, .{ .string = val });
+            try arr.set(a, .{ .string = Value.String.borrowed(key) }, .{ .string = Value.String.borrowed(val) });
         } else {
             const key = try urlDecode(a, pair);
             try vm.strings.append(a, key);
-            try arr.set(a, .{ .string = key }, .{ .string = "" });
+            try arr.set(a, .{ .string = Value.String.borrowed(key) }, .{ .string = Value.String.borrowed("") });
         }
     }
 }
@@ -1326,7 +1343,7 @@ fn parseCookies(a: Allocator, vm: *VM, arr: *PhpArray, cookies: []const u8) !voi
             try vm.strings.append(a, key);
             const val = try a.dupe(u8, pair[eq + 1 ..]);
             try vm.strings.append(a, val);
-            try arr.set(a, .{ .string = key }, .{ .string = val });
+            try arr.set(a, .{ .string = Value.String.borrowed(key) }, .{ .string = Value.String.borrowed(val) });
         }
     }
 }
@@ -1390,28 +1407,28 @@ fn parseMultipart(a: Allocator, vm: *VM, body: []const u8, boundary: []const u8,
 
             const fname = try a.dupe(u8, filename);
             try vm.strings.append(a, fname);
-            try file_entry.set(a, .{ .string = "name" }, .{ .string = fname });
+            try file_entry.set(a, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed(fname) });
 
             const mime = try a.dupe(u8, part_ct);
             try vm.strings.append(a, mime);
-            try file_entry.set(a, .{ .string = "type" }, .{ .string = mime });
+            try file_entry.set(a, .{ .string = Value.String.borrowed("type") }, .{ .string = Value.String.borrowed(mime) });
 
-            try file_entry.set(a, .{ .string = "size" }, .{ .int = @intCast(part_body.len) });
-            try file_entry.set(a, .{ .string = "error" }, .{ .int = 0 });
+            try file_entry.set(a, .{ .string = Value.String.borrowed("size") }, .{ .int = @intCast(part_body.len) });
+            try file_entry.set(a, .{ .string = Value.String.borrowed("error") }, .{ .int = 0 });
 
             // write to temp file
             const tmp_path = writeTempFile(a, part_body) catch blk: {
-                try file_entry.set(a, .{ .string = "error" }, .{ .int = 6 }); // UPLOAD_ERR_NO_TMP_DIR
+                try file_entry.set(a, .{ .string = Value.String.borrowed("error") }, .{ .int = 6 }); // UPLOAD_ERR_NO_TMP_DIR
                 break :blk try a.dupe(u8, "");
             };
             try vm.strings.append(a, tmp_path);
-            try file_entry.set(a, .{ .string = "tmp_name" }, .{ .string = tmp_path });
+            try file_entry.set(a, .{ .string = Value.String.borrowed("tmp_name") }, .{ .string = Value.String.borrowed(tmp_path) });
 
-            try files_arr.set(a, .{ .string = name_owned }, .{ .array = file_entry });
+            try files_arr.set(a, .{ .string = Value.String.borrowed(name_owned) }, .{ .array = file_entry });
         } else {
             const val = try a.dupe(u8, part_body);
             try vm.strings.append(a, val);
-            try post_arr.set(a, .{ .string = name_owned }, .{ .string = val });
+            try post_arr.set(a, .{ .string = Value.String.borrowed(name_owned) }, .{ .string = Value.String.borrowed(val) });
         }
 
         // advance past delimiter
@@ -1448,12 +1465,18 @@ fn writeTempFile(a: Allocator, data: []const u8) ![]const u8 {
     buf[template.len] = 0;
 
     const fd = c_mkstemp.mkstemp(buf.ptr);
-    if (fd < 0) { a.free(buf); return error.TempFileCreation; }
+    if (fd < 0) {
+        a.free(buf);
+        return error.TempFileCreation;
+    }
     defer posix.close(fd);
 
     var written: usize = 0;
     while (written < data.len) {
-        const n = posix.write(fd, data[written..]) catch { a.free(buf); return error.TempFileWrite; };
+        const n = posix.write(fd, data[written..]) catch {
+            a.free(buf);
+            return error.TempFileWrite;
+        };
         written += n;
     }
 
@@ -1468,8 +1491,16 @@ fn urlDecode(a: Allocator, input: []const u8) ![]const u8 {
     var i: usize = 0;
     while (i < input.len) {
         if (input[i] == '%' and i + 2 < input.len) {
-            const hi = std.fmt.charToDigit(input[i + 1], 16) catch { try buf.append(a, input[i]); i += 1; continue; };
-            const lo = std.fmt.charToDigit(input[i + 2], 16) catch { try buf.append(a, input[i]); i += 1; continue; };
+            const hi = std.fmt.charToDigit(input[i + 1], 16) catch {
+                try buf.append(a, input[i]);
+                i += 1;
+                continue;
+            };
+            const lo = std.fmt.charToDigit(input[i + 2], 16) catch {
+                try buf.append(a, input[i]);
+                i += 1;
+                continue;
+            };
             try buf.append(a, hi * 16 + lo);
             i += 3;
         } else if (input[i] == '+') {
@@ -1578,15 +1609,29 @@ fn mimeType(path: []const u8) []const u8 {
 
 fn statusText(code: i64, buf: *[32]u8) []const u8 {
     return switch (code) {
-        200 => "200 OK", 201 => "201 Created", 202 => "202 Accepted",
-        203 => "203 Non-Authoritative Information", 204 => "204 No Content",
-        301 => "301 Moved Permanently", 302 => "302 Found", 303 => "303 See Other",
-        304 => "304 Not Modified", 307 => "307 Temporary Redirect", 308 => "308 Permanent Redirect",
-        400 => "400 Bad Request", 401 => "401 Unauthorized", 403 => "403 Forbidden",
-        404 => "404 Not Found", 405 => "405 Method Not Allowed", 409 => "409 Conflict",
-        413 => "413 Content Too Large", 422 => "422 Unprocessable Entity",
-        429 => "429 Too Many Requests", 500 => "500 Internal Server Error",
-        502 => "502 Bad Gateway", 503 => "503 Service Unavailable",
+        200 => "200 OK",
+        201 => "201 Created",
+        202 => "202 Accepted",
+        203 => "203 Non-Authoritative Information",
+        204 => "204 No Content",
+        301 => "301 Moved Permanently",
+        302 => "302 Found",
+        303 => "303 See Other",
+        304 => "304 Not Modified",
+        307 => "307 Temporary Redirect",
+        308 => "308 Permanent Redirect",
+        400 => "400 Bad Request",
+        401 => "401 Unauthorized",
+        403 => "403 Forbidden",
+        404 => "404 Not Found",
+        405 => "405 Method Not Allowed",
+        409 => "409 Conflict",
+        413 => "413 Content Too Large",
+        422 => "422 Unprocessable Entity",
+        429 => "429 Too Many Requests",
+        500 => "500 Internal Server Error",
+        502 => "502 Bad Gateway",
+        503 => "503 Service Unavailable",
         else => std.fmt.bufPrint(buf, "{d} Unknown", .{code}) catch "500 Internal Server Error",
     };
 }
@@ -1616,7 +1661,7 @@ fn writeResponse(conn: *Connection, code: i64, content_type: []const u8, extra_h
     if (extra_headers) |hdrs| {
         for (hdrs.entries.items) |entry| {
             if (entry.value == .string) {
-                const hdr = entry.value.string;
+                const hdr = entry.value.string.bytes();
                 // Content-Type is already in the base headers above
                 if (std.mem.startsWith(u8, hdr, "Content-Type:") or std.mem.startsWith(u8, hdr, "content-type:")) continue;
                 // header("HTTP/1.1 N ...") is PHP's way to set the status code,
@@ -1638,7 +1683,11 @@ fn writeResponse(conn: *Connection, code: i64, content_type: []const u8, extra_h
         }
     }
 
-    if (pos + 2 <= hdr_buf.len) { hdr_buf[pos] = '\r'; hdr_buf[pos + 1] = '\n'; pos += 2; }
+    if (pos + 2 <= hdr_buf.len) {
+        hdr_buf[pos] = '\r';
+        hdr_buf[pos + 1] = '\n';
+        pos += 2;
+    }
     _ = conn.ioWrite(hdr_buf[0..pos]) catch return;
     if (actual_body.len > 0) _ = conn.ioWrite(actual_body) catch return;
 }
@@ -1675,13 +1724,22 @@ fn gzipCompress(allocator: Allocator, input: []const u8) ?[]u8 {
     const rc = zlib.deflate(&stream, zlib.Z_FINISH);
     _ = zlib.deflateEnd(&stream);
 
-    if (rc != zlib.Z_STREAM_END) { allocator.free(out); return null; }
+    if (rc != zlib.Z_STREAM_END) {
+        allocator.free(out);
+        return null;
+    }
 
     const compressed_len = out.len - stream.avail_out;
-    if (compressed_len >= input.len) { allocator.free(out); return null; }
+    if (compressed_len >= input.len) {
+        allocator.free(out);
+        return null;
+    }
 
     if (allocator.resize(out, compressed_len)) return out[0..compressed_len];
-    const exact = allocator.alloc(u8, compressed_len) catch { allocator.free(out); return null; };
+    const exact = allocator.alloc(u8, compressed_len) catch {
+        allocator.free(out);
+        return null;
+    };
     @memcpy(exact, out[0..compressed_len]);
     allocator.free(out);
     return exact;

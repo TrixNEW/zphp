@@ -64,10 +64,10 @@ fn varDumpValue(ctx: *NativeContext, val: Value, depth: usize) !void {
             try appendIndent(out, a, indent);
             try out.appendSlice(a, "string(");
             var tmp: [32]u8 = undefined;
-            const len_s = std.fmt.bufPrint(&tmp, "{d}", .{s.len}) catch return;
+            const len_s = std.fmt.bufPrint(&tmp, "{d}", .{s.bytes().len}) catch return;
             try out.appendSlice(a, len_s);
             try out.appendSlice(a, ") \"");
-            try out.appendSlice(a, s);
+            try out.appendSlice(a, s.bytes());
             try out.appendSlice(a, "\"\n");
         },
         .array => |arr| {
@@ -97,7 +97,7 @@ fn varDumpValue(ctx: *NativeContext, val: Value, depth: usize) !void {
                     },
                     .string => |ks| {
                         try out.appendSlice(a, "[\"");
-                        try out.appendSlice(a, ks);
+                        try out.appendSlice(a, ks.bytes());
                         try out.appendSlice(a, "\"]=>\n");
                     },
                 }
@@ -125,7 +125,7 @@ fn varDumpValue(ctx: *NativeContext, val: Value, depth: usize) !void {
                         try out.appendSlice(a, "enum(");
                         try out.appendSlice(a, obj.class_name);
                         try out.appendSlice(a, "::");
-                        try out.appendSlice(a, name_v.string);
+                        try out.appendSlice(a, name_v.string.bytes());
                         try out.appendSlice(a, ")\n");
                         return;
                     }
@@ -160,7 +160,10 @@ fn varDumpValue(ctx: *NativeContext, val: Value, depth: usize) !void {
                     var dyn_iter = obj.properties.iterator();
                     while (dyn_iter.next()) |entry| {
                         for (layout.names) |sn| {
-                            if (std.mem.eql(u8, sn, entry.key_ptr.*)) { prop_count -= 1; break; }
+                            if (std.mem.eql(u8, sn, entry.key_ptr.*)) {
+                                prop_count -= 1;
+                                break;
+                            }
                         }
                     }
                 }
@@ -181,7 +184,7 @@ fn varDumpValue(ctx: *NativeContext, val: Value, depth: usize) !void {
                         },
                         .string => |ks| {
                             try out.appendSlice(a, "[\"");
-                            try out.appendSlice(a, ks);
+                            try out.appendSlice(a, ks.bytes());
                             try out.appendSlice(a, "\"]=>\n");
                         },
                     }
@@ -204,7 +207,10 @@ fn varDumpValue(ctx: *NativeContext, val: Value, depth: usize) !void {
                     var in_slots = false;
                     if (obj.slot_layout) |layout| {
                         for (layout.names) |sn| {
-                            if (std.mem.eql(u8, sn, entry.key_ptr.*)) { in_slots = true; break; }
+                            if (std.mem.eql(u8, sn, entry.key_ptr.*)) {
+                                in_slots = true;
+                                break;
+                            }
                         }
                     }
                     if (!in_slots) {
@@ -259,7 +265,7 @@ fn print_r(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         try printRValueImpl(ctx.allocator, &buf, args[0], 0, ctx.vm);
         const s = try buf.toOwnedSlice(ctx.allocator);
         try ctx.strings.append(ctx.allocator, s);
-        return .{ .string = s };
+        return .{ .string = Value.String.borrowed(s) };
     }
     try printRValueImpl(ctx.allocator, &ctx.vm.output, args[0], 0, ctx.vm);
     return .{ .bool = true };
@@ -279,7 +285,7 @@ fn printRValueImpl(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: 
             try out.appendSlice(a, s);
         },
         .float => try val.format(out, a),
-        .string => |s| try out.appendSlice(a, s),
+        .string => |s| try out.appendSlice(a, s.bytes()),
         .array => |arr| {
             const arr_ptr = @intFromPtr(arr);
             if (visitedContains(arr_ptr)) {
@@ -304,7 +310,7 @@ fn printRValueImpl(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: 
                     },
                     .string => |ks| {
                         try out.appendSlice(a, "[");
-                        try out.appendSlice(a, ks);
+                        try out.appendSlice(a, ks.bytes());
                         try out.appendSlice(a, "] => ");
                     },
                 }
@@ -352,7 +358,7 @@ fn printRValueImpl(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: 
                             try appendIndent(out, a, (depth + 1) * 4);
                             try out.appendSlice(a, "[");
                             switch (entry.key) {
-                                .string => |s| try out.appendSlice(a, s),
+                                .string => |s| try out.appendSlice(a, s.bytes()),
                                 .int => |i| {
                                     var tmp: [32]u8 = undefined;
                                     const ki = std.fmt.bufPrint(&tmp, "{d}", .{i}) catch return;
@@ -415,7 +421,10 @@ fn printRValueImpl(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: 
                 var in_slots = false;
                 if (obj.slot_layout) |layout| {
                     for (layout.names) |sn| {
-                        if (std.mem.eql(u8, sn, entry.key_ptr.*)) { in_slots = true; break; }
+                        if (std.mem.eql(u8, sn, entry.key_ptr.*)) {
+                            in_slots = true;
+                            break;
+                        }
                     }
                 }
                 if (!in_slots) {
@@ -455,7 +464,7 @@ fn var_export(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (return_str) {
         const s = try buf.toOwnedSlice(ctx.allocator);
         try ctx.strings.append(ctx.allocator, s);
-        return .{ .string = s };
+        return .{ .string = Value.String.borrowed(s) };
     }
     try ctx.vm.output.appendSlice(ctx.allocator, buf.items);
     buf.deinit(ctx.allocator);
@@ -466,14 +475,15 @@ fn varExportString(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), s: []
     // fast path: no nulls -> single quoted literal
     var has_null = false;
     for (s) |c| {
-        if (c == 0) { has_null = true; break; }
+        if (c == 0) {
+            has_null = true;
+            break;
+        }
     }
     if (!has_null) {
         try out.append(a, '\'');
         for (s) |c| {
-            if (c == '\'') try out.appendSlice(a, "\\'")
-            else if (c == '\\') try out.appendSlice(a, "\\\\")
-            else try out.append(a, c);
+            if (c == '\'') try out.appendSlice(a, "\\'") else if (c == '\\') try out.appendSlice(a, "\\\\") else try out.append(a, c);
         }
         try out.append(a, '\'');
         return;
@@ -490,9 +500,7 @@ fn varExportString(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), s: []
         first_chunk = false;
         try out.append(a, '\'');
         for (s[i..j]) |c| {
-            if (c == '\'') try out.appendSlice(a, "\\'")
-            else if (c == '\\') try out.appendSlice(a, "\\\\")
-            else try out.append(a, c);
+            if (c == '\'') try out.appendSlice(a, "\\'") else if (c == '\\') try out.appendSlice(a, "\\\\") else try out.append(a, c);
         }
         try out.append(a, '\'');
         if (j >= s.len) break;
@@ -538,7 +546,7 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
                 }
             }
         },
-        .string => |s| try varExportString(a, out, s),
+        .string => |s| try varExportString(a, out, s.bytes()),
         .array => |arr| {
             const arr_ptr = @intFromPtr(arr);
             if (visitedContains(arr_ptr)) {
@@ -556,7 +564,7 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
                         const ks = std.fmt.bufPrint(&tmp, "{d}", .{ki}) catch return;
                         try out.appendSlice(a, ks);
                     },
-                    .string => |ks| try varExportString(a, out, ks),
+                    .string => |ks| try varExportString(a, out, ks.bytes()),
                 }
                 try out.appendSlice(a, " => ");
                 const ev_recurses = switch (entry.value) {
@@ -568,7 +576,7 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
                     try out.append(a, '\n');
                     for (0..(depth + 1) * 2) |_| try out.append(a, ' ');
                 }
-                try varExportValue(a, out,entry.value, depth + 1, ctx);
+                try varExportValue(a, out, entry.value, depth + 1, ctx);
                 try out.appendSlice(a, ",\n");
             }
             for (0..depth * 2) |_| try out.append(a, ' ');
@@ -589,7 +597,7 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
                         try out.append(a, '\\');
                         try out.appendSlice(a, obj.class_name);
                         try out.appendSlice(a, "::");
-                        try out.appendSlice(a, case_name.string);
+                        try out.appendSlice(a, case_name.string.bytes());
                         return;
                     }
                 }
@@ -619,7 +627,7 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
                                 try out.append(a, '\n');
                                 for (0..(depth + 1) * 2) |_| try out.append(a, ' ');
                             }
-                            try varExportValue(a, out,slots[i], depth + 1, ctx);
+                            try varExportValue(a, out, slots[i], depth + 1, ctx);
                             try out.appendSlice(a, ",\n");
                         }
                     }
@@ -630,7 +638,10 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
                 var in_slots = false;
                 if (obj.slot_layout) |layout| {
                     for (layout.names) |sn| {
-                        if (std.mem.eql(u8, sn, entry.key_ptr.*)) { in_slots = true; break; }
+                        if (std.mem.eql(u8, sn, entry.key_ptr.*)) {
+                            in_slots = true;
+                            break;
+                        }
                     }
                 }
                 if (!in_slots) {
@@ -646,7 +657,7 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
                         try out.append(a, '\n');
                         for (0..(depth + 1) * 2) |_| try out.append(a, ' ');
                     }
-                    try varExportValue(a, out,entry.value_ptr.*, depth + 1, ctx);
+                    try varExportValue(a, out, entry.value_ptr.*, depth + 1, ctx);
                     try out.appendSlice(a, ",\n");
                 }
             }

@@ -83,19 +83,19 @@ fn ensureInit() void {
 }
 
 fn strBytes(v: Value) ?[]const u8 {
-    return if (v == .string) v.string else null;
+    return if (v == .string) v.string.bytes() else null;
 }
 
 fn allocStr(ctx: *NativeContext, src: []const u8) RuntimeError!Value {
     const owned = try ctx.allocator.dupe(u8, src);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn native_bin2hex(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
-    if (args.len < 1 or args[0] != .string) return .{ .string = "" };
-    const bin = args[0].string;
+    if (args.len < 1 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const bin = args[0].string.bytes();
     const out = try ctx.allocator.alloc(u8, bin.len * 2 + 1);
     defer ctx.allocator.free(out);
     _ = c.sodium_bin2hex(out.ptr, out.len, bin.ptr, bin.len);
@@ -105,9 +105,9 @@ fn native_bin2hex(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_hex2bin(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const hex = args[0].string;
+    const hex = args[0].string.bytes();
     const ignore: ?[*:0]const u8 = if (args.len > 1 and args[1] == .string)
-        (try ctx.allocator.dupeZ(u8, args[1].string)).ptr
+        (try ctx.allocator.dupeZ(u8, args[1].string.bytes())).ptr
     else
         null;
     const out = try ctx.allocator.alloc(u8, hex.len / 2 + 1);
@@ -120,9 +120,9 @@ fn native_hex2bin(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_bin2base64(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
-    if (args.len < 1 or args[0] != .string) return .{ .string = "" };
+    if (args.len < 1 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
     const variant: c_int = if (args.len > 1 and args[1] == .int) @intCast(args[1].int) else 1;
-    const bin = args[0].string;
+    const bin = args[0].string.bytes();
     const out_max = c.sodium_base64_encoded_len(bin.len, variant);
     const out = try ctx.allocator.alloc(u8, out_max);
     defer ctx.allocator.free(out);
@@ -138,10 +138,10 @@ fn native_base642bin(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
     const variant: c_int = if (args.len > 1 and args[1] == .int) @intCast(args[1].int) else 1;
     const ignore: ?[*:0]const u8 = if (args.len > 2 and args[2] == .string)
-        (try ctx.allocator.dupeZ(u8, args[2].string)).ptr
+        (try ctx.allocator.dupeZ(u8, args[2].string.bytes())).ptr
     else
         null;
-    const src = args[0].string;
+    const src = args[0].string.bytes();
     const out = try ctx.allocator.alloc(u8, src.len + 1);
     defer ctx.allocator.free(out);
     var out_len: usize = 0;
@@ -157,8 +157,8 @@ fn native_memzero(_: *NativeContext, _: []const Value) RuntimeError!Value {
 fn native_memcmp(_: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .int = -1 };
-    const a = args[0].string;
-    const b = args[1].string;
+    const a = args[0].string.bytes();
+    const b = args[1].string.bytes();
     if (a.len != b.len) return .{ .int = -1 };
     return .{ .int = @intCast(c.sodium_memcmp(a.ptr, b.ptr, a.len)) };
 }
@@ -166,8 +166,8 @@ fn native_memcmp(_: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_compare(_: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .int = 0 };
-    const a = args[0].string;
-    const b = args[1].string;
+    const a = args[0].string.bytes();
+    const b = args[1].string.bytes();
     if (a.len != b.len) return .{ .int = if (a.len < b.len) -1 else 1 };
     return .{ .int = @intCast(c.sodium_compare(a.ptr, b.ptr, a.len)) };
 }
@@ -175,7 +175,7 @@ fn native_compare(_: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_increment(_: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 1 or args[0] != .string) return .null;
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     const mut: [*]u8 = @ptrCast(@constCast(s.ptr));
     c.sodium_increment(mut, s.len);
     return .null;
@@ -184,8 +184,8 @@ fn native_increment(_: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_add(_: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .null;
-    const a = args[0].string;
-    const b = args[1].string;
+    const a = args[0].string.bytes();
+    const b = args[1].string.bytes();
     if (a.len != b.len) return .null;
     c.sodium_add(@ptrCast(@constCast(a.ptr)), b.ptr, a.len);
     return .null;
@@ -196,7 +196,7 @@ fn native_pad(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .int) return .{ .bool = false };
     const block: usize = @intCast(args[1].int);
     if (block == 0) return .{ .bool = false };
-    const src = args[0].string;
+    const src = args[0].string.bytes();
     const padded_len = src.len + (block - (src.len % block));
     const out = try ctx.allocator.alloc(u8, padded_len);
     defer ctx.allocator.free(out);
@@ -212,7 +212,7 @@ fn native_unpad(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .int) return .{ .bool = false };
     const block: usize = @intCast(args[1].int);
     if (block == 0) return .{ .bool = false };
-    const src = args[0].string;
+    const src = args[0].string.bytes();
     var unpadded_len: usize = 0;
     const rc = c.sodium_unpad(&unpadded_len, src.ptr, src.len, block);
     if (rc != 0) return .{ .bool = false };
@@ -222,9 +222,9 @@ fn native_unpad(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_secretbox(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string) return .{ .bool = false };
-    const msg = args[0].string;
-    const nonce = args[1].string;
-    const key = args[2].string;
+    const msg = args[0].string.bytes();
+    const nonce = args[1].string.bytes();
+    const key = args[2].string.bytes();
     if (nonce.len != c.crypto_secretbox_NONCEBYTES or key.len != c.crypto_secretbox_KEYBYTES) return .{ .bool = false };
     const out = try ctx.allocator.alloc(u8, msg.len + c.crypto_secretbox_MACBYTES);
     defer ctx.allocator.free(out);
@@ -235,9 +235,9 @@ fn native_secretbox(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 fn native_secretbox_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string) return .{ .bool = false };
-    const ct = args[0].string;
-    const nonce = args[1].string;
-    const key = args[2].string;
+    const ct = args[0].string.bytes();
+    const nonce = args[1].string.bytes();
+    const key = args[2].string.bytes();
     if (ct.len < c.crypto_secretbox_MACBYTES) return .{ .bool = false };
     if (nonce.len != c.crypto_secretbox_NONCEBYTES or key.len != c.crypto_secretbox_KEYBYTES) return .{ .bool = false };
     const out = try ctx.allocator.alloc(u8, ct.len - c.crypto_secretbox_MACBYTES);
@@ -271,8 +271,8 @@ fn native_box_keypair(ctx: *NativeContext, _: []const Value) RuntimeError!Value 
 
 fn native_box_keypair_from_skpk(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const sk = args[0].string;
-    const pk = args[1].string;
+    const sk = args[0].string.bytes();
+    const pk = args[1].string.bytes();
     if (sk.len != c.crypto_box_SECRETKEYBYTES or pk.len != c.crypto_box_PUBLICKEYBYTES) return .{ .bool = false };
     const out = try ctx.allocator.alloc(u8, sk.len + pk.len);
     defer ctx.allocator.free(out);
@@ -283,14 +283,14 @@ fn native_box_keypair_from_skpk(ctx: *NativeContext, args: []const Value) Runtim
 
 fn native_box_secretkey(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const kp = args[0].string;
+    const kp = args[0].string.bytes();
     if (kp.len < c.crypto_box_SECRETKEYBYTES) return .{ .bool = false };
     return try allocStr(ctx, kp[0..c.crypto_box_SECRETKEYBYTES]);
 }
 
 fn native_box_publickey(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const kp = args[0].string;
+    const kp = args[0].string.bytes();
     if (kp.len < c.crypto_box_SECRETKEYBYTES + c.crypto_box_PUBLICKEYBYTES) return .{ .bool = false };
     return try allocStr(ctx, kp[c.crypto_box_SECRETKEYBYTES..]);
 }
@@ -298,7 +298,7 @@ fn native_box_publickey(ctx: *NativeContext, args: []const Value) RuntimeError!V
 fn native_box_pk_from_sk(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const sk = args[0].string;
+    const sk = args[0].string.bytes();
     if (sk.len != c.crypto_box_SECRETKEYBYTES) return .{ .bool = false };
     var pk: [c.crypto_box_PUBLICKEYBYTES]u8 = undefined;
     _ = c.crypto_scalarmult_base(&pk, sk.ptr);
@@ -308,9 +308,9 @@ fn native_box_pk_from_sk(ctx: *NativeContext, args: []const Value) RuntimeError!
 fn native_box(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string) return .{ .bool = false };
-    const msg = args[0].string;
-    const nonce = args[1].string;
-    const kp = args[2].string;
+    const msg = args[0].string.bytes();
+    const nonce = args[1].string.bytes();
+    const kp = args[2].string.bytes();
     if (kp.len != c.crypto_box_SECRETKEYBYTES + c.crypto_box_PUBLICKEYBYTES) return .{ .bool = false };
     if (nonce.len != c.crypto_box_NONCEBYTES) return .{ .bool = false };
     const sk = kp[0..c.crypto_box_SECRETKEYBYTES];
@@ -324,9 +324,9 @@ fn native_box(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_box_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string) return .{ .bool = false };
-    const ct = args[0].string;
-    const nonce = args[1].string;
-    const kp = args[2].string;
+    const ct = args[0].string.bytes();
+    const nonce = args[1].string.bytes();
+    const kp = args[2].string.bytes();
     if (kp.len != c.crypto_box_SECRETKEYBYTES + c.crypto_box_PUBLICKEYBYTES) return .{ .bool = false };
     if (nonce.len != c.crypto_box_NONCEBYTES) return .{ .bool = false };
     if (ct.len < c.crypto_box_MACBYTES) return .{ .bool = false };
@@ -341,8 +341,8 @@ fn native_box_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 fn native_box_seal(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const msg = args[0].string;
-    const pk = args[1].string;
+    const msg = args[0].string.bytes();
+    const pk = args[1].string.bytes();
     if (pk.len != c.crypto_box_PUBLICKEYBYTES) return .{ .bool = false };
     const out = try ctx.allocator.alloc(u8, msg.len + c.crypto_box_SEALBYTES);
     defer ctx.allocator.free(out);
@@ -353,8 +353,8 @@ fn native_box_seal(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
 fn native_box_seal_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const ct = args[0].string;
-    const kp = args[1].string;
+    const ct = args[0].string.bytes();
+    const kp = args[1].string.bytes();
     if (kp.len != c.crypto_box_SECRETKEYBYTES + c.crypto_box_PUBLICKEYBYTES) return .{ .bool = false };
     if (ct.len < c.crypto_box_SEALBYTES) return .{ .bool = false };
     const sk = kp[0..c.crypto_box_SECRETKEYBYTES];
@@ -378,14 +378,14 @@ fn native_sign_keypair(ctx: *NativeContext, _: []const Value) RuntimeError!Value
 
 fn native_sign_publickey(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const kp = args[0].string;
+    const kp = args[0].string.bytes();
     if (kp.len < c.crypto_sign_SECRETKEYBYTES + c.crypto_sign_PUBLICKEYBYTES) return .{ .bool = false };
     return try allocStr(ctx, kp[c.crypto_sign_SECRETKEYBYTES..]);
 }
 
 fn native_sign_secretkey(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const kp = args[0].string;
+    const kp = args[0].string.bytes();
     if (kp.len < c.crypto_sign_SECRETKEYBYTES) return .{ .bool = false };
     return try allocStr(ctx, kp[0..c.crypto_sign_SECRETKEYBYTES]);
 }
@@ -393,7 +393,7 @@ fn native_sign_secretkey(ctx: *NativeContext, args: []const Value) RuntimeError!
 fn native_sign_pk_from_sk(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const sk = args[0].string;
+    const sk = args[0].string.bytes();
     if (sk.len != c.crypto_sign_SECRETKEYBYTES) return .{ .bool = false };
     var pk: [c.crypto_sign_PUBLICKEYBYTES]u8 = undefined;
     if (c.crypto_sign_ed25519_sk_to_pk(&pk, sk.ptr) != 0) return .{ .bool = false };
@@ -403,8 +403,8 @@ fn native_sign_pk_from_sk(ctx: *NativeContext, args: []const Value) RuntimeError
 fn native_sign(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const msg = args[0].string;
-    const sk = args[1].string;
+    const msg = args[0].string.bytes();
+    const sk = args[1].string.bytes();
     if (sk.len != c.crypto_sign_SECRETKEYBYTES) return .{ .bool = false };
     const out = try ctx.allocator.alloc(u8, msg.len + c.crypto_sign_BYTES);
     defer ctx.allocator.free(out);
@@ -416,8 +416,8 @@ fn native_sign(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_sign_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const signed = args[0].string;
-    const pk = args[1].string;
+    const signed = args[0].string.bytes();
+    const pk = args[1].string.bytes();
     if (pk.len != c.crypto_sign_PUBLICKEYBYTES) return .{ .bool = false };
     const out = try ctx.allocator.alloc(u8, signed.len);
     defer ctx.allocator.free(out);
@@ -429,8 +429,8 @@ fn native_sign_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 fn native_sign_detached(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const msg = args[0].string;
-    const sk = args[1].string;
+    const msg = args[0].string.bytes();
+    const sk = args[1].string.bytes();
     if (sk.len != c.crypto_sign_SECRETKEYBYTES) return .{ .bool = false };
     var sig: [c.crypto_sign_BYTES]u8 = undefined;
     var slen: c_ulonglong = 0;
@@ -441,9 +441,9 @@ fn native_sign_detached(ctx: *NativeContext, args: []const Value) RuntimeError!V
 fn native_sign_verify_detached(_: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string) return .{ .bool = false };
-    const sig = args[0].string;
-    const msg = args[1].string;
-    const pk = args[2].string;
+    const sig = args[0].string.bytes();
+    const msg = args[1].string.bytes();
+    const pk = args[2].string.bytes();
     if (sig.len != c.crypto_sign_BYTES or pk.len != c.crypto_sign_PUBLICKEYBYTES) return .{ .bool = false };
     return .{ .bool = c.crypto_sign_verify_detached(sig.ptr, msg.ptr, msg.len, pk.ptr) == 0 };
 }
@@ -451,9 +451,9 @@ fn native_sign_verify_detached(_: *NativeContext, args: []const Value) RuntimeEr
 fn native_generichash(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const msg = args[0].string;
-    const key: ?[*]const u8 = if (args.len > 1 and args[1] == .string and args[1].string.len > 0) args[1].string.ptr else null;
-    const klen: usize = if (args.len > 1 and args[1] == .string) args[1].string.len else 0;
+    const msg = args[0].string.bytes();
+    const key: ?[*]const u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0) args[1].string.bytes().ptr else null;
+    const klen: usize = if (args.len > 1 and args[1] == .string) args[1].string.bytes().len else 0;
     const out_len: usize = if (args.len > 2 and args[2] == .int) @intCast(args[2].int) else c.crypto_generichash_BYTES;
     const out = try ctx.allocator.alloc(u8, out_len);
     defer ctx.allocator.free(out);
@@ -468,8 +468,8 @@ fn native_generichash_keygen(ctx: *NativeContext, _: []const Value) RuntimeError
 fn native_shorthash(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const msg = args[0].string;
-    const key = args[1].string;
+    const msg = args[0].string.bytes();
+    const key = args[1].string.bytes();
     if (key.len != c.crypto_shorthash_KEYBYTES) return .{ .bool = false };
     var out: [c.crypto_shorthash_BYTES]u8 = undefined;
     if (c.crypto_shorthash(&out, msg.ptr, msg.len, key.ptr) != 0) return .{ .bool = false };
@@ -485,8 +485,8 @@ fn native_pwhash(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 5) return .{ .bool = false };
     if (args[0] != .int or args[1] != .string or args[2] != .string or args[3] != .int or args[4] != .int) return .{ .bool = false };
     const out_len: usize = @intCast(args[0].int);
-    const pass = args[1].string;
-    const salt = args[2].string;
+    const pass = args[1].string.bytes();
+    const salt = args[2].string.bytes();
     if (salt.len != c.crypto_pwhash_SALTBYTES) return .{ .bool = false };
     const ops: c_ulonglong = @intCast(args[3].int);
     const mem: usize = @intCast(args[4].int);
@@ -500,7 +500,7 @@ fn native_pwhash(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_pwhash_str(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 3 or args[0] != .string or args[1] != .int or args[2] != .int) return .{ .bool = false };
-    const pass = args[0].string;
+    const pass = args[0].string.bytes();
     const ops: c_ulonglong = @intCast(args[1].int);
     const mem: usize = @intCast(args[2].int);
     var out: [c.crypto_pwhash_STRBYTES]u8 = undefined;
@@ -512,16 +512,16 @@ fn native_pwhash_str(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 fn native_pwhash_str_verify(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const hash_z = try ctx.allocator.dupeZ(u8, args[0].string);
+    const hash_z = try ctx.allocator.dupeZ(u8, args[0].string.bytes());
     defer ctx.allocator.free(hash_z);
-    const pass = args[1].string;
+    const pass = args[1].string.bytes();
     return .{ .bool = c.crypto_pwhash_str_verify(hash_z.ptr, pass.ptr, pass.len) == 0 };
 }
 
 fn native_pwhash_str_needs_rehash(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 3 or args[0] != .string or args[1] != .int or args[2] != .int) return .{ .bool = true };
-    const hash_z = try ctx.allocator.dupeZ(u8, args[0].string);
+    const hash_z = try ctx.allocator.dupeZ(u8, args[0].string.bytes());
     defer ctx.allocator.free(hash_z);
     const ops: c_ulonglong = @intCast(args[1].int);
     const mem: usize = @intCast(args[2].int);
@@ -531,10 +531,10 @@ fn native_pwhash_str_needs_rehash(ctx: *NativeContext, args: []const Value) Runt
 fn aeadEncrypt(comptime klen: usize, comptime nlen: usize, comptime alen: usize, comptime enc: anytype, ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 4 or args[0] != .string or args[1] != .string or args[2] != .string or args[3] != .string) return .{ .bool = false };
-    const msg = args[0].string;
-    const ad = args[1].string;
-    const nonce = args[2].string;
-    const key = args[3].string;
+    const msg = args[0].string.bytes();
+    const ad = args[1].string.bytes();
+    const nonce = args[2].string.bytes();
+    const key = args[3].string.bytes();
     if (nonce.len != nlen or key.len != klen) return .{ .bool = false };
     const out = try ctx.allocator.alloc(u8, msg.len + alen);
     defer ctx.allocator.free(out);
@@ -546,10 +546,10 @@ fn aeadEncrypt(comptime klen: usize, comptime nlen: usize, comptime alen: usize,
 fn aeadDecrypt(comptime klen: usize, comptime nlen: usize, comptime alen: usize, comptime dec: anytype, ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 4 or args[0] != .string or args[1] != .string or args[2] != .string or args[3] != .string) return .{ .bool = false };
-    const ct = args[0].string;
-    const ad = args[1].string;
-    const nonce = args[2].string;
-    const key = args[3].string;
+    const ct = args[0].string.bytes();
+    const ad = args[1].string.bytes();
+    const nonce = args[2].string.bytes();
+    const key = args[3].string.bytes();
     if (nonce.len != nlen or key.len != klen) return .{ .bool = false };
     if (ct.len < alen) return .{ .bool = false };
     const out = try ctx.allocator.alloc(u8, ct.len - alen);
@@ -638,8 +638,8 @@ fn native_aes256gcm_keygen(ctx: *NativeContext, _: []const Value) RuntimeError!V
 fn native_auth(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const msg = args[0].string;
-    const key = args[1].string;
+    const msg = args[0].string.bytes();
+    const key = args[1].string.bytes();
     if (key.len != c.crypto_auth_KEYBYTES) return .{ .bool = false };
     var out: [c.crypto_auth_BYTES]u8 = undefined;
     if (c.crypto_auth(&out, msg.ptr, msg.len, key.ptr) != 0) return .{ .bool = false };
@@ -649,9 +649,9 @@ fn native_auth(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_auth_verify(_: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string) return .{ .bool = false };
-    const mac = args[0].string;
-    const msg = args[1].string;
-    const key = args[2].string;
+    const mac = args[0].string.bytes();
+    const msg = args[1].string.bytes();
+    const key = args[2].string.bytes();
     if (mac.len != c.crypto_auth_BYTES or key.len != c.crypto_auth_KEYBYTES) return .{ .bool = false };
     return .{ .bool = c.crypto_auth_verify(mac.ptr, msg.ptr, msg.len, key.ptr) == 0 };
 }
@@ -673,14 +673,14 @@ fn native_kx_keypair(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn native_kx_publickey(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const kp = args[0].string;
+    const kp = args[0].string.bytes();
     if (kp.len < c.crypto_kx_SECRETKEYBYTES + c.crypto_kx_PUBLICKEYBYTES) return .{ .bool = false };
     return try allocStr(ctx, kp[c.crypto_kx_SECRETKEYBYTES..]);
 }
 
 fn native_kx_secretkey(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const kp = args[0].string;
+    const kp = args[0].string.bytes();
     if (kp.len < c.crypto_kx_SECRETKEYBYTES) return .{ .bool = false };
     return try allocStr(ctx, kp[0..c.crypto_kx_SECRETKEYBYTES]);
 }
@@ -688,8 +688,8 @@ fn native_kx_secretkey(ctx: *NativeContext, args: []const Value) RuntimeError!Va
 fn native_kx_client_session_keys(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const kp = args[0].string;
-    const server_pk = args[1].string;
+    const kp = args[0].string.bytes();
+    const server_pk = args[1].string.bytes();
     if (kp.len != c.crypto_kx_SECRETKEYBYTES + c.crypto_kx_PUBLICKEYBYTES) return .{ .bool = false };
     if (server_pk.len != c.crypto_kx_PUBLICKEYBYTES) return .{ .bool = false };
     var rx: [c.crypto_kx_SESSIONKEYBYTES]u8 = undefined;
@@ -704,8 +704,8 @@ fn native_kx_client_session_keys(ctx: *NativeContext, args: []const Value) Runti
 fn native_kx_server_session_keys(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const kp = args[0].string;
-    const client_pk = args[1].string;
+    const kp = args[0].string.bytes();
+    const client_pk = args[1].string.bytes();
     if (kp.len != c.crypto_kx_SECRETKEYBYTES + c.crypto_kx_PUBLICKEYBYTES) return .{ .bool = false };
     if (client_pk.len != c.crypto_kx_PUBLICKEYBYTES) return .{ .bool = false };
     var rx: [c.crypto_kx_SESSIONKEYBYTES]u8 = undefined;
@@ -720,8 +720,8 @@ fn native_kx_server_session_keys(ctx: *NativeContext, args: []const Value) Runti
 fn native_scalarmult(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const sk = args[0].string;
-    const pk = args[1].string;
+    const sk = args[0].string.bytes();
+    const pk = args[1].string.bytes();
     if (sk.len != c.crypto_scalarmult_SCALARBYTES or pk.len != c.crypto_scalarmult_BYTES) return .{ .bool = false };
     var out: [c.crypto_scalarmult_BYTES]u8 = undefined;
     if (c.crypto_scalarmult(&out, sk.ptr, pk.ptr) != 0) return .{ .bool = false };
@@ -731,7 +731,7 @@ fn native_scalarmult(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 fn native_scalarmult_base(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const sk = args[0].string;
+    const sk = args[0].string.bytes();
     if (sk.len != c.crypto_scalarmult_SCALARBYTES) return .{ .bool = false };
     var out: [c.crypto_scalarmult_BYTES]u8 = undefined;
     if (c.crypto_scalarmult_base(&out, sk.ptr) != 0) return .{ .bool = false };
@@ -747,8 +747,8 @@ fn native_kdf_derive(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     if (args.len < 4 or args[0] != .int or args[1] != .int or args[2] != .string or args[3] != .string) return .{ .bool = false };
     const out_len: usize = @intCast(args[0].int);
     const subkey_id: u64 = @intCast(args[1].int);
-    const context = args[2].string;
-    const key = args[3].string;
+    const context = args[2].string.bytes();
+    const key = args[3].string.bytes();
     if (key.len != c.crypto_kdf_KEYBYTES) {
         try ctx.vm.setPendingException("SodiumException", "sodium_crypto_kdf_derive_from_key(): Argument #4 ($key) must be SODIUM_CRYPTO_KDF_KEYBYTES bytes long");
         return .{ .bool = false };
@@ -767,7 +767,7 @@ fn native_kdf_derive(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 
 fn native_randombytes_buf(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureInit();
-    if (args.len < 1 or args[0] != .int) return .{ .string = "" };
+    if (args.len < 1 or args[0] != .int) return .{ .string = Value.String.borrowed("") };
     const n: usize = @intCast(args[0].int);
     return try keygen(ctx, n);
 }

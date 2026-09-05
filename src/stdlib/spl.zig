@@ -902,7 +902,7 @@ fn aoMagicSet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const flags = obj.get("__flags");
     const has_props = flags == .int and (flags.int & 2) != 0;
     if (!has_props) {
-        try obj.set(ctx.allocator, args[0].string, args[1]);
+        try obj.set(ctx.allocator, args[0].string.bytes(), args[1]);
         return .null;
     }
     const arr = try ensureData(ctx, obj);
@@ -1106,7 +1106,7 @@ fn aoGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const arr = getData(obj) orelse return .null;
     const ic = obj.get("__iter_class");
-    const cls_name = if (ic == .string and ic.string.len > 0) ic.string else "ArrayIterator";
+    const cls_name = if (ic == .string and ic.string.bytes().len > 0) ic.string.bytes() else "ArrayIterator";
     const it = try ctx.allocator.create(PhpObject);
     it.* = .{ .class_name = cls_name };
     try ctx.vm.objects.append(ctx.allocator, it);
@@ -1118,10 +1118,10 @@ fn aoGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 }
 
 fn aoGetIteratorClass(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "ArrayIterator" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("ArrayIterator") };
     const ic = obj.get("__iter_class");
-    if (ic == .string and ic.string.len > 0) return ic;
-    return .{ .string = "ArrayIterator" };
+    if (ic == .string and ic.string.bytes().len > 0) return ic;
+    return .{ .string = Value.String.borrowed("ArrayIterator") };
 }
 
 fn aoSetFlags(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -1297,7 +1297,7 @@ fn wmConstruct(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // iteration can yield real object keys (the int-keyed __data only has pointers)
     if (obj.get("__keys") != .array) {
         const keys = try ctx.allocator.create(PhpArray);
-        keys.* = .{};
+        keys.* = .{ .weak = true };
         try ctx.vm.arrays.append(ctx.allocator, keys);
         try obj.set(ctx.allocator, "__keys", .{ .array = keys });
     }
@@ -1336,14 +1336,10 @@ fn wmOffsetSet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     try arr.set(ctx.allocator, .{ .int = key }, args[1]);
     if (is_new and args[0] == .object) {
         const keys_v = obj.get("__keys");
-        if (keys_v == .array) {
-            try keys_v.array.append(ctx.allocator, args[0]);
-            // PhpArray.append retained the key object; undo it so the WeakMap
-            // does not pin its keys (PHP's WeakMap is weak). the vm-level
-            // weakmaps registry + weakmapsOnObjectDestruct hook removes the
-            // stale __keys / __data entry when the key reaches refcount 0
-            ctx.vm.objRelease(args[0].object);
-        }
+        // __keys is a weak array: appending takes no reference, and the
+        // weakmapsOnObjectDestruct hook drops the stale __keys / __data entry
+        // when the key object becomes unreachable
+        if (keys_v == .array) try keys_v.array.append(ctx.allocator, args[0]);
     }
     return .null;
 }
@@ -1492,8 +1488,8 @@ fn pqFormatEntry(ctx: *NativeContext, obj: *PhpObject, entry: Value) Value {
         const result = ctx.allocator.create(PhpArray) catch return entry;
         result.* = .{};
         ctx.vm.arrays.append(ctx.allocator, result) catch return entry;
-        result.set(ctx.allocator, .{ .string = "data" }, pair.get(.{ .int = 0 })) catch return entry;
-        result.set(ctx.allocator, .{ .string = "priority" }, pair.get(.{ .int = 1 })) catch return entry;
+        result.set(ctx.allocator, .{ .string = Value.String.borrowed("data") }, pair.get(.{ .int = 0 })) catch return entry;
+        result.set(ctx.allocator, .{ .string = Value.String.borrowed("priority") }, pair.get(.{ .int = 1 })) catch return entry;
         return .{ .array = result };
     }
     return pair.get(.{ .int = 0 });
@@ -1821,11 +1817,11 @@ fn faFromArray(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     while (i < size) : (i += 1) try arr.append(ctx.allocator, .null);
     if (preserve_keys) {
         for (src.entries.items) |entry| {
-            arr.entries.items[@intCast(entry.key.int)].value = entry.value;
+            try arr.set(ctx.allocator, entry.key, entry.value);
         }
     } else {
         for (src.entries.items, 0..) |entry, idx| {
-            arr.entries.items[idx].value = entry.value;
+            try arr.set(ctx.allocator, .{ .int = @intCast(idx) }, entry.value);
         }
     }
     try obj.set(ctx.allocator, "__size", .{ .int = @intCast(size) });
@@ -1839,7 +1835,7 @@ fn faRejectNonIntKey(ctx: *NativeContext, key: Value) !bool {
     // string-key access return the first element
     if (key == .int) return false;
     if (key == .string) {
-        const s = key.string;
+        const s = key.string.bytes();
         if (s.len > 0) {
             var i: usize = 0;
             if (s[0] == '+' or s[0] == '-') i = 1;
@@ -2243,7 +2239,7 @@ fn stackOffsetSet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const n: i64 = @intCast(arr.entries.items.len);
     const idx = Value.toInt(args[0]);
     if (idx >= 0 and idx < n) {
-        arr.entries.items[@intCast(n - 1 - idx)].value = args[1];
+        try arr.set(ctx.allocator, arr.entries.items[@intCast(n - 1 - idx)].key, args[1]);
     }
     return .null;
 }
@@ -2289,7 +2285,7 @@ fn dllOffsetSet(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     } else {
         const idx = Value.toInt(args[0]);
         if (idx >= 0 and idx < @as(i64, @intCast(arr.entries.items.len))) {
-            arr.entries.items[@intCast(idx)].value = args[1];
+            try arr.set(ctx.allocator, arr.entries.items[@intCast(idx)].key, args[1]);
         }
     }
     return .null;
@@ -2353,9 +2349,9 @@ fn sosHashKey(ctx: *NativeContext, sos: *PhpObject, target: *PhpObject) !PhpArra
             if (!std.mem.eql(u8, r, "SplObjectStorage::getHash")) {
                 const result = try ctx.vm.callMethod(sos, "getHash", &.{.{ .object = target }});
                 if (result == .string) {
-                    const owned = try ctx.allocator.dupe(u8, result.string);
+                    const owned = try ctx.allocator.dupe(u8, result.string.bytes());
                     try ctx.vm.strings.append(ctx.allocator, owned);
-                    return .{ .string = owned };
+                    return .{ .string = Value.String.borrowed(owned) };
                 }
             }
         }
@@ -2443,7 +2439,7 @@ fn sosDetach(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (lookup) |real_key| {
         const idx = sosFindIndexByKey(objs, real_key).?;
         _ = objs.entries.orderedRemove(idx);
-        if (real_key == .string) _ = objs.string_index.remove(real_key.string);
+        if (real_key == .string) _ = objs.string_index.remove(real_key.string.bytes());
         info.remove(real_key);
         if (real_key == .string) {
             objs.rebuildStringIndex(ctx.allocator) catch {};
@@ -2491,7 +2487,7 @@ fn sosGetHash(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const ptr: usize = @intFromPtr(args[0].object);
     const hash = std.fmt.allocPrint(ctx.allocator, "{x:0>32}", .{ptr}) catch return .null;
     ctx.vm.strings.append(ctx.allocator, hash) catch {};
-    return .{ .string = hash };
+    return .{ .string = Value.String.borrowed(hash) };
 }
 
 fn sosRewind(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -2541,7 +2537,7 @@ fn sosRemoveAll(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         if (sosFindIndexByKey(objs, key)) |idx| {
             _ = objs.entries.orderedRemove(idx);
             if (key == .string) {
-                _ = objs.string_index.remove(key.string);
+                _ = objs.string_index.remove(key.string.bytes());
                 objs.rebuildStringIndex(ctx.allocator) catch {};
             }
             info.remove(key);
@@ -2579,7 +2575,7 @@ fn sosRemoveAllExcept(ctx: *NativeContext, args: []const Value) RuntimeError!Val
             const key = entry.key;
             _ = objs.entries.orderedRemove(i);
             if (key == .string) {
-                _ = objs.string_index.remove(key.string);
+                _ = objs.string_index.remove(key.string.bytes());
             }
             info.remove(key);
         } else {

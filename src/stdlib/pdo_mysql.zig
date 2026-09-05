@@ -70,8 +70,8 @@ fn parseDsnParams(rest: []const u8) struct { host: ?[]const u8, port: u16, dbnam
 
 pub fn connect(ctx: *NativeContext, obj: *PhpObject, rest: []const u8, args: []const Value) RuntimeError!Value {
     const params = parseDsnParams(rest);
-    const user = if (args.len >= 2 and args[1] == .string) args[1].string else null;
-    const pass = if (args.len >= 3 and args[2] == .string) args[2].string else null;
+    const user = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else null;
+    const pass = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else null;
 
     const conn = mysql.mysql_init(null) orelse return pdo.throwPdo(ctx, "Failed to initialize MySQL connection");
 
@@ -109,7 +109,7 @@ pub fn query(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeError
     const res = mysql.mysql_store_result(conn) orelse return pdo.throwPdo(ctx, std.mem.span(mysql.mysql_error(conn)));
 
     const stmt_obj = try ctx.createObject("PDOStatement");
-    try stmt_obj.set(ctx.allocator, "__driver", .{ .string = "mysql" });
+    try stmt_obj.set(ctx.allocator, "__driver", .{ .string = Value.String.borrowed("mysql") });
     try stmt_obj.set(ctx.allocator, "__db_ptr", .{ .int = @intCast(@intFromPtr(conn)) });
     try stmt_obj.set(ctx.allocator, "__res_ptr", .{ .int = @intCast(@intFromPtr(res)) });
     try stmt_obj.set(ctx.allocator, "__current_row", .{ .int = 0 });
@@ -148,7 +148,7 @@ pub fn prepare(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeErr
     }
 
     const stmt_obj = try ctx.createObject("PDOStatement");
-    try stmt_obj.set(ctx.allocator, "__driver", .{ .string = "mysql" });
+    try stmt_obj.set(ctx.allocator, "__driver", .{ .string = Value.String.borrowed("mysql") });
     try stmt_obj.set(ctx.allocator, "__db_ptr", .{ .int = @intCast(@intFromPtr(conn)) });
     try stmt_obj.set(ctx.allocator, "__res_ptr", .{ .int = 0 });
     try stmt_obj.set(ctx.allocator, "__has_row", .{ .bool = false });
@@ -156,12 +156,12 @@ pub fn prepare(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeErr
 
     const sql_owned = try rewritten.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, sql_owned);
-    try stmt_obj.set(ctx.allocator, "__sql", .{ .string = sql_owned });
+    try stmt_obj.set(ctx.allocator, "__sql", .{ .string = Value.String.borrowed(sql_owned) });
 
     if (param_names.items.len > 0) {
         var map = try ctx.createArray();
         for (param_names.items, 0..) |name, idx| {
-            try map.set(ctx.allocator, .{ .string = name }, .{ .int = @intCast(idx) });
+            try map.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, .{ .int = @intCast(idx) });
         }
         try stmt_obj.set(ctx.allocator, "__param_map", .{ .array = map });
     }
@@ -174,7 +174,7 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
     const conn = getConn(obj) orelse return .{ .bool = false };
     const sql_val = obj.get("__sql");
     if (sql_val != .string) return .{ .bool = false };
-    var sql = sql_val.string;
+    var sql = sql_val.string.bytes();
 
     // if params provided, escape and interpolate
     if (args.len >= 1 and args[0] == .array) {
@@ -223,9 +223,9 @@ fn interpolateParams(ctx: *NativeContext, conn: *mysql.MYSQL, sql: []const u8, p
         try positional.resize(ctx.allocator, max_idx);
         @memset(positional.items, "");
         for (params.entries.items) |entry| {
-            var name = if (entry.key == .string) entry.key.string else "";
+            var name = if (entry.key == .string) entry.key.string.bytes() else "";
             if (name.len > 0 and name[0] == ':') name = name[1..];
-            const idx_val = pm.get(.{ .string = name });
+            const idx_val = pm.get(.{ .string = Value.String.borrowed(name) });
             if (idx_val == .int) {
                 const idx: usize = @intCast(idx_val.int);
                 positional.items[idx] = try valueToSqlString(ctx, conn, entry.value);
@@ -268,8 +268,9 @@ fn valueToSqlString(ctx: *NativeContext, conn: *mysql.MYSQL, val: Value) ![]cons
             const s = std.fmt.bufPrint(&buf, "{d}", .{f}) catch return "0";
             return try ctx.createString(s);
         },
-        .string => |s| {
+        .string => |php_s| {
             // escape and quote
+            const s = php_s.bytes();
             const escaped = try ctx.allocator.alloc(u8, s.len * 2 + 3);
             escaped[0] = '\'';
             const elen = mysql.mysql_real_escape_string(conn, escaped[1..].ptr, s.ptr, @intCast(s.len));
@@ -311,12 +312,12 @@ pub fn stmtFetch(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Runt
         const val = if (row_ptrs[col]) |ptr| blk: {
             const len = lengths[col];
             const s = try ctx.createString(ptr[0..len]);
-            break :blk Value{ .string = s };
+            break :blk Value{ .string = Value.String.borrowed(s) };
         } else Value.null;
 
         if (mode == 3 or mode == 4) try row.append(ctx.allocator, val);
         if (mode == 2 or mode == 4) {
-            try row.set(ctx.allocator, .{ .string = try ctx.createString(field_names[col]) }, val);
+            try row.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(field_names[col])) }, val);
         }
     }
 
@@ -345,7 +346,7 @@ pub fn stmtFetchColumn(ctx: *NativeContext, obj: *PhpObject, args: []const Value
 
     if (row_ptrs[col_idx]) |ptr| {
         const len = lengths[col_idx];
-        return .{ .string = try ctx.createString(ptr[0..len]) };
+        return .{ .string = Value.String.borrowed(try ctx.createString(ptr[0..len])) };
     }
     return .null;
 }
@@ -365,11 +366,11 @@ pub fn stmtCloseCursor(ctx: *NativeContext, obj: *PhpObject) RuntimeError!Value 
 }
 
 pub fn lastInsertId(ctx: *NativeContext, obj: *PhpObject) RuntimeError!Value {
-    const conn = getConn(obj) orelse return .{ .string = "0" };
+    const conn = getConn(obj) orelse return .{ .string = Value.String.borrowed("0") };
     const id = mysql.mysql_insert_id(conn);
     var buf: [32]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "{d}", .{id}) catch "0";
-    return .{ .string = try ctx.createString(s) };
+    return .{ .string = Value.String.borrowed(try ctx.createString(s)) };
 }
 
 pub fn beginTransaction(ctx: *NativeContext, obj: *PhpObject) RuntimeError!Value {
@@ -398,9 +399,9 @@ pub fn errorInfo(ctx: *NativeContext, obj: *PhpObject) RuntimeError!Value {
     const conn = getConn(obj) orelse return .null;
     var arr = try ctx.createArray();
     const msg = std.mem.span(mysql.mysql_error(conn));
-    try arr.append(ctx.allocator, .{ .string = "00000" });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("00000") });
     try arr.append(ctx.allocator, .null);
-    try arr.append(ctx.allocator, .{ .string = try ctx.createString(msg) });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(msg)) });
     return .{ .array = arr };
 }
 

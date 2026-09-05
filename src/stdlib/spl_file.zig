@@ -21,11 +21,11 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try sfo_def.interfaces.append(a, "RecursiveIterator");
     try sfo_def.interfaces.append(a, "SeekableIterator");
     for ([_][]const u8{
-        "__construct", "rewind",         "valid",         "current",      "key",          "next",
-        "fgets",       "fgetcsv",        "fputcsv",       "fread",        "fwrite",       "fseek",
-        "ftell",       "feof",           "fgetc",         "fpassthru",    "fflush",       "ftruncate",
-        "flock",       "getCsvControl",  "setCsvControl", "getCurrentLine", "getMaxLineLen", "setMaxLineLen",
-        "setFlags",    "getFlags",       "seek",          "hasChildren",  "getChildren",  "eof",
+        "__construct", "rewind",        "valid",         "current",        "key",           "next",
+        "fgets",       "fgetcsv",       "fputcsv",       "fread",          "fwrite",        "fseek",
+        "ftell",       "feof",          "fgetc",         "fpassthru",      "fflush",        "ftruncate",
+        "flock",       "getCsvControl", "setCsvControl", "getCurrentLine", "getMaxLineLen", "setMaxLineLen",
+        "setFlags",    "getFlags",      "seek",          "hasChildren",    "getChildren",   "eof",
     }) |m| {
         const arity: u8 = blk: {
             if (std.mem.eql(u8, m, "__construct")) break :blk 4;
@@ -111,25 +111,25 @@ fn defaultCsvControl(ctx: *NativeContext) RuntimeError!*PhpArray {
     const arr = try ctx.allocator.create(PhpArray);
     arr.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, arr);
-    try arr.append(ctx.allocator, .{ .string = "," });
-    try arr.append(ctx.allocator, .{ .string = "\"" });
-    try arr.append(ctx.allocator, .{ .string = "\\" });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(",") });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("\"") });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("\\") });
     return arr;
 }
 
 fn sfoConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 1 or args[0] != .string) return .null;
-    const mode: Value = if (args.len >= 2 and args[1] == .string) args[1] else .{ .string = "r" };
+    const mode: Value = if (args.len >= 2 and args[1] == .string) args[1] else .{ .string = Value.String.borrowed("r") };
     const fh = try ctx.vm.callByName("fopen", &.{ args[0], mode });
     if (fh != .object) {
-        const msg = try std.fmt.allocPrint(ctx.allocator, "SplFileObject::__construct(): Failed to open stream: {s}", .{args[0].string});
+        const msg = try std.fmt.allocPrint(ctx.allocator, "SplFileObject::__construct(): Failed to open stream: {s}", .{args[0].string.bytes()});
         try ctx.vm.strings.append(ctx.allocator, msg);
         if (try ctx.vm.throwBuiltinException("RuntimeException", msg)) return .null;
         return error.RuntimeError;
     }
     try obj.set(ctx.allocator, "__sfo_fh", fh);
-    try obj.set(ctx.allocator, "__pathname", .{ .string = try createString(ctx, args[0].string) });
+    try obj.set(ctx.allocator, "__pathname", .{ .string = Value.String.borrowed(try createString(ctx, args[0].string.bytes())) });
     try obj.set(ctx.allocator, "__sfo_line", .{ .int = 0 });
     try obj.set(ctx.allocator, "__sfo_flags", .{ .int = 0 });
     try obj.set(ctx.allocator, "__sfo_max", .{ .int = 0 });
@@ -147,7 +147,7 @@ fn stfoConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         break :blk s;
     } else "php://temp";
     const path_str = try createString(ctx, path);
-    return sfoConstruct(ctx, &.{ .{ .string = path_str }, .{ .string = "w+" } });
+    return sfoConstruct(ctx, &.{ .{ .string = Value.String.borrowed(path_str) }, .{ .string = Value.String.borrowed("w+") } });
 }
 
 fn readOneLine(ctx: *NativeContext, obj: *PhpObject) RuntimeError!void {
@@ -160,9 +160,9 @@ fn readOneLine(ctx: *NativeContext, obj: *PhpObject) RuntimeError!void {
         var line: Value = undefined;
         if ((flags & FLAG_READ_CSV) != 0) {
             const csv_v = obj.get("__sfo_csv");
-            const sep_v: Value = if (csv_v == .array) csv_v.array.get(.{ .int = 0 }) else .{ .string = "," };
-            const enc_v: Value = if (csv_v == .array) csv_v.array.get(.{ .int = 1 }) else .{ .string = "\"" };
-            const esc_v: Value = if (csv_v == .array) csv_v.array.get(.{ .int = 2 }) else .{ .string = "\\" };
+            const sep_v: Value = if (csv_v == .array) csv_v.array.get(.{ .int = 0 }) else .{ .string = Value.String.borrowed(",") };
+            const enc_v: Value = if (csv_v == .array) csv_v.array.get(.{ .int = 1 }) else .{ .string = Value.String.borrowed("\"") };
+            const esc_v: Value = if (csv_v == .array) csv_v.array.get(.{ .int = 2 }) else .{ .string = Value.String.borrowed("\\") };
             line = try ctx.vm.callByName("fgetcsv", &.{ fh, .{ .int = 0 }, sep_v, enc_v, esc_v });
         } else {
             line = try ctx.vm.callByName("fgets", &.{fh});
@@ -172,18 +172,18 @@ fn readOneLine(ctx: *NativeContext, obj: *PhpObject) RuntimeError!void {
             return;
         }
         if ((flags & FLAG_READ_CSV) == 0 and (flags & FLAG_DROP_NEW_LINE) != 0 and line == .string) {
-            var s = line.string;
+            var s = line.string.bytes();
             while (s.len > 0 and (s[s.len - 1] == '\n' or s[s.len - 1] == '\r')) s = s[0 .. s.len - 1];
-            line = .{ .string = try createString(ctx, s) };
+            line = .{ .string = Value.String.borrowed(try createString(ctx, s)) };
         }
         if ((flags & FLAG_SKIP_EMPTY) != 0) {
             const is_empty = blk: {
-                if (line == .string) break :blk line.string.len == 0;
+                if (line == .string) break :blk line.string.bytes().len == 0;
                 if (line == .array) {
                     if (line.array.length() == 0) break :blk true;
                     if (line.array.length() == 1) {
                         const only = line.array.get(.{ .int = 0 });
-                        if (only == .null or (only == .string and only.string.len == 0)) break :blk true;
+                        if (only == .null or (only == .string and only.string.bytes().len == 0)) break :blk true;
                     }
                 }
                 break :blk false;
@@ -251,9 +251,9 @@ fn sfoFgetcsv(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const fh = getHandle(obj) orelse return .{ .bool = false };
     const csv_v = obj.get("__sfo_csv");
-    const sep: Value = if (args.len >= 1 and args[0] == .string) args[0] else if (csv_v == .array) csv_v.array.get(.{ .int = 0 }) else .{ .string = "," };
-    const enc: Value = if (args.len >= 2 and args[1] == .string) args[1] else if (csv_v == .array) csv_v.array.get(.{ .int = 1 }) else .{ .string = "\"" };
-    const esc: Value = if (args.len >= 3 and args[2] == .string) args[2] else if (csv_v == .array) csv_v.array.get(.{ .int = 2 }) else .{ .string = "\\" };
+    const sep: Value = if (args.len >= 1 and args[0] == .string) args[0] else if (csv_v == .array) csv_v.array.get(.{ .int = 0 }) else .{ .string = Value.String.borrowed(",") };
+    const enc: Value = if (args.len >= 2 and args[1] == .string) args[1] else if (csv_v == .array) csv_v.array.get(.{ .int = 1 }) else .{ .string = Value.String.borrowed("\"") };
+    const esc: Value = if (args.len >= 3 and args[2] == .string) args[2] else if (csv_v == .array) csv_v.array.get(.{ .int = 2 }) else .{ .string = Value.String.borrowed("\\") };
     try obj.set(ctx.allocator, "__sfo_line", .{ .int = objGetInt(obj, "__sfo_line") + 1 });
     return ctx.vm.callByName("fgetcsv", &.{ fh, .{ .int = 0 }, sep, enc, esc });
 }
@@ -263,10 +263,10 @@ fn sfoFputcsv(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const fh = getHandle(obj) orelse return .{ .bool = false };
     if (args.len < 1 or args[0] != .array) return .{ .bool = false };
     const csv_v = obj.get("__sfo_csv");
-    const sep: Value = if (args.len >= 2 and args[1] == .string) args[1] else if (csv_v == .array) csv_v.array.get(.{ .int = 0 }) else .{ .string = "," };
-    const enc: Value = if (args.len >= 3 and args[2] == .string) args[2] else if (csv_v == .array) csv_v.array.get(.{ .int = 1 }) else .{ .string = "\"" };
-    const esc: Value = if (args.len >= 4 and args[3] == .string) args[3] else if (csv_v == .array) csv_v.array.get(.{ .int = 2 }) else .{ .string = "\\" };
-    const eol: Value = if (args.len >= 5 and args[4] == .string) args[4] else .{ .string = "\n" };
+    const sep: Value = if (args.len >= 2 and args[1] == .string) args[1] else if (csv_v == .array) csv_v.array.get(.{ .int = 0 }) else .{ .string = Value.String.borrowed(",") };
+    const enc: Value = if (args.len >= 3 and args[2] == .string) args[2] else if (csv_v == .array) csv_v.array.get(.{ .int = 1 }) else .{ .string = Value.String.borrowed("\"") };
+    const esc: Value = if (args.len >= 4 and args[3] == .string) args[3] else if (csv_v == .array) csv_v.array.get(.{ .int = 2 }) else .{ .string = Value.String.borrowed("\\") };
+    const eol: Value = if (args.len >= 5 and args[4] == .string) args[4] else .{ .string = Value.String.borrowed("\n") };
     return ctx.vm.callByName("fputcsv", &.{ fh, args[0], sep, enc, esc, eol });
 }
 
@@ -318,9 +318,9 @@ fn sfoFpassthru(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     var total: i64 = 0;
     while (true) {
         const chunk = try ctx.vm.callByName("fread", &.{ fh, .{ .int = 8192 } });
-        if (chunk != .string or chunk.string.len == 0) break;
-        try ctx.vm.output.appendSlice(ctx.allocator, chunk.string);
-        total += @intCast(chunk.string.len);
+        if (chunk != .string or chunk.string.bytes().len == 0) break;
+        try ctx.vm.output.appendSlice(ctx.allocator, chunk.string.bytes());
+        total += @intCast(chunk.string.bytes().len);
     }
     return .{ .int = total };
 }
@@ -358,9 +358,9 @@ fn sfoSetCsvControl(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     const arr = try ctx.allocator.create(PhpArray);
     arr.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, arr);
-    const sep: Value = if (args.len >= 1 and args[0] == .string) args[0] else .{ .string = "," };
-    const enc: Value = if (args.len >= 2 and args[1] == .string) args[1] else .{ .string = "\"" };
-    const esc: Value = if (args.len >= 3 and args[2] == .string) args[2] else .{ .string = "\\" };
+    const sep: Value = if (args.len >= 1 and args[0] == .string) args[0] else .{ .string = Value.String.borrowed(",") };
+    const enc: Value = if (args.len >= 2 and args[1] == .string) args[1] else .{ .string = Value.String.borrowed("\"") };
+    const esc: Value = if (args.len >= 3 and args[2] == .string) args[2] else .{ .string = Value.String.borrowed("\\") };
     try arr.append(ctx.allocator, sep);
     try arr.append(ctx.allocator, enc);
     try arr.append(ctx.allocator, esc);

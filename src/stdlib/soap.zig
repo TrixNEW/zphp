@@ -117,7 +117,7 @@ fn getThis(ctx: *NativeContext) ?*PhpObject {
 
 fn getOpt(opts: ?*PhpArray, key: []const u8) Value {
     if (opts == null) return .null;
-    return opts.?.get(.{ .string = key });
+    return opts.?.get(.{ .string = Value.String.borrowed(key) });
 }
 
 fn loadText(allocator: Allocator, source: []const u8) ![]u8 {
@@ -156,7 +156,7 @@ fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeEr
     if (target_ns) |v| {
         const owned = try ctx.allocator.dupe(u8, v);
         try ctx.strings.append(ctx.allocator, owned);
-        try obj.set(ctx.allocator, "__uri", .{ .string = owned });
+        try obj.set(ctx.allocator, "__uri", .{ .string = Value.String.borrowed(owned) });
     }
     const functions = try ctx.createArray();
     const types = try ctx.createArray();
@@ -175,7 +175,7 @@ fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeEr
                         if (loc) |v| {
                             const owned = try ctx.allocator.dupe(u8, v);
                             try ctx.strings.append(ctx.allocator, owned);
-                            try obj.set(ctx.allocator, "__location", .{ .string = owned });
+                            try obj.set(ctx.allocator, "__location", .{ .string = Value.String.borrowed(owned) });
                         }
                     }
                 }
@@ -189,7 +189,7 @@ fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeEr
                 if (name) |v| {
                     const sig = try std.fmt.allocPrint(ctx.allocator, "void {s}()", .{v});
                     try ctx.strings.append(ctx.allocator, sig);
-                    try functions.set(ctx.allocator, .{ .int = functions.next_int_key }, .{ .string = sig });
+                    try functions.set(ctx.allocator, .{ .int = functions.next_int_key }, .{ .string = Value.String.borrowed(sig) });
                 }
             }
         } else if (std.mem.eql(u8, lname, "types")) {
@@ -234,7 +234,7 @@ fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeEr
                         try decl.appendSlice(ctx.allocator, "}");
                         const owned = try decl.toOwnedSlice(ctx.allocator);
                         try ctx.strings.append(ctx.allocator, owned);
-                        try types.set(ctx.allocator, .{ .int = types.next_int_key }, .{ .string = owned });
+                        try types.set(ctx.allocator, .{ .int = types.next_int_key }, .{ .string = Value.String.borrowed(owned) });
                     }
                 }
             }
@@ -263,15 +263,15 @@ fn soapClientConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     const ver: i64 = if (soap_version == .int) soap_version.int else 1; // SOAP_1_1
     try obj.set(ctx.allocator, "__soap_version", .{ .int = ver });
 
-    try obj.set(ctx.allocator, "__last_request", .{ .string = "" });
-    try obj.set(ctx.allocator, "__last_response", .{ .string = "" });
-    try obj.set(ctx.allocator, "__last_request_headers", .{ .string = "" });
-    try obj.set(ctx.allocator, "__last_response_headers", .{ .string = "" });
+    try obj.set(ctx.allocator, "__last_request", .{ .string = Value.String.borrowed("") });
+    try obj.set(ctx.allocator, "__last_response", .{ .string = Value.String.borrowed("") });
+    try obj.set(ctx.allocator, "__last_request_headers", .{ .string = Value.String.borrowed("") });
+    try obj.set(ctx.allocator, "__last_response_headers", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "__headers", .{ .array = try ctx.createArray() });
     try obj.set(ctx.allocator, "__cookies", .{ .array = try ctx.createArray() });
     try obj.set(ctx.allocator, "__functions", .{ .array = try ctx.createArray() });
     try obj.set(ctx.allocator, "__types", .{ .array = try ctx.createArray() });
-    if (wsdl == .string) try parseWsdl(ctx, obj, wsdl.string);
+    if (wsdl == .string) try parseWsdl(ctx, obj, wsdl.string.bytes());
 
     if (wsdl != .null and wsdl != .string) {
         // PHP throws SoapFault here. we accept null only for non-WSDL.
@@ -319,7 +319,7 @@ fn appendValue(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), tag: []con
         },
         .string => |s| {
             try out.appendSlice(ctx.allocator, " xsi:type=\"xsd:string\">");
-            const esc = try xmlEscape(ctx.allocator, s);
+            const esc = try xmlEscape(ctx.allocator, s.bytes());
             defer ctx.allocator.free(esc);
             try out.appendSlice(ctx.allocator, esc);
         },
@@ -327,7 +327,7 @@ fn appendValue(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), tag: []con
             try out.appendSlice(ctx.allocator, ">");
             for (arr.entries.items) |entry| {
                 const child_tag = switch (entry.key) {
-                    .string => |s| s,
+                    .string => |s| s.bytes(),
                     .int => "item",
                 };
                 try appendValue(ctx, out, child_tag, entry.value);
@@ -354,11 +354,11 @@ fn appendSoapHeader(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), heade
     try out.appendSlice(ctx.allocator, "<");
     try out.appendSlice(ctx.allocator, prefix);
     try out.appendSlice(ctx.allocator, ":");
-    try out.appendSlice(ctx.allocator, name.string);
+    try out.appendSlice(ctx.allocator, name.string.bytes());
     try out.appendSlice(ctx.allocator, " xmlns:");
     try out.appendSlice(ctx.allocator, prefix);
     try out.appendSlice(ctx.allocator, "=\"");
-    const ns_esc = try xmlEscape(ctx.allocator, ns.string);
+    const ns_esc = try xmlEscape(ctx.allocator, ns.string.bytes());
     defer ctx.allocator.free(ns_esc);
     try out.appendSlice(ctx.allocator, ns_esc);
     try out.appendSlice(ctx.allocator, "\"");
@@ -367,14 +367,14 @@ fn appendSoapHeader(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), heade
     try out.appendSlice(ctx.allocator, ">");
     const data = header.get("data");
     if (data != .null) {
-        const esc = try xmlEscape(ctx.allocator, if (data == .string) data.string else "");
+        const esc = try xmlEscape(ctx.allocator, if (data == .string) data.string.bytes() else "");
         defer ctx.allocator.free(esc);
         try out.appendSlice(ctx.allocator, esc);
     }
     try out.appendSlice(ctx.allocator, "</");
     try out.appendSlice(ctx.allocator, prefix);
     try out.appendSlice(ctx.allocator, ":");
-    try out.appendSlice(ctx.allocator, name.string);
+    try out.appendSlice(ctx.allocator, name.string.bytes());
     try out.appendSlice(ctx.allocator, ">");
 }
 
@@ -405,7 +405,7 @@ fn buildEnvelope(ctx: *NativeContext, client: *PhpObject, method: []const u8, ur
     for (args_array.entries.items, 0..) |entry, i| {
         var tag_buf: [64]u8 = undefined;
         const tag = switch (entry.key) {
-            .string => |s| s,
+            .string => |s| s.bytes(),
             .int => try std.fmt.bufPrint(&tag_buf, "param{d}", .{i}),
         };
         try appendValue(ctx, &out, tag, entry.value);
@@ -506,7 +506,7 @@ fn parseSoapResponse(ctx: *NativeContext, xml: []const u8) RuntimeError!Value {
     if (body_start == null) {
         const owned = try ctx.allocator.dupe(u8, xml);
         try ctx.strings.append(ctx.allocator, owned);
-        return .{ .string = owned };
+        return .{ .string = Value.String.borrowed(owned) };
     }
 
     const body = xml[body_start.?..(body_end orelse xml.len)];
@@ -530,7 +530,7 @@ fn parseSoapResponse(ctx: *NativeContext, xml: []const u8) RuntimeError!Value {
     if (p >= body.len or body[p] != '<') {
         const owned = try ctx.allocator.dupe(u8, body);
         try ctx.strings.append(ctx.allocator, owned);
-        return .{ .string = owned };
+        return .{ .string = Value.String.borrowed(owned) };
     }
     // skip past response element tag
     const tag_close = std.mem.indexOfScalarPos(u8, body, p, '>') orelse return .null;
@@ -553,7 +553,7 @@ fn parseSoapResponse(ctx: *NativeContext, xml: []const u8) RuntimeError!Value {
         while (end > 0 and std.ascii.isWhitespace(inner[end - 1])) end -= 1;
         const owned = try ctx.allocator.dupe(u8, inner[rp..end]);
         try ctx.strings.append(ctx.allocator, owned);
-        return .{ .string = owned };
+        return .{ .string = Value.String.borrowed(owned) };
     }
     const child_close = std.mem.indexOfScalarPos(u8, inner, rp, '>') orelse return .null;
     var child_name_end = rp + 1;
@@ -572,13 +572,13 @@ fn parseSoapResponse(ctx: *NativeContext, xml: []const u8) RuntimeError!Value {
     }
     const owned = try ctx.allocator.dupe(u8, text);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn soapClientCall(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len < 2 or args[0] != .string or args[1] != .array) return .null;
-    const method = args[0].string;
+    const method = args[0].string.bytes();
     const args_arr = args[1].array;
 
     const loc_v = obj.get("__location");
@@ -587,8 +587,8 @@ fn soapClientCall(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         try ctx.vm.setPendingException("SoapFault", "SoapClient requires location and uri options for non-WSDL calls");
         return .{ .bool = false };
     }
-    const location = loc_v.string;
-    const uri = uri_v.string;
+    const location = loc_v.string.bytes();
+    const uri = uri_v.string.bytes();
 
     const envelope = buildEnvelope(ctx, obj, method, uri, args_arr) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -601,7 +601,7 @@ fn soapClientCall(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     const env_owned = try ctx.allocator.dupe(u8, envelope);
     try ctx.strings.append(ctx.allocator, env_owned);
-    try obj.set(ctx.allocator, "__last_request", .{ .string = env_owned });
+    try obj.set(ctx.allocator, "__last_request", .{ .string = Value.String.borrowed(env_owned) });
 
     const resp = httpPostSoap(ctx.allocator, location, action, envelope) catch {
         try ctx.vm.setPendingException("SoapFault", "SOAP HTTP request failed");
@@ -612,10 +612,10 @@ fn soapClientCall(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     const resp_owned = try ctx.allocator.dupe(u8, resp.body);
     try ctx.strings.append(ctx.allocator, resp_owned);
-    try obj.set(ctx.allocator, "__last_response", .{ .string = resp_owned });
+    try obj.set(ctx.allocator, "__last_response", .{ .string = Value.String.borrowed(resp_owned) });
     const rh_owned = try ctx.allocator.dupe(u8, resp.headers);
     try ctx.strings.append(ctx.allocator, rh_owned);
-    try obj.set(ctx.allocator, "__last_response_headers", .{ .string = rh_owned });
+    try obj.set(ctx.allocator, "__last_response_headers", .{ .string = Value.String.borrowed(rh_owned) });
 
     return try parseSoapResponse(ctx, resp.body);
 }
@@ -671,12 +671,12 @@ fn soapClientSetCookie(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     // PHP stores each cookie as a 3-element array: [value, autodelete, path].
     // a single arg deletes the cookie - matches PHP's __setCookie(name) semantic
     if (args.len == 1) {
-        try cookies_v.array.set(ctx.allocator, .{ .string = args[0].string }, .null);
+        try cookies_v.array.set(ctx.allocator, .{ .string = Value.String.borrowed(args[0].string.bytes()) }, .null);
         return .null;
     }
     const inner = try ctx.createArray();
     try inner.set(ctx.allocator, .{ .int = 0 }, args[1]);
-    try cookies_v.array.set(ctx.allocator, .{ .string = args[0].string }, .{ .array = inner });
+    try cookies_v.array.set(ctx.allocator, .{ .string = Value.String.borrowed(args[0].string.bytes()) }, .{ .array = inner });
     return .null;
 }
 fn soapClientGetCookies(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -696,7 +696,7 @@ fn soapServerConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Va
     // the response namespace (ns1) comes from options['uri'] in non-WSDL mode
     var uri: Value = .null;
     if (args.len > 1 and args[1] == .array) {
-        const u = args[1].array.get(.{ .string = "uri" });
+        const u = args[1].array.get(.{ .string = Value.String.borrowed("uri") });
         if (u == .string) uri = u;
     }
     try obj.set(ctx.allocator, "__uri", uri);
@@ -802,7 +802,7 @@ fn encodeTypedValue(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), tag: 
             try out.appendSlice(a, ">");
         },
         .string => |s| {
-            const esc = try xmlEscape(a, s);
+            const esc = try xmlEscape(a, s.bytes());
             defer a.free(esc);
             try out.appendSlice(a, " xsi:type=\"xsd:string\">");
             try out.appendSlice(a, esc);
@@ -879,7 +879,7 @@ fn encodeReturn(ctx: *NativeContext, out: *std.ArrayListUnmanaged(u8), val: Valu
             try out.appendSlice(a, "</return>");
         },
         .string => |s| {
-            const esc = try xmlEscape(a, s);
+            const esc = try xmlEscape(a, s.bytes());
             defer a.free(esc);
             try out.appendSlice(a, "<return xsi:type=\"xsd:string\">");
             try out.appendSlice(a, esc);
@@ -895,8 +895,8 @@ fn dispatchSoap(ctx: *NativeContext, server: *PhpObject, method: []const u8, arg
     if (o == .object) return ctx.callMethod(o.object, method, args);
     const cls = server.get("__class");
     if (cls == .string) {
-        const inst = try ctx.createObject(cls.string);
-        if (ctx.vm.hasMethod(cls.string, "__construct")) {
+        const inst = try ctx.createObject(cls.string.bytes());
+        if (ctx.vm.hasMethod(cls.string.bytes(), "__construct")) {
             _ = try ctx.callMethod(inst, "__construct", &.{});
         }
         return ctx.callMethod(inst, method, args);
@@ -905,7 +905,7 @@ fn dispatchSoap(ctx: *NativeContext, server: *PhpObject, method: []const u8, arg
     const fns = server.get("__functions");
     if (fns == .array) {
         for (fns.array.entries.items) |e| {
-            if (e.value == .string and std.mem.eql(u8, e.value.string, method)) {
+            if (e.value == .string and std.mem.eql(u8, e.value.string.bytes(), method)) {
                 return ctx.callFunction(method, args);
             }
         }
@@ -918,9 +918,9 @@ fn soapServerHandle(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     // request XML: explicit arg, else the raw HTTP body (php://input)
     var req: []const u8 = "";
     if (args.len > 0 and args[0] == .string) {
-        req = args[0].string;
+        req = args[0].string.bytes();
     } else if (ctx.vm.request_vars.get("__raw_body")) |body_val| {
-        if (body_val == .string) req = body_val.string;
+        if (body_val == .string) req = body_val.string.bytes();
     }
     if (req.len == 0) return .null;
 
@@ -960,7 +960,7 @@ fn soapServerHandle(ctx: *NativeContext, args: []const Value) RuntimeError!Value
             var cse = ce;
             while (cse < content.len and content[cse] != '>') : (cse += 1) {}
             if (cse > 0 and content[cse - 1] == '/') {
-                try arg_vals.append(ctx.allocator, .{ .string = "" });
+                try arg_vals.append(ctx.allocator, .{ .string = Value.String.borrowed("") });
                 cp = cse + 1;
                 continue;
             }
@@ -968,7 +968,7 @@ fn soapServerHandle(ctx: *NativeContext, args: []const Value) RuntimeError!Value
             const txt_end = std.mem.indexOfPos(u8, content, txt_start, "</") orelse content.len;
             const txt = try xmlUnescape(ctx.allocator, content[txt_start..txt_end]);
             try ctx.vm.strings.append(ctx.allocator, txt);
-            try arg_vals.append(ctx.allocator, .{ .string = txt });
+            try arg_vals.append(ctx.allocator, .{ .string = Value.String.borrowed(txt) });
             cp = (std.mem.indexOfPos(u8, content, txt_end, ">") orelse content.len -| 1) + 1;
         }
     }
@@ -976,7 +976,7 @@ fn soapServerHandle(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     const result = try dispatchSoap(ctx, obj, method, arg_vals.items);
 
     const uri_v = obj.get("__uri");
-    const uri = if (uri_v == .string) uri_v.string else "";
+    const uri = if (uri_v == .string) uri_v.string.bytes() else "";
     const uri_esc = try xmlEscape(ctx.allocator, uri);
     defer ctx.allocator.free(uri_esc);
     var out = std.ArrayListUnmanaged(u8){};
@@ -1081,14 +1081,14 @@ fn soapFaultConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 }
 
 fn soapFaultToString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("") };
     const code = obj.get("faultcode");
     const str = obj.get("faultstring");
-    const code_s = if (code == .string) code.string else "Server";
-    const str_s = if (str == .string) str.string else "SOAP fault";
+    const code_s = if (code == .string) code.string.bytes() else "Server";
+    const str_s = if (str == .string) str.string.bytes() else "SOAP fault";
     const out = try std.fmt.allocPrint(ctx.allocator, "SoapFault: {s} ({s})", .{ str_s, code_s });
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 test {}

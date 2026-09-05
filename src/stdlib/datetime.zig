@@ -78,7 +78,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // shadow class so DateTimeInterface::ATOM-style constant lookups resolve
     var dti_const = ClassDef{ .name = "DateTimeInterface", .is_abstract = true };
     inline for (DT_FORMAT_CONSTS) |c| {
-        try dti_const.static_props.put(a, c[0], .{ .string = c[1] });
+        try dti_const.static_props.put(a, c[0], .{ .string = Value.String.borrowed(c[1]) });
     }
     try vm.classes.put(a, "DateTimeInterface", dti_const);
 
@@ -108,7 +108,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try dt_def.methods.put(a, "createFromImmutable", .{ .name = "createFromImmutable", .arity = 1, .is_static = true });
     try dt_def.methods.put(a, "createFromInterface", .{ .name = "createFromInterface", .arity = 1, .is_static = true });
     inline for (DT_FORMAT_CONSTS) |c| {
-        try dt_def.static_props.put(a, c[0], .{ .string = c[1] });
+        try dt_def.static_props.put(a, c[0], .{ .string = Value.String.borrowed(c[1]) });
     }
     try vm.classes.put(a, "DateTime", dt_def);
 
@@ -155,7 +155,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try dti_def.methods.put(a, "createFromInterface", .{ .name = "createFromInterface", .arity = 1, .is_static = true });
     try dti_def.methods.put(a, "setISODate", .{ .name = "setISODate", .arity = 2 });
     inline for (DT_FORMAT_CONSTS) |c| {
-        try dti_def.static_props.put(a, c[0], .{ .string = c[1] });
+        try dti_def.static_props.put(a, c[0], .{ .string = Value.String.borrowed(c[1]) });
     }
     try vm.classes.put(a, "DateTimeImmutable", dti_def);
 
@@ -183,7 +183,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     // DateTimeZone class
     var dtz_def = ClassDef{ .name = "DateTimeZone" };
-    try dtz_def.properties.append(a, .{ .name = "timezone", .default = .{ .string = "UTC" }, .visibility = .private });
+    try dtz_def.properties.append(a, .{ .name = "timezone", .default = .{ .string = Value.String.borrowed("UTC") }, .visibility = .private });
     try dtz_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try dtz_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try dtz_def.methods.put(a, "getOffset", .{ .name = "getOffset", .arity = 1 });
@@ -286,7 +286,7 @@ fn dpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // constructor only accepts the R-prefixed recurring form; the bare
     // start/interval/end string is a DateMalformedPeriodStringException there
     if (args.len >= 1 and args[0] == .string) {
-        const spec = args[0].string;
+        const spec = args[0].string.bytes();
         var it = std.mem.splitScalar(u8, spec, '/');
         const p0 = it.next() orelse return .null;
         const p1 = it.next() orelse return .null;
@@ -449,13 +449,13 @@ fn dtGetLastErrors(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // entries that match the count() shape of PHP's typical responses
     if (!ctx.vm.last_dt_parse_failed) return .{ .bool = false };
     var result = try ctx.createArray();
-    try result.set(ctx.allocator, .{ .string = "warning_count" }, .{ .int = 0 });
-    try result.set(ctx.allocator, .{ .string = "warnings" }, .{ .array = try ctx.createArray() });
-    try result.set(ctx.allocator, .{ .string = "error_count" }, .{ .int = @intCast(ctx.vm.last_dt_error_count) });
+    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("warning_count") }, .{ .int = 0 });
+    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("warnings") }, .{ .array = try ctx.createArray() });
+    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("error_count") }, .{ .int = @intCast(ctx.vm.last_dt_error_count) });
     var errors_arr = try ctx.createArray();
-    try errors_arr.set(ctx.allocator, .{ .int = 0 }, .{ .string = "A four digit year could not be found" });
-    try errors_arr.set(ctx.allocator, .{ .int = @intCast(ctx.vm.last_dt_error_pos) }, .{ .string = ctx.vm.last_dt_error_text });
-    try result.set(ctx.allocator, .{ .string = "errors" }, .{ .array = errors_arr });
+    try errors_arr.set(ctx.allocator, .{ .int = 0 }, .{ .string = Value.String.borrowed("A four digit year could not be found") });
+    try errors_arr.set(ctx.allocator, .{ .int = @intCast(ctx.vm.last_dt_error_pos) }, .{ .string = Value.String.borrowed(ctx.vm.last_dt_error_text) });
+    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("errors") }, .{ .array = errors_arr });
     return .{ .array = result };
 }
 
@@ -478,10 +478,10 @@ fn dtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len >= 2) {
         tz_name = extractTimezoneName(args[1..]);
     }
-    try obj.set(ctx.allocator, "__timezone", .{ .string = tz_name });
+    try obj.set(ctx.allocator, "__timezone", .{ .string = Value.String.borrowed(tz_name) });
 
     if (args.len >= 1 and args[0] == .string) {
-        const s = args[0].string;
+        const s = args[0].string.bytes();
         if (s.len == 0 or std.mem.eql(u8, s, "now")) {
             // default: current time (UTC), no conversion needed
         } else if (s.len >= 2 and s[0] == '@') {
@@ -550,7 +550,7 @@ fn dtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             ts = dateToTimestamp(year, month, day, hour, min, sec);
             if (explicit_offset) |off| {
                 ts -= off;
-                try obj.set(ctx.allocator, "__timezone", .{ .string = explicit_name.? });
+                try obj.set(ctx.allocator, "__timezone", .{ .string = Value.String.borrowed(explicit_name.?) });
             } else {
                 ts -= @as(i64, tzOffsetForWallByName(ctx.allocator, tz_name, ts));
             }
@@ -594,14 +594,14 @@ fn dtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn dtFormat(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
     const ts = getTimestamp(obj);
     const tz_val = obj.get("__timezone");
-    const tz_name = if (tz_val == .string) tz_val.string else ctx.vm.default_tz_name;
+    const tz_name = if (tz_val == .string) tz_val.string.bytes() else ctx.vm.default_tz_name;
     const offset = tzOffsetForName(ctx.allocator, tz_name, ts);
     const us_v = obj.get("__microseconds");
     const us: i64 = if (us_v == .int) us_v.int else 0;
-    return formatTimestampTzMicros(ctx, ts, args[0].string, offset, tz_name, us);
+    return formatTimestampTzMicros(ctx, ts, args[0].string.bytes(), offset, tz_name, us);
 }
 
 pub fn formatTimestamp(ctx: *NativeContext, timestamp: i64, format: []const u8) RuntimeError!Value {
@@ -894,7 +894,7 @@ pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []co
     }
     const result = try buf.toOwnedSlice(a);
     try ctx.strings.append(a, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 fn dtGetTimestamp(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -912,7 +912,7 @@ fn dtModify(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len == 0 or args[0] != .string) return .{ .object = obj };
     const ts = getTimestamp(obj);
-    const result = parseRelativeTime(args[0].string, ts);
+    const result = parseRelativeTime(args[0].string.bytes(), ts);
     if (result == .int) try obj.set(ctx.allocator, "timestamp", result);
     return .{ .object = obj };
 }
@@ -921,7 +921,7 @@ fn dtiModify(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len == 0 or args[0] != .string) return .{ .object = obj };
     const ts = getTimestamp(obj);
-    const result = parseRelativeTime(args[0].string, ts);
+    const result = parseRelativeTime(args[0].string.bytes(), ts);
     if (result != .int) return .{ .object = obj };
 
     // immutable: create a new DateTime object
@@ -967,8 +967,14 @@ fn applyIntervalTz(ts: i64, interval: *PhpObject, sign: i64, tz_name: []const u8
     const c = baseComponents(ts + off_in);
     var year: i64 = c.year + direction * y;
     var month: i64 = c.month + direction * m;
-    while (month > 12) : ({ month -= 12; year += 1; }) {}
-    while (month < 1) : ({ month += 12; year -= 1; }) {}
+    while (month > 12) : ({
+        month -= 12;
+        year += 1;
+    }) {}
+    while (month < 1) : ({
+        month += 12;
+        year -= 1;
+    }) {}
     const day: i64 = c.day + direction * d;
 
     var local_ts = dateToTimestamp(year, month, day, c.hour, c.min, c.sec);
@@ -983,7 +989,7 @@ fn applyIntervalTz(ts: i64, interval: *PhpObject, sign: i64, tz_name: []const u8
 
 fn objTzName(obj: *PhpObject, fallback: []const u8) []const u8 {
     const v = obj.get("__timezone");
-    return if (v == .string) v.string else fallback;
+    return if (v == .string) v.string.bytes() else fallback;
 }
 
 fn dtAdd(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -1047,7 +1053,7 @@ fn dtDiff(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // calendar arithmetic happens in the receiver's timezone so DST boundaries
     // don't bleed into hour-of-day computation
     const tz_val = obj.get("__timezone");
-    const tz_name = if (tz_val == .string) tz_val.string else ctx.vm.default_tz_name;
+    const tz_name = if (tz_val == .string) tz_val.string.bytes() else ctx.vm.default_tz_name;
     const tz = lookupTimezone(tz_name);
     const off_early: i64 = if (tz) |t| @as(i64, tzOffsetAt(t, early_ts)) else 0;
     const off_late: i64 = if (tz) |t| @as(i64, tzOffsetAt(t, late_ts)) else 0;
@@ -1060,19 +1066,34 @@ fn dtDiff(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     var d = c2.day - c1.day;
     var mo = c2.month - c1.month;
     var y = c2.year - c1.year;
-    if (s < 0) { s += 60; mi -= 1; }
-    if (mi < 0) { mi += 60; hh -= 1; }
-    if (hh < 0) { hh += 24; d -= 1; }
+    if (s < 0) {
+        s += 60;
+        mi -= 1;
+    }
+    if (mi < 0) {
+        mi += 60;
+        hh -= 1;
+    }
+    if (hh < 0) {
+        hh += 24;
+        d -= 1;
+    }
     if (d < 0) {
         const borrow_month: i64 = if (invert == 0) c2.month - 1 else c1.month;
         const borrow_year: i64 = if (invert == 0) c2.year else c1.year;
         var bm = borrow_month;
         var by = borrow_year;
-        if (bm == 0) { bm = 12; by -= 1; }
+        if (bm == 0) {
+            bm = 12;
+            by -= 1;
+        }
         d += daysInMonth(bm, by);
         mo -= 1;
     }
-    if (mo < 0) { mo += 12; y -= 1; }
+    if (mo < 0) {
+        mo += 12;
+        y -= 1;
+    }
 
     // DST correction: when the diff is entirely within one calendar day, PHP
     // reports REAL elapsed h/i/s rather than wall-clock subtraction, so
@@ -1285,7 +1306,7 @@ fn createBareDt(ctx: *NativeContext, class_name: []const u8, args: []const Value
     const tz_name = if (args.len >= 2) extractTimezoneName(args[1..]) else ctx.vm.default_tz_name;
     var ts: i64 = std.time.timestamp();
     if (args.len >= 1 and args[0] == .string) {
-        const s = args[0].string;
+        const s = args[0].string.bytes();
         if (s.len == 0 or std.mem.eql(u8, s, "now")) {
             // current
         } else if (s.len >= 2 and s[0] == '@') {
@@ -1310,7 +1331,7 @@ fn createBareDt(ctx: *NativeContext, class_name: []const u8, args: []const Value
         }
     }
     const obj = try ctx.createObject(class_name);
-    try obj.set(ctx.allocator, "__timezone", .{ .string = tz_name });
+    try obj.set(ctx.allocator, "__timezone", .{ .string = Value.String.borrowed(tz_name) });
     try obj.set(ctx.allocator, "timestamp", .{ .int = ts });
     return .{ .object = obj };
 }
@@ -1334,12 +1355,12 @@ fn isImmutable(obj: *PhpObject) bool {
 
 fn native_date_format(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = argObj(args) orelse return .{ .bool = false };
-    if (args.len < 2 or args[1] != .string) return .{ .string = "" };
+    if (args.len < 2 or args[1] != .string) return .{ .string = Value.String.borrowed("") };
     const ts = getTimestamp(obj);
     const tz_val = obj.get("__timezone");
-    const tz_name = if (tz_val == .string) tz_val.string else ctx.vm.default_tz_name;
+    const tz_name = if (tz_val == .string) tz_val.string.bytes() else ctx.vm.default_tz_name;
     const offset = tzOffsetForName(ctx.allocator, tz_name, ts);
-    return formatTimestampTz(ctx, ts, args[1].string, offset, tz_name);
+    return formatTimestampTz(ctx, ts, args[1].string.bytes(), offset, tz_name);
 }
 
 // procedural alias for DateInterval::createFromDateString
@@ -1360,7 +1381,7 @@ fn native_date_modify(ctx: *NativeContext, args: []const Value) RuntimeError!Val
     const obj = argObj(args) orelse return .{ .bool = false };
     if (args.len < 2 or args[1] != .string) return .{ .object = obj };
     const ts = getTimestamp(obj);
-    const result = parseRelativeTime(args[1].string, ts);
+    const result = parseRelativeTime(args[1].string.bytes(), ts);
     if (result != .int) return .{ .bool = false };
     if (isImmutable(obj)) {
         const new_obj = try ctx.createObject("DateTimeImmutable");
@@ -1458,8 +1479,8 @@ fn dtiCreateFromFormat(ctx: *NativeContext, args: []const Value) RuntimeError!Va
 
 fn createFromFormatImpl(ctx: *NativeContext, args: []const Value, default_class: []const u8) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const format = args[0].string;
-    const datetime = args[1].string;
+    const format = args[0].string.bytes();
+    const datetime = args[1].string.bytes();
 
     // late static binding: if called from a subclass (e.g. Carbon), create that class
     const class_name = blk: {
@@ -1500,16 +1521,16 @@ fn createFromFormatImpl(ctx: *NativeContext, args: []const Value, default_class:
     } else if (args.len >= 3 and args[2] == .object and std.mem.eql(u8, args[2].object.class_name, "DateTimeZone")) {
         const nv = args[2].object.get("timezone");
         if (nv == .string) {
-            tz_name_opt = nv.string;
+            tz_name_opt = nv.string.bytes();
             // adjust timestamp: parseDateTimeFormat returned a UTC-interpreted
             // ts but the user meant the wall clock in the explicit zone.
             // subtract the zone's offset at that moment to get the real UTC ts
-            const off: i64 = if (lookupTimezone(nv.string)) |tz| tzOffsetAt(tz, res.ts) else 0;
+            const off: i64 = if (lookupTimezone(nv.string.bytes())) |tz| tzOffsetAt(tz, res.ts) else 0;
             final_ts = res.ts - off;
         }
     }
     try obj.set(ctx.allocator, "timestamp", .{ .int = final_ts });
-    if (tz_name_opt) |n| try obj.set(ctx.allocator, "__timezone", .{ .string = n });
+    if (tz_name_opt) |n| try obj.set(ctx.allocator, "__timezone", .{ .string = Value.String.borrowed(n) });
     if (res.microseconds != 0) try obj.set(ctx.allocator, "__microseconds", .{ .int = res.microseconds });
     return .{ .object = obj };
 }
@@ -1548,10 +1569,18 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
         const c = format[fi];
         switch (c) {
             '!' => {
-                year = 1970; month = 1; day = 1;
-                hour = 0; min = 0; sec = 0;
-                parsed_year = true; parsed_month = true; parsed_day = true;
-                parsed_hour = true; parsed_min = true; parsed_sec = true;
+                year = 1970;
+                month = 1;
+                day = 1;
+                hour = 0;
+                min = 0;
+                sec = 0;
+                parsed_year = true;
+                parsed_month = true;
+                parsed_day = true;
+                parsed_hour = true;
+                parsed_min = true;
+                parsed_sec = true;
             },
             '|' => {
                 if (!parsed_year) year = 1970;
@@ -1569,20 +1598,20 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
             },
             'Y' => {
                 if (di + 4 > datetime.len) return null;
-                year = std.fmt.parseInt(i64, datetime[di..di+4], 10) catch return null;
+                year = std.fmt.parseInt(i64, datetime[di .. di + 4], 10) catch return null;
                 di += 4;
                 parsed_year = true;
             },
             'y' => {
                 if (di + 2 > datetime.len) return null;
-                const yy = std.fmt.parseInt(i64, datetime[di..di+2], 10) catch return null;
+                const yy = std.fmt.parseInt(i64, datetime[di .. di + 2], 10) catch return null;
                 year = if (yy < 70) 2000 + yy else 1900 + yy;
                 di += 2;
                 parsed_year = true;
             },
             'm' => {
                 if (di + 2 > datetime.len) return null;
-                month = std.fmt.parseInt(i64, datetime[di..di+2], 10) catch return null;
+                month = std.fmt.parseInt(i64, datetime[di .. di + 2], 10) catch return null;
                 di += 2;
                 parsed_month = true;
             },
@@ -1594,7 +1623,7 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
             },
             'd' => {
                 if (di + 2 > datetime.len) return null;
-                day = std.fmt.parseInt(i64, datetime[di..di+2], 10) catch return null;
+                day = std.fmt.parseInt(i64, datetime[di .. di + 2], 10) catch return null;
                 di += 2;
                 parsed_day = true;
             },
@@ -1606,7 +1635,7 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
             },
             'H' => {
                 if (di + 2 > datetime.len) return null;
-                hour = std.fmt.parseInt(i64, datetime[di..di+2], 10) catch return null;
+                hour = std.fmt.parseInt(i64, datetime[di .. di + 2], 10) catch return null;
                 di += 2;
                 parsed_hour = true;
             },
@@ -1618,7 +1647,7 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
             },
             'h' => {
                 if (di + 2 > datetime.len) return null;
-                hour = std.fmt.parseInt(i64, datetime[di..di+2], 10) catch return null;
+                hour = std.fmt.parseInt(i64, datetime[di .. di + 2], 10) catch return null;
                 di += 2;
                 parsed_hour = true;
                 hour_is_12 = true;
@@ -1632,13 +1661,13 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
             },
             'i' => {
                 if (di + 2 > datetime.len) return null;
-                min = std.fmt.parseInt(i64, datetime[di..di+2], 10) catch return null;
+                min = std.fmt.parseInt(i64, datetime[di .. di + 2], 10) catch return null;
                 di += 2;
                 parsed_min = true;
             },
             's' => {
                 if (di + 2 > datetime.len) return null;
-                sec = std.fmt.parseInt(i64, datetime[di..di+2], 10) catch return null;
+                sec = std.fmt.parseInt(i64, datetime[di .. di + 2], 10) catch return null;
                 di += 2;
                 parsed_sec = true;
             },
@@ -1671,10 +1700,8 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
             },
             'a', 'A' => {
                 if (di + 2 > datetime.len) return null;
-                const seg = datetime[di..di+2];
-                if (eqlLower(seg, "am")) is_pm = false
-                else if (eqlLower(seg, "pm")) is_pm = true
-                else return null;
+                const seg = datetime[di .. di + 2];
+                if (eqlLower(seg, "am")) is_pm = false else if (eqlLower(seg, "pm")) is_pm = true else return null;
                 di += 2;
             },
             'M' => {
@@ -1710,12 +1737,12 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
                 const sign: i64 = if (datetime[di] == '+') 1 else if (datetime[di] == '-') -1 else return null;
                 di += 1;
                 if (di + 2 > datetime.len) return null;
-                const hh = std.fmt.parseInt(i64, datetime[di..di+2], 10) catch return null;
+                const hh = std.fmt.parseInt(i64, datetime[di .. di + 2], 10) catch return null;
                 di += 2;
                 var mm: i64 = 0;
                 if (di < datetime.len and datetime[di] == ':') di += 1;
-                if (di + 2 <= datetime.len and datetime[di] >= '0' and datetime[di] <= '9' and datetime[di+1] >= '0' and datetime[di+1] <= '9') {
-                    mm = std.fmt.parseInt(i64, datetime[di..di+2], 10) catch 0;
+                if (di + 2 <= datetime.len and datetime[di] >= '0' and datetime[di] <= '9' and datetime[di + 1] >= '0' and datetime[di + 1] <= '9') {
+                    mm = std.fmt.parseInt(i64, datetime[di .. di + 2], 10) catch 0;
                     di += 2;
                 }
                 tz_offset = sign * (hh * 3600 + mm * 60);
@@ -1745,8 +1772,7 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
 
     if (hour_is_12) {
         if (is_pm) |pm| {
-            if (pm and hour < 12) hour += 12
-            else if (!pm and hour == 12) hour = 0;
+            if (pm and hour < 12) hour += 12 else if (!pm and hour == 12) hour = 0;
         }
     }
 
@@ -1762,8 +1788,12 @@ fn parseDateTimeFormat(format: []const u8, datetime: []const u8, now: i64) ?Pars
     return .{ .ts = dateToTimestamp(year, month, day, hour, min, sec) - tz_offset, .tz_offset_seconds = parsed_off, .microseconds = microseconds };
 }
 
-fn isDigit(c: u8) bool { return c >= '0' and c <= '9'; }
-fn isAlpha(c: u8) bool { return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z'); }
+fn isDigit(c: u8) bool {
+    return c >= '0' and c <= '9';
+}
+fn isAlpha(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z');
+}
 
 fn takeDigits(s: []const u8, start: usize, min_n: usize, max_n: usize) ?struct { value: i64, next: usize } {
     var i = start;
@@ -1816,16 +1846,16 @@ fn dtSetMicrosecond(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 fn dtGetTimezone(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const tz_val = obj.get("__timezone");
-    const tz_name = if (tz_val == .string) tz_val.string else "UTC";
+    const tz_name = if (tz_val == .string) tz_val.string.bytes() else "UTC";
     const tz_obj = try ctx.createObject("DateTimeZone");
-    try tz_obj.set(ctx.allocator, "timezone", .{ .string = tz_name });
+    try tz_obj.set(ctx.allocator, "timezone", .{ .string = Value.String.borrowed(tz_name) });
     return .{ .object = tz_obj };
 }
 
 fn dtGetOffset(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .int = 0 };
     const tz_val = obj.get("__timezone");
-    const tz_name = if (tz_val == .string) tz_val.string else "UTC";
+    const tz_name = if (tz_val == .string) tz_val.string.bytes() else "UTC";
     const ts = getTimestamp(obj);
     return .{ .int = @intCast(tzOffsetForName(ctx.allocator, tz_name, ts)) };
 }
@@ -1833,7 +1863,7 @@ fn dtGetOffset(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 fn dtSetTimezone(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     const tz_name = extractTimezoneName(args);
-    try obj.set(ctx.allocator, "__timezone", .{ .string = tz_name });
+    try obj.set(ctx.allocator, "__timezone", .{ .string = Value.String.borrowed(tz_name) });
     return .{ .object = obj };
 }
 
@@ -1843,16 +1873,16 @@ fn dtiSetTimezone(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const new_obj = try ctx.createObject("DateTimeImmutable");
     const ts = obj.get("timestamp");
     try new_obj.set(ctx.allocator, "timestamp", if (ts == .null) .{ .int = 0 } else ts);
-    try new_obj.set(ctx.allocator, "__timezone", .{ .string = tz_name });
+    try new_obj.set(ctx.allocator, "__timezone", .{ .string = Value.String.borrowed(tz_name) });
     return .{ .object = new_obj };
 }
 
 fn extractTimezoneName(args: []const Value) []const u8 {
     if (args.len == 0) return "UTC";
-    if (args[0] == .string) return args[0].string;
+    if (args[0] == .string) return args[0].string.bytes();
     if (args[0] == .object) {
         const tz_val = args[0].object.get("timezone");
-        if (tz_val == .string) return tz_val.string;
+        if (tz_val == .string) return tz_val.string.bytes();
     }
     return "UTC";
 }
@@ -1860,7 +1890,7 @@ fn extractTimezoneName(args: []const Value) []const u8 {
 fn dtzConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len >= 1 and args[0] == .string) {
-        const name = args[0].string;
+        const name = args[0].string.bytes();
         // accept fixed-offset forms (+HH, +HH:MM, UTC, GMT) or known zones.
         // PHP normalizes fixed-offset input to '+HH:MM' / '-HH:MM' (e.g.
         // 'GMT+5' -> '+05:00'). zone names + 'UTC' / 'GMT' alone pass through
@@ -1887,7 +1917,7 @@ fn dtzConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
                 return error.RuntimeError;
             }
         }
-        try obj.set(ctx.allocator, "timezone", .{ .string = stored });
+        try obj.set(ctx.allocator, "timezone", .{ .string = Value.String.borrowed(stored) });
     }
     return .null;
 }
@@ -1897,153 +1927,149 @@ fn dtzListIdentifiers(ctx: *NativeContext, _: []const Value) RuntimeError!Value 
     // for membership checks in user code that whitelists allowed zones; the
     // names themselves are also valid `DateTimeZone` constructor inputs
     const ids = [_][]const u8{
-        "Africa/Abidjan",       "Africa/Accra",        "Africa/Addis_Ababa",
-        "Africa/Algiers",       "Africa/Asmara",       "Africa/Bamako",
-        "Africa/Bangui",        "Africa/Banjul",       "Africa/Bissau",
-        "Africa/Blantyre",      "Africa/Brazzaville",  "Africa/Bujumbura",
-        "Africa/Cairo",         "Africa/Casablanca",   "Africa/Ceuta",
-        "Africa/Conakry",       "Africa/Dakar",        "Africa/Dar_es_Salaam",
-        "Africa/Djibouti",      "Africa/Douala",       "Africa/El_Aaiun",
-        "Africa/Freetown",      "Africa/Gaborone",     "Africa/Harare",
-        "Africa/Johannesburg",  "Africa/Juba",         "Africa/Kampala",
-        "Africa/Khartoum",      "Africa/Kigali",       "Africa/Kinshasa",
-        "Africa/Lagos",         "Africa/Libreville",   "Africa/Lome",
-        "Africa/Luanda",        "Africa/Lubumbashi",   "Africa/Lusaka",
-        "Africa/Malabo",        "Africa/Maputo",       "Africa/Maseru",
-        "Africa/Mbabane",       "Africa/Mogadishu",    "Africa/Monrovia",
-        "Africa/Nairobi",       "Africa/Ndjamena",     "Africa/Niamey",
-        "Africa/Nouakchott",    "Africa/Ouagadougou",  "Africa/Porto-Novo",
-        "Africa/Sao_Tome",      "Africa/Tripoli",      "Africa/Tunis",
-        "Africa/Windhoek",      "America/Adak",        "America/Anchorage",
-        "America/Anguilla",     "America/Antigua",     "America/Araguaina",
-        "America/Argentina/Buenos_Aires", "America/Argentina/Catamarca",
-        "America/Argentina/Cordoba",      "America/Argentina/Jujuy",
-        "America/Argentina/La_Rioja",     "America/Argentina/Mendoza",
-        "America/Argentina/Rio_Gallegos", "America/Argentina/Salta",
-        "America/Argentina/San_Juan",     "America/Argentina/San_Luis",
-        "America/Argentina/Tucuman",      "America/Argentina/Ushuaia",
-        "America/Aruba",        "America/Asuncion",    "America/Atikokan",
-        "America/Bahia",        "America/Bahia_Banderas", "America/Barbados",
-        "America/Belem",        "America/Belize",      "America/Blanc-Sablon",
-        "America/Boa_Vista",    "America/Bogota",      "America/Boise",
-        "America/Cambridge_Bay","America/Campo_Grande","America/Cancun",
-        "America/Caracas",      "America/Cayenne",     "America/Cayman",
-        "America/Chicago",      "America/Chihuahua",   "America/Ciudad_Juarez",
-        "America/Costa_Rica",   "America/Coyhaique",   "America/Creston",
-        "America/Cuiaba",       "America/Curacao",     "America/Danmarkshavn",
-        "America/Dawson",       "America/Dawson_Creek","America/Denver",
-        "America/Detroit",      "America/Dominica",    "America/Edmonton",
-        "America/Eirunepe",     "America/El_Salvador", "America/Fort_Nelson",
-        "America/Fortaleza",    "America/Glace_Bay",   "America/Goose_Bay",
-        "America/Grand_Turk",   "America/Grenada",     "America/Guadeloupe",
-        "America/Guatemala",    "America/Guayaquil",   "America/Guyana",
-        "America/Halifax",      "America/Havana",      "America/Hermosillo",
-        "America/Indiana/Indianapolis", "America/Indiana/Knox",
-        "America/Indiana/Marengo",      "America/Indiana/Petersburg",
-        "America/Indiana/Tell_City",    "America/Indiana/Vevay",
-        "America/Indiana/Vincennes",    "America/Indiana/Winamac",
-        "America/Inuvik",       "America/Iqaluit",     "America/Jamaica",
-        "America/Juneau",       "America/Kentucky/Louisville",
-        "America/Kentucky/Monticello",  "America/Kralendijk",
-        "America/La_Paz",       "America/Lima",        "America/Los_Angeles",
-        "America/Lower_Princes","America/Maceio",      "America/Managua",
-        "America/Manaus",       "America/Marigot",     "America/Martinique",
-        "America/Matamoros",    "America/Mazatlan",    "America/Menominee",
-        "America/Merida",       "America/Metlakatla",  "America/Mexico_City",
-        "America/Miquelon",     "America/Moncton",     "America/Monterrey",
-        "America/Montevideo",   "America/Montserrat",  "America/Nassau",
-        "America/New_York",     "America/Nome",        "America/Noronha",
-        "America/North_Dakota/Beulah",  "America/North_Dakota/Center",
-        "America/North_Dakota/New_Salem","America/Nuuk", "America/Ojinaga",
-        "America/Panama",       "America/Paramaribo",  "America/Phoenix",
-        "America/Port-au-Prince","America/Port_of_Spain","America/Porto_Velho",
-        "America/Puerto_Rico",  "America/Punta_Arenas","America/Rankin_Inlet",
-        "America/Recife",       "America/Regina",      "America/Resolute",
-        "America/Rio_Branco",   "America/Santarem",    "America/Santiago",
-        "America/Santo_Domingo","America/Sao_Paulo",   "America/Scoresbysund",
-        "America/Sitka",        "America/St_Barthelemy","America/St_Johns",
-        "America/St_Kitts",     "America/St_Lucia",    "America/St_Thomas",
-        "America/St_Vincent",   "America/Swift_Current","America/Tegucigalpa",
-        "America/Thule",        "America/Tijuana",     "America/Toronto",
-        "America/Tortola",      "America/Vancouver",   "America/Whitehorse",
-        "America/Winnipeg",     "America/Yakutat",     "Antarctica/Casey",
-        "Antarctica/Davis",     "Antarctica/DumontDUrville", "Antarctica/Macquarie",
-        "Antarctica/Mawson",    "Antarctica/McMurdo",  "Antarctica/Palmer",
-        "Antarctica/Rothera",   "Antarctica/Syowa",    "Antarctica/Troll",
-        "Antarctica/Vostok",    "Arctic/Longyearbyen", "Asia/Aden",
-        "Asia/Almaty",          "Asia/Amman",          "Asia/Anadyr",
-        "Asia/Aqtau",           "Asia/Aqtobe",         "Asia/Ashgabat",
-        "Asia/Atyrau",          "Asia/Baghdad",        "Asia/Bahrain",
-        "Asia/Baku",            "Asia/Bangkok",        "Asia/Barnaul",
-        "Asia/Beirut",          "Asia/Bishkek",        "Asia/Brunei",
-        "Asia/Chita",           "Asia/Colombo",        "Asia/Damascus",
-        "Asia/Dhaka",           "Asia/Dili",           "Asia/Dubai",
-        "Asia/Dushanbe",        "Asia/Famagusta",      "Asia/Gaza",
-        "Asia/Hebron",          "Asia/Ho_Chi_Minh",    "Asia/Hong_Kong",
-        "Asia/Hovd",            "Asia/Irkutsk",        "Asia/Jakarta",
-        "Asia/Jayapura",        "Asia/Jerusalem",      "Asia/Kabul",
-        "Asia/Kamchatka",       "Asia/Karachi",        "Asia/Kathmandu",
-        "Asia/Khandyga",        "Asia/Kolkata",        "Asia/Krasnoyarsk",
-        "Asia/Kuala_Lumpur",    "Asia/Kuching",        "Asia/Kuwait",
-        "Asia/Macau",           "Asia/Magadan",        "Asia/Makassar",
-        "Asia/Manila",          "Asia/Muscat",         "Asia/Nicosia",
-        "Asia/Novokuznetsk",    "Asia/Novosibirsk",    "Asia/Omsk",
-        "Asia/Oral",            "Asia/Phnom_Penh",     "Asia/Pontianak",
-        "Asia/Pyongyang",       "Asia/Qatar",          "Asia/Qostanay",
-        "Asia/Qyzylorda",       "Asia/Riyadh",         "Asia/Sakhalin",
-        "Asia/Samarkand",       "Asia/Seoul",          "Asia/Shanghai",
-        "Asia/Singapore",       "Asia/Srednekolymsk",  "Asia/Taipei",
-        "Asia/Tashkent",        "Asia/Tbilisi",        "Asia/Tehran",
-        "Asia/Thimphu",         "Asia/Tokyo",          "Asia/Tomsk",
-        "Asia/Ulaanbaatar",     "Asia/Urumqi",         "Asia/Ust-Nera",
-        "Asia/Vientiane",       "Asia/Vladivostok",    "Asia/Yakutsk",
-        "Asia/Yangon",          "Asia/Yekaterinburg",  "Asia/Yerevan",
-        "Atlantic/Azores",      "Atlantic/Bermuda",    "Atlantic/Canary",
-        "Atlantic/Cape_Verde",  "Atlantic/Faroe",      "Atlantic/Madeira",
-        "Atlantic/Reykjavik",   "Atlantic/South_Georgia","Atlantic/St_Helena",
-        "Atlantic/Stanley",     "Australia/Adelaide",  "Australia/Brisbane",
-        "Australia/Broken_Hill","Australia/Darwin",    "Australia/Eucla",
-        "Australia/Hobart",     "Australia/Lindeman",  "Australia/Lord_Howe",
-        "Australia/Melbourne",  "Australia/Perth",     "Australia/Sydney",
-        "Europe/Amsterdam",     "Europe/Andorra",      "Europe/Astrakhan",
-        "Europe/Athens",        "Europe/Belgrade",     "Europe/Berlin",
-        "Europe/Bratislava",    "Europe/Brussels",     "Europe/Bucharest",
-        "Europe/Budapest",      "Europe/Busingen",     "Europe/Chisinau",
-        "Europe/Copenhagen",    "Europe/Dublin",       "Europe/Gibraltar",
-        "Europe/Guernsey",      "Europe/Helsinki",     "Europe/Isle_of_Man",
-        "Europe/Istanbul",      "Europe/Jersey",       "Europe/Kaliningrad",
-        "Europe/Kirov",         "Europe/Kyiv",         "Europe/Lisbon",
-        "Europe/Ljubljana",     "Europe/London",       "Europe/Luxembourg",
-        "Europe/Madrid",        "Europe/Malta",        "Europe/Mariehamn",
-        "Europe/Minsk",         "Europe/Monaco",       "Europe/Moscow",
-        "Europe/Oslo",          "Europe/Paris",        "Europe/Podgorica",
-        "Europe/Prague",        "Europe/Riga",         "Europe/Rome",
-        "Europe/Samara",        "Europe/San_Marino",   "Europe/Sarajevo",
-        "Europe/Saratov",       "Europe/Simferopol",   "Europe/Skopje",
-        "Europe/Sofia",         "Europe/Stockholm",    "Europe/Tallinn",
-        "Europe/Tirane",        "Europe/Ulyanovsk",    "Europe/Vaduz",
-        "Europe/Vatican",       "Europe/Vienna",       "Europe/Vilnius",
-        "Europe/Volgograd",     "Europe/Warsaw",       "Europe/Zagreb",
-        "Europe/Zurich",        "Indian/Antananarivo", "Indian/Chagos",
-        "Indian/Christmas",     "Indian/Cocos",        "Indian/Comoro",
-        "Indian/Kerguelen",     "Indian/Mahe",         "Indian/Maldives",
-        "Indian/Mauritius",     "Indian/Mayotte",      "Indian/Reunion",
-        "Pacific/Apia",         "Pacific/Auckland",    "Pacific/Bougainville",
-        "Pacific/Chatham",      "Pacific/Chuuk",       "Pacific/Easter",
-        "Pacific/Efate",        "Pacific/Fakaofo",     "Pacific/Fiji",
-        "Pacific/Funafuti",     "Pacific/Galapagos",   "Pacific/Gambier",
-        "Pacific/Guadalcanal",  "Pacific/Guam",        "Pacific/Honolulu",
-        "Pacific/Kanton",       "Pacific/Kiritimati",  "Pacific/Kosrae",
-        "Pacific/Kwajalein",    "Pacific/Majuro",      "Pacific/Marquesas",
-        "Pacific/Midway",       "Pacific/Nauru",       "Pacific/Niue",
-        "Pacific/Norfolk",      "Pacific/Noumea",      "Pacific/Pago_Pago",
-        "Pacific/Palau",        "Pacific/Pitcairn",    "Pacific/Pohnpei",
-        "Pacific/Port_Moresby", "Pacific/Rarotonga",   "Pacific/Saipan",
-        "Pacific/Tahiti",       "Pacific/Tarawa",      "Pacific/Tongatapu",
-        "Pacific/Wake",         "Pacific/Wallis",      "UTC",
+        "Africa/Abidjan",                 "Africa/Accra",                "Africa/Addis_Ababa",
+        "Africa/Algiers",                 "Africa/Asmara",               "Africa/Bamako",
+        "Africa/Bangui",                  "Africa/Banjul",               "Africa/Bissau",
+        "Africa/Blantyre",                "Africa/Brazzaville",          "Africa/Bujumbura",
+        "Africa/Cairo",                   "Africa/Casablanca",           "Africa/Ceuta",
+        "Africa/Conakry",                 "Africa/Dakar",                "Africa/Dar_es_Salaam",
+        "Africa/Djibouti",                "Africa/Douala",               "Africa/El_Aaiun",
+        "Africa/Freetown",                "Africa/Gaborone",             "Africa/Harare",
+        "Africa/Johannesburg",            "Africa/Juba",                 "Africa/Kampala",
+        "Africa/Khartoum",                "Africa/Kigali",               "Africa/Kinshasa",
+        "Africa/Lagos",                   "Africa/Libreville",           "Africa/Lome",
+        "Africa/Luanda",                  "Africa/Lubumbashi",           "Africa/Lusaka",
+        "Africa/Malabo",                  "Africa/Maputo",               "Africa/Maseru",
+        "Africa/Mbabane",                 "Africa/Mogadishu",            "Africa/Monrovia",
+        "Africa/Nairobi",                 "Africa/Ndjamena",             "Africa/Niamey",
+        "Africa/Nouakchott",              "Africa/Ouagadougou",          "Africa/Porto-Novo",
+        "Africa/Sao_Tome",                "Africa/Tripoli",              "Africa/Tunis",
+        "Africa/Windhoek",                "America/Adak",                "America/Anchorage",
+        "America/Anguilla",               "America/Antigua",             "America/Araguaina",
+        "America/Argentina/Buenos_Aires", "America/Argentina/Catamarca", "America/Argentina/Cordoba",
+        "America/Argentina/Jujuy",        "America/Argentina/La_Rioja",  "America/Argentina/Mendoza",
+        "America/Argentina/Rio_Gallegos", "America/Argentina/Salta",     "America/Argentina/San_Juan",
+        "America/Argentina/San_Luis",     "America/Argentina/Tucuman",   "America/Argentina/Ushuaia",
+        "America/Aruba",                  "America/Asuncion",            "America/Atikokan",
+        "America/Bahia",                  "America/Bahia_Banderas",      "America/Barbados",
+        "America/Belem",                  "America/Belize",              "America/Blanc-Sablon",
+        "America/Boa_Vista",              "America/Bogota",              "America/Boise",
+        "America/Cambridge_Bay",          "America/Campo_Grande",        "America/Cancun",
+        "America/Caracas",                "America/Cayenne",             "America/Cayman",
+        "America/Chicago",                "America/Chihuahua",           "America/Ciudad_Juarez",
+        "America/Costa_Rica",             "America/Coyhaique",           "America/Creston",
+        "America/Cuiaba",                 "America/Curacao",             "America/Danmarkshavn",
+        "America/Dawson",                 "America/Dawson_Creek",        "America/Denver",
+        "America/Detroit",                "America/Dominica",            "America/Edmonton",
+        "America/Eirunepe",               "America/El_Salvador",         "America/Fort_Nelson",
+        "America/Fortaleza",              "America/Glace_Bay",           "America/Goose_Bay",
+        "America/Grand_Turk",             "America/Grenada",             "America/Guadeloupe",
+        "America/Guatemala",              "America/Guayaquil",           "America/Guyana",
+        "America/Halifax",                "America/Havana",              "America/Hermosillo",
+        "America/Indiana/Indianapolis",   "America/Indiana/Knox",        "America/Indiana/Marengo",
+        "America/Indiana/Petersburg",     "America/Indiana/Tell_City",   "America/Indiana/Vevay",
+        "America/Indiana/Vincennes",      "America/Indiana/Winamac",     "America/Inuvik",
+        "America/Iqaluit",                "America/Jamaica",             "America/Juneau",
+        "America/Kentucky/Louisville",    "America/Kentucky/Monticello", "America/Kralendijk",
+        "America/La_Paz",                 "America/Lima",                "America/Los_Angeles",
+        "America/Lower_Princes",          "America/Maceio",              "America/Managua",
+        "America/Manaus",                 "America/Marigot",             "America/Martinique",
+        "America/Matamoros",              "America/Mazatlan",            "America/Menominee",
+        "America/Merida",                 "America/Metlakatla",          "America/Mexico_City",
+        "America/Miquelon",               "America/Moncton",             "America/Monterrey",
+        "America/Montevideo",             "America/Montserrat",          "America/Nassau",
+        "America/New_York",               "America/Nome",                "America/Noronha",
+        "America/North_Dakota/Beulah",    "America/North_Dakota/Center", "America/North_Dakota/New_Salem",
+        "America/Nuuk",                   "America/Ojinaga",             "America/Panama",
+        "America/Paramaribo",             "America/Phoenix",             "America/Port-au-Prince",
+        "America/Port_of_Spain",          "America/Porto_Velho",         "America/Puerto_Rico",
+        "America/Punta_Arenas",           "America/Rankin_Inlet",        "America/Recife",
+        "America/Regina",                 "America/Resolute",            "America/Rio_Branco",
+        "America/Santarem",               "America/Santiago",            "America/Santo_Domingo",
+        "America/Sao_Paulo",              "America/Scoresbysund",        "America/Sitka",
+        "America/St_Barthelemy",          "America/St_Johns",            "America/St_Kitts",
+        "America/St_Lucia",               "America/St_Thomas",           "America/St_Vincent",
+        "America/Swift_Current",          "America/Tegucigalpa",         "America/Thule",
+        "America/Tijuana",                "America/Toronto",             "America/Tortola",
+        "America/Vancouver",              "America/Whitehorse",          "America/Winnipeg",
+        "America/Yakutat",                "Antarctica/Casey",            "Antarctica/Davis",
+        "Antarctica/DumontDUrville",      "Antarctica/Macquarie",        "Antarctica/Mawson",
+        "Antarctica/McMurdo",             "Antarctica/Palmer",           "Antarctica/Rothera",
+        "Antarctica/Syowa",               "Antarctica/Troll",            "Antarctica/Vostok",
+        "Arctic/Longyearbyen",            "Asia/Aden",                   "Asia/Almaty",
+        "Asia/Amman",                     "Asia/Anadyr",                 "Asia/Aqtau",
+        "Asia/Aqtobe",                    "Asia/Ashgabat",               "Asia/Atyrau",
+        "Asia/Baghdad",                   "Asia/Bahrain",                "Asia/Baku",
+        "Asia/Bangkok",                   "Asia/Barnaul",                "Asia/Beirut",
+        "Asia/Bishkek",                   "Asia/Brunei",                 "Asia/Chita",
+        "Asia/Colombo",                   "Asia/Damascus",               "Asia/Dhaka",
+        "Asia/Dili",                      "Asia/Dubai",                  "Asia/Dushanbe",
+        "Asia/Famagusta",                 "Asia/Gaza",                   "Asia/Hebron",
+        "Asia/Ho_Chi_Minh",               "Asia/Hong_Kong",              "Asia/Hovd",
+        "Asia/Irkutsk",                   "Asia/Jakarta",                "Asia/Jayapura",
+        "Asia/Jerusalem",                 "Asia/Kabul",                  "Asia/Kamchatka",
+        "Asia/Karachi",                   "Asia/Kathmandu",              "Asia/Khandyga",
+        "Asia/Kolkata",                   "Asia/Krasnoyarsk",            "Asia/Kuala_Lumpur",
+        "Asia/Kuching",                   "Asia/Kuwait",                 "Asia/Macau",
+        "Asia/Magadan",                   "Asia/Makassar",               "Asia/Manila",
+        "Asia/Muscat",                    "Asia/Nicosia",                "Asia/Novokuznetsk",
+        "Asia/Novosibirsk",               "Asia/Omsk",                   "Asia/Oral",
+        "Asia/Phnom_Penh",                "Asia/Pontianak",              "Asia/Pyongyang",
+        "Asia/Qatar",                     "Asia/Qostanay",               "Asia/Qyzylorda",
+        "Asia/Riyadh",                    "Asia/Sakhalin",               "Asia/Samarkand",
+        "Asia/Seoul",                     "Asia/Shanghai",               "Asia/Singapore",
+        "Asia/Srednekolymsk",             "Asia/Taipei",                 "Asia/Tashkent",
+        "Asia/Tbilisi",                   "Asia/Tehran",                 "Asia/Thimphu",
+        "Asia/Tokyo",                     "Asia/Tomsk",                  "Asia/Ulaanbaatar",
+        "Asia/Urumqi",                    "Asia/Ust-Nera",               "Asia/Vientiane",
+        "Asia/Vladivostok",               "Asia/Yakutsk",                "Asia/Yangon",
+        "Asia/Yekaterinburg",             "Asia/Yerevan",                "Atlantic/Azores",
+        "Atlantic/Bermuda",               "Atlantic/Canary",             "Atlantic/Cape_Verde",
+        "Atlantic/Faroe",                 "Atlantic/Madeira",            "Atlantic/Reykjavik",
+        "Atlantic/South_Georgia",         "Atlantic/St_Helena",          "Atlantic/Stanley",
+        "Australia/Adelaide",             "Australia/Brisbane",          "Australia/Broken_Hill",
+        "Australia/Darwin",               "Australia/Eucla",             "Australia/Hobart",
+        "Australia/Lindeman",             "Australia/Lord_Howe",         "Australia/Melbourne",
+        "Australia/Perth",                "Australia/Sydney",            "Europe/Amsterdam",
+        "Europe/Andorra",                 "Europe/Astrakhan",            "Europe/Athens",
+        "Europe/Belgrade",                "Europe/Berlin",               "Europe/Bratislava",
+        "Europe/Brussels",                "Europe/Bucharest",            "Europe/Budapest",
+        "Europe/Busingen",                "Europe/Chisinau",             "Europe/Copenhagen",
+        "Europe/Dublin",                  "Europe/Gibraltar",            "Europe/Guernsey",
+        "Europe/Helsinki",                "Europe/Isle_of_Man",          "Europe/Istanbul",
+        "Europe/Jersey",                  "Europe/Kaliningrad",          "Europe/Kirov",
+        "Europe/Kyiv",                    "Europe/Lisbon",               "Europe/Ljubljana",
+        "Europe/London",                  "Europe/Luxembourg",           "Europe/Madrid",
+        "Europe/Malta",                   "Europe/Mariehamn",            "Europe/Minsk",
+        "Europe/Monaco",                  "Europe/Moscow",               "Europe/Oslo",
+        "Europe/Paris",                   "Europe/Podgorica",            "Europe/Prague",
+        "Europe/Riga",                    "Europe/Rome",                 "Europe/Samara",
+        "Europe/San_Marino",              "Europe/Sarajevo",             "Europe/Saratov",
+        "Europe/Simferopol",              "Europe/Skopje",               "Europe/Sofia",
+        "Europe/Stockholm",               "Europe/Tallinn",              "Europe/Tirane",
+        "Europe/Ulyanovsk",               "Europe/Vaduz",                "Europe/Vatican",
+        "Europe/Vienna",                  "Europe/Vilnius",              "Europe/Volgograd",
+        "Europe/Warsaw",                  "Europe/Zagreb",               "Europe/Zurich",
+        "Indian/Antananarivo",            "Indian/Chagos",               "Indian/Christmas",
+        "Indian/Cocos",                   "Indian/Comoro",               "Indian/Kerguelen",
+        "Indian/Mahe",                    "Indian/Maldives",             "Indian/Mauritius",
+        "Indian/Mayotte",                 "Indian/Reunion",              "Pacific/Apia",
+        "Pacific/Auckland",               "Pacific/Bougainville",        "Pacific/Chatham",
+        "Pacific/Chuuk",                  "Pacific/Easter",              "Pacific/Efate",
+        "Pacific/Fakaofo",                "Pacific/Fiji",                "Pacific/Funafuti",
+        "Pacific/Galapagos",              "Pacific/Gambier",             "Pacific/Guadalcanal",
+        "Pacific/Guam",                   "Pacific/Honolulu",            "Pacific/Kanton",
+        "Pacific/Kiritimati",             "Pacific/Kosrae",              "Pacific/Kwajalein",
+        "Pacific/Majuro",                 "Pacific/Marquesas",           "Pacific/Midway",
+        "Pacific/Nauru",                  "Pacific/Niue",                "Pacific/Norfolk",
+        "Pacific/Noumea",                 "Pacific/Pago_Pago",           "Pacific/Palau",
+        "Pacific/Pitcairn",               "Pacific/Pohnpei",             "Pacific/Port_Moresby",
+        "Pacific/Rarotonga",              "Pacific/Saipan",              "Pacific/Tahiti",
+        "Pacific/Tarawa",                 "Pacific/Tongatapu",           "Pacific/Wake",
+        "Pacific/Wallis",                 "UTC",
     };
     var arr = try ctx.createArray();
-    for (ids) |id| try arr.append(ctx.allocator, .{ .string = id });
+    for (ids) |id| try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(id) });
     return .{ .array = arr };
 }
 
@@ -2094,16 +2120,16 @@ fn dtzListAbbreviations(ctx: *NativeContext, _: []const Value) RuntimeError!Valu
         .{ .c = 'z', .off = 0 },
     };
     for (military) |m| {
-        if (arr.get(.{ .string = &[_]u8{m.c} }) != .null) continue;
+        if (arr.get(.{ .string = Value.String.borrowed(&[_]u8{m.c}) }) != .null) continue;
         const key = try ctx.allocator.dupe(u8, &[_]u8{m.c});
         try ctx.vm.strings.append(ctx.allocator, key);
         const list = try ctx.createArray();
         const entry = try ctx.createArray();
-        try entry.set(ctx.allocator, .{ .string = "dst" }, .{ .bool = false });
-        try entry.set(ctx.allocator, .{ .string = "offset" }, .{ .int = @as(i64, m.off) });
-        try entry.set(ctx.allocator, .{ .string = "timezone_id" }, .null);
+        try entry.set(ctx.allocator, .{ .string = Value.String.borrowed("dst") }, .{ .bool = false });
+        try entry.set(ctx.allocator, .{ .string = Value.String.borrowed("offset") }, .{ .int = @as(i64, m.off) });
+        try entry.set(ctx.allocator, .{ .string = Value.String.borrowed("timezone_id") }, .null);
         try list.append(ctx.allocator, .{ .array = entry });
-        try arr.set(ctx.allocator, .{ .string = key }, .{ .array = list });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, .{ .array = list });
     }
     return .{ .array = arr };
 }
@@ -2127,30 +2153,30 @@ fn canonicalizeZoneName(ctx: *NativeContext, lower_name: []const u8) ![]const u8
 fn appendAbbrevEntry(ctx: *NativeContext, outer: *@import("../runtime/value.zig").PhpArray, key: []const u8, dst: bool, offset: i32, tz_id: []const u8) !void {
     const PA = @import("../runtime/value.zig").PhpArray;
     var list: *PA = undefined;
-    const existing = outer.get(.{ .string = key });
+    const existing = outer.get(.{ .string = Value.String.borrowed(key) });
     if (existing == .array) {
         list = existing.array;
     } else {
         list = try ctx.createArray();
-        try outer.set(ctx.allocator, .{ .string = key }, .{ .array = list });
+        try outer.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, .{ .array = list });
     }
     const entry = try ctx.createArray();
-    try entry.set(ctx.allocator, .{ .string = "dst" }, .{ .bool = dst });
-    try entry.set(ctx.allocator, .{ .string = "offset" }, .{ .int = @as(i64, offset) });
-    try entry.set(ctx.allocator, .{ .string = "timezone_id" }, .{ .string = tz_id });
+    try entry.set(ctx.allocator, .{ .string = Value.String.borrowed("dst") }, .{ .bool = dst });
+    try entry.set(ctx.allocator, .{ .string = Value.String.borrowed("offset") }, .{ .int = @as(i64, offset) });
+    try entry.set(ctx.allocator, .{ .string = Value.String.borrowed("timezone_id") }, .{ .string = Value.String.borrowed(tz_id) });
     try list.append(ctx.allocator, .{ .array = entry });
 }
 
 fn dtzGetName(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    const obj = getThis(ctx) orelse return .{ .string = "UTC" };
+    const obj = getThis(ctx) orelse return .{ .string = Value.String.borrowed("UTC") };
     const tz_val = obj.get("timezone");
-    return if (tz_val == .string) tz_val else .{ .string = "UTC" };
+    return if (tz_val == .string) tz_val else .{ .string = Value.String.borrowed("UTC") };
 }
 
 fn dtzGetOffset(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .int = 0 };
     const tz_val = obj.get("timezone");
-    const tz_name = if (tz_val == .string) tz_val.string else "UTC";
+    const tz_name = if (tz_val == .string) tz_val.string.bytes() else "UTC";
 
     // getOffset takes a DateTime argument for DST calculation
     var ref_ts: i64 = std.time.timestamp();
@@ -2167,14 +2193,14 @@ fn dtzGetOffset(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn dtzGetLocation(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .{ .bool = false };
     const tz_val = obj.get("timezone");
-    const tz_name = if (tz_val == .string) tz_val.string else "UTC";
+    const tz_name = if (tz_val == .string) tz_val.string.bytes() else "UTC";
     // offset-only zones report false
     if (tz_name.len > 0 and (tz_name[0] == '+' or tz_name[0] == '-')) return .{ .bool = false };
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "country_code" }, .{ .string = "??" });
-    try arr.set(ctx.allocator, .{ .string = "latitude" }, .{ .float = 0.0 });
-    try arr.set(ctx.allocator, .{ .string = "longitude" }, .{ .float = 0.0 });
-    try arr.set(ctx.allocator, .{ .string = "comments" }, .{ .string = "" });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("country_code") }, .{ .string = Value.String.borrowed("??") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("latitude") }, .{ .float = 0.0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("longitude") }, .{ .float = 0.0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("comments") }, .{ .string = Value.String.borrowed("") });
     return .{ .array = arr };
 }
 
@@ -2212,8 +2238,8 @@ fn appendOffsetCompact(buf: *std.ArrayListUnmanaged(u8), a: Allocator, offset: i
 }
 
 fn native_date(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const format = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const format = args[0].string.bytes();
     const timestamp: i64 = if (args.len >= 2) Value.toInt(args[1]) else std.time.timestamp();
     return formatTimestamp(ctx, timestamp, format);
 }
@@ -2242,7 +2268,7 @@ fn native_gmmktime(_: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const input = args[0].string;
+    const input = args[0].string.bytes();
     const base: i64 = if (args.len >= 2) Value.toInt(args[1]) else std.time.timestamp();
 
     // @timestamp - unix timestamp literal
@@ -2252,9 +2278,7 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!Value {
     }
 
     // ISO 8601 week date: YYYY-Www-D (e.g. 2024-W10-1) or YYYY-Www (Monday)
-    if (input.len >= 8 and input[4] == '-' and (input[5] == 'W' or input[5] == 'w')
-        and input[6] >= '0' and input[6] <= '9' and input[7] >= '0' and input[7] <= '9')
-    {
+    if (input.len >= 8 and input[4] == '-' and (input[5] == 'W' or input[5] == 'w') and input[6] >= '0' and input[6] <= '9' and input[7] >= '0' and input[7] <= '9') {
         const year = std.fmt.parseInt(i64, input[0..4], 10) catch return Value{ .bool = false };
         const week = std.fmt.parseInt(i64, input[6..8], 10) catch return Value{ .bool = false };
         var dow: i64 = 1;
@@ -2295,7 +2319,10 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!Value {
                 }
                 consumed = time_start + i;
                 var rest = input[consumed..];
-                while (rest.len > 0 and rest[0] == ' ') { rest = rest[1..]; consumed += 1; }
+                while (rest.len > 0 and rest[0] == ' ') {
+                    rest = rest[1..];
+                    consumed += 1;
+                }
                 if (rest.len > 0) {
                     if (parseTimezoneOffset(rest)) |off| {
                         tz_offset = off;
@@ -2549,31 +2576,31 @@ fn native_cal_days_in_month(ctx: *NativeContext, args: []const Value) RuntimeErr
 fn buildDateParseResult(ctx: *NativeContext, year: ?i64, month: ?i64, day: ?i64, hour: ?i64, minute: ?i64, second: ?i64, fraction: f64, errors: []const []const u8) !Value {
     const PhpArray = @import("../runtime/value.zig").PhpArray;
     var arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "year" }, if (year) |y| .{ .int = y } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "month" }, if (month) |m| .{ .int = m } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "day" }, if (day) |d| .{ .int = d } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "hour" }, if (hour) |h| .{ .int = h } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "minute" }, if (minute) |m| .{ .int = m } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "second" }, if (second) |s| .{ .int = s } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "fraction" }, .{ .float = fraction });
-    try arr.set(ctx.allocator, .{ .string = "warning_count" }, .{ .int = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("year") }, if (year) |y| .{ .int = y } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("month") }, if (month) |m| .{ .int = m } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("day") }, if (day) |d| .{ .int = d } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("hour") }, if (hour) |h| .{ .int = h } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("minute") }, if (minute) |m| .{ .int = m } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("second") }, if (second) |s| .{ .int = s } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("fraction") }, .{ .float = fraction });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("warning_count") }, .{ .int = 0 });
     const warns = try ctx.allocator.create(PhpArray);
     warns.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, warns);
-    try arr.set(ctx.allocator, .{ .string = "warnings" }, .{ .array = warns });
-    try arr.set(ctx.allocator, .{ .string = "error_count" }, .{ .int = @intCast(errors.len) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("warnings") }, .{ .array = warns });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("error_count") }, .{ .int = @intCast(errors.len) });
     const errs = try ctx.allocator.create(PhpArray);
     errs.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, errs);
-    for (errors, 0..) |e, i| try errs.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = e });
-    try arr.set(ctx.allocator, .{ .string = "errors" }, .{ .array = errs });
-    try arr.set(ctx.allocator, .{ .string = "is_localtime" }, .{ .bool = false });
+    for (errors, 0..) |e, i| try errs.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = Value.String.borrowed(e) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("errors") }, .{ .array = errs });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("is_localtime") }, .{ .bool = false });
     return .{ .array = arr };
 }
 
 fn native_date_parse(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     var year: ?i64 = null;
     var month: ?i64 = null;
     var day: ?i64 = null;
@@ -2599,8 +2626,8 @@ fn native_date_parse(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 
 fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const format = args[0].string;
-    const datetime = args[1].string;
+    const format = args[0].string.bytes();
+    const datetime = args[1].string.bytes();
 
     var year: ?i64 = null;
     var month: ?i64 = null;
@@ -2622,56 +2649,100 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
         switch (c) {
             'Y' => {
                 if (di + 4 <= datetime.len) {
-                    if (std.fmt.parseInt(i64, datetime[di..di+4], 10)) |v| { year = v; di += 4; }
-                    else |_| { if (n_errors < errors_buf.len) { errors_buf[n_errors] = "A four digit year could not be found"; n_errors += 1; } }
-                } else if (n_errors < errors_buf.len) { errors_buf[n_errors] = "A four digit year could not be found"; n_errors += 1; }
+                    if (std.fmt.parseInt(i64, datetime[di .. di + 4], 10)) |v| {
+                        year = v;
+                        di += 4;
+                    } else |_| {
+                        if (n_errors < errors_buf.len) {
+                            errors_buf[n_errors] = "A four digit year could not be found";
+                            n_errors += 1;
+                        }
+                    }
+                } else if (n_errors < errors_buf.len) {
+                    errors_buf[n_errors] = "A four digit year could not be found";
+                    n_errors += 1;
+                }
             },
             'y' => {
                 if (di + 2 <= datetime.len) {
-                    if (std.fmt.parseInt(i64, datetime[di..di+2], 10)) |yy| { year = if (yy < 70) 2000 + yy else 1900 + yy; di += 2; }
-                    else |_| {}
+                    if (std.fmt.parseInt(i64, datetime[di .. di + 2], 10)) |yy| {
+                        year = if (yy < 70) 2000 + yy else 1900 + yy;
+                        di += 2;
+                    } else |_| {}
                 }
             },
             'm' => {
                 if (di + 2 <= datetime.len) {
-                    if (std.fmt.parseInt(i64, datetime[di..di+2], 10)) |v| { month = v; di += 2; } else |_| {}
+                    if (std.fmt.parseInt(i64, datetime[di .. di + 2], 10)) |v| {
+                        month = v;
+                        di += 2;
+                    } else |_| {}
                 }
             },
             'n' => {
-                if (takeDigits(datetime, di, 1, 2)) |t| { month = t.value; di = t.next; }
+                if (takeDigits(datetime, di, 1, 2)) |t| {
+                    month = t.value;
+                    di = t.next;
+                }
             },
             'd' => {
                 if (di + 2 <= datetime.len) {
-                    if (std.fmt.parseInt(i64, datetime[di..di+2], 10)) |v| { day = v; di += 2; } else |_| {}
+                    if (std.fmt.parseInt(i64, datetime[di .. di + 2], 10)) |v| {
+                        day = v;
+                        di += 2;
+                    } else |_| {}
                 }
             },
             'j' => {
-                if (takeDigits(datetime, di, 1, 2)) |t| { day = t.value; di = t.next; }
+                if (takeDigits(datetime, di, 1, 2)) |t| {
+                    day = t.value;
+                    di = t.next;
+                }
             },
             'H' => {
                 if (di + 2 <= datetime.len) {
-                    if (std.fmt.parseInt(i64, datetime[di..di+2], 10)) |v| { hour = v; di += 2; } else |_| {}
+                    if (std.fmt.parseInt(i64, datetime[di .. di + 2], 10)) |v| {
+                        hour = v;
+                        di += 2;
+                    } else |_| {}
                 }
             },
             'G' => {
-                if (takeDigits(datetime, di, 1, 2)) |t| { hour = t.value; di = t.next; }
+                if (takeDigits(datetime, di, 1, 2)) |t| {
+                    hour = t.value;
+                    di = t.next;
+                }
             },
             'h' => {
                 if (di + 2 <= datetime.len) {
-                    if (std.fmt.parseInt(i64, datetime[di..di+2], 10)) |v| { hour = v; di += 2; hour_is_12 = true; } else |_| {}
+                    if (std.fmt.parseInt(i64, datetime[di .. di + 2], 10)) |v| {
+                        hour = v;
+                        di += 2;
+                        hour_is_12 = true;
+                    } else |_| {}
                 }
             },
             'g' => {
-                if (takeDigits(datetime, di, 1, 2)) |t| { hour = t.value; di = t.next; hour_is_12 = true; }
+                if (takeDigits(datetime, di, 1, 2)) |t| {
+                    hour = t.value;
+                    di = t.next;
+                    hour_is_12 = true;
+                }
             },
             'i' => {
                 if (di + 2 <= datetime.len) {
-                    if (std.fmt.parseInt(i64, datetime[di..di+2], 10)) |v| { minute = v; di += 2; } else |_| {}
+                    if (std.fmt.parseInt(i64, datetime[di .. di + 2], 10)) |v| {
+                        minute = v;
+                        di += 2;
+                    } else |_| {}
                 }
             },
             's' => {
                 if (di + 2 <= datetime.len) {
-                    if (std.fmt.parseInt(i64, datetime[di..di+2], 10)) |v| { second = v; di += 2; } else |_| {}
+                    if (std.fmt.parseInt(i64, datetime[di .. di + 2], 10)) |v| {
+                        second = v;
+                        di += 2;
+                    } else |_| {}
                 }
             },
             'u' => {
@@ -2691,7 +2762,7 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
             'v' => {
                 // milliseconds 3 digits
                 if (di + 3 <= datetime.len) {
-                    if (std.fmt.parseInt(i64, datetime[di..di+3], 10)) |ms| {
+                    if (std.fmt.parseInt(i64, datetime[di .. di + 3], 10)) |ms| {
                         fraction = @as(f64, @floatFromInt(ms)) / 1000.0;
                         di += 3;
                     } else |_| {}
@@ -2699,9 +2770,14 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
             },
             'a', 'A' => {
                 if (di + 2 <= datetime.len) {
-                    const tok = datetime[di..di+2];
-                    if (std.ascii.eqlIgnoreCase(tok, "am")) { is_pm = false; di += 2; }
-                    else if (std.ascii.eqlIgnoreCase(tok, "pm")) { is_pm = true; di += 2; }
+                    const tok = datetime[di .. di + 2];
+                    if (std.ascii.eqlIgnoreCase(tok, "am")) {
+                        is_pm = false;
+                        di += 2;
+                    } else if (std.ascii.eqlIgnoreCase(tok, "pm")) {
+                        is_pm = true;
+                        di += 2;
+                    }
                 }
             },
             'D', 'l' => {
@@ -2714,7 +2790,7 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
                 while (end < datetime.len and std.ascii.isAlphabetic(datetime[end])) end += 1;
                 if (end > di) {
                     const name = datetime[di..end];
-                    const months = [_][]const u8{ "january","february","march","april","may","june","july","august","september","october","november","december" };
+                    const months = [_][]const u8{ "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december" };
                     for (months, 0..) |mn, idx| {
                         if (std.ascii.startsWithIgnoreCase(mn, name) and (name.len == mn.len or name.len == 3)) {
                             month = @intCast(idx + 1);
@@ -2758,8 +2834,7 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
 
     if (hour_is_12) {
         if (is_pm) |pm| {
-            if (pm and (hour orelse 0) < 12) hour = (hour orelse 0) + 12
-            else if (!pm and (hour orelse 0) == 12) hour = 0;
+            if (pm and (hour orelse 0) < 12) hour = (hour orelse 0) + 12 else if (!pm and (hour orelse 0) == 12) hour = 0;
         }
     }
 
@@ -2780,25 +2855,25 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
 fn buildDateParseResultOpt(ctx: *NativeContext, year: ?i64, month: ?i64, day: ?i64, hour: ?i64, minute: ?i64, second: ?i64, fraction: ?f64, errors: []const []const u8) !Value {
     const PhpArray = @import("../runtime/value.zig").PhpArray;
     var arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "year" }, if (year) |y| .{ .int = y } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "month" }, if (month) |m| .{ .int = m } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "day" }, if (day) |d| .{ .int = d } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "hour" }, if (hour) |h| .{ .int = h } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "minute" }, if (minute) |m| .{ .int = m } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "second" }, if (second) |s| .{ .int = s } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "fraction" }, if (fraction) |f| .{ .float = f } else .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "warning_count" }, .{ .int = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("year") }, if (year) |y| .{ .int = y } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("month") }, if (month) |m| .{ .int = m } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("day") }, if (day) |d| .{ .int = d } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("hour") }, if (hour) |h| .{ .int = h } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("minute") }, if (minute) |m| .{ .int = m } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("second") }, if (second) |s| .{ .int = s } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("fraction") }, if (fraction) |f| .{ .float = f } else .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("warning_count") }, .{ .int = 0 });
     const warns = try ctx.allocator.create(PhpArray);
     warns.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, warns);
-    try arr.set(ctx.allocator, .{ .string = "warnings" }, .{ .array = warns });
-    try arr.set(ctx.allocator, .{ .string = "error_count" }, .{ .int = @intCast(errors.len) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("warnings") }, .{ .array = warns });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("error_count") }, .{ .int = @intCast(errors.len) });
     const errs = try ctx.allocator.create(PhpArray);
     errs.* = .{};
     try ctx.vm.arrays.append(ctx.allocator, errs);
-    for (errors, 0..) |e, i| try errs.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = e });
-    try arr.set(ctx.allocator, .{ .string = "errors" }, .{ .array = errs });
-    try arr.set(ctx.allocator, .{ .string = "is_localtime" }, .{ .bool = false });
+    for (errors, 0..) |e, i| try errs.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = Value.String.borrowed(e) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("errors") }, .{ .array = errs });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("is_localtime") }, .{ .bool = false });
     return .{ .array = arr };
 }
 
@@ -2814,21 +2889,21 @@ fn native_getdate(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const dow: i64 = @intCast(@mod(day_num + 4, 7)); // 0=sunday
 
     var arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "seconds" }, .{ .int = day_seconds.getSecondsIntoMinute() });
-    try arr.set(ctx.allocator, .{ .string = "minutes" }, .{ .int = day_seconds.getMinutesIntoHour() });
-    try arr.set(ctx.allocator, .{ .string = "hours" }, .{ .int = day_seconds.getHoursIntoDay() });
-    try arr.set(ctx.allocator, .{ .string = "mday" }, .{ .int = @as(i64, month_day.day_index) + 1 });
-    try arr.set(ctx.allocator, .{ .string = "wday" }, .{ .int = dow });
-    try arr.set(ctx.allocator, .{ .string = "mon" }, .{ .int = month_day.month.numeric() });
-    try arr.set(ctx.allocator, .{ .string = "year" }, .{ .int = year_day.year });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("seconds") }, .{ .int = day_seconds.getSecondsIntoMinute() });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("minutes") }, .{ .int = day_seconds.getMinutesIntoHour() });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("hours") }, .{ .int = day_seconds.getHoursIntoDay() });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("mday") }, .{ .int = @as(i64, month_day.day_index) + 1 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("wday") }, .{ .int = dow });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("mon") }, .{ .int = month_day.month.numeric() });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("year") }, .{ .int = year_day.year });
     const jan1_ts = dateToTimestamp(year_day.year, 1, 1, 0, 0, 0);
     const jan1_es = std.time.epoch.EpochSeconds{ .secs = @intCast(if (jan1_ts < 0) 0 else jan1_ts) };
     const jan1_day: i64 = @intCast(jan1_es.getEpochDay().day);
     const cur_day: i64 = @intCast(epoch_day.day);
-    try arr.set(ctx.allocator, .{ .string = "yday" }, .{ .int = cur_day - jan1_day });
-    try arr.set(ctx.allocator, .{ .string = "weekday" }, .{ .string = ([_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" })[@intCast(dow)] });
-    try arr.set(ctx.allocator, .{ .string = "month" }, .{ .string = ([_][]const u8{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" })[@intCast(month_day.month.numeric() - 1)] });
-    try arr.set(ctx.allocator, .{ .string = "0" }, .{ .int = timestamp });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("yday") }, .{ .int = cur_day - jan1_day });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("weekday") }, .{ .string = Value.String.borrowed(([_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" })[@intCast(dow)]) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("month") }, .{ .string = Value.String.borrowed(([_][]const u8{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" })[@intCast(month_day.month.numeric() - 1)]) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("0") }, .{ .int = timestamp });
     return .{ .array = arr };
 }
 
@@ -2865,7 +2940,7 @@ fn native_microtime(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     try buf.appendSlice(ctx.allocator, ts_str);
     const result = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, result);
-    return .{ .string = result };
+    return .{ .string = Value.String.borrowed(result) };
 }
 
 // date/time utilities
@@ -2949,9 +3024,7 @@ pub fn parseRelativeTime(input: []const u8, base: i64) Value {
             var rest = s[wname_len..];
             while (rest.len > 0 and rest[0] == ' ') rest = rest[1..];
             var week_dir: ?i64 = null;
-            if (startsWithLower(rest, "this week")) week_dir = 0
-            else if (startsWithLower(rest, "next week")) week_dir = 1
-            else if (startsWithLower(rest, "last week")) week_dir = -1;
+            if (startsWithLower(rest, "this week")) week_dir = 0 else if (startsWithLower(rest, "next week")) week_dir = 1 else if (startsWithLower(rest, "last week")) week_dir = -1;
             if (week_dir) |wd| {
                 const midnight = baseMidnight(base);
                 const epoch_secs: u64 = @intCast(if (midnight < 0) 0 else midnight);
@@ -2990,8 +3063,12 @@ fn parseSignedMonthDelta(input: []const u8) ?i64 {
     var s = input;
     var sign: i64 = 1;
     var ago = false;
-    if (s.len > 0 and s[0] == '+') { s = s[1..]; }
-    else if (s.len > 0 and s[0] == '-') { sign = -1; s = s[1..]; }
+    if (s.len > 0 and s[0] == '+') {
+        s = s[1..];
+    } else if (s.len > 0 and s[0] == '-') {
+        sign = -1;
+        s = s[1..];
+    }
     while (s.len > 0 and s[0] == ' ') s = s[1..];
     if (s.len == 0 or s[0] < '0' or s[0] > '9') return null;
     var end: usize = 0;
@@ -3000,13 +3077,24 @@ fn parseSignedMonthDelta(input: []const u8) ?i64 {
     var rest = s[end..];
     while (rest.len > 0 and rest[0] == ' ') rest = rest[1..];
     var unit_months: i64 = 0;
-    if (startsWithLower(rest, "months")) { unit_months = 1; rest = rest[6..]; }
-    else if (startsWithLower(rest, "month")) { unit_months = 1; rest = rest[5..]; }
-    else if (startsWithLower(rest, "years")) { unit_months = 12; rest = rest[5..]; }
-    else if (startsWithLower(rest, "year")) { unit_months = 12; rest = rest[4..]; }
-    else return null;
+    if (startsWithLower(rest, "months")) {
+        unit_months = 1;
+        rest = rest[6..];
+    } else if (startsWithLower(rest, "month")) {
+        unit_months = 1;
+        rest = rest[5..];
+    } else if (startsWithLower(rest, "years")) {
+        unit_months = 12;
+        rest = rest[5..];
+    } else if (startsWithLower(rest, "year")) {
+        unit_months = 12;
+        rest = rest[4..];
+    } else return null;
     while (rest.len > 0 and rest[0] == ' ') rest = rest[1..];
-    if (startsWithLower(rest, "ago")) { ago = true; rest = rest[3..]; }
+    if (startsWithLower(rest, "ago")) {
+        ago = true;
+        rest = rest[3..];
+    }
     while (rest.len > 0 and rest[0] == ' ') rest = rest[1..];
     if (rest.len != 0) return null;
     var delta = n * unit_months * sign;
@@ -3034,15 +3122,27 @@ fn tryParseFirstLastDay(input: []const u8, base: i64) ?i64 {
         // use current month
     } else if (eqlLower(s, "next month")) {
         month += 1;
-        if (month > 12) { month = 1; year += 1; }
+        if (month > 12) {
+            month = 1;
+            year += 1;
+        }
     } else if (eqlLower(s, "last month") or eqlLower(s, "previous month")) {
         month -= 1;
-        if (month < 1) { month = 12; year -= 1; }
+        if (month < 1) {
+            month = 12;
+            year -= 1;
+        }
     } else if (parseSignedMonthDelta(s)) |delta| {
         // "+N month(s)", "-N month(s)", "N months ago"
         month += delta;
-        while (month > 12) { month -= 12; year += 1; }
-        while (month < 1) { month += 12; year -= 1; }
+        while (month > 12) {
+            month -= 12;
+            year += 1;
+        }
+        while (month < 1) {
+            month += 12;
+            year -= 1;
+        }
     } else if (parseMonthName(s) != null) {
         month = parseMonthName(s).?;
         const mname_len = monthNameLen(s);
@@ -3092,8 +3192,14 @@ fn tryParseNextLast(input: []const u8, base: i64) ?i64 {
         } else {
             month += direction;
         }
-        if (month > 12) { year += @divFloor(month - 1, 12); month = @mod(month - 1, 12) + 1; }
-        if (month < 1) { year += @divFloor(month - 12, 12); month = @mod(month - 1, 12) + 1; }
+        if (month > 12) {
+            year += @divFloor(month - 1, 12);
+            month = @mod(month - 1, 12) + 1;
+        }
+        if (month < 1) {
+            year += @divFloor(month - 12, 12);
+            month = @mod(month - 1, 12) + 1;
+        }
         return dateToTimestamp(year, month, comps.day, comps.hour, comps.min, comps.sec);
     }
 
@@ -3269,9 +3375,19 @@ fn applyUnit(base: i64, delta: i64, kind: UnitKind) i64 {
             const comps = baseComponents(base);
             var year = comps.year;
             var month = comps.month;
-            if (kind == .year) { year += delta; } else { month += delta; }
-            if (month > 12) { year += @divFloor(month - 1, 12); month = @mod(month - 1, 12) + 1; }
-            if (month < 1) { year += @divFloor(month - 12, 12); month = @mod(month - 1, 12) + 1; }
+            if (kind == .year) {
+                year += delta;
+            } else {
+                month += delta;
+            }
+            if (month > 12) {
+                year += @divFloor(month - 1, 12);
+                month = @mod(month - 1, 12) + 1;
+            }
+            if (month < 1) {
+                year += @divFloor(month - 12, 12);
+                month = @mod(month - 1, 12) + 1;
+            }
             break :blk dateToTimestamp(year, month, comps.day, comps.hour, comps.min, comps.sec);
         },
     };
@@ -3331,14 +3447,27 @@ fn resolveLastWeekday(base: i64, target_dow: u3) i64 {
 const DateComponents = struct { year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64 };
 
 const FmtDaySec = struct {
-    h: u32, mi: u32, s: u32,
-    pub fn getHoursIntoDay(self: @This()) u32 { return self.h; }
-    pub fn getMinutesIntoHour(self: @This()) u32 { return self.mi; }
-    pub fn getSecondsIntoMinute(self: @This()) u32 { return self.s; }
+    h: u32,
+    mi: u32,
+    s: u32,
+    pub fn getHoursIntoDay(self: @This()) u32 {
+        return self.h;
+    }
+    pub fn getMinutesIntoHour(self: @This()) u32 {
+        return self.mi;
+    }
+    pub fn getSecondsIntoMinute(self: @This()) u32 {
+        return self.s;
+    }
 };
 const FmtEpochDay = struct { day: i64 };
 const FmtYearDay = struct { year: i64 };
-const FmtMonth = struct { v: u32, pub fn numeric(s: @This()) u32 { return s.v; } };
+const FmtMonth = struct {
+    v: u32,
+    pub fn numeric(s: @This()) u32 {
+        return s.v;
+    }
+};
 const FmtMonthDay = struct { month: FmtMonth, day_index: u32 };
 
 const IsoWeek = struct { year: i64, week: u32 };
@@ -3360,7 +3489,10 @@ fn baseComponents(base: i64) DateComponents {
     // Howard Hinnant's civil_from_days, works for any year including pre-1970
     var days = @divFloor(base, 86400);
     var sod: i64 = base - days * 86400; // seconds-of-day in [0,86400)
-    if (sod < 0) { sod += 86400; days -= 1; }
+    if (sod < 0) {
+        sod += 86400;
+        days -= 1;
+    }
     const z = days + 719468;
     const era = @divFloor(z, 146097);
     const doe: i64 = z - era * 146097;
@@ -4137,10 +4269,16 @@ fn tryParseOrdinalWeekday(input: []const u8, base: i64) ?i64 {
 
     if (startsWithLower(s, "next month")) {
         month += 1;
-        if (month > 12) { month = 1; year += 1; }
+        if (month > 12) {
+            month = 1;
+            year += 1;
+        }
     } else if (startsWithLower(s, "last month")) {
         month -= 1;
-        if (month < 1) { month = 12; year -= 1; }
+        if (month < 1) {
+            month = 12;
+            year -= 1;
+        }
     } else if (startsWithLower(s, "this month")) {
         // use current
     } else if (parseMonthName(s)) |m| {
@@ -4187,15 +4325,15 @@ fn startsWith(s: []const u8, prefix: []const u8) bool {
 
 // gmdate is identical to date since zphp timestamps are always UTC
 fn native_gmdate(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const format = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const format = args[0].string.bytes();
     const timestamp: i64 = if (args.len >= 2) Value.toInt(args[1]) else std.time.timestamp();
     return formatTimestampTz(ctx, timestamp, format, 0, "UTC");
 }
 
 fn native_tz_set(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     if (lookupTimezone(name)) |_| {
         ctx.vm.default_tz_name = name;
         return .{ .bool = true };
@@ -4207,14 +4345,14 @@ fn native_timezone_name_get(_: *NativeContext, args: []const Value) RuntimeError
     if (args.len < 1 or args[0] != .object) return .{ .bool = false };
     const name = args[0].object.get("timezone");
     if (name == .string) return name;
-    return .{ .string = "UTC" };
+    return .{ .string = Value.String.borrowed("UTC") };
 }
 
 fn native_timezone_offset_get(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .object or args[1] != .object) return .{ .bool = false };
     const tz_obj = args[0].object;
     const dt_obj = args[1].object;
-    const tz_name = if (tz_obj.get("timezone") == .string) tz_obj.get("timezone").string else "UTC";
+    const tz_name = if (tz_obj.get("timezone") == .string) tz_obj.get("timezone").string.bytes() else "UTC";
     const ts = getTimestamp(dt_obj);
     if (lookupTimezone(tz_name)) |tz| return .{ .int = @intCast(tzOffsetAt(tz, ts)) };
     return .{ .int = 0 };
@@ -4222,7 +4360,7 @@ fn native_timezone_offset_get(_: *NativeContext, args: []const Value) RuntimeErr
 
 fn native_timezone_open(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     // validate against the same rules as DateTimeZone::__construct: accept
     // fixed-offset forms (+HH, +HH:MM, UTC, GMT) and known IANA zones. on
     // failure, PHP emits a Warning and returns false (rather than throwing
@@ -4262,7 +4400,7 @@ fn native_date_timezone_set(ctx: *NativeContext, args: []const Value) RuntimeErr
 }
 
 fn native_tz_get(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = ctx.vm.default_tz_name };
+    return .{ .string = Value.String.borrowed(ctx.vm.default_tz_name) };
 }
 
 fn native_localtime(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -4284,15 +4422,15 @@ fn native_localtime(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
     var arr = try ctx.createArray();
     if (assoc) {
-        try arr.set(ctx.allocator, .{ .string = "tm_sec" }, .{ .int = day_seconds.getSecondsIntoMinute() });
-        try arr.set(ctx.allocator, .{ .string = "tm_min" }, .{ .int = day_seconds.getMinutesIntoHour() });
-        try arr.set(ctx.allocator, .{ .string = "tm_hour" }, .{ .int = day_seconds.getHoursIntoDay() });
-        try arr.set(ctx.allocator, .{ .string = "tm_mday" }, .{ .int = @as(i64, month_day.day_index) + 1 });
-        try arr.set(ctx.allocator, .{ .string = "tm_mon" }, .{ .int = month_day.month.numeric() - 1 });
-        try arr.set(ctx.allocator, .{ .string = "tm_year" }, .{ .int = year_day.year - 1900 });
-        try arr.set(ctx.allocator, .{ .string = "tm_wday" }, .{ .int = dow });
-        try arr.set(ctx.allocator, .{ .string = "tm_yday" }, .{ .int = yday });
-        try arr.set(ctx.allocator, .{ .string = "tm_isdst" }, .{ .int = 0 });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_sec") }, .{ .int = day_seconds.getSecondsIntoMinute() });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_min") }, .{ .int = day_seconds.getMinutesIntoHour() });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_hour") }, .{ .int = day_seconds.getHoursIntoDay() });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_mday") }, .{ .int = @as(i64, month_day.day_index) + 1 });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_mon") }, .{ .int = month_day.month.numeric() - 1 });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_year") }, .{ .int = year_day.year - 1900 });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_wday") }, .{ .int = dow });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_yday") }, .{ .int = yday });
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_isdst") }, .{ .int = 0 });
     } else {
         try arr.append(ctx.allocator, .{ .int = day_seconds.getSecondsIntoMinute() });
         try arr.append(ctx.allocator, .{ .int = day_seconds.getMinutesIntoHour() });
@@ -4308,8 +4446,8 @@ fn native_localtime(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 }
 
 fn native_idate(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .string or args[0].string.len == 0) return .{ .bool = false };
-    const fmt = args[0].string[0];
+    if (args.len == 0 or args[0] != .string or args[0].string.bytes().len == 0) return .{ .bool = false };
+    const fmt = args[0].string.bytes()[0];
     const timestamp: i64 = if (args.len >= 2) Value.toInt(args[1]) else std.time.timestamp();
     const epoch_secs: u64 = @intCast(if (timestamp < 0) 0 else timestamp);
     const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
@@ -4399,7 +4537,7 @@ fn parseIsoDuration(spec: []const u8) IsoDuration {
 fn diConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len > 0 and args[0] == .string) {
-        const dur = parseIsoDuration(args[0].string);
+        const dur = parseIsoDuration(args[0].string.bytes());
         try obj.set(ctx.allocator, "y", .{ .int = dur.y });
         try obj.set(ctx.allocator, "m", .{ .int = dur.m });
         try obj.set(ctx.allocator, "d", .{ .int = dur.d });
@@ -4415,7 +4553,7 @@ fn diConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn diCreateFromDateString(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const dur = parseRelativeDuration(args[0].string);
+    const dur = parseRelativeDuration(args[0].string.bytes());
     const obj = try ctx.createObject("DateInterval");
     try obj.set(ctx.allocator, "y", .{ .int = dur.y });
     try obj.set(ctx.allocator, "m", .{ .int = dur.m });
@@ -4473,13 +4611,7 @@ fn parseRelativeDuration(input: []const u8) RelDuration {
             i = save_i + 3;
         }
 
-        if (matchUnit(unit, "year")) out.y += v
-        else if (matchUnit(unit, "month")) out.m += v
-        else if (matchUnit(unit, "week")) out.d += v * 7
-        else if (matchUnit(unit, "day")) out.d += v
-        else if (matchUnit(unit, "hour")) out.h += v
-        else if (matchUnit(unit, "minute") or matchUnit(unit, "min")) out.mi += v
-        else if (matchUnit(unit, "second") or matchUnit(unit, "sec")) out.s += v;
+        if (matchUnit(unit, "year")) out.y += v else if (matchUnit(unit, "month")) out.m += v else if (matchUnit(unit, "week")) out.d += v * 7 else if (matchUnit(unit, "day")) out.d += v else if (matchUnit(unit, "hour")) out.h += v else if (matchUnit(unit, "minute") or matchUnit(unit, "min")) out.mi += v else if (matchUnit(unit, "second") or matchUnit(unit, "sec")) out.s += v;
     }
     return out;
 }
@@ -4492,8 +4624,8 @@ fn matchUnit(actual: []const u8, base: []const u8) bool {
 
 fn diFormat(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
-    const fmt = args[0].string;
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
+    const fmt = args[0].string.bytes();
 
     // raw signed values (PHP's lowercase %d/%h/etc print signed values for
     // intervals created from date strings); uppercase variants use abs/2-digit
@@ -4562,15 +4694,13 @@ fn diFormat(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
     const dup = try ctx.allocator.dupe(u8, buf.items);
     try ctx.strings.append(ctx.allocator, dup);
-    return .{ .string = dup };
+    return .{ .string = Value.String.borrowed(dup) };
 }
 
 fn diInvert(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const obj = getThis(ctx) orelse return .null;
     if (args.len > 0) {
-        const invert = if (args[0] == .bool) (if (args[0].bool) @as(i64, 1) else @as(i64, 0))
-        else if (args[0] == .int) (if (args[0].int != 0) @as(i64, 1) else @as(i64, 0))
-        else @as(i64, 0);
+        const invert = if (args[0] == .bool) (if (args[0].bool) @as(i64, 1) else @as(i64, 0)) else if (args[0] == .int) (if (args[0].int != 0) @as(i64, 1) else @as(i64, 0)) else @as(i64, 0);
         try obj.set(ctx.allocator, "invert", .{ .int = invert });
     }
     return .{ .object = obj };

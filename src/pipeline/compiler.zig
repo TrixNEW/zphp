@@ -456,7 +456,7 @@ pub const Compiler = struct {
                 else
                     raw;
                 if (self.namespace.len > 0) try self.string_allocs.append(self.allocator, name);
-                const name_idx = try self.addConstant(.{ .string = name });
+                const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(name) });
                 try self.emitOp(.define_const);
                 try self.emitU16(name_idx);
             },
@@ -468,7 +468,7 @@ pub const Compiler = struct {
             .cast_expr => try compiler_expr.compileCast(self, node),
             .inline_html => {
                 const text = self.ast.tokenSlice(node.main_token);
-                const idx2 = try self.addConstant(.{ .string = text });
+                const idx2 = try self.addConstant(.{ .string = Value.String.borrowed(text) });
                 try self.emitConstant(idx2);
                 try self.emitOp(.echo);
             },
@@ -604,18 +604,18 @@ pub const Compiler = struct {
 
         if (std.mem.eql(u8, name, "__DIR__")) {
             const dir = self.getFileDir();
-            const idx = try self.addConstant(.{ .string = dir });
+            const idx = try self.addConstant(.{ .string = Value.String.borrowed(dir) });
             try self.emitConstant(idx);
             return;
         }
         if (std.mem.eql(u8, name, "__FILE__")) {
             const path = if (self.file_path.len > 0) self.file_path else "";
-            const idx = try self.addConstant(.{ .string = path });
+            const idx = try self.addConstant(.{ .string = Value.String.borrowed(path) });
             try self.emitConstant(idx);
             return;
         }
         if (std.mem.eql(u8, name, "__FUNCTION__")) {
-            const idx = try self.addConstant(.{ .string = self.current_function });
+            const idx = try self.addConstant(.{ .string = Value.String.borrowed(self.current_function) });
             try self.emitConstant(idx);
             return;
         }
@@ -623,14 +623,14 @@ pub const Compiler = struct {
             // inside a trait the compile-time class is the trait name, but PHP
             // resolves __CLASS__ to the using class - defer to runtime self::class
             if (self.in_trait) {
-                const class_idx = try self.addConstant(.{ .string = "self" });
-                const prop_idx = try self.addConstant(.{ .string = "class" });
+                const class_idx = try self.addConstant(.{ .string = Value.String.borrowed("self") });
+                const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed("class") });
                 try self.emitOp(.get_static_prop);
                 try self.emitU16(class_idx);
                 try self.emitU16(prop_idx);
                 return;
             }
-            const idx = try self.addConstant(.{ .string = self.current_class });
+            const idx = try self.addConstant(.{ .string = Value.String.borrowed(self.current_class) });
             try self.emitConstant(idx);
             return;
         }
@@ -643,19 +643,19 @@ pub const Compiler = struct {
                 self.current_function
             else
                 @as([]const u8, "");
-            const idx = try self.addConstant(.{ .string = val });
+            const idx = try self.addConstant(.{ .string = Value.String.borrowed(val) });
             try self.emitConstant(idx);
             return;
         }
         if (std.mem.eql(u8, name, "__NAMESPACE__")) {
             const ns = if (self.namespace.len > 0) self.namespace else "";
-            const idx = try self.addConstant(.{ .string = ns });
+            const idx = try self.addConstant(.{ .string = Value.String.borrowed(ns) });
             try self.emitConstant(idx);
             return;
         }
         if (std.mem.eql(u8, name, "__TRAIT__")) {
             const val = if (self.in_trait) self.current_class else "";
-            const idx = try self.addConstant(.{ .string = val });
+            const idx = try self.addConstant(.{ .string = Value.String.borrowed(val) });
             try self.emitConstant(idx);
             return;
         }
@@ -745,7 +745,7 @@ pub const Compiler = struct {
                         try self.compileNode(inner_target.data.lhs);
                         try self.emitOp(.swap);
                         const prop_name = self.propName(inner_target);
-                        const prop_idx = try self.addConstant(.{ .string = prop_name });
+                        const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
                         try self.emitOp(.set_prop);
                         try self.emitU16(prop_idx);
                         try self.emitOp(.pop);
@@ -774,7 +774,7 @@ pub const Compiler = struct {
                     try self.compileNode(slot_node.data.lhs);
                     try self.emitOp(.swap);
                     const prop_name = self.propName(slot_node);
-                    const prop_idx = try self.addConstant(.{ .string = prop_name });
+                    const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
                     try self.emitOp(.set_prop);
                     try self.emitU16(prop_idx);
                     try self.emitOp(.pop);
@@ -817,7 +817,7 @@ pub const Compiler = struct {
                     try self.compileNode(val_node.data.lhs);
                     try self.emitOp(.swap);
                     const prop_name = self.propName(val_node);
-                    const prop_idx = try self.addConstant(.{ .string = prop_name });
+                    const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
                     try self.emitOp(.set_prop);
                     try self.emitU16(prop_idx);
                     try self.emitOp(.pop);
@@ -854,7 +854,7 @@ pub const Compiler = struct {
         const inner = self.ast.nodes[ref_node.data.lhs];
         if (inner.tag != .variable) return;
         const name = self.ast.tokenSlice(inner.main_token);
-        const name_idx = try self.addConstant(.{ .string = name });
+        const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(name) });
         try self.emitOp(.dup);
         switch (key) {
             .index => |i| {
@@ -880,8 +880,8 @@ pub const Compiler = struct {
         return switch (v) {
             .string => |s| blk: {
                 // reject sentinel-encoded deferred values (\x00CC.. / \x00NW..)
-                if (s.len >= 3 and s[0] == 0) break :blk null;
-                break :blk s;
+                if (s.len >= 3 and s.bytes()[0] == 0) break :blk null;
+                break :blk s.bytes();
             },
             .int => |i| blk: {
                 const buf = std.fmt.allocPrint(self.allocator, "{d}", .{i}) catch break :blk null;
@@ -906,7 +906,7 @@ pub const Compiler = struct {
         };
         const sentinel = bytecode.encodeDeferredExprSentinel(self.allocator, de) catch return Value.null;
         self.string_allocs.append(self.allocator, sentinel) catch return Value.null;
-        return .{ .string = sentinel };
+        return .{ .string = Value.String.borrowed(sentinel) };
     }
 
     pub fn evalConstExpr(self: *Compiler, idx: u32) Value {
@@ -921,10 +921,10 @@ pub const Compiler = struct {
                 const tok_tag = self.ast.tokens[n.main_token].tag;
                 if (tok_tag == .heredoc or tok_tag == .nowdoc) {
                     const body = compiler_strings.extractHeredocBody(self, n.main_token) catch "";
-                    break :blk .{ .string = body };
+                    break :blk .{ .string = Value.String.borrowed(body) };
                 }
                 const raw = self.ast.tokenSlice(n.main_token);
-                if (raw.len < 2) break :blk .{ .string = raw };
+                if (raw.len < 2) break :blk .{ .string = Value.String.borrowed(raw) };
                 const quote = raw[0];
                 const inner = raw[1 .. raw.len - 1];
                 // process escape sequences the same way the regular string
@@ -933,17 +933,17 @@ pub const Compiler = struct {
                 // defaults like `self::NS . '\\Default'`)
                 if (quote == '\'') {
                     if (compiler_strings.processSingleQuoteEscapes(self.allocator, inner) catch null) |p| {
-                        self.string_allocs.append(self.allocator, p) catch break :blk .{ .string = inner };
-                        break :blk .{ .string = p };
+                        self.string_allocs.append(self.allocator, p) catch break :blk .{ .string = Value.String.borrowed(inner) };
+                        break :blk .{ .string = Value.String.borrowed(p) };
                     }
-                    break :blk .{ .string = inner };
+                    break :blk .{ .string = Value.String.borrowed(inner) };
                 }
                 if (std.mem.indexOfScalar(u8, inner, '\\') != null) {
-                    const p = compiler_strings.processEscapes(self.allocator, inner) catch break :blk .{ .string = inner };
-                    self.string_allocs.append(self.allocator, p) catch break :blk .{ .string = inner };
-                    break :blk .{ .string = p };
+                    const p = compiler_strings.processEscapes(self.allocator, inner) catch break :blk .{ .string = Value.String.borrowed(inner) };
+                    self.string_allocs.append(self.allocator, p) catch break :blk .{ .string = Value.String.borrowed(inner) };
+                    break :blk .{ .string = Value.String.borrowed(p) };
                 }
-                break :blk .{ .string = inner };
+                break :blk .{ .string = Value.String.borrowed(inner) };
             },
             .true_literal => .{ .bool = true },
             .false_literal => .{ .bool = false },
@@ -1015,7 +1015,7 @@ pub const Compiler = struct {
                         if (constScalarToStr(self, rhs)) |rs| {
                             const joined = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ ls, rs }) catch break :blk .null;
                             self.string_allocs.append(self.allocator, joined) catch break :blk .null;
-                            break :blk .{ .string = joined };
+                            break :blk .{ .string = Value.String.borrowed(joined) };
                         }
                     }
                     break :blk self.makeDeferredExpr(.concat, lhs, rhs);
@@ -1051,7 +1051,7 @@ pub const Compiler = struct {
                     .bool => |b| b,
                     .int => |i| i != 0,
                     .float => |f| f != 0,
-                    .string => |s| s.len != 0 and !std.mem.eql(u8, s, "0"),
+                    .string => |s| s.len != 0 and !std.mem.eql(u8, s.bytes(), "0"),
                     .null => false,
                     else => break :blk .null,
                 };
@@ -1119,7 +1119,7 @@ pub const Compiler = struct {
                 // encode as deferred sentinel: "\x00CC\x00ClassName\x00CONST_NAME"
                 const sentinel = std.fmt.allocPrint(self.allocator, "\x00CC\x00{s}\x00{s}", .{ class_name, prop_name }) catch break :blk Value.null;
                 self.string_allocs.append(self.allocator, sentinel) catch break :blk Value.null;
-                break :blk .{ .string = sentinel };
+                break :blk .{ .string = Value.String.borrowed(sentinel) };
             },
             .identifier => blk: {
                 const name = self.ast.tokenSlice(n.main_token);
@@ -1131,7 +1131,7 @@ pub const Compiler = struct {
                 const resolved = self.resolveClassName(name);
                 const sentinel = std.fmt.allocPrint(self.allocator, "\x00CC\x00\x00{s}", .{resolved}) catch break :blk Value.null;
                 self.string_allocs.append(self.allocator, sentinel) catch break :blk Value.null;
-                break :blk .{ .string = sentinel };
+                break :blk .{ .string = Value.String.borrowed(sentinel) };
             },
             .new_expr => blk: {
                 const resolved = @import("compiler_expr.zig").resolveQualifiedNewName(self, n) catch break :blk Value.null;
@@ -1157,7 +1157,7 @@ pub const Compiler = struct {
                 };
                 const sentinel = bytecode.encodeNewDefaultSentinel(self.allocator, nd) catch break :blk Value.null;
                 self.string_allocs.append(self.allocator, sentinel) catch break :blk Value.null;
-                break :blk .{ .string = sentinel };
+                break :blk .{ .string = Value.String.borrowed(sentinel) };
             },
             else => .null,
         };
@@ -1343,7 +1343,7 @@ pub const Compiler = struct {
         }
         // non-$ name: may be a namespaced constant aliased by `use const`
         const resolved = if (name.len == 0 or name[0] != '$') (self.use_const_aliases.get(name) orelse name) else name;
-        const idx = try self.addConstant(.{ .string = resolved });
+        const idx = try self.addConstant(.{ .string = Value.String.borrowed(resolved) });
         try self.emitOp(.get_var);
         try self.emitU16(idx);
     }
@@ -1355,7 +1355,7 @@ pub const Compiler = struct {
             try self.emitU16(slot);
             return;
         }
-        const idx = try self.addConstant(.{ .string = name });
+        const idx = try self.addConstant(.{ .string = Value.String.borrowed(name) });
         try self.emitOp(.set_var);
         try self.emitU16(idx);
     }
@@ -1368,7 +1368,7 @@ pub const Compiler = struct {
     pub fn tryCompileRefReturn(self: *Compiler, expr_idx: u32) Error!bool {
         const expr = self.ast.nodes[expr_idx];
         const ret_name = "$__ret_ref";
-        const ret_name_idx = try self.addConstant(.{ .string = ret_name });
+        const ret_name_idx = try self.addConstant(.{ .string = Value.String.borrowed(ret_name) });
         if (expr.tag == .array_access) {
             try self.compileNode(expr.data.lhs); // base
             try self.compileNode(expr.data.rhs); // key
@@ -1385,7 +1385,7 @@ pub const Compiler = struct {
                 try self.emitOp(.make_var_prop_ref_dyn);
                 try self.emitU16(ret_name_idx);
             } else {
-                const prop_idx = try self.addConstant(.{ .string = self.propName(expr) });
+                const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(self.propName(expr)) });
                 try self.emitOp(.make_var_prop_ref);
                 try self.emitU16(ret_name_idx);
                 try self.emitU16(prop_idx);
@@ -1396,7 +1396,7 @@ pub const Compiler = struct {
         }
         if (expr.tag == .variable) {
             const src_name = self.ast.tokenSlice(expr.main_token);
-            const src_idx = try self.addConstant(.{ .string = src_name });
+            const src_idx = try self.addConstant(.{ .string = Value.String.borrowed(src_name) });
             try self.emitOp(.make_var_ref);
             try self.emitU16(ret_name_idx);
             try self.emitU16(src_idx);

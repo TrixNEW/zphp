@@ -1,7 +1,9 @@
 const std = @import("std");
 const parser = @import("pipeline/parser.zig");
 const compiler = @import("pipeline/compiler.zig");
+const runtime_value = @import("runtime/value.zig");
 const VM = @import("runtime/vm.zig").VM;
+const Value = runtime_value.Value;
 const CompileResult = @import("pipeline/compiler.zig").CompileResult;
 const bytecode_format = @import("bytecode_format.zig");
 const error_format = @import("error_format.zig");
@@ -390,7 +392,7 @@ fn initCliServerVars(vm: *VM, a: std.mem.Allocator) !void {
         .{ "PHP_SELF", "/" },
     };
     inline for (entries) |e| {
-        try arr.set(a, .{ .string = e[0] }, .{ .string = e[1] });
+        try arr.set(a, .{ .string = Value.String.borrowed(e[0]) }, .{ .string = Value.String.borrowed(e[1]) });
     }
     try vm.putRequestVar("$_SERVER", .{ .array = arr });
 
@@ -409,9 +411,9 @@ fn initArgv(vm: *VM, a: std.mem.Allocator, script_path: []const u8, script_args:
     argv_arr.* = .{};
     try vm.arrays.append(a, argv_arr);
 
-    try argv_arr.append(a, .{ .string = script_path });
+    try argv_arr.append(a, .{ .string = Value.String.borrowed(script_path) });
     for (script_args) |arg| {
-        try argv_arr.append(a, .{ .string = arg });
+        try argv_arr.append(a, .{ .string = Value.String.borrowed(arg) });
     }
 
     try vm.putRequestVar("$argv", .{ .array = argv_arr });
@@ -421,13 +423,13 @@ fn initArgv(vm: *VM, a: std.mem.Allocator, script_path: []const u8, script_args:
     // path keys that CLI PHP populates for the running file
     if (vm.request_vars.get("$_SERVER")) |sv| {
         if (sv == .array) {
-            try sv.array.set(a, .{ .string = "argv" }, .{ .array = argv_arr });
-            try sv.array.set(a, .{ .string = "argc" }, .{ .int = @intCast(1 + script_args.len) });
+            try sv.array.set(a, .{ .string = Value.String.borrowed("argv") }, .{ .array = argv_arr });
+            try sv.array.set(a, .{ .string = Value.String.borrowed("argc") }, .{ .int = @intCast(1 + script_args.len) });
             const dup_path = try a.dupe(u8, script_path);
             try vm.strings.append(a, dup_path);
-            try sv.array.set(a, .{ .string = "SCRIPT_FILENAME" }, .{ .string = dup_path });
-            try sv.array.set(a, .{ .string = "SCRIPT_NAME" }, .{ .string = dup_path });
-            try sv.array.set(a, .{ .string = "PHP_SELF" }, .{ .string = dup_path });
+            try sv.array.set(a, .{ .string = Value.String.borrowed("SCRIPT_FILENAME") }, .{ .string = Value.String.borrowed(dup_path) });
+            try sv.array.set(a, .{ .string = Value.String.borrowed("SCRIPT_NAME") }, .{ .string = Value.String.borrowed(dup_path) });
+            try sv.array.set(a, .{ .string = Value.String.borrowed("PHP_SELF") }, .{ .string = Value.String.borrowed(dup_path) });
         }
     }
 }
@@ -499,6 +501,7 @@ fn runWithVM(allocator: std.mem.Allocator, result: *CompileResult, script_path: 
                 vm.pending_exception = null;
                 var ctx = vm.makeContext(null);
                 _ = ctx.invokeCallable(handler, &.{exc}) catch {};
+                vm.releaseValue(handler);
                 vm.runShutdownCallbacks() catch {};
                 if (vm.output.items.len > 0) try writeStdout(vm.output.items);
                 if (std.posix.getenv("ZPHP_DBG_PROFILE") != null) dumpProfile(vm);

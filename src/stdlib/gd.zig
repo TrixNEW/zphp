@@ -105,7 +105,7 @@ fn imgDestroy(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn imgCreateFromPng(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const path_z = try dupZ(ctx, args[0].string);
+    const path_z = try dupZ(ctx, args[0].string.bytes());
     const f = c.fopen(path_z.ptr, "rb") orelse return .{ .bool = false };
     defer _ = c.fclose(f);
     const im = c.gdImageCreateFromPng(f);
@@ -114,7 +114,7 @@ fn imgCreateFromPng(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
 fn imgCreateFromJpeg(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const path_z = try dupZ(ctx, args[0].string);
+    const path_z = try dupZ(ctx, args[0].string.bytes());
     const f = c.fopen(path_z.ptr, "rb") orelse return .{ .bool = false };
     defer _ = c.fclose(f);
     const im = c.gdImageCreateFromJpeg(f);
@@ -123,7 +123,7 @@ fn imgCreateFromJpeg(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 
 fn imgCreateFromGif(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const path_z = try dupZ(ctx, args[0].string);
+    const path_z = try dupZ(ctx, args[0].string.bytes());
     const f = c.fopen(path_z.ptr, "rb") orelse return .{ .bool = false };
     defer _ = c.fclose(f);
     const im = c.gdImageCreateFromGif(f);
@@ -132,18 +132,18 @@ fn imgCreateFromGif(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
 fn imgCreateFromString(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const data = args[0].string;
+    const data = args[0].string.bytes();
     // try PNG first, then JPEG, then GIF (sniffed from header)
     if (data.len >= 8 and data[0] == 0x89 and data[1] == 'P' and data[2] == 'N' and data[3] == 'G') {
-        const im = c.gdImageCreateFromPngPtr(@intCast(data.len), @constCast(@ptrCast(data.ptr)));
+        const im = c.gdImageCreateFromPngPtr(@intCast(data.len), @ptrCast(@constCast(data.ptr)));
         return wrapImg(ctx, im);
     }
     if (data.len >= 3 and data[0] == 0xff and data[1] == 0xd8 and data[2] == 0xff) {
-        const im = c.gdImageCreateFromJpegPtr(@intCast(data.len), @constCast(@ptrCast(data.ptr)));
+        const im = c.gdImageCreateFromJpegPtr(@intCast(data.len), @ptrCast(@constCast(data.ptr)));
         return wrapImg(ctx, im);
     }
     if (data.len >= 6 and std.mem.eql(u8, data[0..6], "GIF89a") or (data.len >= 6 and std.mem.eql(u8, data[0..6], "GIF87a"))) {
-        const im = c.gdImageCreateFromGifPtr(@intCast(data.len), @constCast(@ptrCast(data.ptr)));
+        const im = c.gdImageCreateFromGifPtr(@intCast(data.len), @ptrCast(@constCast(data.ptr)));
         return wrapImg(ctx, im);
     }
     return .{ .bool = false };
@@ -153,7 +153,7 @@ fn imgCreateFromString(ctx: *NativeContext, args: []const Value) RuntimeError!Va
 
 fn writeImageTo(ctx: *NativeContext, im: *c.gdImageStruct, args: []const Value, kind: enum { png, jpeg, gif }, quality: c_int) !Value {
     if (args.len > 1 and args[1] == .string) {
-        const path_z = try dupZ(ctx, args[1].string);
+        const path_z = try dupZ(ctx, args[1].string.bytes());
         const f = c.fopen(path_z.ptr, "wb") orelse return .{ .bool = false };
         defer _ = c.fclose(f);
         switch (kind) {
@@ -260,10 +260,10 @@ fn imgColorsForIndex(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
         alpha = im.*.alpha[ci];
     }
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "red" }, .{ .int = r });
-    try arr.set(ctx.allocator, .{ .string = "green" }, .{ .int = g });
-    try arr.set(ctx.allocator, .{ .string = "blue" }, .{ .int = b });
-    try arr.set(ctx.allocator, .{ .string = "alpha" }, .{ .int = alpha });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("red") }, .{ .int = r });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("green") }, .{ .int = g });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("blue") }, .{ .int = b });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("alpha") }, .{ .int = alpha });
     return .{ .array = arr };
 }
 
@@ -365,7 +365,7 @@ fn imgString(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 5 or args[4] != .string) return .{ .bool = false };
     const col = argInt(args, 5) orelse return .{ .bool = false };
 
-    const text_z = try dupZ(ctx, args[4].string);
+    const text_z = try dupZ(ctx, args[4].string.bytes());
     const gd_font = switch (font) {
         2 => c.gdFontGetSmall(),
         3 => c.gdFontGetMediumBold(),
@@ -394,8 +394,8 @@ fn imgTtfText(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const y = argInt(args, 4) orelse return .{ .bool = false };
     const col = argInt(args, 5) orelse return .{ .bool = false };
     if (args[6] != .string or args[7] != .string) return .{ .bool = false };
-    const font_z = try dupZ(ctx, args[6].string);
-    const text_z = try dupZ(ctx, args[7].string);
+    const font_z = try dupZ(ctx, args[6].string.bytes());
+    const text_z = try dupZ(ctx, args[7].string.bytes());
 
     var brect: [8]c_int = .{0} ** 8;
     const err = c.gdImageStringFT(im, &brect, @intCast(col), font_z.ptr, size, angle, @intCast(x), @intCast(y), text_z.ptr);
@@ -506,19 +506,19 @@ fn imgCrop(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .array) return .{ .bool = false };
     const rect = args[1].array;
     const x = blk: {
-        const v = rect.get(.{ .string = "x" });
+        const v = rect.get(.{ .string = Value.String.borrowed("x") });
         break :blk if (v == .int) v.int else 0;
     };
     const y = blk: {
-        const v = rect.get(.{ .string = "y" });
+        const v = rect.get(.{ .string = Value.String.borrowed("y") });
         break :blk if (v == .int) v.int else 0;
     };
     const w = blk: {
-        const v = rect.get(.{ .string = "width" });
+        const v = rect.get(.{ .string = Value.String.borrowed("width") });
         break :blk if (v == .int) v.int else 0;
     };
     const h = blk: {
-        const v = rect.get(.{ .string = "height" });
+        const v = rect.get(.{ .string = Value.String.borrowed("height") });
         break :blk if (v == .int) v.int else 0;
     };
     if (w <= 0 or h <= 0) return .{ .bool = false };
@@ -566,7 +566,7 @@ fn imgInterlace(_: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn imgGetSize(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const path_z = try dupZ(ctx, args[0].string);
+    const path_z = try dupZ(ctx, args[0].string.bytes());
     // sniff via fopen + gd helpers (minimal: just open file and check magic, then return dims via libgd)
     const f = c.fopen(path_z.ptr, "rb") orelse return .{ .bool = false };
     defer _ = c.fclose(f);
@@ -600,36 +600,38 @@ fn imgGetSize(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     try arr.set(ctx.allocator, .{ .int = 0 }, .{ .int = @intCast(im.?.sx) });
     try arr.set(ctx.allocator, .{ .int = 1 }, .{ .int = @intCast(im.?.sy) });
     try arr.set(ctx.allocator, .{ .int = 2 }, .{ .int = typ });
-    try arr.set(ctx.allocator, .{ .int = 3 }, .{ .string = try dupString(ctx, "") });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "mime") }, .{ .string = try dupString(ctx, mime) });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "bits") }, .{ .int = 8 });
+    try arr.set(ctx.allocator, .{ .int = 3 }, .{ .string = Value.String.borrowed(try dupString(ctx, "")) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "mime")) }, .{ .string = Value.String.borrowed(try dupString(ctx, mime)) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "bits")) }, .{ .int = 8 });
     return .{ .array = arr };
 }
 
 // PHP IMAGETYPE_* constants -> mime/extension mappings
 fn imageTypeToMimeType(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "application/octet-stream" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("application/octet-stream") };
     const t = Value.toInt(args[0]);
-    return .{ .string = switch (t) {
-        1 => "image/gif",
-        2 => "image/jpeg",
-        3 => "image/png",
-        4 => "application/x-shockwave-flash",
-        5 => "image/psd",
-        6 => "image/bmp",
-        7, 8 => "image/tiff",
-        9 => "application/octet-stream", // JPC
-        10 => "image/jp2",
-        11, 12 => "application/octet-stream",
-        13 => "application/x-shockwave-flash",
-        14 => "image/iff",
-        15 => "image/vnd.wap.wbmp",
-        16 => "image/xbm",
-        17 => "image/x-icon",
-        18 => "image/webp",
-        19 => "image/avif",
-        else => "application/octet-stream",
-    } };
+    return .{
+        .string = Value.String.borrowed(switch (t) {
+            1 => "image/gif",
+            2 => "image/jpeg",
+            3 => "image/png",
+            4 => "application/x-shockwave-flash",
+            5 => "image/psd",
+            6 => "image/bmp",
+            7, 8 => "image/tiff",
+            9 => "application/octet-stream", // JPC
+            10 => "image/jp2",
+            11, 12 => "application/octet-stream",
+            13 => "application/x-shockwave-flash",
+            14 => "image/iff",
+            15 => "image/vnd.wap.wbmp",
+            16 => "image/xbm",
+            17 => "image/x-icon",
+            18 => "image/webp",
+            19 => "image/avif",
+            else => "application/octet-stream",
+        }),
+    };
 }
 
 fn imageTypeToExtension(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -652,28 +654,28 @@ fn imageTypeToExtension(ctx: *NativeContext, args: []const Value) RuntimeError!V
         19 => "avif",
         else => return .{ .bool = false },
     };
-    if (!include_dot) return .{ .string = try ctx.createString(ext) };
+    if (!include_dot) return .{ .string = Value.String.borrowed(try ctx.createString(ext)) };
     const out = try std.fmt.allocPrint(ctx.allocator, ".{s}", .{ext});
     try ctx.strings.append(ctx.allocator, out);
-    return .{ .string = out };
+    return .{ .string = Value.String.borrowed(out) };
 }
 
 fn gdInfo(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "GD Version" }, .{ .string = "bundled (2.x compatible)" });
-    try arr.set(ctx.allocator, .{ .string = "FreeType Support" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "GIF Read Support" }, .{ .bool = true });
-    try arr.set(ctx.allocator, .{ .string = "GIF Create Support" }, .{ .bool = true });
-    try arr.set(ctx.allocator, .{ .string = "JPEG Support" }, .{ .bool = true });
-    try arr.set(ctx.allocator, .{ .string = "PNG Support" }, .{ .bool = true });
-    try arr.set(ctx.allocator, .{ .string = "WBMP Support" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "XPM Support" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "XBM Support" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "WebP Support" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "BMP Support" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "AVIF Support" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "TGA Read Support" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "JIS-mapped Japanese Font Support" }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("GD Version") }, .{ .string = Value.String.borrowed("bundled (2.x compatible)") });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("FreeType Support") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("GIF Read Support") }, .{ .bool = true });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("GIF Create Support") }, .{ .bool = true });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("JPEG Support") }, .{ .bool = true });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("PNG Support") }, .{ .bool = true });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("WBMP Support") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("XPM Support") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("XBM Support") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("WebP Support") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("BMP Support") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("AVIF Support") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("TGA Read Support") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("JIS-mapped Japanese Font Support") }, .{ .bool = false });
     return .{ .array = arr };
 }
 

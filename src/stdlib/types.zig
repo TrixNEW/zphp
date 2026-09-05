@@ -172,15 +172,15 @@ pub const entries = .{
 
 fn native_define(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return .{ .bool = false };
-    if (ctx.vm.php_constants.contains(args[0].string)) return .{ .bool = false };
-    try ctx.vm.user_constants.put(ctx.allocator, args[0].string, {});
-    try ctx.vm.php_constants.put(ctx.allocator, args[0].string, args[1]);
+    if (ctx.vm.php_constants.contains(args[0].string.bytes())) return .{ .bool = false };
+    try ctx.vm.user_constants.put(ctx.allocator, args[0].string.bytes(), {});
+    try ctx.vm.php_constants.put(ctx.allocator, args[0].string.bytes(), args[1]);
     return .{ .bool = true };
 }
 
 fn native_defined(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     if (ctx.vm.php_constants.contains(name)) return .{ .bool = true };
     // PHP treats leading-backslash and no-leading-backslash equivalently
     // for fully qualified constant lookups: defined('\M\PI') == defined('M\PI')
@@ -197,7 +197,7 @@ fn native_defined(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn native_constant(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .null;
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     if (ctx.vm.php_constants.get(name)) |v| return v;
     if (std.mem.indexOf(u8, name, "::")) |sep| {
         const class_name = name[0..sep];
@@ -220,19 +220,19 @@ fn native_get_defined_constants(ctx: *NativeContext, args: []const Value) Runtim
         while (it.next()) |entry| {
             const name = entry.key_ptr.*;
             if (ctx.vm.user_constants.contains(name)) {
-                try user.set(ctx.allocator, .{ .string = name }, entry.value_ptr.*);
+                try user.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, entry.value_ptr.*);
             } else {
-                try internal.set(ctx.allocator, .{ .string = name }, entry.value_ptr.*);
+                try internal.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, entry.value_ptr.*);
             }
         }
-        try root.set(ctx.allocator, .{ .string = "Core" }, .{ .array = internal });
-        try root.set(ctx.allocator, .{ .string = "user" }, .{ .array = user });
+        try root.set(ctx.allocator, .{ .string = Value.String.borrowed("Core") }, .{ .array = internal });
+        try root.set(ctx.allocator, .{ .string = Value.String.borrowed("user") }, .{ .array = user });
         return .{ .array = root };
     }
     const flat = try ctx.createArray();
     var it = ctx.vm.php_constants.iterator();
     while (it.next()) |entry| {
-        try flat.set(ctx.allocator, .{ .string = entry.key_ptr.* }, entry.value_ptr.*);
+        try flat.set(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, entry.value_ptr.*);
     }
     return .{ .array = flat };
 }
@@ -279,7 +279,7 @@ pub fn phpTypeName(v: Value) []const u8 {
         .bool => |b| if (b) "true" else "false",
         .int => "int",
         .float => "float",
-        .string => |s| if (std.mem.startsWith(u8, s, "__closure_")) "Closure" else "string",
+        .string => |s| if (std.mem.startsWith(u8, s.bytes(), "__closure_")) "Closure" else "string",
         .array => "array",
         .object => |o| o.class_name,
         .generator => "Generator",
@@ -291,7 +291,7 @@ fn intval(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .int = 0 };
     if (args.len >= 2 and args[1] == .int and args[1].int != 10 and args[0] == .string) {
         var base: u8 = @intCast(@max(0, @min(36, args[1].int)));
-        var s = std.mem.trim(u8, args[0].string, " \t\n\r");
+        var s = std.mem.trim(u8, args[0].string.bytes(), " \t\n\r");
         var negative = false;
         if (s.len > 0 and (s[0] == '-' or s[0] == '+')) {
             negative = s[0] == '-';
@@ -339,7 +339,7 @@ fn floatval(_: *NativeContext, args: []const Value) RuntimeError!Value {
 }
 
 fn strval(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "" };
+    if (args.len == 0) return .{ .string = Value.String.borrowed("") };
     if (args[0] == .string) return args[0];
     // PHP's strval on an object dispatches through __toString. Without this,
     // we'd print "Object" instead of the user-defined string form
@@ -354,36 +354,36 @@ fn strval(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     try args[0].format(&buf, ctx.allocator);
     const s = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, s);
-    return .{ .string = s };
+    return .{ .string = Value.String.borrowed(s) };
 }
 
 fn gettype(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "NULL" };
-    return .{ .string = switch (args[0]) {
+    if (args.len == 0) return .{ .string = Value.String.borrowed("NULL") };
+    return .{ .string = Value.String.borrowed(switch (args[0]) {
         .null => "NULL",
         .bool => "boolean",
         .int => "integer",
         .float => "double",
-        .string => |s| if (std.mem.startsWith(u8, s, "__closure_")) "object" else "string",
+        .string => |s| if (std.mem.startsWith(u8, s.bytes(), "__closure_")) "object" else "string",
         .array => "array",
         .object => |o| if (std.mem.eql(u8, o.class_name, "FileHandle")) "resource" else "object",
         .generator, .fiber => "object",
-    } };
+    }) };
 }
 
 fn get_debug_type(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0) return .{ .string = "null" };
-    return .{ .string = switch (args[0]) {
+    if (args.len == 0) return .{ .string = Value.String.borrowed("null") };
+    return .{ .string = Value.String.borrowed(switch (args[0]) {
         .null => "null",
         .bool => "bool",
         .int => "int",
         .float => "float",
-        .string => |s| if (std.mem.startsWith(u8, s, "__closure_")) "Closure" else "string",
+        .string => |s| if (std.mem.startsWith(u8, s.bytes(), "__closure_")) "Closure" else "string",
         .array => "array",
         .object => |o| if (std.mem.eql(u8, o.class_name, "FileHandle")) "resource (stream)" else o.class_name,
         .generator => "Generator",
         .fiber => "Fiber",
-    } };
+    }) };
 }
 
 fn is_array(_: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -405,7 +405,7 @@ fn is_float(_: *NativeContext, args: []const Value) RuntimeError!Value {
 fn is_string(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = false };
     if (args[0] != .string) return .{ .bool = false };
-    return .{ .bool = !std.mem.startsWith(u8, args[0].string, "__closure_") };
+    return .{ .bool = !std.mem.startsWith(u8, args[0].string.bytes(), "__closure_") };
 }
 
 fn is_bool(_: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -416,7 +416,7 @@ fn is_numeric(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .{ .bool = false };
     return .{ .bool = switch (args[0]) {
         .int, .float => true,
-        .string => |s| isNumericString(s),
+        .string => |s| isNumericString(s.bytes()),
         else => false,
     } };
 }
@@ -470,13 +470,13 @@ fn strlen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         .string => |s| blk: {
             // closures live as '__closure_<id>' strings in zphp; treat them
             // as object-class Closure for the TypeError, matching PHP
-            if (std.mem.startsWith(u8, s, "__closure_")) {
+            if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
                 const msg = try std.fmt.allocPrint(ctx.allocator, "strlen(): Argument #1 ($string) must be of type string, Closure given", .{});
                 try ctx.vm.strings.append(ctx.allocator, msg);
                 try ctx.vm.setPendingException("TypeError", msg);
                 break :blk error.RuntimeError;
             }
-            break :blk .{ .int = @intCast(s.len) };
+            break :blk .{ .int = @intCast(s.bytes().len) };
         },
         .int => |i| blk: {
             var buf: [32]u8 = undefined;
@@ -493,7 +493,7 @@ fn strlen(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         .object => |obj| blk: {
             if (ctx.vm.hasMethod(obj.class_name, "__toString")) {
                 const result = try ctx.vm.callMethod(obj, "__toString", &.{});
-                if (result == .string) break :blk .{ .int = @intCast(result.string.len) };
+                if (result == .string) break :blk .{ .int = @intCast(result.string.bytes().len) };
             }
             // object without __toString: PHP throws TypeError with the class name
             const msg = try std.fmt.allocPrint(ctx.allocator, "strlen(): Argument #1 ($string) must be of type string, {s} given", .{phpTypeName(args[0])});
@@ -519,7 +519,7 @@ fn is_object(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args[0] == .object) return .{ .bool = true };
     if (args[0] == .generator) return .{ .bool = true };
     if (args[0] == .fiber) return .{ .bool = true };
-    if (args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) return .{ .bool = true };
+    if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) return .{ .bool = true };
     return .{ .bool = false };
 }
 
@@ -530,7 +530,7 @@ fn is_scalar(_: *NativeContext, args: []const Value) RuntimeError!Value {
             .int, .float, .bool => true,
             // closures are stored as a Value.string with a "__closure_" prefix;
             // PHP treats Closure as an object, not a scalar
-            .string => |s| !std.mem.startsWith(u8, s, "__closure_"),
+            .string => |s| !std.mem.startsWith(u8, s.bytes(), "__closure_"),
             else => false,
         },
     };
@@ -577,7 +577,7 @@ fn ctypeCheck(args: []const Value, comptime pred: fn (u8) bool) Value {
         return .{ .bool = true };
     }
     if (args[0] != .string) return .{ .bool = false };
-    const s = args[0].string;
+    const s = args[0].string.bytes();
     if (s.len == 0) return .{ .bool = false };
     for (s) |c| {
         if (!pred(c)) return .{ .bool = false };
@@ -638,7 +638,7 @@ fn ensureLocaleInit() void {
 fn native_setlocale(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     ensureLocaleInit();
     // PHP: setlocale($category, ...$locales). first arg is category (int)
-    if (args.len < 1) return .{ .string = try dupString(ctx, current_locale[0..current_locale_len]) };
+    if (args.len < 1) return .{ .string = Value.String.borrowed(try dupString(ctx, current_locale[0..current_locale_len])) };
 
     // collect candidate locale strings from args 1..n. each may be a string or an
     // array (variadic / array form). first one that "works" wins; "0" queries
@@ -646,27 +646,27 @@ fn native_setlocale(ctx: *NativeContext, args: []const Value) RuntimeError!Value
     while (i < args.len) : (i += 1) {
         switch (args[i]) {
             .string => |s| {
-                if (std.mem.eql(u8, s, "0")) {
-                    return .{ .string = try dupString(ctx, current_locale[0..current_locale_len]) };
+                if (std.mem.eql(u8, s.bytes(), "0")) {
+                    return .{ .string = Value.String.borrowed(try dupString(ctx, current_locale[0..current_locale_len])) };
                 }
                 // accept the string verbatim. empty string maps to "C"
-                const new = if (s.len == 0) "C" else s;
+                const new = if (s.bytes().len == 0) "C" else s.bytes();
                 if (new.len <= current_locale.len) {
                     @memcpy(current_locale[0..new.len], new);
                     current_locale_len = new.len;
                 }
-                return .{ .string = try dupString(ctx, new) };
+                return .{ .string = Value.String.borrowed(try dupString(ctx, new)) };
             },
             .array => |arr| {
                 for (arr.entries.items) |e| {
                     if (e.value != .string) continue;
-                    const s = e.value.string;
+                    const s = e.value.string.bytes();
                     if (s.len == 0) continue;
                     if (s.len <= current_locale.len) {
                         @memcpy(current_locale[0..s.len], s);
                         current_locale_len = s.len;
                     }
-                    return .{ .string = try dupString(ctx, s) };
+                    return .{ .string = Value.String.borrowed(try dupString(ctx, s)) };
                 }
             },
             else => continue,
@@ -681,30 +681,30 @@ fn native_setlocale(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 fn native_localeconv(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
     const empty = try dupString(ctx, "");
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "decimal_point") }, .{ .string = try dupString(ctx, ".") });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "thousands_sep") }, .{ .string = empty });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "int_curr_symbol") }, .{ .string = empty });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "currency_symbol") }, .{ .string = empty });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "mon_decimal_point") }, .{ .string = empty });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "mon_thousands_sep") }, .{ .string = empty });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "positive_sign") }, .{ .string = empty });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "negative_sign") }, .{ .string = empty });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "int_frac_digits") }, .{ .int = 127 });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "frac_digits") }, .{ .int = 127 });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "p_cs_precedes") }, .{ .int = 127 });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "p_sep_by_space") }, .{ .int = 127 });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "n_cs_precedes") }, .{ .int = 127 });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "n_sep_by_space") }, .{ .int = 127 });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "p_sign_posn") }, .{ .int = 127 });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "n_sign_posn") }, .{ .int = 127 });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "grouping") }, .{ .array = try ctx.createArray() });
-    try arr.set(ctx.allocator, .{ .string = try dupString(ctx, "mon_grouping") }, .{ .array = try ctx.createArray() });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "decimal_point")) }, .{ .string = Value.String.borrowed(try dupString(ctx, ".")) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "thousands_sep")) }, .{ .string = Value.String.borrowed(empty) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "int_curr_symbol")) }, .{ .string = Value.String.borrowed(empty) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "currency_symbol")) }, .{ .string = Value.String.borrowed(empty) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "mon_decimal_point")) }, .{ .string = Value.String.borrowed(empty) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "mon_thousands_sep")) }, .{ .string = Value.String.borrowed(empty) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "positive_sign")) }, .{ .string = Value.String.borrowed(empty) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "negative_sign")) }, .{ .string = Value.String.borrowed(empty) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "int_frac_digits")) }, .{ .int = 127 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "frac_digits")) }, .{ .int = 127 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "p_cs_precedes")) }, .{ .int = 127 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "p_sep_by_space")) }, .{ .int = 127 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "n_cs_precedes")) }, .{ .int = 127 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "n_sep_by_space")) }, .{ .int = 127 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "p_sign_posn")) }, .{ .int = 127 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "n_sign_posn")) }, .{ .int = 127 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "grouping")) }, .{ .array = try ctx.createArray() });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "mon_grouping")) }, .{ .array = try ctx.createArray() });
     return .{ .array = arr };
 }
 
 fn native_nl_langinfo(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     _ = args;
-    return .{ .string = try dupString(ctx, "") };
+    return .{ .string = Value.String.borrowed(try dupString(ctx, "")) };
 }
 
 fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
@@ -724,12 +724,12 @@ fn get_class(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) {
         const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return Value{ .bool = false };
         if (this_val != .object) return .{ .bool = false };
-        return .{ .string = this_val.object.class_name };
+        return .{ .string = Value.String.borrowed(this_val.object.class_name) };
     }
-    if (args[0] == .object) return .{ .string = args[0].object.class_name };
-    if (args[0] == .generator) return .{ .string = "Generator" };
-    if (args[0] == .fiber) return .{ .string = "Fiber" };
-    if (args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) return .{ .string = "Closure" };
+    if (args[0] == .object) return .{ .string = Value.String.borrowed(args[0].object.class_name) };
+    if (args[0] == .generator) return .{ .string = Value.String.borrowed("Generator") };
+    if (args[0] == .fiber) return .{ .string = Value.String.borrowed("Fiber") };
+    if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) return .{ .string = Value.String.borrowed("Closure") };
     return .{ .bool = false };
 }
 
@@ -737,7 +737,7 @@ fn get_called_class(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     var i = ctx.vm.frame_count;
     while (i > 0) {
         i -= 1;
-        if (ctx.vm.frames[i].called_class) |cc| return .{ .string = cc };
+        if (ctx.vm.frames[i].called_class) |cc| return .{ .string = Value.String.borrowed(cc) };
     }
     return .{ .bool = false };
 }
@@ -746,7 +746,7 @@ fn native_get_declared_classes(ctx: *NativeContext, _: []const Value) RuntimeErr
     const arr = try ctx.createArray();
     var it = ctx.vm.classes.iterator();
     while (it.next()) |e| {
-        try arr.append(ctx.allocator, .{ .string = e.key_ptr.* });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(e.key_ptr.*) });
     }
     return .{ .array = arr };
 }
@@ -755,7 +755,7 @@ fn native_get_declared_interfaces(ctx: *NativeContext, _: []const Value) Runtime
     const arr = try ctx.createArray();
     var it = ctx.vm.interfaces.iterator();
     while (it.next()) |e| {
-        try arr.append(ctx.allocator, .{ .string = e.key_ptr.* });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(e.key_ptr.*) });
     }
     return .{ .array = arr };
 }
@@ -764,7 +764,7 @@ fn native_get_declared_traits(ctx: *NativeContext, _: []const Value) RuntimeErro
     const arr = try ctx.createArray();
     var it = ctx.vm.traits.iterator();
     while (it.next()) |e| {
-        try arr.append(ctx.allocator, .{ .string = e.key_ptr.* });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(e.key_ptr.*) });
     }
     return .{ .array = arr };
 }
@@ -780,7 +780,7 @@ fn classExistsCaseInsensitive(ctx: *NativeContext, name: []const u8) bool {
 
 fn class_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const raw = args[0].string;
+    const raw = args[0].string.bytes();
     const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
     if (std.ascii.eqlIgnoreCase(name, "stdClass") or std.ascii.eqlIgnoreCase(name, "Attribute")) return .{ .bool = true };
     if (std.ascii.eqlIgnoreCase(name, "Closure") or std.ascii.eqlIgnoreCase(name, "Generator") or std.ascii.eqlIgnoreCase(name, "Fiber")) return .{ .bool = true };
@@ -799,8 +799,8 @@ fn method_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
     // closures (stored as unique name strings) report themselves as the
     // 'Closure' class. they always have __invoke + the public Closure API
-    if (args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) {
-        const m = args[1].string;
+    if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) {
+        const m = args[1].string.bytes();
         const closure_methods = [_][]const u8{ "__invoke", "bindTo", "bind", "call", "fromCallable", "getClosureScopeClass", "getClosureThis", "getClosureCalledClass", "getClosureUsedVariables" };
         for (closure_methods) |cm| if (std.ascii.eqlIgnoreCase(cm, m)) return .{ .bool = true };
         return .{ .bool = false };
@@ -812,12 +812,12 @@ fn method_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     else if (args[0] == .fiber)
         "Fiber"
     else if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else {
         try ctx.vm.setPendingException("TypeError", "method_exists(): Argument #1 ($object_or_class) must be of type object|string");
         return error.RuntimeError;
     };
-    const method_name = args[1].string;
+    const method_name = args[1].string.bytes();
     // Generator and Fiber are not registered as ClassDef. Hardcode their
     // method tables so method_exists works on tagged values and "Generator"/"Fiber" strings.
     if (std.mem.eql(u8, current.?, "Generator")) {
@@ -869,7 +869,7 @@ fn method_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 
 fn property_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
-    const prop_name = args[1].string;
+    const prop_name = args[1].string.bytes();
     if (args[0] == .object) {
         const obj = args[0].object;
         if (obj.getSlotIndex(prop_name) != null) return .{ .bool = true };
@@ -888,7 +888,7 @@ fn property_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
         return .{ .bool = false };
     }
     if (args[0] == .string) {
-        const raw = args[0].string;
+        const raw = args[0].string.bytes();
         const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
         var is_own = true;
         var current: ?[]const u8 = class_name;
@@ -923,11 +923,11 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Val
             if (a.len < 3) return;
             const owned = c.allocator.dupe(u8, name_str) catch return;
             c.vm.strings.append(c.allocator, owned) catch {};
-            c.setCallerVar(2, a.len, .{ .string = owned });
+            c.setCallerVar(2, a.len, .{ .string = Value.String.borrowed(owned) });
         }
     }.run;
     if (val == .string) {
-        const raw = val.string;
+        const raw = val.string.bytes();
         const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
         fillName(ctx, args, name);
         if (ctx.vm.native_fns.contains(name)) return .{ .bool = true };
@@ -953,11 +953,11 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Val
         const target = arr.entries.items[0].value;
         const method_val = arr.entries.items[1].value;
         if (method_val != .string) return .{ .bool = false };
-        const method = method_val.string;
+        const method = method_val.string.bytes();
         const raw_class = if (target == .object)
             target.object.class_name
         else if (target == .string)
-            target.string
+            target.string.bytes()
         else
             return .{ .bool = false };
         const class_name = if (raw_class.len > 0 and raw_class[0] == '\\') raw_class[1..] else raw_class;
@@ -985,7 +985,7 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Val
 
 fn native_settype(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return args[0];
-    const type_name = args[1].string;
+    const type_name = args[1].string.bytes();
     const val = args[0];
     if (std.mem.eql(u8, type_name, "int") or std.mem.eql(u8, type_name, "integer"))
         return .{ .int = Value.toInt(val) };
@@ -998,7 +998,7 @@ fn native_settype(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         try val.format(&buf, ctx.allocator);
         const s = try buf.toOwnedSlice(ctx.allocator);
         try ctx.strings.append(ctx.allocator, s);
-        return .{ .string = s };
+        return .{ .string = Value.String.borrowed(s) };
     }
     if (std.mem.eql(u8, type_name, "bool") or std.mem.eql(u8, type_name, "boolean"))
         return .{ .bool = val.isTruthy() };
@@ -1014,13 +1014,13 @@ fn native_settype(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
             if (obj.slot_layout) |layout| {
                 if (obj.slots) |slots| {
                     for (layout.names, 0..) |name, i| {
-                        if (i < slots.len) try arr.set(ctx.allocator, .{ .string = name }, slots[i]);
+                        if (i < slots.len) try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, slots[i]);
                     }
                 }
             }
             var dyn_iter = obj.properties.iterator();
             while (dyn_iter.next()) |entry| {
-                try arr.set(ctx.allocator, .{ .string = entry.key_ptr.* }, entry.value_ptr.*);
+                try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, entry.value_ptr.*);
             }
             return .{ .array = arr };
         }
@@ -1040,7 +1040,7 @@ fn native_settype(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         if (val == .array) {
             for (val.array.entries.items) |entry| {
                 if (entry.key == .string) {
-                    try obj.set(ctx.allocator, entry.key.string, entry.value);
+                    try obj.set(ctx.allocator, entry.key.string.bytes(), entry.value);
                 } else {
                     var key_buf: [32]u8 = undefined;
                     const ks = std.fmt.bufPrint(&key_buf, "{d}", .{entry.key.int}) catch continue;
@@ -1074,7 +1074,7 @@ fn native_call_user_func_array(ctx: *NativeContext, args: []const Value) Runtime
 
 fn native_function_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const raw = args[0].string;
+    const raw = args[0].string.bytes();
     const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
     if (ctx.vm.native_fns.contains(name)) return .{ .bool = true };
     if (ctx.vm.functions.contains(name)) return .{ .bool = true };
@@ -1084,7 +1084,7 @@ fn native_function_exists(ctx: *NativeContext, args: []const Value) RuntimeError
 fn native_get_object_vars(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     // closures are stored as name strings and report as 'object'/'Closure'
     // but have no user-visible properties - return empty array per PHP
-    if (args.len > 0 and args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) {
+    if (args.len > 0 and args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) {
         const empty = try ctx.createArray();
         return .{ .array = empty };
     }
@@ -1115,7 +1115,7 @@ fn native_get_object_vars(ctx: *NativeContext, args: []const Value) RuntimeError
                     if (caller_class == null or decl == null or !std.mem.eql(u8, caller_class.?, decl.?)) continue;
                 }
                 if (vis == .protected and !can_see_protected) continue;
-                try arr.set(ctx.allocator, .{ .string = name }, slots[i]);
+                try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, slots[i]);
             }
         }
     }
@@ -1129,7 +1129,7 @@ fn native_get_object_vars(ctx: *NativeContext, args: []const Value) RuntimeError
             if (caller_class == null or decl == null or !std.mem.eql(u8, caller_class.?, decl.?)) continue;
         }
         if (vis == .protected and !can_see_protected) continue;
-        try arr.set(ctx.allocator, .{ .string = name }, entry.value_ptr.*);
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, entry.value_ptr.*);
     }
     return .{ .array = arr };
 }
@@ -1185,10 +1185,10 @@ fn isInClassHierarchy(vm: *@import("../runtime/vm.zig").VM, candidate: []const u
 fn native_get_class_methods(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return Value{ .bool = false };
     // closures (stored as name strings) report the standard Closure API
-    if (args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) {
+    if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) {
         var arr = try ctx.createArray();
         const methods = [_][]const u8{ "bind", "bindTo", "call", "fromCallable", "__invoke" };
-        for (methods) |m| try arr.append(ctx.allocator, .{ .string = m });
+        for (methods) |m| try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(m) });
         return .{ .array = arr };
     }
     const class_name = if (args[0] == .object)
@@ -1198,20 +1198,20 @@ fn native_get_class_methods(ctx: *NativeContext, args: []const Value) RuntimeErr
     else if (args[0] == .fiber)
         "Fiber"
     else if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else
         return Value{ .bool = false };
 
     if (std.mem.eql(u8, class_name, "Generator")) {
         var arr = try ctx.createArray();
         const methods = [_][]const u8{ "rewind", "valid", "current", "key", "next", "send", "throw", "getReturn", "__debugInfo" };
-        for (methods) |m| try arr.append(ctx.allocator, .{ .string = m });
+        for (methods) |m| try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(m) });
         return .{ .array = arr };
     }
     if (std.mem.eql(u8, class_name, "Fiber")) {
         var arr = try ctx.createArray();
         const methods = [_][]const u8{ "__construct", "start", "resume", "throw", "isStarted", "isSuspended", "isRunning", "isTerminated", "getReturn", "getCurrent", "suspend" };
-        for (methods) |m| try arr.append(ctx.allocator, .{ .string = m });
+        for (methods) |m| try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(m) });
         return .{ .array = arr };
     }
 
@@ -1236,7 +1236,7 @@ fn native_get_class_methods(ctx: *NativeContext, args: []const Value) RuntimeErr
                     if (!visible) return;
                     if (s.contains(name)) return;
                     try s.put(c.allocator, name, {});
-                    try a.append(c.allocator, .{ .string = name });
+                    try a.append(c.allocator, .{ .string = Value.String.borrowed(name) });
                 }
             }.run;
             // declaration order when available, hash order as fallback
@@ -1275,7 +1275,7 @@ fn isInClassChain(vm: *@import("../runtime/vm.zig").VM, a: []const u8, b: []cons
 
 fn native_get_class_vars(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return Value{ .bool = false };
-    const raw = args[0].string;
+    const raw = args[0].string.bytes();
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
     const cls = ctx.vm.classes.get(class_name) orelse return Value{ .bool = false };
     const caller = ctx.vm.currentDefiningClass();
@@ -1287,14 +1287,14 @@ fn native_get_class_vars(ctx: *NativeContext, args: []const Value) RuntimeError!
             .private => caller != null and std.mem.eql(u8, caller.?, class_name),
         };
         if (!visible) continue;
-        try arr.set(ctx.allocator, .{ .string = prop.name }, prop.default);
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(prop.name) }, prop.default);
     }
     // PHP's get_class_vars also includes static properties
     var sit = cls.static_props.iterator();
     while (sit.next()) |e| {
         // class constants are also stored in static_props; skip them
         if (cls.constant_names.contains(e.key_ptr.*)) continue;
-        try arr.set(ctx.allocator, .{ .string = e.key_ptr.* }, e.value_ptr.*);
+        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(e.key_ptr.*) }, e.value_ptr.*);
     }
     return .{ .array = arr };
 }
@@ -1304,17 +1304,17 @@ fn native_get_parent_class(ctx: *NativeContext, args: []const Value) RuntimeErro
         // no-arg form: use the calling class
         const caller = ctx.vm.currentDefiningClass() orelse return Value{ .bool = false };
         const cls = ctx.vm.classes.get(caller) orelse return Value{ .bool = false };
-        if (cls.parent) |p| return Value{ .string = p };
+        if (cls.parent) |p| return Value{ .string = Value.String.borrowed(p) };
         return Value{ .bool = false };
     }
     // closures (string-form) report as Closure with no parent
-    if (args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) {
+    if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) {
         return Value{ .bool = false };
     }
     const raw = if (args[0] == .object)
         args[0].object.class_name
     else if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else
         return Value{ .bool = false };
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
@@ -1322,27 +1322,27 @@ fn native_get_parent_class(ctx: *NativeContext, args: []const Value) RuntimeErro
         try ctx.vm.setPendingException("TypeError", "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name");
         return error.RuntimeError;
     };
-    if (cls.parent) |p| return Value{ .string = p };
+    if (cls.parent) |p| return Value{ .string = Value.String.borrowed(p) };
     return Value{ .bool = false };
 }
 
 fn native_is_a(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
-    const raw_target = args[1].string;
+    const raw_target = args[1].string.bytes();
     const target = if (raw_target.len > 0 and raw_target[0] == '\\') raw_target[1..] else raw_target;
     if (args[0] == .generator) {
         return .{ .bool = std.mem.eql(u8, target, "Generator") or std.mem.eql(u8, target, "Iterator") or std.mem.eql(u8, target, "Traversable") };
     }
     if (args[0] == .fiber) return .{ .bool = std.mem.eql(u8, target, "Fiber") };
     // closures stored as unique name strings present as object/Closure
-    if (args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) {
+    if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) {
         return .{ .bool = std.mem.eql(u8, target, "Closure") };
     }
     if (args[0] == .string) {
         // string arg requires explicit allow_string=true (3rd arg)
         const allow_string = args.len >= 3 and args[2].isTruthy();
         if (!allow_string) return .{ .bool = false };
-        return .{ .bool = ctx.vm.isInstanceOf(args[0].string, target) };
+        return .{ .bool = ctx.vm.isInstanceOf(args[0].string.bytes(), target) };
     }
     const class_name = if (args[0] == .object) args[0].object.class_name else return .{ .bool = false };
     return .{ .bool = ctx.vm.isInstanceOf(class_name, target) };
@@ -1351,17 +1351,17 @@ fn native_is_a(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_is_subclass_of(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[1] != .string) return .{ .bool = false };
     if (args[0] == .generator) {
-        const t = args[1].string;
+        const t = args[1].string.bytes();
         return .{ .bool = std.mem.eql(u8, t, "Iterator") or std.mem.eql(u8, t, "Traversable") };
     }
     if (args[0] == .fiber) return .{ .bool = false };
     const class_name = if (args[0] == .object)
         args[0].object.class_name
     else if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else
         return Value{ .bool = false };
-    const target_name = args[1].string;
+    const target_name = args[1].string.bytes();
     ctx.vm.tryAutoload(class_name) catch {};
     ctx.vm.tryAutoload(target_name) catch {};
     // is_subclass_of returns false if same class, only true for actual subclasses
@@ -1382,8 +1382,8 @@ fn native_spl_object_id(ctx: *NativeContext, args: []const Value) RuntimeError!V
     if (args[0] == .fiber) return .{ .int = @intCast(@intFromPtr(args[0].fiber)) };
     // closures stored as unique name strings - mirror spl_object_hash by
     // using the string's pointer as the id
-    if (args[0] == .string and std.mem.startsWith(u8, args[0].string, "__closure_")) {
-        return .{ .int = @intCast(@intFromPtr(args[0].string.ptr)) };
+    if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) {
+        return .{ .int = @intCast(@intFromPtr(args[0].string.bytes().ptr)) };
     }
     return Value{ .int = 0 };
 }
@@ -1391,7 +1391,7 @@ fn native_spl_object_id(ctx: *NativeContext, args: []const Value) RuntimeError!V
 fn native_exit(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len > 0) {
         if (args[0] == .string) {
-            try ctx.vm.output.appendSlice(ctx.allocator, args[0].string);
+            try ctx.vm.output.appendSlice(ctx.allocator, args[0].string.bytes());
         } else if (args[0] == .int) {
             // PHP truncates to u8 ([0,255]) for the process exit status
             const code: i64 = args[0].int;
@@ -1449,8 +1449,8 @@ fn tokenizeVersion(s: []const u8, out: *[16]VersionToken) usize {
 
 fn native_version_compare(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .null;
-    const v1 = args[0].string;
-    const v2 = args[1].string;
+    const v1 = args[0].string.bytes();
+    const v2 = args[1].string.bytes();
 
     var toks1: [16]VersionToken = undefined;
     var toks2: [16]VersionToken = undefined;
@@ -1530,7 +1530,7 @@ fn native_version_compare(ctx: *NativeContext, args: []const Value) RuntimeError
     }
 
     if (args.len >= 3 and args[2] == .string) {
-        const op = args[2].string;
+        const op = args[2].string.bytes();
         const result = if (std.mem.eql(u8, op, "<") or std.mem.eql(u8, op, "lt"))
             cmp < 0
         else if (std.mem.eql(u8, op, "<=") or std.mem.eql(u8, op, "le"))
@@ -1553,11 +1553,11 @@ fn native_version_compare(ctx: *NativeContext, args: []const Value) RuntimeError
 }
 
 fn native_php_sapi_name(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = "cli" };
+    return .{ .string = Value.String.borrowed("cli") };
 }
 
 fn native_php_version(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = "8.4.1" };
+    return .{ .string = Value.String.borrowed("8.4.1") };
 }
 
 fn native_getmypid(_: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -1590,7 +1590,7 @@ fn native_get_current_user(ctx: *NativeContext, _: []const Value) RuntimeError!V
         if (span.len > 0) {
             const owned = try ctx.allocator.dupe(u8, span);
             try ctx.strings.append(ctx.allocator, owned);
-            return .{ .string = owned };
+            return .{ .string = Value.String.borrowed(owned) };
         }
     }
     inline for ([_][]const u8{ "USER", "LOGNAME" }) |key| {
@@ -1598,11 +1598,11 @@ fn native_get_current_user(ctx: *NativeContext, _: []const Value) RuntimeError!V
             if (val.len > 0) {
                 const owned = try ctx.allocator.dupe(u8, val);
                 try ctx.strings.append(ctx.allocator, owned);
-                return .{ .string = owned };
+                return .{ .string = Value.String.borrowed(owned) };
             }
         }
     }
-    return .{ .string = "" };
+    return .{ .string = Value.String.borrowed("") };
 }
 
 fn iniDefault(name: []const u8) ?[]const u8 {
@@ -1652,15 +1652,15 @@ fn iniDefault(name: []const u8) ?[]const u8 {
 
 fn native_ini_get(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return Value{ .bool = false };
-    const name = args[0].string;
-    if (ctx.vm.ini_settings.get(name)) |stored| return .{ .string = stored };
-    if (iniDefault(name)) |def| return .{ .string = def };
+    const name = args[0].string.bytes();
+    if (ctx.vm.ini_settings.get(name)) |stored| return .{ .string = Value.String.borrowed(stored) };
+    if (iniDefault(name)) |def| return .{ .string = Value.String.borrowed(def) };
     return Value{ .bool = false };
 }
 
 fn native_ini_set(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return Value{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     // PHP rejects unknown directives. Only allow known names.
     const previous: []const u8 = if (ctx.vm.ini_settings.get(name)) |s| s else if (iniDefault(name)) |d| d else return Value{ .bool = false };
     var buf = std.ArrayListUnmanaged(u8){};
@@ -1676,7 +1676,7 @@ fn native_ini_set(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         const seconds = std.fmt.parseInt(i64, std.mem.trim(u8, new_val, " \t\r\n"), 10) catch 0;
         ctx.vm.setExecutionLimit(seconds);
     }
-    return .{ .string = previous };
+    return .{ .string = Value.String.borrowed(previous) };
 }
 
 const SUPPORTED_EXTENSIONS = [_][]const u8{
@@ -1692,7 +1692,7 @@ const SUPPORTED_EXTENSIONS = [_][]const u8{
 
 fn native_extension_loaded(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     for (SUPPORTED_EXTENSIONS) |s| {
         if (std.ascii.eqlIgnoreCase(name, s)) return .{ .bool = true };
     }
@@ -1703,13 +1703,13 @@ fn native_extension_loaded(_: *NativeContext, args: []const Value) RuntimeError!
 
 fn native_get_loaded_extensions(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
-    for (SUPPORTED_EXTENSIONS) |s| try arr.append(ctx.allocator, .{ .string = s });
+    for (SUPPORTED_EXTENSIONS) |s| try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
     return .{ .array = arr };
 }
 
 fn native_get_extension_funcs(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     // not granular about which fn belongs to which extension - PHP code that
     // calls this typically just checks for non-false. return false for unknown
     // extensions and an empty array for known ones to mirror "exists but no
@@ -1726,13 +1726,14 @@ fn native_get_included_files(ctx: *NativeContext, _: []const Value) RuntimeError
     var arr = try ctx.createArray();
     var iter = ctx.vm.loaded_files.iterator();
     while (iter.next()) |entry| {
-        try arr.append(ctx.allocator, .{ .string = entry.key_ptr.* });
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) });
     }
     return .{ .array = arr };
 }
 
 fn native_register_shutdown_function(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0) return .null;
+    VM.retainValue(args[0]);
     try ctx.vm.shutdown_callbacks.append(ctx.allocator, args[0]);
     return .null;
 }
@@ -1757,10 +1758,12 @@ fn native_set_error_handler(ctx: *NativeContext, args: []const Value) RuntimeErr
         try ctx.vm.error_handler_stack.append(ctx.allocator, .{ .handler = h, .mask = ctx.vm.user_error_handler_mask });
     }
     if (args.len > 0 and args[0] != .null) {
+        VM.retainValue(args[0]);
         ctx.vm.user_error_handler = args[0];
     } else {
         ctx.vm.user_error_handler = null;
     }
+    ctx.returnShared(prev);
     ctx.vm.user_error_handler_mask = if (args.len >= 2 and args[1] == .int) args[1].int else -1;
     return prev;
 }
@@ -1781,10 +1784,12 @@ fn native_set_exception_handler(ctx: *NativeContext, args: []const Value) Runtim
     const prev = ctx.vm.user_exception_handler orelse Value.null;
     try ctx.vm.exception_handler_stack.append(ctx.allocator, ctx.vm.user_exception_handler);
     if (args.len > 0 and args[0] != .null) {
+        VM.retainValue(args[0]);
         ctx.vm.user_exception_handler = args[0];
     } else {
         ctx.vm.user_exception_handler = null;
     }
+    ctx.returnShared(prev);
     return prev;
 }
 
@@ -1798,10 +1803,11 @@ fn native_get_exception_handler(ctx: *NativeContext, _: []const Value) RuntimeEr
 
 fn native_eval(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
-    return ctx.vm.evalSource(args[0].string);
+    return ctx.vm.evalSource(args[0].string.bytes());
 }
 
 fn native_restore_exception_handler(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    if (ctx.vm.user_exception_handler) |h| ctx.vm.releaseValue(h);
     if (ctx.vm.exception_handler_stack.items.len > 0) {
         ctx.vm.user_exception_handler = ctx.vm.exception_handler_stack.pop().?;
     } else {
@@ -1811,6 +1817,7 @@ fn native_restore_exception_handler(ctx: *NativeContext, _: []const Value) Runti
 }
 
 fn native_restore_error_handler(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    if (ctx.vm.user_error_handler) |h| ctx.vm.releaseValue(h);
     if (ctx.vm.error_handler_stack.items.len > 0) {
         const entry = ctx.vm.error_handler_stack.pop().?;
         ctx.vm.user_error_handler = entry.handler;
@@ -1836,12 +1843,12 @@ fn native_assert(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
         const file = ctx.vm.file_path;
         const line: i64 = 0;
         const expr: []const u8 = "assert(false)";
-        var cb_args = [_]Value{ .{ .string = file }, .{ .int = line }, .{ .string = expr } };
+        var cb_args = [_]Value{ .{ .string = Value.String.borrowed(file) }, .{ .int = line }, .{ .string = Value.String.borrowed(expr) } };
         _ = ctx.invokeCallable(cb, &cb_args) catch {};
     }
     const ae = ctx.vm.ini_settings.get("assert.exception") orelse "0";
     if (std.mem.eql(u8, ae, "1")) {
-        const msg: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string else "assert(false)";
+        const msg: []const u8 = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "assert(false)";
         try ctx.vm.setPendingException("AssertionError", msg);
         return error.RuntimeError;
     }
@@ -1868,7 +1875,10 @@ fn native_assert_options(ctx: *NativeContext, args: []const Value) RuntimeError!
     // get previous value (defaults match PHP: ACTIVE=1, EXCEPTION=1, others=0)
     var prev: Value = .{ .int = 0 };
     if (opt == 2) {
-        if (ctx.vm.ini_callbacks.get("assert.callback")) |cb| prev = cb;
+        if (ctx.vm.ini_callbacks.get("assert.callback")) |cb| {
+            prev = cb;
+            ctx.returnShared(prev);
+        }
     } else {
         const default_v: i64 = if (opt == 1 or opt == 6) 1 else 0;
         var buf: [4]u8 = undefined;
@@ -1879,6 +1889,8 @@ fn native_assert_options(ctx: *NativeContext, args: []const Value) RuntimeError!
 
     if (args.len >= 2) {
         if (opt == 2) {
+            VM.retainValue(args[1]);
+            if (ctx.vm.ini_callbacks.get("assert.callback")) |old| ctx.vm.releaseValue(old);
             try ctx.vm.ini_callbacks.put(ctx.allocator, "assert.callback", args[1]);
         } else {
             var buf: [32]u8 = undefined;
@@ -1937,15 +1949,15 @@ fn native_ini_restore(_: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn native_opcache_get_status(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "opcache_enabled" }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("opcache_enabled") }, .{ .bool = false });
     return .{ .array = arr };
 }
 
 fn native_opcache_get_configuration(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const arr = try ctx.createArray();
     const directives = try ctx.createArray();
-    try directives.set(ctx.allocator, .{ .string = "opcache.enable" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "directives" }, .{ .array = directives });
+    try directives.set(ctx.allocator, .{ .string = Value.String.borrowed("opcache.enable") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("directives") }, .{ .array = directives });
     return .{ .array = arr };
 }
 
@@ -1954,19 +1966,19 @@ fn native_gc_status(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     // collector_time, etc.). emit the full key set so callers that read
     // them via array access don't see undefined-index notices
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "running" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "protected" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "full" }, .{ .bool = false });
-    try arr.set(ctx.allocator, .{ .string = "runs" }, .{ .int = @intCast(ctx.vm.gc_runs) });
-    try arr.set(ctx.allocator, .{ .string = "collected" }, .{ .int = @intCast(ctx.vm.gc_collected) });
-    try arr.set(ctx.allocator, .{ .string = "threshold" }, .{ .int = @intCast(ctx.vm.gc_threshold) });
-    try arr.set(ctx.allocator, .{ .string = "buffer_size" }, .{ .int = 16384 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("running") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("protected") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("full") }, .{ .bool = false });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("runs") }, .{ .int = @intCast(ctx.vm.gc_runs) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("collected") }, .{ .int = @intCast(ctx.vm.gc_collected) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("threshold") }, .{ .int = @intCast(ctx.vm.gc_threshold) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("buffer_size") }, .{ .int = 16384 });
     const roots = ctx.vm.cycle_candidates.items.len + ctx.vm.cycle_array_candidates.items.len;
-    try arr.set(ctx.allocator, .{ .string = "roots" }, .{ .int = @intCast(roots) });
-    try arr.set(ctx.allocator, .{ .string = "application_time" }, .{ .float = 0 });
-    try arr.set(ctx.allocator, .{ .string = "collector_time" }, .{ .float = 0 });
-    try arr.set(ctx.allocator, .{ .string = "destructor_time" }, .{ .float = 0 });
-    try arr.set(ctx.allocator, .{ .string = "free_time" }, .{ .float = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("roots") }, .{ .int = @intCast(roots) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("application_time") }, .{ .float = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("collector_time") }, .{ .float = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("destructor_time") }, .{ .float = 0 });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("free_time") }, .{ .float = 0 });
     return .{ .array = arr };
 }
 
@@ -1975,7 +1987,7 @@ fn native_highlight_string(_: *NativeContext, args: []const Value) RuntimeError!
     // also return false, so this is safe as a "no-op" while still being callable)
     if (args.len >= 2 and args[1] == .bool and args[1].bool) {
         if (args.len >= 1 and args[0] == .string) return args[0];
-        return .{ .string = "" };
+        return .{ .string = Value.String.borrowed("") };
     }
     return .{ .bool = true };
 }
@@ -1988,7 +2000,7 @@ fn native_strftime(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
     // strftime is deprecated since 8.1; we delegate to date() with a best-effort
     // format remap for the most common specifiers
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const fmt = args[0].string;
+    const fmt = args[0].string.bytes();
     const ts: Value = if (args.len >= 2) args[1] else try ctx.vm.callByName("time", &.{});
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(ctx.allocator);
@@ -2025,12 +2037,12 @@ fn native_strftime(ctx: *NativeContext, args: []const Value) RuntimeError!Value 
             '%' => "%%",
             else => continue,
         };
-        const r = try ctx.vm.callByName("date", &.{ .{ .string = mapped }, ts });
-        if (r == .string) try buf.appendSlice(ctx.allocator, r.string);
+        const r = try ctx.vm.callByName("date", &.{ .{ .string = Value.String.borrowed(mapped) }, ts });
+        if (r == .string) try buf.appendSlice(ctx.allocator, r.string.bytes());
     }
     const owned = try ctx.allocator.dupe(u8, buf.items);
     try ctx.vm.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn native_gmstrftime(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -2046,11 +2058,11 @@ fn native_getmxrr(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
 
 fn native_spl_autoload_call(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .null;
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     var i: usize = 0;
     while (i < ctx.vm.autoload_callbacks.items.len) : (i += 1) {
         const cb = ctx.vm.autoload_callbacks.items[i];
-        _ = ctx.invokeCallable(cb, &.{.{ .string = name }}) catch {};
+        _ = ctx.invokeCallable(cb, &.{.{ .string = Value.String.borrowed(name) }}) catch {};
         if (ctx.vm.classes.contains(name)) break;
     }
     return .null;
@@ -2073,13 +2085,13 @@ fn native_spl_classes(ctx: *NativeContext, _: []const Value) RuntimeError!Value 
         "SplMaxHeap",                      "SplObjectStorage",           "SplPriorityQueue",         "SplQueue",
         "SplStack",                        "SplTempFileObject",          "UnderflowException",       "UnexpectedValueException",
     };
-    for (names) |n| try arr.set(ctx.allocator, .{ .string = n }, .{ .string = n });
+    for (names) |n| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(n) }, .{ .string = Value.String.borrowed(n) });
     return .{ .array = arr };
 }
 
 fn native_iconv_mime_decode(_: *NativeContext, args: []const Value) RuntimeError!Value {
     // best-effort: return the input as-is, ignoring mime encoding
-    if (args.len == 0 or args[0] != .string) return .{ .string = "" };
+    if (args.len == 0 or args[0] != .string) return .{ .string = Value.String.borrowed("") };
     return args[0];
 }
 
@@ -2095,11 +2107,11 @@ fn native_iconv_mime_encode(_: *NativeContext, args: []const Value) RuntimeError
 }
 
 fn native_get_include_path(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = "." };
+    return .{ .string = Value.String.borrowed(".") };
 }
 
 fn native_set_include_path(_: *NativeContext, _: []const Value) RuntimeError!Value {
-    return .{ .string = "." };
+    return .{ .string = Value.String.borrowed(".") };
 }
 
 fn native_error_reporting(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
@@ -2126,11 +2138,11 @@ fn native_match_unhandled_msg(ctx: *NativeContext, args: []const Value) RuntimeE
         .null => try buf.appendSlice(ctx.allocator, "null"),
         .string => |s| {
             // closures stored as Value.string with a __closure_ prefix are objects
-            if (std.mem.startsWith(u8, s, "__closure_")) {
+            if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
                 try buf.appendSlice(ctx.allocator, "of type Closure");
             } else {
                 try buf.append(ctx.allocator, '\'');
-                try buf.appendSlice(ctx.allocator, s);
+                try buf.appendSlice(ctx.allocator, s.bytes());
                 try buf.append(ctx.allocator, '\'');
             }
         },
@@ -2144,18 +2156,18 @@ fn native_match_unhandled_msg(ctx: *NativeContext, args: []const Value) RuntimeE
     }
     const owned = try buf.toOwnedSlice(ctx.allocator);
     try ctx.strings.append(ctx.allocator, owned);
-    return .{ .string = owned };
+    return .{ .string = Value.String.borrowed(owned) };
 }
 
 fn native_error_log(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const message = args[0].string;
+    const message = args[0].string.bytes();
     const msg_type: i64 = if (args.len >= 2) Value.toInt(args[1]) else 0;
     switch (msg_type) {
         3 => {
             // append to the file named by arg #3
             if (args.len < 3 or args[2] != .string) return .{ .bool = false };
-            const path = args[2].string;
+            const path = args[2].string.bytes();
             const f = std.fs.cwd().createFile(path, .{ .truncate = false }) catch return .{ .bool = false };
             defer f.close();
             f.seekFromEnd(0) catch {};
@@ -2182,7 +2194,7 @@ fn native_error_log(ctx: *NativeContext, args: []const Value) RuntimeError!Value
 
 fn native_trigger_error(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const message = args[0].string;
+    const message = args[0].string.bytes();
     const errno: i64 = if (args.len >= 2) Value.toInt(args[1]) else 1024; // E_USER_NOTICE
 
     if (errno == 256) {
@@ -2193,7 +2205,7 @@ fn native_trigger_error(ctx: *NativeContext, args: []const Value) RuntimeError!V
                 if (ctx.vm.currentChunk().getSourceLocation(if (ip0 > 0) ip0 - 1 else 0, ctx.vm.source)) |loc| @intCast(loc.line) else 0
             else
                 0;
-            const args_dep = &[_]Value{ .{ .int = 8192 }, .{ .string = dep_msg }, .{ .string = ctx.vm.file_path }, .{ .int = line0 } };
+            const args_dep = &[_]Value{ .{ .int = 8192 }, .{ .string = Value.String.borrowed(dep_msg) }, .{ .string = Value.String.borrowed(ctx.vm.file_path) }, .{ .int = line0 } };
             _ = try ctx.invokeCallable(handler, args_dep);
         }
     }
@@ -2209,8 +2221,8 @@ fn native_trigger_error(ctx: *NativeContext, args: []const Value) RuntimeError!V
         if ((ctx.vm.user_error_handler_mask & errno) != 0) {
             const call_args = &[_]Value{
                 .{ .int = errno },
-                .{ .string = message },
-                .{ .string = file },
+                .{ .string = Value.String.borrowed(message) },
+                .{ .string = Value.String.borrowed(file) },
                 .{ .int = line },
             };
             const result = try ctx.invokeCallable(handler, call_args);
@@ -2266,17 +2278,17 @@ fn errnoLabel(errno: i64) []const u8 {
 fn native_error_get_last(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     if (ctx.vm.last_error_type == 0) return .null;
     var arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = "type" }, .{ .int = ctx.vm.last_error_type });
-    try arr.set(ctx.allocator, .{ .string = "message" }, .{ .string = ctx.vm.last_error_message });
-    try arr.set(ctx.allocator, .{ .string = "file" }, .{ .string = ctx.vm.last_error_file });
-    try arr.set(ctx.allocator, .{ .string = "line" }, .{ .int = ctx.vm.last_error_line });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("type") }, .{ .int = ctx.vm.last_error_type });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("message") }, .{ .string = Value.String.borrowed(ctx.vm.last_error_message) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(ctx.vm.last_error_file) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = ctx.vm.last_error_line });
     return .{ .array = arr };
 }
 
 fn native_class_alias(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return .{ .bool = false };
-    const original = args[0].string;
-    const alias = args[1].string;
+    const original = args[0].string.bytes();
+    const alias = args[1].string.bytes();
     const autoload = if (args.len >= 3) args[2].isTruthy() else true;
     if (autoload and !ctx.vm.classes.contains(original)) {
         ctx.vm.tryAutoload(original) catch return Value{ .bool = false };
@@ -2336,14 +2348,14 @@ fn native_spl_autoload_unregister(ctx: *NativeContext, args: []const Value) Runt
 }
 
 fn callablesEqual(a: Value, b: Value) bool {
-    if (a == .string and b == .string) return std.mem.eql(u8, a.string, b.string);
+    if (a == .string and b == .string) return std.mem.eql(u8, a.string.bytes(), b.string.bytes());
     if (a == .array and b == .array) {
         const aa = a.array;
         const ba = b.array;
         if (aa.entries.items.len != ba.entries.items.len) return false;
         for (aa.entries.items, ba.entries.items) |ae, be| {
             if (ae.value == .string and be.value == .string) {
-                if (!std.mem.eql(u8, ae.value.string, be.value.string)) continue;
+                if (!std.mem.eql(u8, ae.value.string.bytes(), be.value.string.bytes())) continue;
             } else if (ae.value == .object and be.value == .object) {
                 if (ae.value.object != be.value.object) return false;
             } else return false;
@@ -2454,7 +2466,7 @@ fn native_func_get_arg(ctx: *NativeContext, args: []const Value) RuntimeError!Va
 
 fn native_interface_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const raw = args[0].string;
+    const raw = args[0].string.bytes();
     const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
     if (ctx.vm.interfaces.contains(name)) return .{ .bool = true };
     const autoload = if (args.len > 1 and args[1] == .bool) args[1].bool else true;
@@ -2467,7 +2479,7 @@ fn native_interface_exists(ctx: *NativeContext, args: []const Value) RuntimeErro
 
 fn native_enum_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     if (ctx.vm.classes.get(name)) |cls| {
         if (cls.is_enum) return .{ .bool = true };
     }
@@ -2486,7 +2498,7 @@ fn native_class_implements(ctx: *NativeContext, args: []const Value) RuntimeErro
     const raw = if (args[0] == .object)
         args[0].object.class_name
     else if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else
         return Value{ .bool = false };
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
@@ -2514,8 +2526,8 @@ fn native_class_implements(ctx: *NativeContext, args: []const Value) RuntimeErro
     var i: usize = 0;
     while (i < queue.items.len) : (i += 1) {
         const iface = queue.items[i];
-        if (result.get(.{ .string = iface }) != .null) continue;
-        try result.set(ctx.allocator, .{ .string = iface }, .{ .string = iface });
+        if (result.get(.{ .string = Value.String.borrowed(iface) }) != .null) continue;
+        try result.set(ctx.allocator, .{ .string = Value.String.borrowed(iface) }, .{ .string = Value.String.borrowed(iface) });
         if (ctx.vm.classes.get(iface)) |idef| {
             for (idef.interfaces.items) |sub| try queue.append(ctx.allocator, sub);
         }
@@ -2532,7 +2544,7 @@ fn native_class_parents(ctx: *NativeContext, args: []const Value) RuntimeError!V
     const raw = if (args[0] == .object)
         args[0].object.class_name
     else if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else
         return Value{ .bool = false };
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
@@ -2540,14 +2552,14 @@ fn native_class_parents(ctx: *NativeContext, args: []const Value) RuntimeError!V
     const cls = ctx.vm.classes.get(class_name) orelse {
         try ctx.vm.tryAutoload(class_name);
         if (ctx.vm.classes.get(class_name) == null) return Value{ .bool = false };
-        const normalized = [_]Value{.{ .string = class_name }};
+        const normalized = [_]Value{.{ .string = Value.String.borrowed(class_name) }};
         return native_class_parents(ctx, &normalized);
     };
 
     var result = try ctx.createArray();
     var parent = cls.parent;
     while (parent) |p| {
-        try result.set(ctx.allocator, .{ .string = p }, .{ .string = p });
+        try result.set(ctx.allocator, .{ .string = Value.String.borrowed(p) }, .{ .string = Value.String.borrowed(p) });
         const pcls = ctx.vm.classes.get(p) orelse break;
         parent = pcls.parent;
     }
@@ -2560,7 +2572,7 @@ fn native_class_uses(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
     const raw = if (args[0] == .object)
         args[0].object.class_name
     else if (args[0] == .string)
-        args[0].string
+        args[0].string.bytes()
     else
         return Value{ .bool = false };
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
@@ -2573,7 +2585,7 @@ fn native_class_uses(ctx: *NativeContext, args: []const Value) RuntimeError!Valu
 
     var result = try ctx.createArray();
     for (cls.used_traits.items) |trait| {
-        try result.set(ctx.allocator, .{ .string = trait }, .{ .string = trait });
+        try result.set(ctx.allocator, .{ .string = Value.String.borrowed(trait) }, .{ .string = Value.String.borrowed(trait) });
     }
     return .{ .array = result };
 }
@@ -2770,7 +2782,7 @@ fn native_iterator_apply(ctx: *NativeContext, args: []const Value) RuntimeError!
 
 fn native_filter_id(_: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 1 or args[0] != .string) return .{ .bool = false };
-    const name = args[0].string;
+    const name = args[0].string.bytes();
     // PHP's filter_id maps a filter name to its numeric ID (matches the
     // FILTER_VALIDATE_*/FILTER_SANITIZE_* / FILTER_DEFAULT constants)
     const Pair = struct { name: []const u8, id: i64 };
@@ -2813,7 +2825,7 @@ fn native_filter_list(ctx: *NativeContext, _: []const Value) RuntimeError!Value 
     };
     var i: usize = 0;
     while (i < names.len) : (i += 1) {
-        try arr.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = names[i] });
+        try arr.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = Value.String.borrowed(names[i]) });
     }
     return .{ .array = arr };
 }
@@ -2895,12 +2907,12 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
     var default_val: ?Value = null;
     if (args.len > 2 and args[2] == .array) {
         const top = args[2].array;
-        const fl = top.get(.{ .string = "flags" });
+        const fl = top.get(.{ .string = Value.String.borrowed("flags") });
         if (fl == .int) opt_flags = fl.int;
-        const o = top.get(.{ .string = "options" });
+        const o = top.get(.{ .string = Value.String.borrowed("options") });
         if (o == .array) {
             opts_arr = o.array;
-            const dv = o.array.get(.{ .string = "default" });
+            const dv = o.array.get(.{ .string = Value.String.borrowed("default") });
             if (dv != .null) default_val = dv;
         }
     }
@@ -2938,7 +2950,7 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
 
     switch (filter) {
         275 => { // FILTER_VALIDATE_IP
-            const s = if (value == .string) value.string else return .{ .bool = false };
+            const s = if (value == .string) value.string.bytes() else return .{ .bool = false };
             const ipv4_only = (flags & 1048576) != 0;
             const ipv6_only = (flags & 2097152) != 0;
             const no_priv = (flags & 8388608) != 0;
@@ -2953,14 +2965,14 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             return .{ .bool = false };
         },
         274 => { // FILTER_VALIDATE_EMAIL
-            const s = if (value == .string) value.string else return .{ .bool = false };
+            const s = if (value == .string) value.string.bytes() else return .{ .bool = false };
             if (std.mem.indexOf(u8, s, "@")) |at| {
                 if (at > 0 and at < s.len - 1 and std.mem.indexOf(u8, s[at + 1 ..], ".") != null) return value;
             }
             return .{ .bool = false };
         },
         273 => { // FILTER_VALIDATE_URL
-            const s = if (value == .string) value.string else return .{ .bool = false };
+            const s = if (value == .string) value.string.bytes() else return .{ .bool = false };
             if (std.mem.startsWith(u8, s, "http://") or std.mem.startsWith(u8, s, "https://") or std.mem.startsWith(u8, s, "ftp://")) return value;
             return .{ .bool = false };
         },
@@ -2973,7 +2985,7 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
                 if (value == .int) break :blk value.int;
                 // PHP stringifies a non-string scalar then applies the string
                 // filter: true->"1"->1, false->""->fail, 3.0->"3"->3, 3.7->fail
-                const s: []const u8 = if (value == .string) value.string else sblk: {
+                const s: []const u8 = if (value == .string) value.string.bytes() else sblk: {
                     if (value == .bool or value == .float) {
                         value.format(&str_buf, _ctx.allocator) catch return fail_default;
                         break :sblk str_buf.items;
@@ -3014,16 +3026,16 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
                 break :blk sign * parsed;
             };
             if (opts_arr) |opts| {
-                const min_v = opts.get(.{ .string = "min_range" });
+                const min_v = opts.get(.{ .string = Value.String.borrowed("min_range") });
                 if (min_v != .null and n < Value.toInt(min_v)) return fail_default;
-                const max_v = opts.get(.{ .string = "max_range" });
+                const max_v = opts.get(.{ .string = Value.String.borrowed("max_range") });
                 if (max_v != .null and n > Value.toInt(max_v)) return fail_default;
             }
             return .{ .int = n };
         },
         259 => { // FILTER_VALIDATE_FLOAT
             if (value == .float or value == .int) return value;
-            const s = if (value == .string) value.string else return .{ .bool = false };
+            const s = if (value == .string) value.string.bytes() else return .{ .bool = false };
             const trimmed = std.mem.trim(u8, s, " ");
             var parse_src: []const u8 = trimmed;
             var cleaned = std.ArrayListUnmanaged(u8){};
@@ -3046,27 +3058,27 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             const fail_val: Value = if (null_on_fail) .null else .{ .bool = false };
             if (value == .bool) return value;
             if (value == .int) return .{ .bool = value.int != 0 };
-            const s = if (value == .string) value.string else return fail_val;
+            const s = if (value == .string) value.string.bytes() else return fail_val;
             if (std.mem.eql(u8, s, "true") or std.mem.eql(u8, s, "1") or std.mem.eql(u8, s, "yes") or std.mem.eql(u8, s, "on")) return .{ .bool = true };
             if (std.mem.eql(u8, s, "false") or std.mem.eql(u8, s, "0") or std.mem.eql(u8, s, "no") or std.mem.eql(u8, s, "off")) return .{ .bool = false };
             return fail_val;
         },
         272 => { // FILTER_VALIDATE_REGEXP
-            const s = if (value == .string) value.string else if (value == .int) (try _ctx.createString(blk: {
+            const s = if (value == .string) value.string.bytes() else if (value == .int) (try _ctx.createString(blk: {
                 var b: [32]u8 = undefined;
                 break :blk std.fmt.bufPrint(&b, "{d}", .{value.int}) catch "";
             })) else return fail_default;
             if (opts_arr) |opts| {
-                const re_v = opts.get(.{ .string = "regexp" });
+                const re_v = opts.get(.{ .string = Value.String.borrowed("regexp") });
                 if (re_v == .string) {
-                    const r = _ctx.vm.callByName("preg_match", &.{ re_v, .{ .string = s } }) catch return fail_default;
+                    const r = _ctx.vm.callByName("preg_match", &.{ re_v, .{ .string = Value.String.borrowed(s) } }) catch return fail_default;
                     if (r == .int and r.int > 0) return value;
                 }
             }
             return fail_default;
         },
         277 => { // FILTER_VALIDATE_DOMAIN
-            const s = if (value == .string) value.string else return fail_default;
+            const s = if (value == .string) value.string.bytes() else return fail_default;
             if (s.len == 0 or s.len > 253) return fail_default;
             const strict = (eff_flags & 1048576) != 0; // FILTER_FLAG_HOSTNAME
             if (strict) {
@@ -3077,7 +3089,7 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             return value;
         },
         276 => { // FILTER_VALIDATE_MAC
-            const s = if (value == .string) value.string else return fail_default;
+            const s = if (value == .string) value.string.bytes() else return fail_default;
             // colon: 6 hex pairs separated by ":" or "-", or 3 quads of 4 hex separated by "."
             const HexHelpers = struct {
                 fn isHex(c: u8) bool {
@@ -3112,17 +3124,17 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             return fail_default;
         },
         519 => { // FILTER_SANITIZE_NUMBER_INT
-            const s = if (value == .string) value.string else return fail_default;
+            const s = if (value == .string) value.string.bytes() else return fail_default;
             var buf = std.ArrayListUnmanaged(u8){};
             for (s) |c| {
                 if (std.ascii.isDigit(c) or c == '+' or c == '-') try buf.append(_ctx.allocator, c);
             }
             const out = try buf.toOwnedSlice(_ctx.allocator);
             try _ctx.strings.append(_ctx.allocator, out);
-            return .{ .string = out };
+            return .{ .string = Value.String.borrowed(out) };
         },
         520 => { // FILTER_SANITIZE_NUMBER_FLOAT
-            const s = if (value == .string) value.string else return fail_default;
+            const s = if (value == .string) value.string.bytes() else return fail_default;
             const allow_frac = (eff_flags & 4096) != 0;
             const allow_thou = (eff_flags & 8192) != 0;
             const allow_sci = (eff_flags & 16384) != 0;
@@ -3140,14 +3152,14 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             }
             const out = try buf.toOwnedSlice(_ctx.allocator);
             try _ctx.strings.append(_ctx.allocator, out);
-            return .{ .string = out };
+            return .{ .string = Value.String.borrowed(out) };
         },
         515 => { // FILTER_SANITIZE_SPECIAL_CHARS
-            const s = if (value == .string) value.string else return .{ .bool = false };
-            return .{ .string = try sanitizeSpecialChars(_ctx, s) };
+            const s = if (value == .string) value.string.bytes() else return .{ .bool = false };
+            return .{ .string = Value.String.borrowed(try sanitizeSpecialChars(_ctx, s)) };
         },
         522 => { // FILTER_SANITIZE_FULL_SPECIAL_CHARS
-            const s = if (value == .string) value.string else return .{ .bool = false };
+            const s = if (value == .string) value.string.bytes() else return .{ .bool = false };
             var buf = std.ArrayListUnmanaged(u8){};
             for (s) |c| {
                 switch (c) {
@@ -3161,10 +3173,10 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             }
             const out = try buf.toOwnedSlice(_ctx.allocator);
             try _ctx.strings.append(_ctx.allocator, out);
-            return .{ .string = out };
+            return .{ .string = Value.String.borrowed(out) };
         },
         518 => { // FILTER_SANITIZE_URL
-            const s = if (value == .string) value.string else return .{ .bool = false };
+            const s = if (value == .string) value.string.bytes() else return .{ .bool = false };
             var buf = std.ArrayListUnmanaged(u8){};
             for (s) |c| {
                 // PHP strips all chars except a-zA-Z0-9 and the URL-reserved set
@@ -3179,10 +3191,10 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             }
             const out = try buf.toOwnedSlice(_ctx.allocator);
             try _ctx.strings.append(_ctx.allocator, out);
-            return .{ .string = out };
+            return .{ .string = Value.String.borrowed(out) };
         },
         517 => { // FILTER_SANITIZE_EMAIL
-            const s = if (value == .string) value.string else return .{ .bool = false };
+            const s = if (value == .string) value.string.bytes() else return .{ .bool = false };
             var buf = std.ArrayListUnmanaged(u8){};
             for (s) |c| {
                 if (std.ascii.isAlphanumeric(c) or c == '@' or c == '.' or c == '!' or c == '#' or
@@ -3195,7 +3207,7 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             }
             const out = try buf.toOwnedSlice(_ctx.allocator);
             try _ctx.strings.append(_ctx.allocator, out);
-            return .{ .string = out };
+            return .{ .string = Value.String.borrowed(out) };
         },
         1024 => { // FILTER_CALLBACK
             // options is the callable; PHP invokes it with the value and uses
@@ -3204,7 +3216,7 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Val
             // what comes back (even if null/false)
             if (args.len > 2 and args[2] == .array) {
                 const top = args[2].array;
-                const o = top.get(.{ .string = "options" });
+                const o = top.get(.{ .string = Value.String.borrowed("options") });
                 if (o != .null) {
                     return _ctx.invokeCallable(o, &.{value}) catch return .{ .bool = false };
                 }
@@ -3315,11 +3327,11 @@ fn native_get_resource_type(_: *NativeContext, args: []const Value) RuntimeError
     if (args[0] == .object) {
         const cn = args[0].object.class_name;
         // map zphp internal class names to PHP-canonical resource type strings
-        if (std.mem.eql(u8, cn, "FileHandle")) return .{ .string = "stream" };
-        if (std.mem.eql(u8, cn, "StreamContext")) return .{ .string = "stream-context" };
-        if (std.mem.eql(u8, cn, "CurlHandle")) return .{ .string = "curl" };
-        if (std.mem.eql(u8, cn, "GdImage")) return .{ .string = "gd" };
-        return .{ .string = cn };
+        if (std.mem.eql(u8, cn, "FileHandle")) return .{ .string = Value.String.borrowed("stream") };
+        if (std.mem.eql(u8, cn, "StreamContext")) return .{ .string = Value.String.borrowed("stream-context") };
+        if (std.mem.eql(u8, cn, "CurlHandle")) return .{ .string = Value.String.borrowed("curl") };
+        if (std.mem.eql(u8, cn, "GdImage")) return .{ .string = Value.String.borrowed("gd") };
+        return .{ .string = Value.String.borrowed(cn) };
     }
     return .{ .bool = false };
 }
@@ -3348,8 +3360,8 @@ fn native_spl_object_hash(ctx: *NativeContext, args: []const Value) RuntimeError
         // or "__closure_bound_N"). use the string's pointer as the id so
         // every distinct closure instance gets a distinct hash
         .string => |s| {
-            if (std.mem.startsWith(u8, s, "__closure_")) {
-                id = @intCast(@intFromPtr(s.ptr));
+            if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
+                id = @intCast(@intFromPtr(s.bytes().ptr));
             } else {
                 return .{ .bool = false };
             }
@@ -3359,7 +3371,7 @@ fn native_spl_object_hash(ctx: *NativeContext, args: []const Value) RuntimeError
     // PHP format: 16 hex chars of id, then 16 zeros
     const hash = std.fmt.allocPrint(ctx.allocator, "{x:0>16}0000000000000000", .{id}) catch return .{ .bool = false };
     ctx.vm.strings.append(ctx.allocator, hash) catch {};
-    return .{ .string = hash };
+    return .{ .string = Value.String.borrowed(hash) };
 }
 
 const T_INLINE_HTML: i64 = 267;
@@ -3445,14 +3457,14 @@ fn makeToken(ctx: *NativeContext, id: i64, text: []const u8, line: i64) RuntimeE
     try arr.append(ctx.allocator, .{ .int = id });
     const s = try std.fmt.allocPrint(ctx.allocator, "{s}", .{text});
     try ctx.strings.append(ctx.allocator, s);
-    try arr.append(ctx.allocator, .{ .string = s });
+    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
     try arr.append(ctx.allocator, .{ .int = line });
     return .{ .array = arr };
 }
 
 fn native_token_get_all(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .{ .array = try ctx.createArray() };
-    const input = args[0].string;
+    const input = args[0].string.bytes();
     const result = try ctx.createArray();
     var pos: usize = 0;
     var line: i64 = 1;
@@ -3570,7 +3582,7 @@ fn native_token_get_all(ctx: *NativeContext, args: []const Value) RuntimeError!V
                 // single character token returned as string
                 const s = try std.fmt.allocPrint(ctx.allocator, "{c}", .{input[pos]});
                 try ctx.strings.append(ctx.allocator, s);
-                try result.append(ctx.allocator, .{ .string = s });
+                try result.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
                 pos += 1;
             }
         }
@@ -3579,8 +3591,8 @@ fn native_token_get_all(ctx: *NativeContext, args: []const Value) RuntimeError!V
 }
 
 fn native_token_name(_: *NativeContext, args: []const Value) RuntimeError!Value {
-    if (args.len == 0 or args[0] != .int) return .{ .string = "UNKNOWN" };
-    return .{ .string = switch (args[0].int) {
+    if (args.len == 0 or args[0] != .int) return .{ .string = Value.String.borrowed("UNKNOWN") };
+    return .{ .string = Value.String.borrowed(switch (args[0].int) {
         322 => "T_ABSTRACT",
         409 => "T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG",
         410 => "T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG",
@@ -3734,5 +3746,5 @@ fn native_token_name(_: *NativeContext, args: []const Value) RuntimeError!Value 
         281 => "T_YIELD",
         282 => "T_YIELD_FROM",
         else => "UNKNOWN",
-    } };
+    }) };
 }
