@@ -842,12 +842,7 @@ fn skipWhitespace(s: []const u8, pos: *usize) void {
 }
 
 fn throwJsonException(ctx: *NativeContext, msg: []const u8) RuntimeError {
-    const obj = ctx.allocator.create(PhpObject) catch return error.OutOfMemory;
-    obj.* = .{ .class_name = "JsonException" };
-    obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed(msg) }) catch {};
-    obj.set(ctx.allocator, "code", .{ .int = 0 }) catch {};
-    ctx.vm.objects.append(ctx.allocator, obj) catch {};
-    ctx.vm.pending_exception = .{ .object = obj };
+    ctx.vm.setPendingException("JsonException", msg) catch return error.OutOfMemory;
     return error.RuntimeError;
 }
 

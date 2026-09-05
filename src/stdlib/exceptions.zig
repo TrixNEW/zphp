@@ -18,12 +18,18 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try throwable.methods.append(a, "getTraceAsString");
     try vm.interfaces.put(a, "Throwable", throwable);
 
+    const trace_default = try a.create(@import("../runtime/value.zig").PhpArray);
+    trace_default.* = .{};
+    try vm.arrays.append(a, trace_default);
+
     var exc_def = ClassDef{ .name = "Exception" };
     try exc_def.properties.append(a, .{ .name = "message", .default = .{ .string = Value.String.borrowed("") } });
     try exc_def.properties.append(a, .{ .name = "code", .default = .{ .int = 0 } });
     try exc_def.properties.append(a, .{ .name = "previous", .default = .null });
     try exc_def.properties.append(a, .{ .name = "file", .default = .{ .string = Value.String.borrowed("") } });
     try exc_def.properties.append(a, .{ .name = "line", .default = .{ .int = 0 } });
+    try exc_def.properties.append(a, .{ .name = "trace", .has_default = true, .type_str = "array", .visibility = .private, .default = .{ .array = trace_default } });
+    exc_def.slot_layout = try vm.buildSlotLayout(&exc_def);
     try exc_def.interfaces.append(a, "Throwable");
     try exc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
     try exc_def.methods.put(a, "getMessage", .{ .name = "getMessage", .arity = 0 });
@@ -53,6 +59,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try err_def.properties.append(a, .{ .name = "previous", .default = .null });
     try err_def.properties.append(a, .{ .name = "file", .default = .{ .string = Value.String.borrowed("") } });
     try err_def.properties.append(a, .{ .name = "line", .default = .{ .int = 0 } });
+    try err_def.properties.append(a, .{ .name = "trace", .has_default = true, .type_str = "array", .visibility = .private, .default = .{ .array = trace_default } });
+    err_def.slot_layout = try vm.buildSlotLayout(&err_def);
     try err_def.interfaces.append(a, "Throwable");
     try err_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
     try err_def.methods.put(a, "getMessage", .{ .name = "getMessage", .arity = 0 });
@@ -237,7 +245,7 @@ fn buildAndAttachTrace(ctx: *NativeContext, obj: *@import("../runtime/value.zig"
             if (i == 0) break;
         }
     }
-    try obj.set(ctx.vm.allocator, "__trace", .{ .array = arr });
+    try obj.setForScope(ctx.vm.allocator, "trace", .{ .array = arr }, ctx.vm.exceptionTraceScope(obj));
 }
 
 fn exceptionGetMessage(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
@@ -296,7 +304,7 @@ fn exceptionGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
         return .{ .array = arr };
     };
     if (this_val == .object) {
-        const t = this_val.object.get("__trace");
+        const t = this_val.object.getForScope("trace", ctx.vm.exceptionTraceScope(this_val.object));
         if (t == .array) return t;
     }
     const arr = try ctx.vm.allocator.create(PhpArray);
@@ -337,7 +345,7 @@ fn formatTraceArg(buf: *std.ArrayListUnmanaged(u8), alloc: std.mem.Allocator, v:
 fn exceptionGetTraceAsString(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
     const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return .{ .string = Value.String.borrowed("") };
     if (this_val != .object) return .{ .string = Value.String.borrowed("") };
-    const t = this_val.object.get("__trace");
+    const t = this_val.object.getForScope("trace", ctx.vm.exceptionTraceScope(this_val.object));
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(ctx.allocator);
     if (t == .array) {

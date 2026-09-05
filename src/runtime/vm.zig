@@ -10238,7 +10238,7 @@ pub const VM = struct {
         try arr.append(self.allocator, .{ .array = entry });
     }
 
-    // capture the current user call stack as an exception __trace array. one
+    // capture the current user call stack as an exception trace array. one
     // entry per active user frame (top-down), each carrying the function name
     // and the call site's line/file - so an exception thrown by a native
     // function still reports the user functions that led to it
@@ -10286,7 +10286,7 @@ pub const VM = struct {
     }
 
     // when a native (e.g. array_map, iterator_apply) calls a user callback
-    // that throws, splice the native into the exception's __trace to match
+    // that throws, splice the native into the exception's trace to match
     // PHP. PHP's getTrace() puts the throwing user callback at #0 attributed
     // as `[internal function]` (no file/line), then the native at #1 with
     // the user call-site file/line and the native's args - the native was
@@ -10297,7 +10297,7 @@ pub const VM = struct {
     fn prependNativeFrameToTrace(self: *VM, exc: Value, name: []const u8, native_args: []const Value) !void {
         if (exc != .object) return;
         const obj = exc.object;
-        const trace_v = obj.get("__trace");
+        const trace_v = obj.getForScope("trace", self.exceptionTraceScope(obj));
         if (trace_v != .array) return;
         const old_trace = trace_v.array;
         if (old_trace.entries.items.len == 0) return;
@@ -10324,13 +10324,27 @@ pub const VM = struct {
         try new_trace.append(self.allocator, .{ .array = closure_entry });
         try new_trace.append(self.allocator, .{ .array = native_entry });
         for (old_trace.entries.items[1..]) |e| try new_trace.append(self.allocator, e.value);
-        try obj.set(self.allocator, "__trace", .{ .array = new_trace });
+        try obj.setForScope(self.allocator, "trace", .{ .array = new_trace }, self.exceptionTraceScope(obj));
+    }
+
+    // Native throwable access must use the root declaring class, never a
+    // subclass's unrelated same-name property.
+    pub fn exceptionTraceScope(self: *VM, obj: *const PhpObject) []const u8 {
+        var name = obj.class_name;
+        while (true) {
+            if (std.mem.eql(u8, name, "Error")) return "Error";
+            if (std.mem.eql(u8, name, "Exception")) return "Exception";
+            const cls = self.classes.get(name) orelse break;
+            name = cls.parent orelse break;
+        }
+        return "Exception";
     }
 
     pub fn setPendingException(self: *VM, class_name: []const u8, message: []const u8) !void {
         const obj = try self.allocator.create(PhpObject);
         self.next_object_id += 1;
         obj.* = .{ .class_name = class_name, .id = self.next_object_id };
+        try self.initObjectProperties(obj, class_name);
         try obj.set(self.allocator, "message", .{ .string = Value.String.borrowed(message) });
         try obj.set(self.allocator, "code", .{ .int = 0 });
         const exc_file = if (self.frame_count > 0) self.frameFile(self.frame_count - 1) else self.file_path;
@@ -10341,7 +10355,7 @@ pub const VM = struct {
         else
             0;
         try obj.set(self.allocator, "line", .{ .int = line });
-        try obj.set(self.allocator, "__trace", .{ .array = try self.buildExceptionTrace() });
+        try obj.setForScope(self.allocator, "trace", .{ .array = try self.buildExceptionTrace() }, self.exceptionTraceScope(obj));
         try self.objects.append(self.allocator, obj);
         self.pending_exception = .{ .object = obj };
     }
@@ -10622,6 +10636,7 @@ pub const VM = struct {
         const obj = try self.allocator.create(PhpObject);
         self.next_object_id += 1;
         obj.* = .{ .class_name = class_name, .id = self.next_object_id };
+        try self.initObjectProperties(obj, class_name);
         try obj.set(self.allocator, "message", .{ .string = Value.String.borrowed(message) });
         try obj.set(self.allocator, "code", .{ .int = 0 });
         // file/line should reflect the throwing frame (often a function in a
@@ -10638,7 +10653,7 @@ pub const VM = struct {
         else
             0;
         try obj.set(self.allocator, "line", .{ .int = line });
-        try obj.set(self.allocator, "__trace", .{ .array = try self.buildExceptionTrace() });
+        try obj.setForScope(self.allocator, "trace", .{ .array = try self.buildExceptionTrace() }, self.exceptionTraceScope(obj));
         try self.objects.append(self.allocator, obj);
 
         if (self.handler_count <= self.handler_floor) {
@@ -14538,7 +14553,7 @@ pub const VM = struct {
         }
     }
 
-    fn buildSlotLayout(self: *VM, def: *const ClassDef) RuntimeError!?*PhpObject.SlotLayout {
+    pub fn buildSlotLayout(self: *VM, def: *const ClassDef) RuntimeError!?*PhpObject.SlotLayout {
         // collect all properties walking parent chain (parent first). private
         // slots from each declaring class get their OWN entry (PHP keeps
         // parent's `private $foo` and child's `private $foo` separate); only
@@ -15635,7 +15650,7 @@ pub const VM = struct {
     // enforce a typed property's declared type on write. mirrors checkParamTypes:
     // non-strict weak-coerces a compatible scalar, strict rejects a mismatch.
     // returns true if a TypeError was thrown+dispatched (caller should continue)
-    noinline fn checkPropertyType(self: *VM, val: *Value, type_str: []const u8, class_name: []const u8, prop_name: []const u8) RuntimeError!bool {
+    pub noinline fn checkPropertyType(self: *VM, val: *Value, type_str: []const u8, class_name: []const u8, prop_name: []const u8) RuntimeError!bool {
         if (type_str.len == 0) return false;
         // fast path: the value's tag already exactly matches a simple scalar
         // declared type - no coercion, no checkTypeMatch parse needed

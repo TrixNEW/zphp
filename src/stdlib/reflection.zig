@@ -3365,7 +3365,10 @@ fn rpGetValue(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const this = getThis(ctx) orelse return .null;
     const prop_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (args.len > 0 and args[0] == .object) {
-        return args[0].object.get(prop_name);
+        const dc = this.get("_declaring_class");
+        if (dc == .string and !ctx.vm.isInstanceOf(args[0].object.class_name, dc.string.bytes()))
+            return throwReflection(ctx, "Given object is not an instance of the class this property was declared in");
+        return args[0].object.getForScope(prop_name, if (dc == .string) dc.string.bytes() else null);
     }
     return .null;
 }
@@ -3375,14 +3378,18 @@ fn rpSetValue(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     const prop_name = if (this.get("name") == .string) this.get("name").string.bytes() else return .null;
     if (args.len >= 2 and args[0] == .object) {
         const target = args[0].object;
-        const vr = ctx.vm.findPropertyVisibility(target.class_name, prop_name);
-        if (vr.is_readonly and target.get(prop_name) != .null) {
+        const dc = this.get("_declaring_class");
+        const scope = if (dc == .string) dc.string.bytes() else target.class_name;
+        const vr = ctx.vm.findPropertyVisibility(scope, prop_name);
+        if (vr.is_readonly and target.getForScope(prop_name, scope) != .null) {
             const msg = try std.fmt.allocPrint(ctx.allocator, "Cannot modify readonly property {s}::${s}", .{ vr.defining_class, prop_name });
             try ctx.vm.strings.append(ctx.allocator, msg);
             _ = ctx.vm.throwBuiltinException("Error", msg) catch {};
             return error.RuntimeError;
         }
-        try target.set(ctx.allocator, prop_name, args[1]);
+        var value = args[1];
+        if (try ctx.vm.checkPropertyType(&value, vr.type_str, scope, prop_name)) return error.RuntimeError;
+        try target.setForScope(ctx.allocator, prop_name, value, scope);
     }
     return .null;
 }
