@@ -438,46 +438,31 @@ fn curlWriteCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaqu
 }
 
 fn curlHeaderCallback(data: [*]u8, size: usize, nmemb: usize, userdata: *anyopaque) callconv(.c) usize {
-    const total = size * nmemb;
+    const total = std.math.mul(usize, size, nmemb) catch return 0;
     const hd: *CurlHeaderData = @ptrCast(@alignCast(userdata));
-    const raw = data[0..total];
-    const cleaned_raw = std.mem.trimEnd(u8, raw, "\r\n");
-        if (std.mem.startsWith(u8, cleaned_raw, "HTTP/")) {
-            if (parseHttpStatus(cleaned_raw)) |code| {
-                if (code >= 100 and code < 200 and code != 101) {
-                    hd.in_1xx = true;
-                    return total;
-                }
-            }
-            hd.in_1xx = false;
-            // Note: ctx.createString creates an owned copy of line in ctx.strings,
-            // safely detached from cURL's transient buffer.
-            const owned = hd.ctx.createString(cleaned_raw) catch {
-                hd.oom = true;
-                return 0;
-            };
-            hd.headers.append(hd.ctx.allocator, .{ .string = Value.String.borrowed(owned) }) catch {
-                hd.oom = true;
-                return 0;
-            };
-        } else if (!hd.in_1xx) {
-            const line = std.mem.trimEnd(u8, cleaned_raw, " \t");
-            if (line.len > 0) {
-                // Note: ctx.createString creates an owned copy in ctx.strings.
-                const owned = hd.ctx.createString(line) catch {
-                    hd.oom = true;
-                    return 0;
-                };
-                hd.headers.append(hd.ctx.allocator, .{ .string = Value.String.borrowed(owned) }) catch {
-                    hd.oom = true;
-                    return 0;
-                };
-            }
-        }
+    const raw = std.mem.trimEnd(u8, data[0..total], "\r\n");
+    const status = std.mem.startsWith(u8, raw, "HTTP/");
+    if (status) {
+        const code = parseHttpStatus(raw) orelse return total;
+        hd.in_1xx = code >= 100 and code < 200 and code != 101;
+    }
+    if (hd.in_1xx) return total;
+    const line = if (status) raw else std.mem.trimEnd(u8, raw, " \t");
+    if (line.len == 0) return total;
+    const owned = Value.String.create(hd.ctx.allocator, line) catch {
+        hd.oom = true;
+        return 0;
+    };
+    defer owned.release();
+    hd.headers.append(hd.ctx.allocator, .{ .string = owned }) catch {
+        hd.oom = true;
+        return 0;
+    };
     return total;
 }
 
 fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!Value {
+    if (ctx.vm.last_http_response_headers) |previous| ctx.vm.arrayRelease(previous);
     ctx.vm.last_http_response_headers = null;
 
     // Note: process-local curl_global_init is safe under zphp serve's fork-based worker model.
@@ -504,9 +489,9 @@ fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!Value {
     };
     defer wd.buffer.deinit(wd.allocator);
 
-    // headers_arr is tracked in VM.arrays and swept by freeHeapItems on request reset;
-    // only published to ctx.vm.last_http_response_headers if valid headers were received.
     const headers_arr = ctx.createArray() catch return .{ .bool = false };
+    @import("../runtime/vm.zig").VM.arrayRetain(headers_arr);
+    defer ctx.vm.arrayRelease(headers_arr);
     var hd = CurlHeaderData{
         .ctx = ctx,
         .headers = headers_arr,
@@ -519,6 +504,7 @@ fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!Value {
 
     const result = c_curl.curl_easy_perform(handle);
     if (!hd.oom and headers_arr.entries.items.len > 0) {
+        @import("../runtime/vm.zig").VM.arrayRetain(headers_arr);
         ctx.vm.last_http_response_headers = headers_arr;
     }
     if (result != c_curl.CURLE_OK) return .{ .bool = false };

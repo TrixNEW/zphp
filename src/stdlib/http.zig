@@ -303,6 +303,7 @@ fn native_http_get_last_response_headers(ctx: *NativeContext, _: []const Value) 
 }
 
 fn native_http_clear_last_response_headers(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
+    if (ctx.vm.last_http_response_headers) |arr| ctx.vm.arrayRelease(arr);
     ctx.vm.last_http_response_headers = null;
     return .null;
 }
@@ -376,7 +377,7 @@ fn getResponseHeaders(ctx: *NativeContext) ?*PhpArray {
     return ctx.vm.response_headers;
 }
 
-fn appendResponseHeader(ctx: *NativeContext, hdr: []const u8) !void {
+pub fn appendResponseHeader(ctx: *NativeContext, hdr: []const u8) !void {
     if (ctx.vm.response_headers) |arr| {
         try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(hdr) });
     } else {

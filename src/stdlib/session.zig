@@ -137,15 +137,7 @@ fn setSessionCookie(ctx: *NativeContext, sid: []const u8) !void {
     const cookie = std.fmt.bufPrint(&buf, "Set-Cookie: {s}={s}; Path=/; HttpOnly; SameSite=Lax", .{ default_name, sid }) catch return;
     const hdr = try ctx.createString(cookie);
 
-    const key = "__response_headers";
-    const existing = ctx.vm.frames[0].vars.get(key);
-    if (existing != null and existing.? == .array) {
-        try existing.?.array.append(ctx.allocator, .{ .string = Value.String.borrowed(hdr) });
-    } else {
-        const arr = try ctx.createArray();
-        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(hdr) });
-        try ctx.vm.putGlobalVar(key, .{ .array = arr });
-    }
+    try @import("http.zig").appendResponseHeader(ctx, hdr);
 }
 
 fn native_session_start(ctx: *NativeContext, _: []const Value) RuntimeError!Value {
