@@ -173,8 +173,10 @@ pub const entries = .{
 fn native_define(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len < 2 or args[0] != .string) return .{ .bool = false };
     if (ctx.vm.php_constants.contains(args[0].string.bytes())) return .{ .bool = false };
-    try ctx.vm.user_constants.put(ctx.allocator, args[0].string.bytes(), {});
-    try ctx.vm.php_constants.put(ctx.allocator, args[0].string.bytes(), args[1]);
+    const name = try ctx.createString(args[0].string.bytes());
+    try ctx.vm.user_constants.put(ctx.allocator, name, {});
+    try ctx.vm.php_constants.put(ctx.allocator, name, args[1]);
+    VM.retainValue(args[1]);
     return .{ .bool = true };
 }
 
@@ -198,11 +200,17 @@ fn native_defined(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
 fn native_constant(ctx: *NativeContext, args: []const Value) RuntimeError!Value {
     if (args.len == 0 or args[0] != .string) return .null;
     const name = args[0].string.bytes();
-    if (ctx.vm.php_constants.get(name)) |v| return v;
+    if (ctx.vm.php_constants.get(name)) |v| {
+        if (v == .string) v.string.retain();
+        return v;
+    }
     if (std.mem.indexOf(u8, name, "::")) |sep| {
         const class_name = name[0..sep];
         const prop_name = name[sep + 2 ..];
-        if (ctx.vm.getStaticProp(class_name, prop_name)) |v| return v;
+        if (ctx.vm.getStaticProp(class_name, prop_name)) |v| {
+            if (v == .string) v.string.retain();
+            return v;
+        }
     }
     const msg = try std.fmt.allocPrint(ctx.allocator, "Undefined constant \"{s}\"", .{name});
     try ctx.strings.append(ctx.allocator, msg);

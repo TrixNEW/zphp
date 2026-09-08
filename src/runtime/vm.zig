@@ -687,6 +687,7 @@ pub const VM = struct {
     exception_dispatched: bool = false,
     run_base_frame: usize = 0,
     allocator: Allocator,
+    string_pool: @import("string_pool.zig") = .{ .backing = undefined },
     global_slot_names: []const []const u8 = &.{},
     script_strict_types: bool = false,
     // most recent ICU UErrorCode from any intl native call. reset to 0 on entry
@@ -699,6 +700,8 @@ pub const VM = struct {
     // script's layout, not the most-recently-required file's
     top_slot_names: []const []const u8 = &.{},
     global_vars_dirty: bool = false,
+    method_cache_class_storage: [256]u8 = undefined,
+    method_cache_method_storage: [256]u8 = undefined,
     method_cache_class: []const u8 = "",
     method_cache_method: []const u8 = "",
     method_cache_result: []const u8 = "",
@@ -707,6 +710,8 @@ pub const VM = struct {
     // hasMethod single-entry cache. method dispatch repeatedly probes the
     // same (class, method) pair per call site (decide method-call vs __call
     // fallback) - this skips the bufPrint("{s}::{s}") cost on hits
+    has_method_cache_class_storage: [256]u8 = undefined,
+    has_method_cache_method_storage: [256]u8 = undefined,
     has_method_cache_class: []const u8 = "",
     has_method_cache_method: []const u8 = "",
     has_method_cache_result: bool = false,
@@ -1272,7 +1277,13 @@ pub const VM = struct {
             break :blk created;
         };
         self.next_object_id += 1;
-        obj.* = .{ .class_name = class_name, .id = self.next_object_id };
+        const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
+            const owned = try self.allocator.dupe(u8, class_name);
+            errdefer self.allocator.free(owned);
+            try self.strings.append(self.allocator, owned);
+            break :blk owned;
+        };
+        obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
         if (self.debug_trace_class) |trace_class| if (std.mem.eql(u8, trace_class, class_name)) {
             @import("value.zig").trace_obj = obj;
             @import("value.zig").trace_rc_verbose = true;
@@ -1333,7 +1344,12 @@ pub const VM = struct {
         return vm;
     }
 
+    pub fn stringAllocator(self: *VM) Allocator {
+        return self.string_pool.allocator();
+    }
+
     fn initVm(vm: *VM, allocator: Allocator) RuntimeError!void {
+        vm.string_pool.backing = allocator;
         if (std.posix.getenv("ZPHP_HEAP_STATS") != null) vm.debug_closure_owners = .{};
         if (std.posix.getenv("ZPHP_NO_POOL") != null) vm.debug_no_pool = true;
         if (std.posix.getenv("ZPHP_GC_VERIFY") != null) vm.debug_gc_verify = true;
@@ -2289,8 +2305,21 @@ pub const VM = struct {
         defer self.heap_teardown = false;
         // static state (class static props, function statics, superglobals)
         // holds owned values that no frame releases
+        var constant_it = self.php_constants.valueIterator();
+        while (constant_it.next()) |value| {
+            if (value.* == .string) {
+                self.releaseValue(value.*);
+                value.* = .null;
+            }
+        }
         var class_it = self.classes.valueIterator();
         while (class_it.next()) |class| {
+            for (class.properties.items) |*property| {
+                if (property.default == .string) {
+                    self.releaseValue(property.default);
+                    property.default = .null;
+                }
+            }
             var sp_it = class.static_props.valueIterator();
             while (sp_it.next()) |value| {
                 self.releaseValue(value.*);
@@ -2569,6 +2598,7 @@ pub const VM = struct {
         self.pending_destruct.deinit(self.allocator);
         self.pending_array_release.deinit(self.allocator);
         self.pending_string_release.deinit(self.allocator);
+        self.string_pool.deinit();
         self.pending_gen_release.deinit(self.allocator);
         self.pending_fiber_release.deinit(self.allocator);
         self.weakmaps.deinit(self.allocator);
@@ -2763,6 +2793,7 @@ pub const VM = struct {
             while (ctfn_it.next()) |e| e.value_ptr.*.deinit(self.allocator);
             self.chunk_to_func_names.clearRetainingCapacity();
             self.php_constants.clearRetainingCapacity();
+            self.user_constants.clearRetainingCapacity();
             initConstants(&self.php_constants, self.allocator) catch {};
             // builtins persist across reset now (freeClassState kept them), so the
             // stdlib classes + their native methods + enum objects DON'T need
@@ -3027,7 +3058,7 @@ pub const VM = struct {
             }
         }
         for (caller_slot_names, 0..) |name, caller_slot| {
-            if (name.len == 0 or caller_slot >= caller.locals.len or inherited_vars.contains(name)) continue;
+            if (name.len == 0 or caller_slot >= caller.locals.len) continue;
             try inherited_vars.put(self.allocator, name, caller.locals[caller_slot]);
         }
         const saved_slot_names = self.global_slot_names;
@@ -3437,35 +3468,38 @@ pub const VM = struct {
                 .concat => {
                     const b = self.pop();
                     const a = self.pop();
+                    VM.retainValue(a);
+                    VM.retainValue(b);
+                    defer self.releaseValue(a);
+                    defer self.releaseValue(b);
                     if (a == .string and b == .string) {
                         const as = a.string.bytes();
                         const bs = b.string.bytes();
-                        const owned = try self.allocator.alloc(u8, as.len + bs.len);
+                        const owned = try self.stringAllocator().alloc(u8, as.len + bs.len);
                         @memcpy(owned[0..as.len], as);
                         @memcpy(owned[as.len..], bs);
-                        try self.strings.append(self.allocator, owned);
-                        self.push(.{ .string = Value.String.borrowed(owned) });
+                        self.pushTransfer(.{ .string = try Value.String.adopt(self.stringAllocator(), owned) });
                     } else {
                         if (a == .array) self.emitWarning("Array to string conversion");
                         if (b == .array) self.emitWarning("Array to string conversion");
                         var buf = std.ArrayListUnmanaged(u8){};
+                        defer buf.deinit(self.stringAllocator());
                         if (a == .object) {
                             const s = self.objectToString(a.object) catch {
                                 if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                                 return error.RuntimeError;
                             };
-                            try buf.appendSlice(self.allocator, s);
-                        } else try a.format(&buf, self.allocator);
+                            try buf.appendSlice(self.stringAllocator(), s);
+                        } else try a.format(&buf, self.stringAllocator());
                         if (b == .object) {
                             const s = self.objectToString(b.object) catch {
                                 if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                                 return error.RuntimeError;
                             };
-                            try buf.appendSlice(self.allocator, s);
-                        } else try b.format(&buf, self.allocator);
-                        const owned = try buf.toOwnedSlice(self.allocator);
-                        try self.strings.append(self.allocator, owned);
-                        self.push(.{ .string = Value.String.borrowed(owned) });
+                            try buf.appendSlice(self.stringAllocator(), s);
+                        } else try b.format(&buf, self.stringAllocator());
+                        const owned = try buf.toOwnedSlice(self.stringAllocator());
+                        self.pushTransfer(.{ .string = try Value.String.adopt(self.stringAllocator(), owned) });
                     }
                 },
 
@@ -4354,7 +4388,7 @@ pub const VM = struct {
                         else
                             null;
                         if (resolved) |ri| {
-                            self.push(.{ .string = string.retainedSlice(ri, ri + 1) });
+                            self.pushTransfer(.{ .string = string.retainedSlice(ri, ri + 1) });
                         } else {
                             self.push(.{ .string = Value.String.borrowed("") });
                         }
@@ -4403,7 +4437,7 @@ pub const VM = struct {
                         else
                             null;
                         if (resolved) |ri| {
-                            self.push(.{ .string = string.retainedSlice(ri, ri + 1) });
+                            self.pushTransfer(.{ .string = string.retainedSlice(ri, ri + 1) });
                         } else {
                             self.push(.null);
                         }
@@ -4495,6 +4529,14 @@ pub const VM = struct {
                     const inner_key = self.pop();
                     const prop_key = self.pop();
                     const base = self.pop();
+                    VM.retainValue(v);
+                    VM.retainValue(inner_key);
+                    VM.retainValue(prop_key);
+                    VM.retainValue(base);
+                    defer self.releaseValue(v);
+                    defer self.releaseValue(inner_key);
+                    defer self.releaseValue(prop_key);
+                    defer self.releaseValue(base);
                     if (base != .object or prop_key != .string) {
                         self.push(v);
                         continue;
@@ -4882,20 +4924,8 @@ pub const VM = struct {
                         @memcpy(buf[0..s.len], s);
                         if (new_len > s.len) @memset(buf[s.len..], ' ');
                         buf[target_idx] = write_byte;
-                        try self.strings.append(self.allocator, buf);
-                        const new_str = Value{ .string = Value.String.borrowed(buf) };
-
-                        if (ref_cell) |cell| self.setCell(cell, new_str);
-                        if (frame.func) |func| {
-                            if (slot < func.slot_names.len) {
-                                const name = func.slot_names[slot];
-                                if (name.len > 0) try frame.vars.put(self.allocator, name, new_str);
-                            }
-                            if (slot < frame.locals.len) frame.locals[slot] = new_str;
-                        } else {
-                            if (slot < frame.locals.len) frame.locals[slot] = new_str;
-                            try self.setLocalGlobal(slot, new_str, frame);
-                        }
+                        const new_str = Value{ .string = try Value.String.adopt(self.allocator, buf) };
+                        try self.setVariableByName(frame, self.slotName(frame, slot), new_str);
                         self.push(val);
                         continue;
                     }
@@ -5315,6 +5345,7 @@ pub const VM = struct {
                             // alias the original's shared cell (entry.value already
                             // mirrors the referenced value)
                             entry.ref = null;
+                            if (entry.key == .string) entry.key.string.retain();
                             retainValue(entry.value);
                         }
                         copy.next_int_key = src.next_int_key;
@@ -5631,11 +5662,7 @@ pub const VM = struct {
                     const cell = try self.getOrCreateVarCell(frame, var_name);
                     if (arr_val == .array) {
                         const arr_ptr = arr_val.array;
-                        const key: PhpArray.Key = switch (key_val) {
-                            .int => |i| .{ .int = i },
-                            .string => |s| .{ .string = s },
-                            else => .{ .int = Value.toInt(key_val) },
-                        };
+                        const key = PhpArray.normalizeKey(Value.toArrayKey(key_val));
                         // The element becomes a mirror of the cell.
                         try self.arraySetOwned(arr_ptr, key, cell.*);
                         if (arr_ptr.getPtr(key)) |ep| self.setEntryRef(ep, cell);
@@ -6231,119 +6258,42 @@ pub const VM = struct {
                     if (append_val == .array) self.emitWarning("Array to string conversion");
                     const is_ref = self.currentFrame().ref_slots.get(name);
 
-                    // find the local slot for this variable
-                    const ca_sn = if (self.currentFrame().func) |func| func.slot_names else self.currentFrame().slot_names;
-                    var ca_slot: u16 = 0xFFFF;
-                    for (ca_sn, 0..) |sn, si| {
-                        if (std.mem.eql(u8, sn, name)) {
-                            ca_slot = @intCast(si);
-                            break;
-                        }
-                    }
-
-                    // try growable buffer path for local variables (no refs)
-                    if (ca_slot != 0xFFFF and is_ref == null and self.ic != null and self.currentFrame().include_parent == null) {
-                        const ic = self.ic.?;
-                        const current = if (ca_slot < self.currentFrame().locals.len) self.currentFrame().locals[ca_slot] else Value.null;
-
-                        // check if we can reuse the existing buffer
-                        if (ic.concat_slot == ca_slot and ic.concat_frame == self.frame_count and ic.concat_buf.items.len > 0) {
-                            // verify the local still points into our buffer
-                            if (current == .string and current.string.len > 0 and
-                                ic.concat_buf.items.len >= current.string.len and
-                                current.string.ptr == ic.concat_buf.items.ptr)
-                            {
-                                if (append_val == .string) {
-                                    try ic.concat_buf.appendSlice(self.allocator, append_val.string.bytes());
-                                } else {
-                                    try append_val.format(&ic.concat_buf, self.allocator);
+                    const frame = self.currentFrame();
+                    const current = if (is_ref) |cell| cell.* else (frame.vars.get(name) orelse .null);
+                    var suffix_allocator = std.heap.stackFallback(128, self.allocator);
+                    const temporary_allocator = suffix_allocator.get();
+                    var suffix: std.ArrayListUnmanaged(u8) = .{};
+                    defer suffix.deinit(temporary_allocator);
+                    if (append_val == .string) {
+                        try suffix.appendSlice(temporary_allocator, append_val.string.bytes());
+                    } else try append_val.format(&suffix, temporary_allocator);
+                    if (is_ref == null and current == .string) {
+                        if (current.string.owner) |owner| {
+                            if (!owner.closure and owner.refcount == 1 and current.string.ptr == owner.bytes.ptr) {
+                                const length = std.math.add(usize, current.string.len, suffix.items.len) catch return error.OutOfMemory;
+                                if (length > owner.bytes.len) {
+                                    const growth = std.math.add(usize, owner.bytes.len / 2, 16) catch return error.OutOfMemory;
+                                    const capacity = @max(length, std.math.add(usize, owner.bytes.len, growth) catch length);
+                                    owner.bytes = try owner.allocator.realloc(owner.bytes, capacity);
                                 }
-                                const result_val = Value{ .string = Value.String.borrowed(ic.concat_buf.items) };
-                                self.currentFrame().locals[ca_slot] = result_val;
-                                try self.currentFrame().vars.put(self.allocator, name, result_val);
-                                self.push(result_val);
+                                @memcpy(owner.bytes[current.string.len..length], suffix.items);
+                                const result: Value = .{ .string = .{ .ptr = owner.bytes.ptr, .len = length, .owner = owner } };
+                                VM.retainValue(result);
+                                try self.setVariableByName(frame, name, result);
+                                self.push(result);
                                 continue;
                             }
                         }
-
-                        // finalize old buffer: transfer ownership to self.strings so
-                        // external references (array entries etc.) remain valid, then
-                        // start a fresh buffer
-                        if (ic.concat_buf.items.len > 0 and ic.concat_slot != 0xFFFF) {
-                            const old_str = try self.allocator.alloc(u8, ic.concat_buf.items.len);
-                            @memcpy(old_str, ic.concat_buf.items);
-                            try self.strings.append(self.allocator, old_str);
-                            if (ic.concat_frame == self.frame_count and ic.concat_slot < self.currentFrame().locals.len) {
-                                const old_val = self.currentFrame().locals[ic.concat_slot];
-                                if (old_val == .string and old_val.string.ptr == ic.concat_buf.items.ptr) {
-                                    self.currentFrame().locals[ic.concat_slot] = .{ .string = Value.String.borrowed(old_str) };
-                                }
-                            }
-                            // preserve old buffer memory for external references
-                            if (ic.concat_buf.capacity > 0) {
-                                try self.strings.append(self.allocator, ic.concat_buf.allocatedSlice());
-                                ic.concat_buf = .{};
-                            }
-                        } else {
-                            ic.concat_buf.clearRetainingCapacity();
-                        }
-                        if (current == .string) {
-                            try ic.concat_buf.appendSlice(self.allocator, current.string.bytes());
-                        } else if (current != .null) {
-                            try current.format(&ic.concat_buf, self.allocator);
-                        }
-                        if (append_val == .string) {
-                            try ic.concat_buf.appendSlice(self.allocator, append_val.string.bytes());
-                        } else {
-                            try append_val.format(&ic.concat_buf, self.allocator);
-                        }
-                        ic.concat_slot = ca_slot;
-                        ic.concat_frame = self.frame_count;
-                        const result_val = Value{ .string = Value.String.borrowed(ic.concat_buf.items) };
-                        self.currentFrame().locals[ca_slot] = result_val;
-                        try self.currentFrame().vars.put(self.allocator, name, result_val);
-                        self.push(result_val);
-                        continue;
                     }
-
-                    // fallback: allocate new string each time (ref variables, no IC, no slot)
-                    const current = if (is_ref) |cell| cell.* else (self.currentFrame().vars.get(name) orelse .null);
-                    var result_str: []const u8 = undefined;
-                    if (current == .string and append_val == .string) {
-                        const cs = current.string.bytes();
-                        const as = append_val.string.bytes();
-                        const new_str = try self.allocator.alloc(u8, cs.len + as.len);
-                        @memcpy(new_str[0..cs.len], cs);
-                        @memcpy(new_str[cs.len..], as);
-                        try self.strings.append(self.allocator, new_str);
-                        result_str = new_str;
-                    } else {
-                        var buf = std.ArrayListUnmanaged(u8){};
-                        if (current == .string) {
-                            try buf.appendSlice(self.allocator, current.string.bytes());
-                        } else {
-                            try current.format(&buf, self.allocator);
-                        }
-                        if (append_val == .string) {
-                            try buf.appendSlice(self.allocator, append_val.string.bytes());
-                        } else {
-                            try append_val.format(&buf, self.allocator);
-                        }
-                        const owned = try buf.toOwnedSlice(self.allocator);
-                        try self.strings.append(self.allocator, owned);
-                        result_str = owned;
-                    }
-                    const result_val = Value{ .string = Value.String.borrowed(result_str) };
-                    if (is_ref) |cell| {
-                        self.setCell(cell, result_val);
-                        try self.propagateCellWrite(cell, result_val);
-                    }
-                    try self.currentFrame().vars.put(self.allocator, name, result_val);
-                    if (ca_slot != 0xFFFF and ca_slot < self.currentFrame().locals.len) {
-                        self.currentFrame().locals[ca_slot] = result_val;
-                    }
-                    try self.syncIncludeVar(self.currentFrame(), name, result_val);
-                    self.push(result_val);
+                    var buffer: std.ArrayListUnmanaged(u8) = .{};
+                    errdefer buffer.deinit(self.stringAllocator());
+                    if (current == .string) {
+                        try buffer.appendSlice(self.stringAllocator(), current.string.bytes());
+                    } else if (current != .null) try current.format(&buffer, self.stringAllocator());
+                    try buffer.appendSlice(self.stringAllocator(), suffix.items);
+                    const result: Value = .{ .string = try Value.String.adopt(self.stringAllocator(), try buffer.toOwnedSlice(self.stringAllocator())) };
+                    try self.setVariableByName(frame, name, result);
+                    self.push(result);
                 },
                 .get_local => {
                     const slot = self.readU16();
@@ -6758,7 +6708,7 @@ pub const VM = struct {
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
                         };
-                        self.push(.{ .string = Value.String.borrowed(s) });
+                        self.pushTransfer(.{ .string = try Value.String.create(self.allocator, s) });
                     } else {
                         if (v == .array) self.emitWarning("Array to string conversion");
                         var buf = std.ArrayListUnmanaged(u8){};
@@ -7131,6 +7081,8 @@ pub const VM = struct {
                 .require => {
                     const variant = self.readByte();
                     const path_val = self.pop();
+                    VM.retainValue(path_val);
+                    defer self.releaseValue(path_val);
                     if (path_val != .string) {
                         self.push(.null);
                     } else {
@@ -7141,7 +7093,13 @@ pub const VM = struct {
                         if (is_once and self.loaded_files.contains(path)) {
                             self.push(.{ .bool = true });
                         } else {
-                            const from_cache = self.serve_mode and self.serve_compile_cache.contains(path);
+                            const stable_path = blk: {
+                                const owned = try self.allocator.dupe(u8, path);
+                                errdefer self.allocator.free(owned);
+                                try self.strings.append(self.allocator, owned);
+                                break :blk owned;
+                            };
+                            const from_cache = self.serve_mode and self.serve_compile_cache.contains(stable_path);
                             const result: ?*CompileResult = if (from_cache)
                                 self.serve_compile_cache.get(path).?
                             else if (self.file_loader) |loader|
@@ -7155,7 +7113,7 @@ pub const VM = struct {
                                     try self.serve_cache_keys.append(self.allocator, duped);
                                     try self.serve_compile_cache.put(self.allocator, duped, r);
                                 }
-                                try self.loaded_files.put(self.allocator, path, {});
+                                try self.loaded_files.put(self.allocator, stable_path, {});
                                 if (!from_cache) {
                                     try self.compile_results.append(self.allocator, r);
                                 }
@@ -9344,6 +9302,7 @@ pub const VM = struct {
                         return error.RuntimeError;
                     }
                     const obj = obj_val.object;
+                    defer self.stackRelease(method_name_val);
                     // shift args down by 1 to remove method_name from stack, leaving [object, arg1, ..., argN]
                     var i: usize = 0;
                     while (i < ac) : (i += 1) {
@@ -10171,6 +10130,7 @@ pub const VM = struct {
                     }
                     self.clearArgStackFrom(self.sp - 1);
                     self.sp -= 1;
+                    defer self.stackRelease(method_val);
                     try self.callStaticFunction(full_name, arg_count, effective_called);
                 },
 
@@ -11039,7 +10999,13 @@ pub const VM = struct {
     pub fn setPendingException(self: *VM, class_name: []const u8, message: []const u8) !void {
         const obj = try self.allocator.create(PhpObject);
         self.next_object_id += 1;
-        obj.* = .{ .class_name = class_name, .id = self.next_object_id };
+        const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
+            const owned = try self.allocator.dupe(u8, class_name);
+            errdefer self.allocator.free(owned);
+            try self.strings.append(self.allocator, owned);
+            break :blk owned;
+        };
+        obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
         try self.initObjectProperties(obj, class_name);
         try obj.set(self.allocator, "message", .{ .string = Value.String.borrowed(message) });
         try obj.set(self.allocator, "code", .{ .int = 0 });
@@ -11331,7 +11297,13 @@ pub const VM = struct {
     pub fn throwBuiltinException(self: *VM, class_name: []const u8, message: []const u8) !bool {
         const obj = try self.allocator.create(PhpObject);
         self.next_object_id += 1;
-        obj.* = .{ .class_name = class_name, .id = self.next_object_id };
+        const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
+            const owned = try self.allocator.dupe(u8, class_name);
+            errdefer self.allocator.free(owned);
+            try self.strings.append(self.allocator, owned);
+            break :blk owned;
+        };
+        obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
         try self.initObjectProperties(obj, class_name);
         try obj.set(self.allocator, "message", .{ .string = Value.String.borrowed(message) });
         try obj.set(self.allocator, "code", .{ .int = 0 });
@@ -11678,7 +11650,7 @@ pub const VM = struct {
     // set_local / set_var_var do: a slot and its vars mirror share the one
     // reference, a bound reference cell takes its own and propagates
     pub fn setVariableByName(self: *VM, frame: *CallFrame, name: []const u8, val: Value) RuntimeError!void {
-        const slot_names = if (frame.func) |func| func.slot_names else self.global_slot_names;
+        const slot_names = if (frame.func) |func| func.slot_names else frame.slot_names;
         for (slot_names, 0..) |slot_name, si| {
             if (!std.mem.eql(u8, slot_name, name)) continue;
             if (si < frame.locals.len) {
@@ -11686,11 +11658,20 @@ pub const VM = struct {
                 if (frame.func != null) {
                     if (frame.ref_slots.get(name)) |cell| try self.propagateCellWrite(cell, val);
                     try self.storeLocalSlot(frame, slot, val);
+                } else if (frame.include_parent != null) {
+                    if (frame.ref_slots.get(name)) |cell| {
+                        self.setCell(cell, val);
+                        try self.propagateCellWrite(cell, val);
+                    }
+                    if (try frame.vars.fetchPut(self.allocator, name, val)) |old| {
+                        self.releaseValue(old.value);
+                    } else self.releaseValue(frame.locals[slot]);
+                    frame.locals[slot] = val;
+                    try self.syncIncludeLocal(frame, slot, val);
                 } else {
                     self.releaseValue(frame.locals[slot]);
                     frame.locals[slot] = val;
                     try self.setLocalGlobal(slot, val, frame);
-                    try self.syncIncludeLocal(frame, slot, val);
                 }
                 return;
             }
@@ -13788,8 +13769,14 @@ pub const VM = struct {
                 try self.propagateCellWrite(cell, value);
             }
             retainValue(value);
-            if (try caller.vars.fetchPut(self.allocator, name, value)) |old| {
-                self.releaseValue(old.value);
+            const replaced = try caller.vars.fetchPut(self.allocator, name, value);
+            if (replaced) |old| self.releaseValue(old.value);
+            for (caller_sn, 0..) |slot_name, i| {
+                if (std.mem.eql(u8, slot_name, name) and i < caller.locals.len) {
+                    if (replaced == null) self.releaseValue(caller.locals[i]);
+                    caller.locals[i] = value;
+                    break;
+                }
             }
         }
     }
@@ -14484,6 +14471,7 @@ pub const VM = struct {
         };
         self.clearArgStackFrom(floor);
         if (floor < self.sp) for (self.stack[floor..self.sp]) |v| {
+            if (v == .string) self.stackRelease(v);
             if (v == .array and v.array.refcount == 0) self.queueArrayRelease(v.array);
         };
     }
@@ -15620,8 +15608,14 @@ pub const VM = struct {
             }
             break false;
         };
-        self.has_method_cache_class = class_name;
-        self.has_method_cache_method = method_name;
+        if (class_name.len > self.has_method_cache_class_storage.len or method_name.len > self.has_method_cache_method_storage.len) {
+            self.has_method_cache_fn_count = std.math.maxInt(usize);
+            return result;
+        }
+        @memcpy(self.has_method_cache_class_storage[0..class_name.len], class_name);
+        @memcpy(self.has_method_cache_method_storage[0..method_name.len], method_name);
+        self.has_method_cache_class = self.has_method_cache_class_storage[0..class_name.len];
+        self.has_method_cache_method = self.has_method_cache_method_storage[0..method_name.len];
         self.has_method_cache_result = result;
         self.has_method_cache_fn_count = fn_count;
         self.has_method_cache_cls_count = cls_count;
@@ -15647,8 +15641,14 @@ pub const VM = struct {
             return self.method_cache_result;
         }
         const result = try self.resolveMethodSlow(class_name, method_name);
-        self.method_cache_class = class_name;
-        self.method_cache_method = method_name;
+        if (class_name.len > self.method_cache_class_storage.len or method_name.len > self.method_cache_method_storage.len) {
+            self.method_cache_fn_count = std.math.maxInt(usize);
+            return result;
+        }
+        @memcpy(self.method_cache_class_storage[0..class_name.len], class_name);
+        @memcpy(self.method_cache_method_storage[0..method_name.len], method_name);
+        self.method_cache_class = self.method_cache_class_storage[0..class_name.len];
+        self.method_cache_method = self.method_cache_method_storage[0..method_name.len];
         self.method_cache_result = result;
         self.method_cache_fn_count = fn_count;
         self.method_cache_cls_count = cls_count;
@@ -16309,7 +16309,13 @@ pub const VM = struct {
         }
         const obj = try self.allocator.create(PhpObject);
         self.next_object_id += 1;
-        obj.* = .{ .class_name = class_name, .id = self.next_object_id };
+        const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
+            const owned = try self.allocator.dupe(u8, class_name);
+            errdefer self.allocator.free(owned);
+            try self.strings.append(self.allocator, owned);
+            break :blk owned;
+        };
+        obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
         try self.objects.append(self.allocator, obj);
         try self.initObjectProperties(obj, class_name);
 
@@ -17794,20 +17800,14 @@ pub const VM = struct {
     }
 
     fn pushNativeResult(self: *VM, value: Value) void {
-        self.pushCallResult(value);
-    }
-
-    // a call result (callMethod / callByName / executeFunction*) is a borrowed
-    // reference: its last owning reference has been released into the deferred
-    // queues, so it stays valid until the next drain and whoever stores or
-    // pushes it retains it. a refcount-zero owned string is exactly that
-    // state; an owned string at refcount >= 1 is a native's own result and
-    // moves onto the stack as the transfer of that reference
-    fn pushCallResult(self: *VM, value: Value) void {
         if (value == .string and value.string.owner != null and value.string.owner.?.refcount > 0) {
             self.pushTransfer(value);
-            return;
-        }
+        } else self.push(value);
+    }
+
+    // call results borrow storage until the next release drain. Other holders
+    // may still own the same value, so its refcount does not identify ownership.
+    fn pushCallResult(self: *VM, value: Value) void {
         self.push(value);
     }
 
@@ -19068,11 +19068,21 @@ pub const VM = struct {
     }
 
     pub fn objectSetOwned(self: *VM, object: *PhpObject, name: []const u8, value: Value) !void {
-        try object.set(self.allocator, name, value);
+        var stable_name = name;
+        if (object.getSlotIndex(name) == null and !object.storage().properties.contains(name)) {
+            stable_name = try self.allocator.dupe(u8, name);
+            try self.strings.append(self.allocator, stable_name);
+        }
+        try object.set(self.allocator, stable_name, value);
     }
 
     pub fn objectSetForScopeOwned(self: *VM, object: *PhpObject, name: []const u8, value: Value, scope: ?[]const u8) !void {
-        try object.setForScope(self.allocator, name, value, scope);
+        var stable_name = name;
+        if (object.getSlotIndexForScope(name, scope) == null and !object.storage().properties.contains(name)) {
+            stable_name = try self.allocator.dupe(u8, name);
+            try self.strings.append(self.allocator, stable_name);
+        }
+        try object.setForScope(self.allocator, stable_name, value, scope);
     }
 
     pub inline fn retainValue(v: Value) void {
