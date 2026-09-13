@@ -1936,8 +1936,11 @@ pub const Value = union(enum) {
                 continue;
             }
             if ((c == 'e' or c == 'E') and !has_exp and i > start) {
+                var j = i + 1;
+                if (j < s.len and (s[j] == '+' or s[j] == '-')) j += 1;
+                if (j >= s.len or s[j] < '0' or s[j] > '9') break;
                 has_exp = true;
-                if (i + 1 < s.len and (s[i + 1] == '+' or s[i + 1] == '-')) i += 1;
+                i = j - 1;
                 continue;
             }
             break;

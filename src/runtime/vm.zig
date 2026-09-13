@@ -3578,6 +3578,7 @@ pub const VM = struct {
                         if (try self.throwBuiltinException("TypeError", msg)) continue;
                         return error.RuntimeError;
                     }
+                    if (v == .string and isPartialNumericString(v.string.bytes())) self.emitNonNumericWarning();
                     self.push(v.negate());
                 },
                 .concat => {
