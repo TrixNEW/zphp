@@ -47,13 +47,14 @@ pub const entries = .{
     .{ "curl_file_create", curlFileCreate },
 };
 
-var global_init_done: bool = false;
+var global_init = std.once(globalInit);
 
 fn ensureGlobalInit() void {
-    if (!global_init_done) {
-        _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
-        global_init_done = true;
-    }
+    global_init.call();
+}
+
+fn globalInit() void {
+    _ = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
 }
 
 fn getHandle(obj: *PhpObject) ?*c.CURL {
@@ -824,6 +825,7 @@ fn curlShareStrerror(ctx: *NativeContext, args: []const Value) RuntimeError!Nati
 // PhpObject property maps instead belong to the VM allocator.
 
 var multi_wcb_table: std.AutoHashMapUnmanaged(usize, *WriteCallbackData) = .{};
+var multi_wcb_mutex: std.Thread.Mutex = .{};
 
 fn getMultiHandle(obj: *PhpObject) ?*c.CURLM {
     return obj.native.get(c.CURLM, .curl_multi);
@@ -846,6 +848,8 @@ fn curlMultiAddHandle(_: *NativeContext, args: []const Value) RuntimeError!Nativ
     if (return_transfer_v == .bool and return_transfer_v.bool) {
         const wcb = std.heap.page_allocator.create(WriteCallbackData) catch return NativeResult.scalar(.{ .int = 1 });
         wcb.* = .{ .allocator = std.heap.page_allocator, .buffer = .{} };
+        multi_wcb_mutex.lock();
+        defer multi_wcb_mutex.unlock();
         multi_wcb_table.put(std.heap.page_allocator, @intFromPtr(easy), wcb) catch {
             wcb.buffer.deinit(wcb.allocator);
             std.heap.page_allocator.destroy(wcb);
@@ -859,6 +863,8 @@ fn curlMultiAddHandle(_: *NativeContext, args: []const Value) RuntimeError!Nativ
 }
 
 fn freeMultiWcb(easy: *c.CURL) void {
+    multi_wcb_mutex.lock();
+    defer multi_wcb_mutex.unlock();
     if (multi_wcb_table.fetchRemove(@intFromPtr(easy))) |kv| {
         kv.value.buffer.deinit(kv.value.allocator);
         std.heap.page_allocator.destroy(kv.value);
@@ -906,6 +912,8 @@ fn curlMultiSelect(_: *NativeContext, args: []const Value) RuntimeError!NativeRe
 fn curlMultiGetcontent(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .object) return NativeResult.scalar(.null);
     const easy = getHandle(args[0].object) orelse return NativeResult.scalar(.null);
+    multi_wcb_mutex.lock();
+    defer multi_wcb_mutex.unlock();
     const wcb = multi_wcb_table.get(@intFromPtr(easy)) orelse return NativeResult.scalar(.null);
     const str = try Value.String.create(ctx.allocator, wcb.buffer.items);
     return NativeResult.takeString(str);

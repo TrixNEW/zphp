@@ -44,8 +44,10 @@ pub const TypeInfo = struct {
     param_types: []const []const u8 = &.{},
     return_type: []const u8 = "",
 };
-pub var g_type_info: std.StringHashMapUnmanaged(TypeInfo) = .{};
-var g_type_info_allocator: ?Allocator = null;
+// one VM per thread (serve workers, worker pools), so the table is
+// thread-local: it is read on the call path and moving it onto the VM
+// struct cost 30% on the fibonacci micro
+pub threadlocal var g_type_info: std.StringHashMapUnmanaged(TypeInfo) = .{};
 
 pub fn getTypeInfo(key: []const u8) ?TypeInfo {
     return g_type_info.get(key);

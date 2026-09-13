@@ -23,20 +23,20 @@ const c = @cImport({
     @cInclude("libxml/xmlschemas.h");
 });
 
-// libxml2 init is one-shot per process; safe to call multiple times
-var global_init_done: bool = false;
+var global_init = std.once(globalInit);
 
 fn ensureGlobalInit() void {
-    if (!global_init_done) {
-        c.xmlInitParser();
-        // suppress libxml2's default stderr output for parse errors;
-        // PHP also defaults to silent unless libxml_use_internal_errors(true)
-        c.xmlSetGenericErrorFunc(null, silentErrorHandler);
-        // structured handler captures detailed error info per call when
-        // libxml_internal_errors_enabled is on; otherwise it's a noop
-        c.xmlSetStructuredErrorFunc(null, structuredErrorHandler);
-        global_init_done = true;
-    }
+    global_init.call();
+}
+
+fn globalInit() void {
+    c.xmlInitParser();
+    // suppress libxml2's default stderr output for parse errors;
+    // PHP also defaults to silent unless libxml_use_internal_errors(true)
+    c.xmlSetGenericErrorFunc(null, silentErrorHandler);
+    // structured handler captures detailed error info per call when
+    // libxml_internal_errors_enabled is on; otherwise it's a noop
+    c.xmlSetStructuredErrorFunc(null, structuredErrorHandler);
 }
 
 fn silentErrorHandler(_: ?*anyopaque, _: [*c]const u8, ...) callconv(.c) void {}
@@ -1198,16 +1198,14 @@ fn nlItems(obj: *PhpObject) ?*PhpArray {
 }
 
 fn domNodeListLength(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    _ = ctx;
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.{ .int = 0 });
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.{ .int = 0 });
     const arr = nlItems(obj) orelse return NativeResult.scalar(.{ .int = 0 });
     return NativeResult.scalar(.{ .int = @intCast(arr.entries.items.len) });
 }
 
 fn domNodeListItem(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    _ = ctx;
     if (args.len < 1 or args[0] != .int) return NativeResult.scalar(.null);
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.null);
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.null);
     const arr = nlItems(obj) orelse return NativeResult.scalar(.null);
     const idx = args[0].int;
     if (idx < 0 or idx >= @as(i64, @intCast(arr.entries.items.len))) return NativeResult.scalar(.null);
@@ -1218,22 +1216,22 @@ fn domNodeListCount(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
     return domNodeListLength(ctx, args);
 }
 
-fn domNodeListRewind(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.null);
+fn domNodeListRewind(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.null);
     obj.properties.put(std.heap.page_allocator, "__pos", .{ .int = 0 }) catch {};
     return NativeResult.scalar(.null);
 }
 
-fn domNodeListValid(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.{ .bool = false });
+fn domNodeListValid(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const arr = nlItems(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const pos = obj.get("__pos");
     const p: i64 = if (pos == .int) pos.int else 0;
     return NativeResult.scalar(.{ .bool = p >= 0 and p < @as(i64, @intCast(arr.entries.items.len)) });
 }
 
-fn domNodeListCurrent(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.null);
+fn domNodeListCurrent(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.null);
     const arr = nlItems(obj) orelse return NativeResult.scalar(.null);
     const pos = obj.get("__pos");
     const p: i64 = if (pos == .int) pos.int else 0;
@@ -1241,30 +1239,28 @@ fn domNodeListCurrent(_: *NativeContext, _: []const Value) RuntimeError!NativeRe
     return NativeResult.share(arr.entries.items[@intCast(p)].value);
 }
 
-fn domNodeListKey(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.{ .int = 0 });
+fn domNodeListKey(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.{ .int = 0 });
     const pos = obj.get("__pos");
     return if (pos == .int) NativeResult.share(pos) else NativeResult.scalar(.{ .int = 0 });
 }
 
 fn domNodeListNext(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.null);
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.null);
     const pos = obj.get("__pos");
     const p: i64 = if (pos == .int) pos.int else 0;
     obj.set(ctx.allocator, "__pos", .{ .int = p + 1 }) catch {};
     return NativeResult.scalar(.null);
 }
 
-fn getThisGlobal() ?*PhpObject {
-    // helper that doesn't need ctx for the simple frame lookup
-    const vm: *VM = vm_singleton orelse return null;
+fn getThisOf(ctx: *NativeContext) ?*PhpObject {
+    const vm = ctx.vm;
     if (vm.frame_count == 0) return null;
     const v = vm.frames[vm.frame_count - 1].vars.get("$this") orelse return null;
     if (v != .object) return null;
     return v.object;
 }
 
-var vm_singleton: ?*VM = null;
 
 // ---------------- DOMNamedNodeMap ----------------
 
@@ -1291,17 +1287,17 @@ fn makeNamedNodeMap(ctx: *NativeContext, owner_doc: *PhpObject, element: *c.xmlN
     return NativeResult.borrowed(.{ .object = map_obj });
 }
 
-fn domNNMGetNamedItem(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+fn domNNMGetNamedItem(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.null);
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.null);
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.null);
     const named = obj.get("__named");
     if (named != .array) return NativeResult.scalar(.null);
     return NativeResult.share(named.array.get(.{ .string = args[0].string }));
 }
 
-fn domNNMItem(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+fn domNNMItem(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .int) return NativeResult.scalar(.null);
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.null);
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.null);
     const items = obj.get("__items");
     if (items != .array) return NativeResult.scalar(.null);
     const idx = args[0].int;
@@ -1309,8 +1305,8 @@ fn domNNMItem(_: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     return NativeResult.share(items.array.entries.items[@intCast(idx)].value);
 }
 
-fn domNNMCount(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.{ .int = 0 });
+fn domNNMCount(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.{ .int = 0 });
     const items = obj.get("__items");
     if (items != .array) return NativeResult.scalar(.{ .int = 0 });
     return NativeResult.scalar(.{ .int = @intCast(items.array.entries.items.len) });
@@ -1471,7 +1467,6 @@ fn domXpathEvaluate(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
 // ---------------- registration ----------------
 
 pub fn register(vm: *VM, a: Allocator) !void {
-    vm_singleton = vm;
     ensureGlobalInit();
 
     try registerDocClass(vm, a);
@@ -1714,9 +1709,9 @@ fn registerNodeListClass(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "DOMNodeList::offsetUnset", domNodeListReadOnly);
 }
 
-fn domNodeListOffsetExists(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+fn domNodeListOffsetExists(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1) return NativeResult.scalar(.{ .bool = false });
-    const obj = getThisGlobal() orelse return NativeResult.scalar(.{ .bool = false });
+    const obj = getThisOf(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const arr = nlItems(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const idx = Value.toInt(args[0]);
     return NativeResult.scalar(.{ .bool = idx >= 0 and idx < @as(i64, @intCast(arr.entries.items.len)) });
