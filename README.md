@@ -2,7 +2,7 @@
 
 **A high-performance PHP runtime built in Zig.**
 
-zphp is an experimental PHP 8.x-compatible runtime focused on **speed, low memory usage, and modern deployment**. It combines a custom runtime with a built-in HTTP server, WebSocket support, TLS, HTTP/2, database drivers, cURL bindings, package management, testing, formatting, and standalone compilation.
+zphp is an experimental PHP 8.x-compatible runtime focused on **speed, low memory usage, modern deployment, and native concurrency**. It combines a custom runtime with a built-in HTTP server, WebSocket support, TLS, HTTP/2, database drivers, cURL bindings, package management, testing, formatting, and standalone compilation.
 
 Built with **Zig**, zphp is designed to give PHP workloads lower-level control, reduced overhead, and a more performance-oriented runtime architecture.
 
@@ -95,6 +95,10 @@ zig build -Doptimize=ReleaseFast -Dextension=hello.c   # static, compiled into z
 ```
 
 `ZPHP_EXTENSION_DIR` names a directory whose libraries load automatically. Extensions get module, worker, and request lifecycle hooks, a request-local and a worker-local data slot, and a destructor per resource type that runs when the PHP value is unset, goes out of scope, unwinds through an exception, or the request ends. Values cross the boundary as opaque handles, so the runtime's internals can change without breaking compiled extensions; an ABI version in the descriptor rejects mismatches at load time. The static musl release binaries cannot load shared libraries and take static extensions only. `tests/extensions/demo.c` exercises the whole API.
+
+## Related projects
+
+- [zphp-bindings](https://github.com/nexxii04/zphp-bindings): Zig bindings for the extension ABI, so extensions can be written in Zig without C.
 
 ## Project Status
 
