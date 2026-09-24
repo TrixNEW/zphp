@@ -49,7 +49,7 @@ extern fn zphp_mpz_mul_2exp(r: *ZphpMpz, a: *const ZphpMpz, e: c_ulong) void;
 extern fn zphp_mpz_tdiv_q_2exp(r: *ZphpMpz, a: *const ZphpMpz, e: c_ulong) void;
 extern fn zphp_mpz_fdiv_q_2exp(r: *ZphpMpz, a: *const ZphpMpz, e: c_ulong) void;
 extern fn zphp_mpz_get_d(a: *const ZphpMpz) f64;
-extern fn zphp_mpz_fits_slong(a: *const ZphpMpz) c_int;
+extern fn zphp_mpz_fits_i64(a: *const ZphpMpz) c_int;
 extern fn zphp_mpz_probab_prime_p(a: *const ZphpMpz, reps: c_int) c_int;
 extern fn zphp_mpz_nextprime(r: *ZphpMpz, a: *const ZphpMpz) void;
 extern fn zphp_mpz_sizeinbase(a: *const ZphpMpz, base: c_int) usize;
@@ -641,7 +641,7 @@ fn gmpCast(obj: *PhpObject, target: @import("../runtime/value.zig").NumericCast)
         .int => .{ .int = zphp_mpz_get_si(p) },
         .float => .{ .float = zphp_mpz_get_d(p) },
         .bool => .{ .bool = zphp_mpz_sgn(p) != 0 },
-        .number => if (zphp_mpz_fits_slong(p) != 0) .{ .int = zphp_mpz_get_si(p) } else .{ .float = zphp_mpz_get_d(p) },
+        .number => if (zphp_mpz_fits_i64(p) != 0) .{ .int = zphp_mpz_get_si(p) } else .{ .float = zphp_mpz_get_d(p) },
     };
 }
 
