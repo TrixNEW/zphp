@@ -243,7 +243,7 @@ pub const CaptureEntry = struct {
 // feeds may bind that position by reference. `simple` names a caller
 // variable; `cell` is the canonical reference cell of a property or array
 // element, carrying the error text if the current scope may not write it
-const RefSource = union(enum) {
+pub const RefSource = union(enum) {
     none,
     simple: []const u8,
     cell: struct { value: *Value, denial: ?[]const u8 = null },
@@ -4124,12 +4124,12 @@ pub const VM = struct {
                                 if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                                 return error.RuntimeError;
                             };
-                        } else if (native_params.map.get(name)) |params| {
+                        } else if (native_params.get(name)) |params| {
                             var resolved: [256]Value = undefined;
                             var resolved_sources: [256]RefSource = undefined;
-                            const placed = self.placeNativeNamedArgs(arr, params, &resolved, &resolved_sources);
-                            if (placed.unknown) |unknown| {
-                                if (try self.throwUnknownNamedParameter(unknown)) continue;
+                            const placed = try self.placeNativeNamedArgs(arr, params, &resolved, &resolved_sources);
+                            if (placed.problem) |problem| {
+                                if (try self.throwNamedArgProblem(name, params, problem)) continue;
                                 return error.RuntimeError;
                             }
                             const pos = placed.count;
@@ -7901,12 +7901,12 @@ pub const VM = struct {
                                             self.setArgSource(self.sp - 1, resolved_sources[i]);
                                         }
                                         arg_count = @intCast(count);
-                                    } else if (native_params.map.get(ctn)) |params| {
+                                    } else if (native_params.get(ctn)) |params| {
                                         var resolved: [256]Value = undefined;
                                         var resolved_sources: [256]RefSource = undefined;
-                                        const placed = self.placeNativeNamedArgs(arr_val.array, params, &resolved, &resolved_sources);
-                                        if (placed.unknown) |unknown| {
-                                            if (try self.throwUnknownNamedParameter(unknown)) continue;
+                                        const placed = try self.placeNativeNamedArgs(arr_val.array, params, &resolved, &resolved_sources);
+                                        if (placed.problem) |problem| {
+                                            if (try self.throwNamedArgProblem(ctn, params, problem)) continue;
                                             return error.RuntimeError;
                                         }
                                         for (0..placed.count) |i| {
@@ -9386,11 +9386,11 @@ pub const VM = struct {
                                         self.push(resolved_buf[i]);
                                         self.setArgSource(self.sp - 1, resolved_sources[i]);
                                     }
-                                } else if (native_params.map.get(fn_name)) |params| {
-                                    const placed = self.placeNativeNamedArgs(arr, params, &resolved_buf, &resolved_sources);
-                                    if (placed.unknown) |unknown| {
+                                } else if (native_params.get(fn_name)) |params| {
+                                    const placed = try self.placeNativeNamedArgs(arr, params, &resolved_buf, &resolved_sources);
+                                    if (placed.problem) |problem| {
                                         self.dropN(1);
-                                        if (try self.throwUnknownNamedParameter(unknown)) continue;
+                                        if (try self.throwNamedArgProblem(fn_name, params, problem)) continue;
                                         return error.RuntimeError;
                                     }
                                     ac = placed.count;
@@ -10211,12 +10211,12 @@ pub const VM = struct {
                                 self.setArgSource(self.sp - 1, resolved_sources[i]);
                             }
                             resolved_ac = pos;
-                        } else if (native_params.map.get(full_name)) |params| {
+                        } else if (native_params.get(full_name)) |params| {
                             var resolved: [256]Value = undefined;
                             var resolved_sources: [256]RefSource = undefined;
-                            const placed = self.placeNativeNamedArgs(arr, params, &resolved, &resolved_sources);
-                            if (placed.unknown) |unknown| {
-                                if (try self.throwUnknownNamedParameter(unknown)) continue;
+                            const placed = try self.placeNativeNamedArgs(arr, params, &resolved, &resolved_sources);
+                            if (placed.problem) |problem| {
+                                if (try self.throwNamedArgProblem(full_name, params, problem)) continue;
                                 return error.RuntimeError;
                             }
                             resolved_ac = placed.count;
@@ -17477,37 +17477,95 @@ pub const VM = struct {
         }
     }
 
-    const NativeNamedArgs = struct { count: usize, unknown: ?[]const u8 = null };
+    pub const NamedArgProblem = union(enum) {
+        unknown: []const u8,
+        overwrites: []const u8,
+        variadic_named,
+        not_passed: usize,
+        default_unknown: usize,
+    };
+    pub const NativeNamedArgs = struct { count: usize = 0, problem: ?NamedArgProblem = null };
 
-    // natives declare no parameter list; native_params names their slots so a
-    // named argument lands in its position
-    fn placeNativeNamedArgs(self: *VM, arr: *PhpArray, params: []const []const u8, resolved: *[256]Value, sources: *[256]RefSource) NativeNamedArgs {
+    // natives declare no parameter list; native_params supplies it, so a named
+    // argument lands in its position and a skipped optional parameter gets
+    // its default, with php's errors for everything else
+    pub fn placeNativeNamedArgs(self: *VM, arr: *PhpArray, params: []const native_params.Param, resolved: *[256]Value, sources: *[256]RefSource) RuntimeError!NativeNamedArgs {
         @memset(resolved, .null);
         @memset(sources, .none);
-        var pos: usize = 0;
+        var assigned: [256]bool = @splat(false);
+        var positional: usize = 0;
+        var count: usize = 0;
         for (arr.entries.items) |entry| {
-            if (entry.key == .int) {
-                if (pos >= resolved.len) break;
-                resolved[pos] = entry.value;
-                sources[pos] = self.argArraySource(arr, entry.key);
-                pos += 1;
-                continue;
-            }
-            const name = entry.key.string.bytes();
-            const index = for (params, 0..) |p, pi| {
-                if (std.mem.eql(u8, p, name) or (p.len > 0 and p[0] == '$' and std.mem.eql(u8, p[1..], name))) break pi;
-            } else return .{ .count = pos, .unknown = name };
+            const index = switch (entry.key) {
+                .int => blk: {
+                    defer positional += 1;
+                    break :blk positional;
+                },
+                .string => |k| blk: {
+                    const name = k.bytes();
+                    for (params, 0..) |p, pi| if (!p.variadic and std.mem.eql(u8, p.name, name)) {
+                        if (assigned[pi]) return .{ .problem = .{ .overwrites = name } };
+                        break :blk pi;
+                    };
+                    for (params) |p| if (p.variadic) return .{ .problem = .variadic_named };
+                    return .{ .problem = .{ .unknown = name } };
+                },
+            };
+            if (index >= resolved.len) return error.RuntimeError;
             resolved[index] = entry.value;
             sources[index] = self.argArraySource(arr, entry.key);
-            pos = @max(pos, index + 1);
+            assigned[index] = true;
+            count = @max(count, index + 1);
         }
-        return .{ .count = pos };
+        for (0..@min(count, params.len)) |i| {
+            if (assigned[i]) continue;
+            switch (params[i].default) {
+                .required => return .{ .problem = .{ .not_passed = i } },
+                .unknown => return .{ .problem = .{ .default_unknown = i } },
+                else => |d| resolved[i] = try self.nativeDefault(d),
+            }
+        }
+        return .{ .count = count };
     }
 
-    fn throwUnknownNamedParameter(self: *VM, name: []const u8) RuntimeError!bool {
-        const msg = try std.fmt.allocPrint(self.allocator, "Unknown named parameter ${s}", .{name});
+    fn nativeDefault(self: *VM, d: native_params.Default) RuntimeError!Value {
+        return switch (d) {
+            .required, .unknown, .null => .null,
+            .bool => |b| .{ .bool = b },
+            .int => |i| .{ .int = i },
+            .float => |f| .{ .float = f },
+            .string => |bytes| .{ .string = Value.String.borrowed(bytes) },
+            .empty_array => blk: {
+                const arr = try self.allocator.create(PhpArray);
+                arr.* = .{};
+                try self.arrays.append(self.allocator, arr);
+                break :blk .{ .array = arr };
+            },
+            .class_constant => |c| blk: {
+                if (self.getStaticProp(c.class, c.name)) |v| break :blk v;
+                var buf: [256]u8 = undefined;
+                const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ c.class, c.name }) catch break :blk .null;
+                break :blk self.php_constants.get(full) orelse .null;
+            },
+        };
+    }
+
+    pub fn throwNamedArgProblem(self: *VM, func_name: []const u8, params: []const native_params.Param, problem: NamedArgProblem) RuntimeError!bool {
+        const class: []const u8, const msg = try self.namedArgProblemMessage(func_name, params, problem);
+        return self.throwBuiltinException(class, msg);
+    }
+
+    // the exception class and message php raises for a misplaced named argument
+    pub fn namedArgProblemMessage(self: *VM, func_name: []const u8, params: []const native_params.Param, problem: NamedArgProblem) RuntimeError!struct { []const u8, []const u8 } {
+        const class: []const u8, const msg = switch (problem) {
+            .unknown => |name| .{ "Error", try std.fmt.allocPrint(self.allocator, "Unknown named parameter ${s}", .{name}) },
+            .overwrites => |name| .{ "Error", try std.fmt.allocPrint(self.allocator, "Named parameter ${s} overwrites previous argument", .{name}) },
+            .variadic_named => .{ "ArgumentCountError", try std.fmt.allocPrint(self.allocator, "{s}() does not accept unknown named parameters", .{func_name}) },
+            .not_passed => |i| .{ "ArgumentCountError", try std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} (${s}) not passed", .{ func_name, i + 1, params[i].name }) },
+            .default_unknown => |i| .{ "ArgumentCountError", try std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} (${s}) must be passed explicitly, because the default value is not known", .{ func_name, i + 1, params[i].name }) },
+        };
         try self.strings.append(self.allocator, msg);
-        return self.throwBuiltinException("Error", msg);
+        return .{ class, msg };
     }
 
     pub fn callMethod(self: *VM, obj: *PhpObject, method_name: []const u8, args: []const Value) RuntimeError!Value {

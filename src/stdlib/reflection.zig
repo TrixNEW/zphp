@@ -4283,26 +4283,18 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
                     }
                 }
                 if (count > 0) _ = try ctx.callMethod(obj, "__construct", resolved[0..count]);
-            } else if (@import("native_params.zig").map.get(ctor_key)) |params| {
-                // a native attribute constructor (#[Deprecated]) resolves its
-                // names from the same table named calls use
-                var resolved: [16]Value = .{.null} ** 16;
-                var pos: usize = 0;
-                for (arr.entries.items) |entry| {
-                    if (entry.key == .string) {
-                        for (params, 0..) |p, pi| {
-                            if (pi < resolved.len and std.mem.eql(u8, p[1..], entry.key.string.bytes())) {
-                                resolved[pi] = entry.value;
-                                if (pi >= pos) pos = pi + 1;
-                                break;
-                            }
-                        }
-                    } else if (pos < resolved.len) {
-                        resolved[pos] = entry.value;
-                        pos += 1;
-                    }
+            } else if (@import("native_params.zig").get(ctor_key)) |params| {
+                // a native attribute constructor (#[Deprecated]) places its
+                // arguments the way a named call does
+                var resolved: [256]Value = undefined;
+                var sources: [256]vm_mod.RefSource = undefined;
+                const placed = try ctx.vm.placeNativeNamedArgs(arr, params, &resolved, &sources);
+                if (placed.problem) |problem| {
+                    const class, const msg = try ctx.vm.namedArgProblemMessage(ctor_key, params, problem);
+                    try ctx.vm.setPendingException(class, msg);
+                    return error.RuntimeError;
                 }
-                _ = try ctx.callMethod(obj, "__construct", resolved[0..pos]);
+                _ = try ctx.callMethod(obj, "__construct", resolved[0..placed.count]);
             } else {
                 var call_args: [16]Value = undefined;
                 const count = @min(arr.entries.items.len, 16);
