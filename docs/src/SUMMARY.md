@@ -14,6 +14,12 @@
 - [Static Files](./server/static-files.md)
 - [WebSockets](./server/websockets.md)
 
+# Parallelism
+
+- [Worker Pools](./parallelism/pools.md)
+- [Channels](./parallelism/channels.md)
+- [Buffers](./parallelism/buffers.md)
+
 # Building and Deploying
 
 - [Bytecode Compilation](./building/bytecode.md)

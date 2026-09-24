@@ -26,4 +26,6 @@ zphp implements PHP syntax and standard library behavior, with compatibility tes
 
 Its built-in server and development tools reduce the number of separate programs needed for supported workflows. They are not drop-in implementations of Composer, PHPUnit, or PHP-CS-Fixer.
 
+zphp can also run PHP on several threads at once. A [worker pool](parallelism/pools.md) spreads CPU-bound tasks across cores, [channels](parallelism/channels.md) pass values between threads while tasks run, and [buffers](parallelism/buffers.md) move binary data to another thread without copying it.
+
 Unused values are reclaimed during execution, supporting long-running command-line workloads as well as request-based applications. Like traditional PHP, zphp uses reference counting and cycle collection. See the [memory model](internals/memory-model.md).

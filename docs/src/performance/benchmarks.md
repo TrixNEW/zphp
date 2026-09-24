@@ -25,6 +25,14 @@ make bench
 
 Measure your application's actual workload before choosing a deployment configuration.
 
+## Parallel work
+
+A [worker pool](../parallelism/pools.md) runs PHP on several cores at once. Splitting 32 CPU-bound tasks took 240 ms on one worker and 32 ms on eight, on an Apple M4 Pro.
+
+Values passed to and from workers are copied, so large strings cost time in proportion to their size: a 16 MB string takes about 3.9 ms to reach a worker and come back. A [buffer](../parallelism/buffers.md) of any size takes about 0.012 ms, because its bytes move instead of being copied. Pass large binary data to workers as buffers.
+
+`tests/workers/run` measures both.
+
 ## HTTP throughput
 
 The HTTP harness uses [wrk](https://github.com/wg/wrk) against a trivial response. Its defaults are four client threads, 100 connections, and ten seconds.
