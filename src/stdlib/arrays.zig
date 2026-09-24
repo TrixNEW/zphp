@@ -715,7 +715,7 @@ fn array_map(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
     if (callback == .string) {
         const raw = callback.string.bytes();
         const cb_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
-        if (!ctx.vm.functions.contains(cb_name) and !ctx.vm.native_fns.contains(cb_name)) {
+        if (!ctx.vm.functionExists(cb_name)) {
             const msg = std.fmt.allocPrint(ctx.allocator, "array_map(): Argument #1 ($callback) must be a valid callback or null, function \"{s}\" not found or invalid function name", .{cb_name}) catch "array_map(): Argument #1 ($callback) must be a valid callback or null";
             try ctx.strings.append(ctx.allocator, msg);
             try ctx.vm.setPendingException("TypeError", msg);

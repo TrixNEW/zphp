@@ -24,6 +24,24 @@ fn expectOutput(source: []const u8, expected: []const u8) !void {
     try std.testing.expectEqualStrings(expected, vm.output.items);
 }
 
+fn expectFatal(source: []const u8, expected: []const u8) !void {
+    const alloc = std.testing.allocator;
+
+    var ast = try parser.parse(alloc, source);
+    defer ast.deinit();
+
+    var result = try @import("pipeline/compiler.zig").compile(&ast, alloc);
+    defer result.deinit();
+
+    const vm = try VM.initOnHeap(alloc);
+    defer {
+        vm.deinit();
+        alloc.destroy(vm);
+    }
+    if (vm.interpret(&result)) |_| return error.TestExpectedError else |_| {}
+    try std.testing.expectEqualStrings(expected, vm.error_msg orelse "");
+}
+
 // ==========================================================================
 // basic operations
 // ==========================================================================
@@ -1998,4 +2016,24 @@ test "discarded regex captures release allocations between batches" {
     }
     _ = try vm.callByName("verifyHeld", &.{});
     try std.testing.expectEqualStrings("retained-1,RETAINED-2", vm.output.items);
+}
+
+// ==========================================================================
+// function names match case-insensitively
+// ==========================================================================
+
+test "function declared twice with different case" {
+    try expectFatal("<?php function foo() {} function FOO() {}", "Fatal error: Cannot redeclare function FOO()");
+}
+
+test "function declared with a native name in another case" {
+    try expectFatal("<?php function STRLEN() {}", "Fatal error: Cannot redeclare function STRLEN()");
+}
+
+test "conditional function declared with a different case" {
+    try expectFatal("<?php function foo() {} if (true) { function Foo() {} }", "Fatal error: Cannot redeclare function Foo()");
+}
+
+test "calls match function names in any case" {
+    try expectOutput("<?php function MyHelper() { return 'h'; } echo myhelper(), STRLEN('ab'), \\StrToUpper('x');", "h2X");
 }

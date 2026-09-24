@@ -2826,9 +2826,7 @@ fn rfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
             if (target == .object) try this.set(ctx.allocator, "__scope_class", .{ .string = Value.String.borrowed(class_name) });
         } else return throwReflection(ctx, "ReflectionFunction::__construct() expects a function name");
     } else if (args[0] == .string) {
-        const raw_name = args[0].string.bytes();
-        const func_name = if (raw_name.len > 0 and raw_name[0] == '\\') raw_name[1..] else raw_name;
-        if (ctx.vm.functions.get(func_name) == null and ctx.vm.native_fns.get(func_name) == null)
+        const func_name = ctx.vm.canonicalFunctionName(args[0].string.bytes()) orelse
             return throwReflection(ctx, "Function does not exist");
         // a closure instance name keeps the closure alive while reflected
         const name_value: Value = if (args[0] == .string and std.mem.startsWith(u8, func_name, "__closure_")) args[0] else .{ .string = Value.String.borrowed(func_name) };
@@ -3321,14 +3319,10 @@ fn closureFromCallable(ctx: *NativeContext, args: []const Value) RuntimeError!Na
     if (callable == .string) {
         const raw = callable.string.bytes();
         const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
-        if (ctx.vm.functions.contains(name) or ctx.vm.native_fns.contains(name)) {
-            // when input had a leading backslash, return the normalized form
-            // so subsequent invocations find the function
-            if (name.len != raw.len) {
-                const owned = try ctx.allocator.dupe(u8, name);
-                try ctx.strings.append(ctx.allocator, owned);
-                return wrapCallableClosure(ctx, .{ .string = Value.String.borrowed(owned) });
-            }
+        if (ctx.vm.canonicalFunctionName(name)) |registered| {
+            // the registered name, so later calls find the function whatever
+            // case or leading backslash the callable was written with
+            if (!std.mem.eql(u8, registered, raw)) return wrapCallableClosure(ctx, .{ .string = Value.String.borrowed(registered) });
             return wrapCallableClosure(ctx, callable);
         }
         try ctx.vm.setPendingException("TypeError", "Failed to create closure from callable: function does not exist");

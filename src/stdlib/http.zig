@@ -47,7 +47,7 @@ fn native_ob_start(ctx: *NativeContext, args: []const Value) RuntimeError!Native
         // and does not start a buffer when the handler can't be found
         if (args[0] == .string) {
             const name = args[0].string.bytes();
-            if (!ctx.vm.functions.contains(name) and !ctx.vm.native_fns.contains(name)) return NativeResult.scalar(.{ .bool = false });
+            if (!ctx.vm.functionExists(name)) return NativeResult.scalar(.{ .bool = false });
         } else if (!isCallable(args[0])) {
             return NativeResult.scalar(.{ .bool = false });
         }

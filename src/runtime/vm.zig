@@ -1185,6 +1185,13 @@ pub const VM = struct {
         locals_cap: usize = 0,
         fn_cache_name: []const u8 = "",
         fn_cache_func: ?*const ObjFunction = null,
+        // php matches function names case-insensitively. an exact hit never
+        // looks here; a miss consults these lowercase indexes (user functions
+        // kept at registration, natives built on the first miss) and caches
+        // the name a call resolved to, namespace fallback included
+        fn_lower: std.StringHashMapUnmanaged([]const u8) = .{},
+        native_lower: std.StringHashMapUnmanaged([]const u8) = .{},
+        resolved_calls: std.StringHashMapUnmanaged([]const u8) = .{},
         // per-frame sp save for inline call/ret in fastLoop
         sp_save: [2048]usize = undefined,
         // per-frame actual arg count for func_get_args
@@ -2606,6 +2613,12 @@ pub const VM = struct {
             self.allocator.free(ic_ptr.active_args);
             self.allocator.free(ic_ptr.intent);
             ic_ptr.concat_buf.deinit(self.allocator);
+            freeOwnedKeys(self.allocator, &ic_ptr.fn_lower);
+            freeOwnedKeys(self.allocator, &ic_ptr.native_lower);
+            freeOwnedKeys(self.allocator, &ic_ptr.resolved_calls);
+            ic_ptr.fn_lower.deinit(self.allocator);
+            ic_ptr.native_lower.deinit(self.allocator);
+            ic_ptr.resolved_calls.deinit(self.allocator);
             if (ic_ptr.locals_cap > 0) self.allocator.free(ic_ptr.locals_buf[0..ic_ptr.locals_cap]);
             self.allocator.destroy(ic_ptr);
         }
@@ -2878,6 +2891,12 @@ pub const VM = struct {
         self.magic_call_guard.clearRetainingCapacity();
         if (self.serve_mode) {
             self.functions.clearRetainingCapacity();
+            if (self.ic) |ic_ptr| {
+                freeOwnedKeys(self.allocator, &ic_ptr.fn_lower);
+                freeOwnedKeys(self.allocator, &ic_ptr.resolved_calls);
+                ic_ptr.fn_lower.clearRetainingCapacity();
+                ic_ptr.resolved_calls.clearRetainingCapacity();
+            }
             // chunk_to_func_names indexes per-chunk name lists - many entries
             // are closure instance names (`__closure_N_inst_M`, `__closure_bound_N`)
             // allocated into self.strings and freed by the clearRetainingCapacity
@@ -3036,8 +3055,95 @@ pub const VM = struct {
 
     pub fn registerFunction(self: *VM, func: *const ObjFunction) RuntimeError!void {
         if (self.functions.contains(func.name)) return;
+        try self.noteFunctionName(func.name);
         try self.functions.put(self.allocator, func.name, func);
         try self.indexFunctionByChunk(func.name, &func.chunk);
+    }
+
+    fn freeOwnedKeys(a: std.mem.Allocator, map: *std.StringHashMapUnmanaged([]const u8)) void {
+        var it = map.keyIterator();
+        while (it.next()) |k| a.free(k.*);
+    }
+
+    fn isFreeFunctionName(name: []const u8) bool {
+        return !std.mem.startsWith(u8, name, "__closure") and std.mem.indexOf(u8, name, "::") == null;
+    }
+
+    // a free function about to be declared: refuses a name that differs from
+    // an existing one only by case, indexes its lowercase form, and forgets
+    // cached resolutions it could now win
+    fn noteFunctionName(self: *VM, name: []const u8) RuntimeError!void {
+        if (!isFreeFunctionName(name)) return;
+        const ic = self.ic.?;
+        const lower = try std.ascii.allocLowerString(self.allocator, name);
+        errdefer self.allocator.free(lower);
+        if (ic.fn_lower.contains(lower) or self.nativeNamed(lower) != null) {
+            self.setErrorMsg("Fatal error: Cannot redeclare function {s}()", .{name});
+            return error.RuntimeError;
+        }
+        try ic.fn_lower.put(self.allocator, lower, name);
+        if (std.mem.indexOfScalar(u8, name, '\\') == null) return;
+        var stale: std.ArrayListUnmanaged([]const u8) = .{};
+        defer stale.deinit(self.allocator);
+        var it = ic.resolved_calls.keyIterator();
+        while (it.next()) |k| if (std.ascii.eqlIgnoreCase(k.*, name)) try stale.append(self.allocator, k.*);
+        for (stale.items) |k| {
+            _ = ic.resolved_calls.remove(k);
+            self.allocator.free(k);
+        }
+    }
+
+    // the native registered under a lowercase name, whatever its case
+    fn nativeNamed(self: *VM, lower: []const u8) ?[]const u8 {
+        const ic = self.ic.?;
+        if (ic.native_lower.count() == 0) {
+            var it = self.native_fns.keyIterator();
+            while (it.next()) |k| {
+                const key = std.ascii.allocLowerString(self.allocator, k.*) catch return self.native_fns.getKey(lower);
+                const gop = ic.native_lower.getOrPut(self.allocator, key) catch {
+                    self.allocator.free(key);
+                    return self.native_fns.getKey(lower);
+                };
+                if (gop.found_existing) self.allocator.free(key) else gop.value_ptr.* = k.*;
+            }
+        }
+        return ic.native_lower.get(lower);
+    }
+
+    fn functionNamedIgnoringCase(self: *VM, name: []const u8) ?[]const u8 {
+        var buf: [256]u8 = undefined;
+        if (name.len > buf.len) return null;
+        const lower = std.ascii.lowerString(buf[0..name.len], name);
+        if (self.ic.?.fn_lower.get(lower)) |registered| return registered;
+        return self.nativeNamed(lower);
+    }
+
+    // the registered name a call to `name` reaches when no function has exactly
+    // that name: php matches function names case-insensitively, and a call
+    // inside a namespace falls back to the global function of the same name
+    pub fn resolveFunctionName(self: *VM, name: []const u8) ?[]const u8 {
+        const ic = self.ic.?;
+        if (ic.resolved_calls.get(name)) |hit| return hit;
+        const target = self.functionNamedIgnoringCase(name) orelse fallback: {
+            const pos = std.mem.lastIndexOfScalar(u8, name, '\\') orelse return null;
+            const base = name[pos + 1 ..];
+            if (base.len == 0) return null;
+            break :fallback self.native_fns.getKey(base) orelse self.functions.getKey(base) orelse self.functionNamedIgnoringCase(base) orelse return null;
+        };
+        const key = self.allocator.dupe(u8, name) catch return target;
+        ic.resolved_calls.put(self.allocator, key, target) catch self.allocator.free(key);
+        return target;
+    }
+
+    // the registered name of the function a callable string names, matched
+    // case-insensitively; a string never falls back to the global namespace
+    pub fn canonicalFunctionName(self: *VM, raw_name: []const u8) ?[]const u8 {
+        const name = if (raw_name.len > 0 and raw_name[0] == '\\') raw_name[1..] else raw_name;
+        return self.native_fns.getKey(name) orelse self.functions.getKey(name) orelse self.functionNamedIgnoringCase(name);
+    }
+
+    pub fn functionExists(self: *VM, raw_name: []const u8) bool {
+        return self.canonicalFunctionName(raw_name) != null;
     }
 
     // register a compile result's functions: unconditional declarations are
@@ -6959,6 +7065,7 @@ pub const VM = struct {
                             self.setErrorMsg("Fatal error: Cannot redeclare function {s}()", .{func.name});
                             return error.RuntimeError;
                         }
+                        try self.noteFunctionName(func.name);
                         try self.functions.put(self.allocator, func.name, func);
                         try self.indexFunctionByChunk(func.name, &func.chunk);
                         break;
@@ -17338,10 +17445,7 @@ pub const VM = struct {
                 if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
             }
         } else {
-            if (std.mem.lastIndexOfScalar(u8, name, '\\')) |pos| {
-                const base = name[pos + 1 ..];
-                if (base.len > 0) return self.callNamedFunction(base, arg_count);
-            }
+            if (self.resolveFunctionName(name)) |registered| return self.callNamedFunctionV(registered, arg_count, named_extras);
             const msg = std.fmt.allocPrint(self.allocator, "Call to undefined function {s}()", .{name}) catch "Call to undefined function";
             try self.strings.append(self.allocator, msg);
             if (try self.throwBuiltinException("Error", msg)) return;
@@ -17672,6 +17776,8 @@ pub const VM = struct {
                 return self.executeFunctionWithRefs(func, new_vars, closure_refs);
             }
             return self.executeFunction(func, new_vars);
+        } else if (self.functionNamedIgnoringCase(name)) |registered| {
+            return self.callByName(registered, args);
         } else return error.RuntimeError;
     }
 

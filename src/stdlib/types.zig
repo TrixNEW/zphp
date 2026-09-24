@@ -938,8 +938,7 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
         const raw = val.string.bytes();
         const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
         fillName(ctx, args, name);
-        if (ctx.vm.native_fns.contains(name)) return NativeResult.scalar(.{ .bool = true });
-        if (ctx.vm.functions.contains(name)) return NativeResult.scalar(.{ .bool = true });
+        if (ctx.vm.functionExists(name)) return NativeResult.scalar(.{ .bool = true });
         // Class::method string form
         if (std.mem.indexOf(u8, name, "::")) |sep| {
             const class_part = name[0..sep];
@@ -1083,11 +1082,7 @@ fn native_call_user_func_array(ctx: *NativeContext, args: []const Value) Runtime
 
 fn native_function_exists(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const raw = args[0].string.bytes();
-    const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
-    if (ctx.vm.native_fns.contains(name)) return NativeResult.scalar(.{ .bool = true });
-    if (ctx.vm.functions.contains(name)) return NativeResult.scalar(.{ .bool = true });
-    return NativeResult.scalar(.{ .bool = false });
+    return NativeResult.scalar(.{ .bool = ctx.vm.functionExists(args[0].string.bytes()) });
 }
 
 fn native_get_object_vars(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
