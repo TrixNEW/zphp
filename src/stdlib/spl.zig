@@ -192,10 +192,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try ao_def.methods.put(a, "__set", .{ .name = "__set", .arity = 2 });
     try ao_def.methods.put(a, "__isset", .{ .name = "__isset", .arity = 1 });
     try ao_def.methods.put(a, "__unset", .{ .name = "__unset", .arity = 1 });
-    try ao_def.static_props.put(a, "STD_PROP_LIST", .{ .int = 1 });
-    try ao_def.static_props.put(a, "ARRAY_AS_PROPS", .{ .int = 2 });
-    try ao_def.constant_names.put(a, "STD_PROP_LIST", {});
-    try ao_def.constant_names.put(a, "ARRAY_AS_PROPS", {});
+    try ao_def.constants.put(a, "STD_PROP_LIST", .{ .int = 1 });
+    try ao_def.constants.put(a, "ARRAY_AS_PROPS", .{ .int = 2 });
     try ao_def.methods.put(a, "__serialize", .{ .name = "__serialize", .arity = 0 });
     try ao_def.methods.put(a, "__unserialize", .{ .name = "__unserialize", .arity = 1 });
     try ao_def.methods.put(a, "serialize", .{ .name = "serialize", .arity = 0 });
@@ -326,9 +324,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try pq_def.methods.put(a, "next", .{ .name = "next", .arity = 0 });
     try pq_def.methods.put(a, "rewind", .{ .name = "rewind", .arity = 0 });
     try pq_def.methods.put(a, "valid", .{ .name = "valid", .arity = 0 });
-    try pq_def.static_props.put(a, "EXTR_DATA", .{ .int = EXTR_DATA });
-    try pq_def.static_props.put(a, "EXTR_PRIORITY", .{ .int = EXTR_PRIORITY });
-    try pq_def.static_props.put(a, "EXTR_BOTH", .{ .int = EXTR_BOTH });
+    try pq_def.constants.put(a, "EXTR_DATA", .{ .int = EXTR_DATA });
+    try pq_def.constants.put(a, "EXTR_PRIORITY", .{ .int = EXTR_PRIORITY });
+    try pq_def.constants.put(a, "EXTR_BOTH", .{ .int = EXTR_BOTH });
     try vm.classes.put(a, "SplPriorityQueue", pq_def);
 
     try vm.native_fns.put(a, "SplPriorityQueue::__construct", pqConstruct);
@@ -524,10 +522,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try dll_def.methods.put(a, "offsetUnset", .{ .name = "offsetUnset", .arity = 1 });
     try dll_def.methods.put(a, "add", .{ .name = "add", .arity = 2 });
     try dll_def.methods.put(a, "toArray", .{ .name = "toArray", .arity = 0 });
-    try dll_def.static_props.put(a, "IT_MODE_LIFO", .{ .int = DLL_IT_MODE_LIFO });
-    try dll_def.static_props.put(a, "IT_MODE_FIFO", .{ .int = DLL_IT_MODE_FIFO });
-    try dll_def.static_props.put(a, "IT_MODE_DELETE", .{ .int = DLL_IT_MODE_DELETE });
-    try dll_def.static_props.put(a, "IT_MODE_KEEP", .{ .int = DLL_IT_MODE_KEEP });
+    try dll_def.constants.put(a, "IT_MODE_LIFO", .{ .int = DLL_IT_MODE_LIFO });
+    try dll_def.constants.put(a, "IT_MODE_FIFO", .{ .int = DLL_IT_MODE_FIFO });
+    try dll_def.constants.put(a, "IT_MODE_DELETE", .{ .int = DLL_IT_MODE_DELETE });
+    try dll_def.constants.put(a, "IT_MODE_KEEP", .{ .int = DLL_IT_MODE_KEEP });
     try vm.classes.put(a, "SplDoublyLinkedList", dll_def);
 
     try vm.native_fns.put(a, "SplDoublyLinkedList::__construct", dllConstruct);

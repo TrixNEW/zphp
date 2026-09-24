@@ -423,6 +423,15 @@ content=$(cat "$WORKDIR/declare.php")
 check_contains "declare directive is kept" 'declare(strict_types=1);' "$content"
 check_contains "halt compiler data is kept" '__halt_compiler(); raw data' "$content"
 
+cat > "$WORKDIR/dynconst.php" << 'EOFPHP'
+<?php
+echo Foo::{$name}, Foo::${'prop'}, $cls::{'X'};
+EOFPHP
+"$ZPHP" fmt "$WORKDIR/dynconst.php" 2>/dev/null
+content=$(cat "$WORKDIR/dynconst.php")
+check_contains "dynamic class constant keeps braces" 'Foo::{$name}' "$content"
+check_contains "dynamic static property keeps its name expression" "Foo::\${'prop'}" "$content"
+
 echo ""
 echo "$passed passed, $failed failed"
 

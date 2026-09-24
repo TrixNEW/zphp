@@ -397,6 +397,13 @@ fn renderNode(ast: *const Ast, idx: u32, buf: *Buf) !void {
             }
             try w.writeByte(')');
         },
+        .dynamic_class_const => {
+            try w.writeAll("(::{} ");
+            try renderNode(ast, node.data.lhs, buf);
+            try w.writeByte(' ');
+            try renderNode(ast, node.data.rhs, buf);
+            try w.writeByte(')');
+        },
         .static_prop_access => {
             try w.writeAll("(::$ ");
             try renderNode(ast, node.data.lhs, buf);

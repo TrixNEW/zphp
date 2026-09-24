@@ -80,7 +80,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // shadow class so DateTimeInterface::ATOM-style constant lookups resolve
     var dti_const = ClassDef{ .name = "DateTimeInterface", .is_abstract = true };
     inline for (DT_FORMAT_CONSTS) |c| {
-        try dti_const.static_props.put(a, c[0], .{ .string = Value.String.borrowed(c[1]) });
+        try dti_const.constants.put(a, c[0], .{ .string = Value.String.borrowed(c[1]) });
     }
     try vm.classes.put(a, "DateTimeInterface", dti_const);
 
@@ -110,7 +110,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try dt_def.methods.put(a, "createFromImmutable", .{ .name = "createFromImmutable", .arity = 1, .is_static = true });
     try dt_def.methods.put(a, "createFromInterface", .{ .name = "createFromInterface", .arity = 1, .is_static = true });
     inline for (DT_FORMAT_CONSTS) |c| {
-        try dt_def.static_props.put(a, c[0], .{ .string = Value.String.borrowed(c[1]) });
+        try dt_def.constants.put(a, c[0], .{ .string = Value.String.borrowed(c[1]) });
     }
     try vm.classes.put(a, "DateTime", dt_def);
 
@@ -157,7 +157,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try dti_def.methods.put(a, "createFromInterface", .{ .name = "createFromInterface", .arity = 1, .is_static = true });
     try dti_def.methods.put(a, "setISODate", .{ .name = "setISODate", .arity = 2 });
     inline for (DT_FORMAT_CONSTS) |c| {
-        try dti_def.static_props.put(a, c[0], .{ .string = Value.String.borrowed(c[1]) });
+        try dti_def.constants.put(a, c[0], .{ .string = Value.String.borrowed(c[1]) });
     }
     try vm.classes.put(a, "DateTimeImmutable", dti_def);
 
@@ -227,10 +227,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     // DatePeriod
     var dp_def = ClassDef{ .name = "DatePeriod" };
-    try dp_def.static_props.put(a, "EXCLUDE_START_DATE", .{ .int = 1 });
-    try dp_def.static_props.put(a, "INCLUDE_END_DATE", .{ .int = 2 });
-    try dp_def.constant_names.put(a, "EXCLUDE_START_DATE", {});
-    try dp_def.constant_names.put(a, "INCLUDE_END_DATE", {});
+    try dp_def.constants.put(a, "EXCLUDE_START_DATE", .{ .int = 1 });
+    try dp_def.constants.put(a, "INCLUDE_END_DATE", .{ .int = 2 });
     try dp_def.interfaces.append(a, "IteratorAggregate");
     try dp_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
     try dp_def.methods.put(a, "getStartDate", .{ .name = "getStartDate", .arity = 0 });

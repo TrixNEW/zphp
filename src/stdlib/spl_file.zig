@@ -39,10 +39,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
         };
         try sfo_def.methods.put(a, m, .{ .name = m, .arity = arity });
     }
-    try sfo_def.static_props.put(a, "DROP_NEW_LINE", .{ .int = FLAG_DROP_NEW_LINE });
-    try sfo_def.static_props.put(a, "READ_AHEAD", .{ .int = FLAG_READ_AHEAD });
-    try sfo_def.static_props.put(a, "SKIP_EMPTY", .{ .int = FLAG_SKIP_EMPTY });
-    try sfo_def.static_props.put(a, "READ_CSV", .{ .int = FLAG_READ_CSV });
+    try sfo_def.constants.put(a, "DROP_NEW_LINE", .{ .int = FLAG_DROP_NEW_LINE });
+    try sfo_def.constants.put(a, "READ_AHEAD", .{ .int = FLAG_READ_AHEAD });
+    try sfo_def.constants.put(a, "SKIP_EMPTY", .{ .int = FLAG_SKIP_EMPTY });
+    try sfo_def.constants.put(a, "READ_CSV", .{ .int = FLAG_READ_CSV });
     try vm.classes.put(a, "SplFileObject", sfo_def);
 
     try vm.native_fns.put(a, "SplFileObject::__construct", sfoConstruct);

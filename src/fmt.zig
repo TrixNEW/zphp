@@ -312,7 +312,7 @@ const Formatter = struct {
             .list_destructure, .named_arg, .ref_target => node.main_token,
             .postfix_op => self.findFirstToken(node.data.lhs),
             .static_call, .dynamic_static_call => self.findFirstToken(node.data.lhs),
-            .static_prop_access => self.findFirstToken(node.data.lhs),
+            .static_prop_access, .dynamic_class_const => self.findFirstToken(node.data.lhs),
             // declarations: main_token is the name, but trivia (docblocks) attaches to
             // the leading keyword, so walk backward through any modifiers and the keyword
             .function_decl => self.declLeadingToken(node.main_token, .kw_function),
@@ -500,6 +500,7 @@ const Formatter = struct {
             .static_call => self.formatStaticCall(node),
             .dynamic_static_call => self.formatDynamicStaticCall(node),
             .static_prop_access => self.formatStaticPropAccess(node),
+            .dynamic_class_const => self.formatDynamicClassConst(node),
             .new_expr => self.formatNewExpr(node),
             .new_expr_dynamic => {
                 self.write("new ");
@@ -1573,7 +1574,21 @@ const Formatter = struct {
     fn formatStaticPropAccess(self: *Formatter, node: Ast.Node) void {
         self.formatNode(node.data.lhs);
         self.write("::");
+        if (node.main_token == 0) {
+            // Class::$$name and Class::${expr}
+            self.write("${");
+            self.formatNode(node.data.rhs);
+            self.write("}");
+            return;
+        }
         self.write(self.ast.tokens[node.main_token].lexeme(self.source));
+    }
+
+    fn formatDynamicClassConst(self: *Formatter, node: Ast.Node) void {
+        self.formatNode(node.data.lhs);
+        self.write("::{");
+        self.formatNode(node.data.rhs);
+        self.write("}");
     }
 
     fn formatNewExpr(self: *Formatter, node: Ast.Node) void {

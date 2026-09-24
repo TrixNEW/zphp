@@ -3204,8 +3204,8 @@ const Parser = struct {
                 const extra = try self.addExtraList(args.items);
                 return self.addNode(.{ .tag = .dynamic_static_call, .main_token = 0, .data = .{ .lhs = class_node, .rhs = extra } });
             }
-            // dynamic static property: Class::{expr} (no call)
-            return self.addNode(.{ .tag = .static_prop_access, .main_token = 0, .data = .{ .lhs = class_node, .rhs = method_expr } });
+            // dynamic class constant: Class::{expr} (no call)
+            return self.addNode(.{ .tag = .dynamic_class_const, .main_token = 0, .data = .{ .lhs = class_node, .rhs = method_expr } });
         }
 
         const name_tok = if (self.peek() == .identifier or isSemiReserved(self.peek()))

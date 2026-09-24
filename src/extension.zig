@@ -281,8 +281,7 @@ fn registerClass(vm: *VM, cls: *ClassReg) RuntimeError!void {
     for (cls.interfaces.items) |iface| try def.interfaces.append(a, iface);
     for (cls.properties.items) |p| try def.properties.append(a, .{ .name = p.name, .default = p.default, .has_default = true, .is_readonly = def.is_readonly });
     for (cls.constants.items) |c| {
-        try def.static_props.put(a, c.name, c.value);
-        try def.constant_names.put(a, c.name, {});
+        try def.constants.put(a, c.name, c.value);
         try def.constant_order.append(a, c.name);
     }
     for (cls.methods.items) |m| {

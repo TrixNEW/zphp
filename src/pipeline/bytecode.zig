@@ -328,6 +328,12 @@ pub const OpCode = enum(u8) {
     // run when the class is first instantiated or reflected, as php does
     defer_prop_defaults,
 
+    // class constants have a namespace of their own, apart from static props
+    set_class_const, // u16 class, u16 name; peeks the value
+    get_class_const_dynamic, // u16 name; class name or object on the stack
+    get_class_const_dyn_name, // u16 class; constant name on the stack
+    get_class_const_dyn_both, // class, then constant name, on the stack
+
     pub fn width(self: OpCode) usize {
         return switch (self) {
             .arg_variable => 6,
@@ -377,11 +383,14 @@ pub const OpCode = enum(u8) {
             .foreach_ref_bind,
             .declare_fn,
             .defer_prop_defaults,
+            .get_class_const_dynamic,
+            .get_class_const_dyn_name,
             => 3,
             .ensure_array_var, .call, .call_spread, .new_obj, .method_call, .method_call_spread, .static_call_dyn_method => 4,
             .make_var_ref, .make_var_prop_ref => 5,
             .get_static_prop,
             .get_class_const,
+            .set_class_const,
             .set_prop_default,
             .set_static_prop,
             .get_static,

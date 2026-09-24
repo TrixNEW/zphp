@@ -192,7 +192,7 @@ fn native_defined(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     if (std.mem.indexOf(u8, name, "::")) |sep| {
         const class_name = name[0..sep];
         const prop_name = name[sep + 2 ..];
-        if (ctx.vm.getStaticProp(class_name, prop_name) != null) return NativeResult.scalar(.{ .bool = true });
+        if (ctx.vm.getClassConstant(class_name, prop_name) != null) return NativeResult.scalar(.{ .bool = true });
     }
     return NativeResult.scalar(.{ .bool = false });
 }
@@ -206,7 +206,7 @@ fn native_constant(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     if (std.mem.indexOf(u8, name, "::")) |sep| {
         const class_name = name[0..sep];
         const prop_name = name[sep + 2 ..];
-        if (ctx.vm.getStaticProp(class_name, prop_name)) |v| {
+        if (ctx.vm.getClassConstant(class_name, prop_name)) |v| {
             return NativeResult.share(v);
         }
     }
@@ -917,7 +917,7 @@ fn property_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Native
                 }
             }
             if (cls.static_props.get(prop_name)) |_| {
-                const vis = cls.const_visibility.get(prop_name) orelse @as(ClassDef.Visibility, .public);
+                const vis = cls.static_prop_visibility.get(prop_name) orelse @as(ClassDef.Visibility, .public);
                 if (is_own or vis != .private) return NativeResult.scalar(.{ .bool = true });
             }
             current = cls.parent;
@@ -1270,7 +1270,7 @@ fn native_get_class_vars(ctx: *NativeContext, args: []const Value) RuntimeError!
     var sit = cls.static_props.iterator();
     while (sit.next()) |e| {
         // class constants are also stored in static_props; skip them
-        if (cls.constant_names.contains(e.key_ptr.*)) continue;
+        if (cls.constants.contains(e.key_ptr.*)) continue;
         try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(e.key_ptr.*) }, e.value_ptr.*);
     }
     return NativeResult.borrowed(.{ .array = arr });

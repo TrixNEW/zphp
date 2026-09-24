@@ -101,14 +101,14 @@ pub fn register(vm: *VM, a: Allocator) !void {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 2 else 0;
         try fsi_def.methods.put(a, m, .{ .name = m, .arity = arity });
     }
-    try fsi_def.static_props.put(a, "CURRENT_AS_PATHNAME", .{ .int = 0x0020 });
-    try fsi_def.static_props.put(a, "CURRENT_AS_FILEINFO", .{ .int = 0x0000 });
-    try fsi_def.static_props.put(a, "CURRENT_AS_SELF", .{ .int = 0x0010 });
-    try fsi_def.static_props.put(a, "KEY_AS_PATHNAME", .{ .int = 0x0000 });
-    try fsi_def.static_props.put(a, "KEY_AS_FILENAME", .{ .int = 0x0100 });
-    try fsi_def.static_props.put(a, "FOLLOW_SYMLINKS", .{ .int = 0x0200 });
-    try fsi_def.static_props.put(a, "SKIP_DOTS", .{ .int = 0x1000 });
-    try fsi_def.static_props.put(a, "UNIX_PATHS", .{ .int = 0x2000 });
+    try fsi_def.constants.put(a, "CURRENT_AS_PATHNAME", .{ .int = 0x0020 });
+    try fsi_def.constants.put(a, "CURRENT_AS_FILEINFO", .{ .int = 0x0000 });
+    try fsi_def.constants.put(a, "CURRENT_AS_SELF", .{ .int = 0x0010 });
+    try fsi_def.constants.put(a, "KEY_AS_PATHNAME", .{ .int = 0x0000 });
+    try fsi_def.constants.put(a, "KEY_AS_FILENAME", .{ .int = 0x0100 });
+    try fsi_def.constants.put(a, "FOLLOW_SYMLINKS", .{ .int = 0x0200 });
+    try fsi_def.constants.put(a, "SKIP_DOTS", .{ .int = 0x1000 });
+    try fsi_def.constants.put(a, "UNIX_PATHS", .{ .int = 0x2000 });
     try vm.classes.put(a, "FilesystemIterator", fsi_def);
     try vm.native_fns.put(a, "FilesystemIterator::__construct", fsiConstruct);
     try vm.native_fns.put(a, "FilesystemIterator::rewind", diRewind);
@@ -128,11 +128,11 @@ pub fn register(vm: *VM, a: Allocator) !void {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 2 else 0;
         try rdi_def.methods.put(a, m, .{ .name = m, .arity = arity });
     }
-    try rdi_def.static_props.put(a, "SKIP_DOTS", .{ .int = 0x1000 });
-    try rdi_def.static_props.put(a, "FOLLOW_SYMLINKS", .{ .int = 0x0200 });
-    try rdi_def.static_props.put(a, "CURRENT_AS_PATHNAME", .{ .int = 0x0020 });
-    try rdi_def.static_props.put(a, "CURRENT_AS_SELF", .{ .int = 0x0010 });
-    try rdi_def.static_props.put(a, "UNIX_PATHS", .{ .int = 0x2000 });
+    try rdi_def.constants.put(a, "SKIP_DOTS", .{ .int = 0x1000 });
+    try rdi_def.constants.put(a, "FOLLOW_SYMLINKS", .{ .int = 0x0200 });
+    try rdi_def.constants.put(a, "CURRENT_AS_PATHNAME", .{ .int = 0x0020 });
+    try rdi_def.constants.put(a, "CURRENT_AS_SELF", .{ .int = 0x0010 });
+    try rdi_def.constants.put(a, "UNIX_PATHS", .{ .int = 0x2000 });
     try vm.classes.put(a, "RecursiveDirectoryIterator", rdi_def);
 
     try vm.native_fns.put(a, "RecursiveDirectoryIterator::__construct", rdiConstruct);
@@ -178,9 +178,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 2 else 0;
         try rii_def.methods.put(a, m, .{ .name = m, .arity = arity });
     }
-    try rii_def.static_props.put(a, "LEAVES_ONLY", .{ .int = 0 });
-    try rii_def.static_props.put(a, "SELF_FIRST", .{ .int = 1 });
-    try rii_def.static_props.put(a, "CHILD_FIRST", .{ .int = 2 });
+    try rii_def.constants.put(a, "LEAVES_ONLY", .{ .int = 0 });
+    try rii_def.constants.put(a, "SELF_FIRST", .{ .int = 1 });
+    try rii_def.constants.put(a, "CHILD_FIRST", .{ .int = 2 });
     try vm.classes.put(a, "RecursiveIteratorIterator", rii_def);
 
     try rii_def.methods.put(a, "setMaxDepth", .{ .name = "setMaxDepth", .arity = 1 });
@@ -298,13 +298,13 @@ pub fn register(vm: *VM, a: Allocator) !void {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 5 else if (std.mem.startsWith(u8, m, "set")) 1 else 0;
         try rx_def.methods.put(a, m, .{ .name = m, .arity = arity });
     }
-    try rx_def.static_props.put(a, "MATCH", .{ .int = 0 });
-    try rx_def.static_props.put(a, "GET_MATCH", .{ .int = 1 });
-    try rx_def.static_props.put(a, "ALL_MATCHES", .{ .int = 2 });
-    try rx_def.static_props.put(a, "SPLIT", .{ .int = 3 });
-    try rx_def.static_props.put(a, "REPLACE", .{ .int = 4 });
-    try rx_def.static_props.put(a, "USE_KEY", .{ .int = 1 });
-    try rx_def.static_props.put(a, "INVERT_MATCH", .{ .int = 2 });
+    try rx_def.constants.put(a, "MATCH", .{ .int = 0 });
+    try rx_def.constants.put(a, "GET_MATCH", .{ .int = 1 });
+    try rx_def.constants.put(a, "ALL_MATCHES", .{ .int = 2 });
+    try rx_def.constants.put(a, "SPLIT", .{ .int = 3 });
+    try rx_def.constants.put(a, "REPLACE", .{ .int = 4 });
+    try rx_def.constants.put(a, "USE_KEY", .{ .int = 1 });
+    try rx_def.constants.put(a, "INVERT_MATCH", .{ .int = 2 });
     try vm.classes.put(a, "RegexIterator", rx_def);
     try vm.native_fns.put(a, "RegexIterator::__construct", rxConstruct);
     try vm.native_fns.put(a, "RegexIterator::accept", rxAccept);
@@ -324,12 +324,12 @@ pub fn register(vm: *VM, a: Allocator) !void {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 2 else if (std.mem.eql(u8, m, "setFlags")) 1 else 0;
         try ci_def.methods.put(a, m, .{ .name = m, .arity = arity });
     }
-    try ci_def.static_props.put(a, "CALL_TOSTRING", .{ .int = 1 });
-    try ci_def.static_props.put(a, "CATCH_GET_CHILD", .{ .int = 2 });
-    try ci_def.static_props.put(a, "TOSTRING_USE_KEY", .{ .int = 4 });
-    try ci_def.static_props.put(a, "TOSTRING_USE_CURRENT", .{ .int = 8 });
-    try ci_def.static_props.put(a, "TOSTRING_USE_INNER", .{ .int = 16 });
-    try ci_def.static_props.put(a, "FULL_CACHE", .{ .int = 256 });
+    try ci_def.constants.put(a, "CALL_TOSTRING", .{ .int = 1 });
+    try ci_def.constants.put(a, "CATCH_GET_CHILD", .{ .int = 2 });
+    try ci_def.constants.put(a, "TOSTRING_USE_KEY", .{ .int = 4 });
+    try ci_def.constants.put(a, "TOSTRING_USE_CURRENT", .{ .int = 8 });
+    try ci_def.constants.put(a, "TOSTRING_USE_INNER", .{ .int = 16 });
+    try ci_def.constants.put(a, "FULL_CACHE", .{ .int = 256 });
     try vm.classes.put(a, "CachingIterator", ci_def);
     try vm.native_fns.put(a, "CachingIterator::__construct", ciConstruct);
     try vm.native_fns.put(a, "CachingIterator::rewind", ciRewind);
@@ -350,10 +350,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
         const arity: u8 = if (std.mem.eql(u8, m, "attachIterator")) 2 else if (std.mem.eql(u8, m, "detachIterator") or std.mem.eql(u8, m, "containsIterator") or std.mem.eql(u8, m, "setFlags")) 1 else 0;
         try mi_def.methods.put(a, m, .{ .name = m, .arity = arity });
     }
-    try mi_def.static_props.put(a, "MIT_NEED_ANY", .{ .int = 0 });
-    try mi_def.static_props.put(a, "MIT_NEED_ALL", .{ .int = 1 });
-    try mi_def.static_props.put(a, "MIT_KEYS_NUMERIC", .{ .int = 0 });
-    try mi_def.static_props.put(a, "MIT_KEYS_ASSOC", .{ .int = 2 });
+    try mi_def.constants.put(a, "MIT_NEED_ANY", .{ .int = 0 });
+    try mi_def.constants.put(a, "MIT_NEED_ALL", .{ .int = 1 });
+    try mi_def.constants.put(a, "MIT_KEYS_NUMERIC", .{ .int = 0 });
+    try mi_def.constants.put(a, "MIT_KEYS_ASSOC", .{ .int = 2 });
     try vm.classes.put(a, "MultipleIterator", mi_def);
     try vm.native_fns.put(a, "MultipleIterator::__construct", miConstruct);
     try vm.native_fns.put(a, "MultipleIterator::attachIterator", miAttach);
@@ -419,14 +419,14 @@ pub fn register(vm: *VM, a: Allocator) !void {
         const arity: u8 = if (std.mem.eql(u8, m, "__construct")) 4 else if (std.mem.eql(u8, m, "setPrefixPart")) 2 else 0;
         try rti_def.methods.put(a, m, .{ .name = m, .arity = arity });
     }
-    try rti_def.static_props.put(a, "BYPASS_CURRENT", .{ .int = 4 });
-    try rti_def.static_props.put(a, "BYPASS_KEY", .{ .int = 8 });
-    try rti_def.static_props.put(a, "PREFIX_LEFT", .{ .int = 0 });
-    try rti_def.static_props.put(a, "PREFIX_MID_HAS_NEXT", .{ .int = 1 });
-    try rti_def.static_props.put(a, "PREFIX_MID_LAST", .{ .int = 2 });
-    try rti_def.static_props.put(a, "PREFIX_END_HAS_NEXT", .{ .int = 3 });
-    try rti_def.static_props.put(a, "PREFIX_END_LAST", .{ .int = 4 });
-    try rti_def.static_props.put(a, "PREFIX_RIGHT", .{ .int = 5 });
+    try rti_def.constants.put(a, "BYPASS_CURRENT", .{ .int = 4 });
+    try rti_def.constants.put(a, "BYPASS_KEY", .{ .int = 8 });
+    try rti_def.constants.put(a, "PREFIX_LEFT", .{ .int = 0 });
+    try rti_def.constants.put(a, "PREFIX_MID_HAS_NEXT", .{ .int = 1 });
+    try rti_def.constants.put(a, "PREFIX_MID_LAST", .{ .int = 2 });
+    try rti_def.constants.put(a, "PREFIX_END_HAS_NEXT", .{ .int = 3 });
+    try rti_def.constants.put(a, "PREFIX_END_LAST", .{ .int = 4 });
+    try rti_def.constants.put(a, "PREFIX_RIGHT", .{ .int = 5 });
     try vm.classes.put(a, "RecursiveTreeIterator", rti_def);
     try vm.native_fns.put(a, "RecursiveTreeIterator::__construct", rtiConstruct);
     try vm.native_fns.put(a, "RecursiveTreeIterator::current", rtiCurrent);

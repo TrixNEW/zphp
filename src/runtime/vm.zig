@@ -287,7 +287,7 @@ pub const ClassDef = struct {
     methods: std.StringHashMapUnmanaged(MethodInfo) = .{},
     method_order: std.ArrayListUnmanaged([]const u8) = .{},
     properties: std.ArrayListUnmanaged(PropertyDef) = .{},
-    static_props: std.StringHashMapUnmanaged(Value) = .{},
+    static_props: std.StringArrayHashMapUnmanaged(Value) = .{},
     static_prop_types: std.StringHashMapUnmanaged([]const u8) = .{},
     file_path: []const u8 = "",
     start_line: u32 = 0,
@@ -329,10 +329,14 @@ pub const ClassDef = struct {
     method_attributes: std.StringHashMapUnmanaged([]const AttributeDef) = .{},
     property_attributes: std.StringHashMapUnmanaged([]const AttributeDef) = .{},
     param_attributes: std.StringHashMapUnmanaged([]const AttributeDef) = .{},
-    constant_names: std.StringHashMapUnmanaged(void) = .{},
+    // class constants and enum cases, a namespace of their own: php lets
+    // `const X` and `static $X` coexist on one class
+    constants: std.StringHashMapUnmanaged(Value) = .{},
     constant_order: std.ArrayListUnmanaged([]const u8) = .{},
     constant_docs: std.StringHashMapUnmanaged([]const u8) = .{},
     const_visibility: std.StringHashMapUnmanaged(Visibility) = .{},
+    constant_types: std.StringHashMapUnmanaged([]const u8) = .{},
+    static_prop_visibility: std.StringHashMapUnmanaged(Visibility) = .{},
     const_final: std.StringHashMapUnmanaged(void) = .{},
     constant_attributes: std.StringHashMapUnmanaged([]const AttributeDef) = .{},
 
@@ -422,9 +426,11 @@ pub const ClassDef = struct {
             freeAttributeDefs(allocator, entry.value_ptr.*);
         }
         self.param_attributes.deinit(allocator);
-        self.constant_names.deinit(allocator);
+        self.constants.deinit(allocator);
         self.constant_order.deinit(allocator);
         self.const_visibility.deinit(allocator);
+        self.constant_types.deinit(allocator);
+        self.static_prop_visibility.deinit(allocator);
         var ca_iter = self.constant_attributes.valueIterator();
         while (ca_iter.next()) |attrs| freeAttributeDefs(allocator, attrs.*);
         self.constant_attributes.deinit(allocator);
@@ -1597,8 +1603,7 @@ pub const VM = struct {
             try vm.objects.append(allocator, case_obj);
             try case_obj.set(allocator, "name", .{ .string = Value.String.borrowed(name) });
             objRetain(case_obj);
-            try rm_def.static_props.put(allocator, name, .{ .object = case_obj });
-            try rm_def.constant_names.put(allocator, name, {});
+            try rm_def.constants.put(allocator, name, .{ .object = case_obj });
             try rm_def.constant_order.append(allocator, name);
             try rm_def.case_order.append(allocator, name);
         }
@@ -2258,8 +2263,9 @@ pub const VM = struct {
         }
         var classes = self.classes.valueIterator();
         while (classes.next()) |class| {
-            var sp_it = class.static_props.valueIterator();
-            while (sp_it.next()) |v| if (debugValueHas(v.*, owner)) std.debug.print(" static-prop({s})", .{class.name});
+            for (class.static_props.values()) |v| if (debugValueHas(v, owner)) std.debug.print(" static-prop({s})", .{class.name});
+            var const_it = class.constants.valueIterator();
+            while (const_it.next()) |v| if (debugValueHas(v.*, owner)) std.debug.print(" constant({s})", .{class.name});
             for (class.properties.items) |prop| if (debugValueHas(prop.default, owner)) std.debug.print(" prop-default({s})", .{class.name});
         }
         for (self.pending_string_release.items) |o| if (o == owner) std.debug.print(" pending-queue", .{});
@@ -2325,8 +2331,12 @@ pub const VM = struct {
                     property.default = .null;
                 }
             }
-            var sp_it = class.static_props.valueIterator();
-            while (sp_it.next()) |value| {
+            for (class.static_props.values()) |*value| {
+                self.releaseValue(value.*);
+                value.* = .null;
+            }
+            var const_it = class.constants.valueIterator();
+            while (const_it.next()) |value| {
                 self.releaseValue(value.*);
                 value.* = .null;
             }
@@ -7604,8 +7614,7 @@ pub const VM = struct {
                             const cval = self.stack[self.sp - ci];
                             // copyValue: the constant value is owned by the
                             // ClassDef and must be refcounted
-                            try def.static_props.put(self.allocator, cname, try self.copyDefault(cval));
-                            try def.constant_names.put(self.allocator, cname, {});
+                            try def.constants.put(self.allocator, cname, try self.copyDefault(cval));
                         }
                         self.clearArgStackFrom(self.sp - const_count);
                         self.sp -= const_count;
@@ -10509,38 +10518,48 @@ pub const VM = struct {
                 },
 
                 .get_class_const => {
-                    // Class::CONST read. an undefined constant on a class that
-                    // genuinely exists is a fatal Error in PHP, not a silent
-                    // null (class constants and enum cases live in the same
-                    // static_props table getStaticProp reads)
                     const class_idx = self.readU16();
                     const const_idx = self.readU16();
-                    var class_name = self.currentChunk().constants.items[class_idx].string.bytes();
+                    const class_name = self.resolveStaticClassName(self.currentChunk().constants.items[class_idx].string.bytes());
                     const const_name = self.currentChunk().constants.items[const_idx].string.bytes();
-                    class_name = self.resolveStaticClassName(class_name);
-                    if (self.getStaticProp(class_name, const_name)) |val| {
-                        self.push(val);
-                    } else {
-                        if (!self.classes.contains(class_name) and !self.interfaces.contains(class_name)) {
-                            try self.tryAutoload(class_name);
-                        }
-                        if (self.getStaticProp(class_name, const_name)) |val| {
-                            self.push(val);
-                        } else if (self.classes.contains(class_name) or self.interfaces.contains(class_name)) {
-                            // the class exists but has no such constant - a real
-                            // typo / undefined-constant error
-                            const msg = try std.fmt.allocPrint(self.allocator, "Undefined constant {s}::{s}", .{ class_name, const_name });
-                            try self.strings.append(self.allocator, msg);
-                            if (try self.throwBuiltinException("Error", msg)) continue;
-                            return error.RuntimeError;
-                        } else {
-                            // class not registered: a self::CONST property/const
-                            // default evaluated before the class is declared, or
-                            // a genuinely missing class. fall back to null like
-                            // get_static_prop rather than false-positive throw
-                            self.push(.null);
-                        }
-                    }
+                    if (try self.pushClassConstant(class_name, const_name)) continue;
+                },
+
+                .get_class_const_dynamic => {
+                    const const_idx = self.readU16();
+                    const const_name = self.currentChunk().constants.items[const_idx].string.bytes();
+                    const class_val = self.pop();
+                    defer self.stackRelease(class_val);
+                    if (try self.pushClassConstant(classNameOf(class_val), const_name)) continue;
+                },
+
+                .get_class_const_dyn_name => {
+                    const class_idx = self.readU16();
+                    const class_name = self.resolveStaticClassName(self.currentChunk().constants.items[class_idx].string.bytes());
+                    const name_val = self.pop();
+                    defer self.stackRelease(name_val);
+                    if (try self.pushClassConstant(class_name, classNameOf(name_val))) continue;
+                },
+
+                .get_class_const_dyn_both => {
+                    const name_val = self.pop();
+                    defer self.stackRelease(name_val);
+                    const class_val = self.pop();
+                    defer self.stackRelease(class_val);
+                    const class_name = self.resolveStaticClassName(classNameOf(class_val));
+                    if (try self.pushClassConstant(class_name, classNameOf(name_val))) continue;
+                },
+
+                .set_class_const => {
+                    const class_idx = self.readU16();
+                    const const_idx = self.readU16();
+                    const class_name = self.resolveStaticClassName(self.currentChunk().constants.items[class_idx].string.bytes());
+                    const const_name = self.currentChunk().constants.items[const_idx].string.bytes();
+                    const val = try self.copyValue(self.peek());
+                    if (self.classes.getPtr(class_name)) |cls| {
+                        const old = try cls.constants.fetchPut(self.allocator, const_name, val);
+                        if (old) |kv| self.releaseValue(kv.value);
+                    } else self.releaseValue(val);
                 },
 
                 .get_static_prop_dyn_name => {
@@ -11015,6 +11034,66 @@ pub const VM = struct {
             }
         }
         return null;
+    }
+
+    // a class constant or enum case, inherited through parents and
+    // interfaces, autoloading ancestors on the way like getStaticProp
+    pub fn getClassConstant(self: *VM, class_name: []const u8, const_name: []const u8) ?Value {
+        var current: ?[]const u8 = class_name;
+        while (current) |cn| {
+            if (!self.classes.contains(cn)) self.tryAutoload(cn) catch {};
+            const step = self.classConstStep(cn, const_name) orelse break;
+            if (step.found) |val| return val;
+            current = step.parent;
+        }
+        return null;
+    }
+
+    fn classConstStep(self: *VM, cn: []const u8, const_name: []const u8) ?StaticPropStep {
+        var ifaces: [64][]const u8 = undefined;
+        var n: usize = 0;
+        var parent: ?[]const u8 = null;
+        {
+            const cls = self.classes.getPtr(cn) orelse return null;
+            if (cls.constants.get(const_name)) |val| return .{ .found = val, .parent = null };
+            n = @min(cls.interfaces.items.len, ifaces.len);
+            @memcpy(ifaces[0..n], cls.interfaces.items[0..n]);
+            parent = cls.parent;
+        }
+        for (ifaces[0..n]) |iface| {
+            if (self.getClassConstant(iface, const_name)) |val| return .{ .found = val, .parent = null };
+        }
+        return .{ .found = null, .parent = parent };
+    }
+
+    // Class::CONST in any of its forms: a missing constant on an existing
+    // class is an Error; an unknown class (a default evaluated before its
+    // class is declared) reads null. true when an exception was dispatched
+    fn pushClassConstant(self: *VM, class_name: []const u8, const_name: []const u8) RuntimeError!bool {
+        if (std.mem.eql(u8, const_name, "class")) {
+            self.push(.{ .string = Value.String.borrowed(class_name) });
+            return false;
+        }
+        if (self.getClassConstant(class_name, const_name)) |val| {
+            self.push(val);
+            return false;
+        }
+        if (!self.classes.contains(class_name) and !self.interfaces.contains(class_name)) {
+            self.push(.null);
+            return false;
+        }
+        const msg = try std.fmt.allocPrint(self.allocator, "Undefined constant {s}::{s}", .{ class_name, const_name });
+        try self.strings.append(self.allocator, msg);
+        if (try self.throwBuiltinException("Error", msg)) return true;
+        return error.RuntimeError;
+    }
+
+    fn classNameOf(v: Value) []const u8 {
+        return switch (v) {
+            .string => |str| str.bytes(),
+            .object => |o| o.class_name,
+            else => "",
+        };
     }
 
     const StaticPropStep = struct { found: ?Value, parent: ?[]const u8 };
@@ -12634,21 +12713,20 @@ pub const VM = struct {
             // copyValue: an array/object default is owned by the ClassDef -
             // it must be refcounted (else an array default sits at refcount 0
             // and the first get_static_prop+push+pop releases it)
-            try def.static_props.put(self.allocator, sprop_names[pi], try self.copyDefault(default_val));
-            if (sprop_type[pi].len > 0) try def.static_prop_types.put(self.allocator, sprop_names[pi], sprop_type[pi]);
             const vis_byte = sprop_visibility[pi] & 0x03;
-            if (vis_byte != 0) {
-                try def.const_visibility.put(self.allocator, sprop_names[pi], @enumFromInt(vis_byte));
-            }
             if (sprop_is_const[pi] == 1) {
+                if (!def.constants.contains(sprop_names[pi])) try def.constant_order.append(self.allocator, sprop_names[pi]);
+                try def.constants.put(self.allocator, sprop_names[pi], try self.copyDefault(default_val));
+                if (sprop_type[pi].len > 0) try def.constant_types.put(self.allocator, sprop_names[pi], sprop_type[pi]);
+                if (vis_byte != 0) try def.const_visibility.put(self.allocator, sprop_names[pi], @enumFromInt(vis_byte));
                 try def.constant_docs.put(self.allocator, sprop_names[pi], sprop_doc[pi]);
-                if (!def.constant_names.contains(sprop_names[pi])) {
-                    try def.constant_order.append(self.allocator, sprop_names[pi]);
-                }
-                try def.constant_names.put(self.allocator, sprop_names[pi], {});
                 if ((sprop_visibility[pi] & 0x10) != 0) {
                     try def.const_final.put(self.allocator, sprop_names[pi], {});
                 }
+            } else {
+                try def.static_props.put(self.allocator, sprop_names[pi], try self.copyDefault(default_val));
+                if (sprop_type[pi].len > 0) try def.static_prop_types.put(self.allocator, sprop_names[pi], sprop_type[pi]);
+                if (vis_byte != 0) try def.static_prop_visibility.put(self.allocator, sprop_names[pi], @enumFromInt(vis_byte));
             }
         }
 
@@ -13072,8 +13150,7 @@ pub const VM = struct {
                 vj += 1;
             }
             objRetain(case_obj);
-            try def.static_props.put(self.allocator, case_names[ci], .{ .object = case_obj });
-            try def.constant_names.put(self.allocator, case_names[ci], {});
+            try def.constants.put(self.allocator, case_names[ci], .{ .object = case_obj });
             try def.constant_order.append(self.allocator, case_names[ci]);
             try def.case_order.append(self.allocator, case_names[ci]);
         }
@@ -13130,10 +13207,10 @@ pub const VM = struct {
             const ec_name = self.currentChunk().constants.items[ec_name_idx].string.bytes();
             const doc_idx = self.readU16();
             if (doc_idx != 0xffff) try def.constant_docs.put(self.allocator, ec_name, self.currentChunk().constants.items[doc_idx].string.bytes());
-            if (!def.constant_names.contains(ec_name)) {
+            if (!def.constants.contains(ec_name)) {
                 try def.constant_order.append(self.allocator, ec_name);
+                try def.constants.put(self.allocator, ec_name, .null);
             }
-            try def.constant_names.put(self.allocator, ec_name, {});
         }
 
         try self.registerEnumMethods(enum_name, backed_type_byte);
@@ -13231,7 +13308,7 @@ pub const VM = struct {
         if (std.mem.indexOf(u8, s, "::")) |sep| {
             const class_name = s[0..sep];
             const const_name = s[sep + 2 ..];
-            if (self.getStaticProp(class_name, const_name)) |v| return v;
+            if (self.getClassConstant(class_name, const_name)) |v| return v;
         }
         // check if it's a PHP constant
         if (self.php_constants.get(s)) |v| return v;
@@ -13435,10 +13512,10 @@ pub const VM = struct {
 
         if (self.trait_constants.get(trait_name)) |consts| {
             for (consts) |c| {
-                if (!def.static_props.contains(c.name)) {
+                if (!def.constants.contains(c.name)) {
+                    try def.constant_order.append(self.allocator, c.name);
                     // each using class gets its own refcounted copy
-                    try def.static_props.put(self.allocator, c.name, try self.copyDefault(c.value));
-                    try def.constant_names.put(self.allocator, c.name, {});
+                    try def.constants.put(self.allocator, c.name, try self.copyDefault(c.value));
                     try def.constant_docs.put(self.allocator, c.name, c.doc_comment);
                 }
             }
@@ -15616,7 +15693,7 @@ pub const VM = struct {
                     vis = v;
                     break;
                 }
-                if (cls.constant_names.contains(const_name)) {
+                if (cls.constants.contains(const_name)) {
                     declaring = cn;
                     vis = .public;
                     break;
@@ -16997,7 +17074,7 @@ pub const VM = struct {
                         }
                         return .null;
                     }
-                    if (self.getStaticProp(class_name, const_name)) |v| return v;
+                    if (self.getClassConstant(class_name, const_name)) |v| return v;
                     // fall back to class constants (ClassName::CONST_NAME)
                     var buf: [512]u8 = undefined;
                     const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ class_name, const_name }) catch return .null;
@@ -17967,7 +18044,7 @@ pub const VM = struct {
                 break :blk .{ .array = arr };
             },
             .class_constant => |c| blk: {
-                if (self.getStaticProp(c.class, c.name)) |v| break :blk v;
+                if (self.getClassConstant(c.class, c.name)) |v| break :blk v;
                 var buf: [256]u8 = undefined;
                 const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ c.class, c.name }) catch break :blk .null;
                 break :blk self.php_constants.get(full) orelse .null;

@@ -2045,8 +2045,7 @@ fn registerBreakIteratorClass(vm: *VM, a: Allocator) !void {
         try def.methods.put(a, "getLocale", .{ .name = "getLocale", .arity = 0 });
 
         try def.constant_order.append(a, "DONE");
-        try def.constant_names.put(a, "DONE", {});
-        try def.static_props.put(a, "DONE", .{ .int = -1 });
+        try def.constants.put(a, "DONE", .{ .int = -1 });
         // rule status tag ranges (PHP exposes these constants on the class)
         const tag_consts = .{
             .{ "WORD_NONE", 0 },      .{ "WORD_NONE_LIMIT", 100 },
@@ -2061,8 +2060,7 @@ fn registerBreakIteratorClass(vm: *VM, a: Allocator) !void {
         };
         inline for (tag_consts) |k| {
             try def.constant_order.append(a, k[0]);
-            try def.constant_names.put(a, k[0], {});
-            try def.static_props.put(a, k[0], .{ .int = k[1] });
+            try def.constants.put(a, k[0], .{ .int = k[1] });
         }
 
         try vm.classes.put(a, cls_name, def);
@@ -2143,8 +2141,7 @@ fn registerIntlCalendarClass(vm: *VM, a: Allocator) !void {
         };
         inline for (fields) |k| {
             try def.constant_order.append(a, k[0]);
-            try def.constant_names.put(a, k[0], {});
-            try def.static_props.put(a, k[0], .{ .int = k[1] });
+            try def.constants.put(a, k[0], .{ .int = k[1] });
         }
 
         try vm.classes.put(a, cls_name, def);
@@ -2215,8 +2212,7 @@ fn registerDateFormatterClass(vm: *VM, a: Allocator) !void {
     };
     inline for (dfs) |k| {
         try def.constant_order.append(a, k[0]);
-        try def.constant_names.put(a, k[0], {});
-        try def.static_props.put(a, k[0], .{ .int = k[1] });
+        try def.constants.put(a, k[0], .{ .int = k[1] });
     }
 
     try vm.classes.put(a, "IntlDateFormatter", def);
@@ -2248,8 +2244,7 @@ fn registerNormalizerClass(vm: *VM, a: Allocator) !void {
     };
     inline for (ncs) |k| {
         try def.constant_order.append(a, k[0]);
-        try def.constant_names.put(a, k[0], {});
-        try def.static_props.put(a, k[0], .{ .int = k[1] });
+        try def.constants.put(a, k[0], .{ .int = k[1] });
     }
 
     try vm.classes.put(a, "Normalizer", def);
@@ -2430,8 +2425,7 @@ fn registerCollatorClass(vm: *VM, a: Allocator) !void {
     };
     inline for (cs) |k| {
         try def.constant_order.append(a, k[0]);
-        try def.constant_names.put(a, k[0], {});
-        try def.static_props.put(a, k[0], .{ .int = k[1] });
+        try def.constants.put(a, k[0], .{ .int = k[1] });
     }
 
     try vm.classes.put(a, "Collator", def);
@@ -2472,8 +2466,7 @@ fn registerNumberFormatterClass(vm: *VM, a: Allocator) !void {
     };
     inline for (nfs) |k| {
         try def.constant_order.append(a, k[0]);
-        try def.constant_names.put(a, k[0], {});
-        try def.static_props.put(a, k[0], .{ .int = k[1] });
+        try def.constants.put(a, k[0], .{ .int = k[1] });
     }
 
     try vm.classes.put(a, "NumberFormatter", def);
@@ -2491,11 +2484,9 @@ fn registerTransliteratorClass(vm: *VM, a: Allocator) !void {
     try def.methods.put(a, "create", .{ .name = "create", .arity = 1, .is_static = true });
     try def.methods.put(a, "transliterate", .{ .name = "transliterate", .arity = 1 });
     try def.constant_order.append(a, "FORWARD");
-    try def.constant_names.put(a, "FORWARD", {});
-    try def.static_props.put(a, "FORWARD", .{ .int = 0 });
+    try def.constants.put(a, "FORWARD", .{ .int = 0 });
     try def.constant_order.append(a, "REVERSE");
-    try def.constant_names.put(a, "REVERSE", {});
-    try def.static_props.put(a, "REVERSE", .{ .int = 1 });
+    try def.constants.put(a, "REVERSE", .{ .int = 1 });
     try vm.classes.put(a, "Transliterator", def);
     try vm.native_fns.put(a, "Transliterator::create", intlWrap(transCreateStatic));
     try vm.native_fns.put(a, "Transliterator::transliterate", intlWrap(transTransliterate));

@@ -398,8 +398,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     };
     inline for (xr_consts) |k| {
         try def.constant_order.append(a, k[0]);
-        try def.constant_names.put(a, k[0], {});
-        try def.static_props.put(a, k[0], .{ .int = k[1] });
+        try def.constants.put(a, k[0], .{ .int = k[1] });
     }
     try vm.classes.put(a, "XMLReader", def);
 

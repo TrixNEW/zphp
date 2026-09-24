@@ -1859,7 +1859,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             try self.compileNode(member.data.lhs);
             const const_name = self.ast.tokenSlice(member.main_token);
             const cprop_idx = try self.addConstant(.{ .string = Value.String.borrowed(const_name) });
-            try self.emitOp(.set_static_prop);
+            try self.emitOp(.set_class_const);
             try self.emitU16(cname_idx);
             try self.emitU16(cprop_idx);
             try self.emitOp(.pop);
@@ -2333,7 +2333,7 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
             try self.compileNode(member.data.lhs);
             const cname = self.ast.tokenSlice(member.main_token);
             const cprop_idx = try self.addConstant(.{ .string = Value.String.borrowed(cname) });
-            try self.emitOp(.set_static_prop);
+            try self.emitOp(.set_class_const);
             try self.emitU16(name_idx);
             try self.emitU16(cprop_idx);
             try self.emitOp(.pop);
@@ -2430,18 +2430,18 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
         if (member.tag == .const_decl) try const_decls.append(self.allocator, member_idx);
     }
 
-    // compile defaults for static properties first (popped third by VM)
+    // compile defaults for trait constants first (popped third by VM)
+    for (const_decls.items) |pi| {
+        const pmember = self.ast.nodes[pi];
+        if (pmember.data.lhs != 0) try self.compileNode(pmember.data.lhs);
+    }
+
+    // compile defaults for static properties (popped second by VM)
     for (static_props.items) |pi| {
         const pmember = self.ast.nodes[pi];
         if (pmember.data.lhs != 0) {
             try self.compileNode(pmember.data.lhs);
         }
-    }
-
-    // compile defaults for trait constants (popped second by VM)
-    for (const_decls.items) |pi| {
-        const pmember = self.ast.nodes[pi];
-        if (pmember.data.lhs != 0) try self.compileNode(pmember.data.lhs);
     }
 
     // compile defaults for own properties last (popped first by VM)
@@ -2735,7 +2735,7 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
             try self.compileNode(member.data.lhs);
             const const_name = self.ast.tokenSlice(member.main_token);
             const cprop_idx = try self.addConstant(.{ .string = Value.String.borrowed(const_name) });
-            try self.emitOp(.set_static_prop);
+            try self.emitOp(.set_class_const);
             try self.emitU16(cname_idx);
             try self.emitU16(cprop_idx);
             try self.emitOp(.pop);

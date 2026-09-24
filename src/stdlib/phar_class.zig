@@ -24,7 +24,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
         .{ .name = "SHA256", .value = 3 },          .{ .name = "SHA512", .value = 4 },
         .{ .name = "OPENSSL", .value = 16 },        .{ .name = "OPENSSL_SHA256", .value = 17 },
         .{ .name = "OPENSSL_SHA512", .value = 18 },
-    }) |constant| try def.static_props.put(a, constant.name, .{ .int = constant.value });
+    }) |constant| try def.constants.put(a, constant.name, .{ .int = constant.value });
 
     try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try def.methods.put(a, "addFromString", .{ .name = "addFromString", .arity = 2 });

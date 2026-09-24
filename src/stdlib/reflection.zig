@@ -29,8 +29,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
         try vm.objects.append(a, obj);
         try obj.set(a, "name", .{ .string = Value.String.borrowed(name) });
         VM.objRetain(obj);
-        try hook_type.static_props.put(a, name, .{ .object = obj });
-        try hook_type.constant_names.put(a, name, {});
+        try hook_type.constants.put(a, name, .{ .object = obj });
         try hook_type.constant_order.append(a, name);
         try hook_type.case_order.append(a, name);
     }
@@ -58,14 +57,14 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     var attr_def = ClassDef{ .name = "Attribute" };
     try attr_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
-    try attr_def.static_props.put(a, "TARGET_CLASS", .{ .int = 1 });
-    try attr_def.static_props.put(a, "TARGET_FUNCTION", .{ .int = 2 });
-    try attr_def.static_props.put(a, "TARGET_METHOD", .{ .int = 4 });
-    try attr_def.static_props.put(a, "TARGET_PROPERTY", .{ .int = 8 });
-    try attr_def.static_props.put(a, "TARGET_CLASS_CONSTANT", .{ .int = 16 });
-    try attr_def.static_props.put(a, "TARGET_PARAMETER", .{ .int = 32 });
-    try attr_def.static_props.put(a, "TARGET_ALL", .{ .int = 127 });
-    try attr_def.static_props.put(a, "IS_REPEATABLE", .{ .int = 128 });
+    try attr_def.constants.put(a, "TARGET_CLASS", .{ .int = 1 });
+    try attr_def.constants.put(a, "TARGET_FUNCTION", .{ .int = 2 });
+    try attr_def.constants.put(a, "TARGET_METHOD", .{ .int = 4 });
+    try attr_def.constants.put(a, "TARGET_PROPERTY", .{ .int = 8 });
+    try attr_def.constants.put(a, "TARGET_CLASS_CONSTANT", .{ .int = 16 });
+    try attr_def.constants.put(a, "TARGET_PARAMETER", .{ .int = 32 });
+    try attr_def.constants.put(a, "TARGET_ALL", .{ .int = 127 });
+    try attr_def.constants.put(a, "IS_REPEATABLE", .{ .int = 128 });
     try vm.classes.put(a, "Attribute", attr_def);
     try vm.native_fns.put(a, "Attribute::__construct", attributeConstruct);
 
@@ -127,16 +126,11 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "Reflection::getModifierNames", reflectionGetModifierNames);
 
     var rc_def = ClassDef{ .name = "ReflectionClass" };
-    try rc_def.static_props.put(a, "IS_IMPLICIT_ABSTRACT", .{ .int = 16 });
-    try rc_def.constant_names.put(a, "IS_IMPLICIT_ABSTRACT", {});
-    try rc_def.static_props.put(a, "IS_EXPLICIT_ABSTRACT", .{ .int = 64 });
-    try rc_def.constant_names.put(a, "IS_EXPLICIT_ABSTRACT", {});
-    try rc_def.static_props.put(a, "IS_FINAL", .{ .int = 32 });
-    try rc_def.constant_names.put(a, "IS_FINAL", {});
-    try rc_def.static_props.put(a, "IS_READONLY", .{ .int = 65536 });
-    try rc_def.constant_names.put(a, "IS_READONLY", {});
-    try rc_def.static_props.put(a, "SKIP_DESTRUCTOR", .{ .int = 16 });
-    try rc_def.constant_names.put(a, "SKIP_DESTRUCTOR", {});
+    try rc_def.constants.put(a, "IS_IMPLICIT_ABSTRACT", .{ .int = 16 });
+    try rc_def.constants.put(a, "IS_EXPLICIT_ABSTRACT", .{ .int = 64 });
+    try rc_def.constants.put(a, "IS_FINAL", .{ .int = 32 });
+    try rc_def.constants.put(a, "IS_READONLY", .{ .int = 65536 });
+    try rc_def.constants.put(a, "SKIP_DESTRUCTOR", .{ .int = 16 });
     try rc_def.interfaces.append(a, "Reflector");
     try rc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
@@ -172,8 +166,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rc_def.methods.put(a, "getProperty", .{ .name = "getProperty", .arity = 1 });
     try rc_def.methods.put(a, "hasProperty", .{ .name = "hasProperty", .arity = 1 });
     try rc_def.methods.put(a, "newInstanceWithoutConstructor", .{ .name = "newInstanceWithoutConstructor", .arity = 0 });
-    try rc_def.static_props.put(a, "SKIP_INITIALIZATION_ON_SERIALIZE", .{ .int = 8 });
-    try rc_def.constant_names.put(a, "SKIP_INITIALIZATION_ON_SERIALIZE", {});
+    try rc_def.constants.put(a, "SKIP_INITIALIZATION_ON_SERIALIZE", .{ .int = 8 });
     try rc_def.methods.put(a, "newLazyGhost", .{ .name = "newLazyGhost", .arity = 1 });
     try rc_def.methods.put(a, "newLazyProxy", .{ .name = "newLazyProxy", .arity = 1 });
     try rc_def.methods.put(a, "initializeLazyObject", .{ .name = "initializeLazyObject", .arity = 1 });
@@ -276,18 +269,12 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.classes.put(a, "ReflectionFunctionAbstract", rfa_def);
 
     var rm_def = ClassDef{ .name = "ReflectionMethod", .parent = "ReflectionFunctionAbstract" };
-    try rm_def.static_props.put(a, "IS_STATIC", .{ .int = 16 });
-    try rm_def.static_props.put(a, "IS_PUBLIC", .{ .int = 1 });
-    try rm_def.static_props.put(a, "IS_PROTECTED", .{ .int = 2 });
-    try rm_def.static_props.put(a, "IS_PRIVATE", .{ .int = 4 });
-    try rm_def.static_props.put(a, "IS_ABSTRACT", .{ .int = 64 });
-    try rm_def.static_props.put(a, "IS_FINAL", .{ .int = 32 });
-    try rm_def.constant_names.put(a, "IS_STATIC", {});
-    try rm_def.constant_names.put(a, "IS_PUBLIC", {});
-    try rm_def.constant_names.put(a, "IS_PROTECTED", {});
-    try rm_def.constant_names.put(a, "IS_PRIVATE", {});
-    try rm_def.constant_names.put(a, "IS_ABSTRACT", {});
-    try rm_def.constant_names.put(a, "IS_FINAL", {});
+    try rm_def.constants.put(a, "IS_STATIC", .{ .int = 16 });
+    try rm_def.constants.put(a, "IS_PUBLIC", .{ .int = 1 });
+    try rm_def.constants.put(a, "IS_PROTECTED", .{ .int = 2 });
+    try rm_def.constants.put(a, "IS_PRIVATE", .{ .int = 4 });
+    try rm_def.constants.put(a, "IS_ABSTRACT", .{ .int = 64 });
+    try rm_def.constants.put(a, "IS_FINAL", .{ .int = 32 });
     try rm_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rm_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
     try rm_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -491,8 +478,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnumBackedCase::getBackingValue", rebcGetBackingValue);
 
     var rf_def = ClassDef{ .name = "ReflectionFunction", .parent = "ReflectionFunctionAbstract" };
-    try rf_def.static_props.put(a, "IS_DEPRECATED", .{ .int = 2048 });
-    try rf_def.constant_names.put(a, "IS_DEPRECATED", {});
+    try rf_def.constants.put(a, "IS_DEPRECATED", .{ .int = 2048 });
     try rf_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rf_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try rf_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -606,26 +592,16 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rprop_def.methods.put(a, "getHook", .{ .name = "getHook", .arity = 1 });
     try rprop_def.methods.put(a, "isLazy", .{ .name = "isLazy", .arity = 1 });
     try rprop_def.methods.put(a, "skipLazyInitialization", .{ .name = "skipLazyInitialization", .arity = 1 });
-    try rprop_def.static_props.put(a, "IS_STATIC", .{ .int = 16 });
-    try rprop_def.static_props.put(a, "IS_READONLY", .{ .int = 128 });
-    try rprop_def.static_props.put(a, "IS_PUBLIC", .{ .int = 1 });
-    try rprop_def.static_props.put(a, "IS_PROTECTED", .{ .int = 2 });
-    try rprop_def.static_props.put(a, "IS_PRIVATE", .{ .int = 4 });
-    try rprop_def.static_props.put(a, "IS_ABSTRACT", .{ .int = 64 });
-    try rprop_def.static_props.put(a, "IS_PROTECTED_SET", .{ .int = 2048 });
-    try rprop_def.static_props.put(a, "IS_PRIVATE_SET", .{ .int = 4096 });
-    try rprop_def.static_props.put(a, "IS_VIRTUAL", .{ .int = 512 });
-    try rprop_def.static_props.put(a, "IS_FINAL", .{ .int = 32 });
-    try rprop_def.constant_names.put(a, "IS_STATIC", {});
-    try rprop_def.constant_names.put(a, "IS_READONLY", {});
-    try rprop_def.constant_names.put(a, "IS_PUBLIC", {});
-    try rprop_def.constant_names.put(a, "IS_PROTECTED", {});
-    try rprop_def.constant_names.put(a, "IS_PRIVATE", {});
-    try rprop_def.constant_names.put(a, "IS_ABSTRACT", {});
-    try rprop_def.constant_names.put(a, "IS_PROTECTED_SET", {});
-    try rprop_def.constant_names.put(a, "IS_PRIVATE_SET", {});
-    try rprop_def.constant_names.put(a, "IS_VIRTUAL", {});
-    try rprop_def.constant_names.put(a, "IS_FINAL", {});
+    try rprop_def.constants.put(a, "IS_STATIC", .{ .int = 16 });
+    try rprop_def.constants.put(a, "IS_READONLY", .{ .int = 128 });
+    try rprop_def.constants.put(a, "IS_PUBLIC", .{ .int = 1 });
+    try rprop_def.constants.put(a, "IS_PROTECTED", .{ .int = 2 });
+    try rprop_def.constants.put(a, "IS_PRIVATE", .{ .int = 4 });
+    try rprop_def.constants.put(a, "IS_ABSTRACT", .{ .int = 64 });
+    try rprop_def.constants.put(a, "IS_PROTECTED_SET", .{ .int = 2048 });
+    try rprop_def.constants.put(a, "IS_PRIVATE_SET", .{ .int = 4096 });
+    try rprop_def.constants.put(a, "IS_VIRTUAL", .{ .int = 512 });
+    try rprop_def.constants.put(a, "IS_FINAL", .{ .int = 32 });
     try vm.classes.put(a, "ReflectionProperty", rprop_def);
 
     try vm.native_fns.put(a, "ReflectionProperty::__construct", rpConstruct);
@@ -667,10 +643,9 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionProperty::isVirtual", rpropIsVirtual);
 
     var ra_def = ClassDef{ .name = "ReflectionAttribute" };
-    try ra_def.static_props.put(a, "IS_INSTANCEOF", .{ .int = 2 });
-    try ra_def.constant_names.put(a, "IS_INSTANCEOF", {});
+    try ra_def.constants.put(a, "IS_INSTANCEOF", .{ .int = 2 });
     try ra_def.interfaces.append(a, "Reflector");
-    try ra_def.static_props.put(a, "IS_INSTANCEOF", .{ .int = 2 });
+    try ra_def.constants.put(a, "IS_INSTANCEOF", .{ .int = 2 });
     try ra_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try ra_def.methods.put(a, "getArguments", .{ .name = "getArguments", .arity = 0 });
     try ra_def.methods.put(a, "newInstance", .{ .name = "newInstance", .arity = 0 });
@@ -687,8 +662,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     var rcc_def = ClassDef{ .name = "ReflectionClassConstant" };
     try rcc_def.interfaces.append(a, "Reflector");
     inline for (.{ .{ "IS_PUBLIC", 1 }, .{ "IS_PROTECTED", 2 }, .{ "IS_PRIVATE", 4 }, .{ "IS_FINAL", 32 } }) |constant| {
-        try rcc_def.static_props.put(a, constant[0], .{ .int = constant[1] });
-        try rcc_def.constant_names.put(a, constant[0], {});
+        try rcc_def.constants.put(a, constant[0], .{ .int = constant[1] });
     }
     try rcc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rcc_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
@@ -1715,8 +1689,7 @@ fn rcGetProperties(ctx: *NativeContext, args: []const Value) RuntimeError!Native
         var sp_iter = cls.static_props.iterator();
         while (sp_iter.next()) |entry| {
             const sp_name = entry.key_ptr.*;
-            if (cls.constant_names.contains(sp_name)) continue;
-            const vis: ClassDef.Visibility = cls.const_visibility.get(sp_name) orelse .public;
+            const vis: ClassDef.Visibility = cls.static_prop_visibility.get(sp_name) orelse .public;
             if (!is_own and vis == .private) continue;
             if (!matchPropFilter(filter, vis, true)) continue;
             if (!seen.contains(sp_name)) {
@@ -1922,71 +1895,67 @@ fn rcIsEnum(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     return NativeResult.scalar(.{ .bool = cls.is_enum });
 }
 
-fn rcGetConstants(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const this = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
+const VisibleConstant = struct { declaring: []const u8, name: []const u8, value: Value };
 
-    const arr = try ctx.createArray();
-    var is_own = true;
+// what a class can see as its constants, in php's order: its own (trait
+// constants included) in declaration order, then its parents', then its
+// interfaces'. an override hides the inherited one and a parent's private
+// constant is not inherited
+fn visibleConstants(ctx: *NativeContext, class_name: []const u8, out: *std.ArrayListUnmanaged(VisibleConstant)) RuntimeError!void {
+    var chain: std.ArrayListUnmanaged([]const u8) = .{};
+    defer chain.deinit(ctx.allocator);
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls = ctx.vm.classes.get(name) orelse break;
-        if (cls.constant_order.items.len > 0) {
-            for (cls.constant_order.items) |cname| {
-                // private constants do not propagate to subclasses
-                if (!is_own) {
-                    const vis = cls.const_visibility.get(cname) orelse ClassDef.Visibility.public;
-                    if (vis == .private) continue;
-                }
-                if (cls.static_props.get(cname)) |val| {
-                    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(cname) }, val);
-                }
-            }
-        } else {
-            var it = cls.constant_names.iterator();
-            while (it.next()) |entry| {
-                if (!is_own) {
-                    const vis = cls.const_visibility.get(entry.key_ptr.*) orelse ClassDef.Visibility.public;
-                    if (vis == .private) continue;
-                }
-                if (cls.static_props.get(entry.key_ptr.*)) |val| {
-                    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, val);
-                }
-            }
-        }
+        try chain.append(ctx.allocator, name);
         current = cls.parent;
-        is_own = false;
     }
+    for (chain.items, 0..) |name, depth| try appendOwnConstants(ctx, name, depth == 0, out);
+    for (chain.items) |name| try appendInterfaceConstants(ctx, name, out, 0);
+}
+
+fn appendOwnConstants(ctx: *NativeContext, name: []const u8, is_own: bool, out: *std.ArrayListUnmanaged(VisibleConstant)) RuntimeError!void {
+    const cls = ctx.vm.classes.get(name) orelse return;
+    for (cls.constant_order.items) |cname| try appendConstant(ctx, cls, name, cname, is_own, out);
+    var it = cls.constants.keyIterator();
+    while (it.next()) |cname| try appendConstant(ctx, cls, name, cname.*, is_own, out);
+}
+
+fn appendInterfaceConstants(ctx: *NativeContext, name: []const u8, out: *std.ArrayListUnmanaged(VisibleConstant), depth: usize) RuntimeError!void {
+    if (depth > 64) return;
+    const cls = ctx.vm.classes.get(name) orelse return;
+    for (cls.interfaces.items) |iface| {
+        try appendOwnConstants(ctx, iface, false, out);
+        try appendInterfaceConstants(ctx, iface, out, depth + 1);
+    }
+}
+
+fn appendConstant(ctx: *NativeContext, cls: ClassDef, declaring: []const u8, cname: []const u8, is_own: bool, out: *std.ArrayListUnmanaged(VisibleConstant)) RuntimeError!void {
+    const value = cls.constants.get(cname) orelse return;
+    if (!is_own and (cls.const_visibility.get(cname) orelse .public) == .private) return;
+    for (out.items) |seen| if (std.mem.eql(u8, seen.name, cname)) return;
+    try out.append(ctx.allocator, .{ .declaring = declaring, .name = cname, .value = value });
+}
+
+fn rcGetConstants(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const this = getThis(ctx) orelse return NativeResult.scalar(.null);
+    const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
+    var constants: std.ArrayListUnmanaged(VisibleConstant) = .{};
+    defer constants.deinit(ctx.allocator);
+    try visibleConstants(ctx, class_name, &constants);
+    const arr = try ctx.createArray();
+    for (constants.items) |c| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(c.name) }, c.value);
     return NativeResult.borrowed(.{ .array = arr });
 }
 
 fn rcGetReflectionConstants(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
-
+    var constants: std.ArrayListUnmanaged(VisibleConstant) = .{};
+    defer constants.deinit(ctx.allocator);
+    try visibleConstants(ctx, class_name, &constants);
     const arr = try ctx.createArray();
-    var current: ?[]const u8 = class_name;
-    while (current) |name| {
-        const cls = ctx.vm.classes.get(name) orelse break;
-        if (cls.constant_order.items.len > 0) {
-            for (cls.constant_order.items) |cname| {
-                if (cls.static_props.get(cname)) |val| {
-                    const obj = try buildReflectionClassConstant(ctx, name, cname, val);
-                    try arr.append(ctx.allocator, obj);
-                }
-            }
-        } else {
-            var it = cls.constant_names.iterator();
-            while (it.next()) |entry| {
-                const cname = entry.key_ptr.*;
-                if (cls.static_props.get(cname)) |val| {
-                    const obj = try buildReflectionClassConstant(ctx, name, cname, val);
-                    try arr.append(ctx.allocator, obj);
-                }
-            }
-        }
-        current = cls.parent;
-    }
+    for (constants.items) |c| try arr.append(ctx.allocator, try buildReflectionClassConstant(ctx, c.declaring, c.name, c.value));
     return NativeResult.borrowed(.{ .array = arr });
 }
 
@@ -1999,8 +1968,8 @@ fn rcGetReflectionConstant(ctx: *NativeContext, args: []const Value) RuntimeErro
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls = ctx.vm.classes.get(name) orelse break;
-        if (cls.constant_names.contains(target)) {
-            if (cls.static_props.get(target)) |val| {
+        if (cls.constants.contains(target)) {
+            if (cls.constants.get(target)) |val| {
                 return NativeResult.borrowed(try buildReflectionClassConstant(ctx, name, target, val));
             }
         }
@@ -2018,7 +1987,7 @@ fn rcHasConstant(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls = ctx.vm.classes.get(name) orelse break;
-        if (cls.constant_names.contains(target)) return NativeResult.scalar(.{ .bool = true });
+        if (cls.constants.contains(target)) return NativeResult.scalar(.{ .bool = true });
         current = cls.parent;
     }
     return NativeResult.scalar(.{ .bool = false });
@@ -2033,8 +2002,8 @@ fn rcGetConstant(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls = ctx.vm.classes.get(name) orelse break;
-        if (cls.constant_names.contains(target)) {
-            if (cls.static_props.get(target)) |val| return NativeResult.share(val);
+        if (cls.constants.contains(target)) {
+            if (cls.constants.get(target)) |val| return NativeResult.share(val);
         }
         current = cls.parent;
     }
@@ -2075,7 +2044,7 @@ fn findConstantOwner(ctx: *NativeContext, class_name: []const u8, name: []const 
     }
     if (ctx.vm.classes.getEntry(class_name)) |entry| {
         const cls = entry.value_ptr;
-        if (cls.constant_names.contains(name)) return entry.key_ptr.*;
+        if (cls.constants.contains(name)) return entry.key_ptr.*;
         if (cls.parent) |parent| {
             if (findConstantOwner(ctx, parent, name, depth + 1)) |owner| return owner;
         }
@@ -2104,7 +2073,7 @@ fn rccGetValue(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult 
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls = ctx.vm.classes.get(name) orelse break;
-        if (cls.static_props.get(const_name)) |val| return NativeResult.share(val);
+        if (cls.constants.get(const_name)) |val| return NativeResult.share(val);
         current = cls.parent;
     }
     return NativeResult.scalar(.null);
@@ -2229,8 +2198,8 @@ fn rccGetType(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     var current: ?[]const u8 = class_name;
     while (current) |cn| {
         if (ctx.vm.classes.get(cn)) |cls| {
-            if (cls.static_prop_types.get(const_name)) |type_str| {
-                if (cls.constant_names.contains(const_name)) {
+            if (cls.constant_types.get(const_name)) |type_str| {
+                if (cls.constants.contains(const_name)) {
                     return NativeResult.borrowed(.{ .object = try createTypeObj(ctx, type_str, false, cn) });
                 }
             }
@@ -2247,7 +2216,7 @@ fn rccHasType(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     var current: ?[]const u8 = class_name;
     while (current) |cn| {
         if (ctx.vm.classes.get(cn)) |cls| {
-            if (cls.static_prop_types.get(const_name) != null and cls.constant_names.contains(const_name)) return NativeResult.scalar(.{ .bool = true });
+            if (cls.constant_types.get(const_name) != null) return NativeResult.scalar(.{ .bool = true });
             current = cls.parent;
         } else break;
     }
@@ -2332,7 +2301,6 @@ fn rcGetStaticProperties(ctx: *NativeContext, _: []const Value) RuntimeError!Nat
         const cls = ctx.vm.classes.get(name) orelse break;
         var it = cls.static_props.iterator();
         while (it.next()) |entry| {
-            if (cls.constant_names.contains(entry.key_ptr.*)) continue;
             try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, entry.value_ptr.*);
         }
         current = cls.parent;
@@ -2348,9 +2316,7 @@ fn rcGetStaticPropertyValue(ctx: *NativeContext, args: []const Value) RuntimeErr
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls = ctx.vm.classes.get(name) orelse break;
-        if (!cls.constant_names.contains(prop_name)) {
-            if (cls.static_props.get(prop_name)) |v| return NativeResult.share(v);
-        }
+        if (cls.static_props.get(prop_name)) |v| return NativeResult.share(v);
         current = cls.parent;
     }
     if (args.len >= 2) return NativeResult.share(args[1]);
@@ -2365,7 +2331,7 @@ fn rcSetStaticPropertyValue(ctx: *NativeContext, args: []const Value) RuntimeErr
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         const cls_ptr = ctx.vm.classes.getPtr(name) orelse break;
-        if (!cls_ptr.constant_names.contains(prop_name)) {
+        if (!cls_ptr.constants.contains(prop_name)) {
             if (cls_ptr.static_props.contains(prop_name)) {
                 try cls_ptr.static_props.put(ctx.vm.allocator, prop_name, args[1]);
                 return NativeResult.scalar(.null);
@@ -4576,7 +4542,7 @@ fn reGetCase(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
     const cls = ctx.vm.classes.get(class_name) orelse return NativeResult.scalar(.null);
-    if (!cls.constant_names.contains(args[0].string.bytes())) {
+    if (!cls.constants.contains(args[0].string.bytes())) {
         const msg = std.fmt.allocPrint(ctx.allocator, "Case {s}::{s} does not exist", .{ class_name, args[0].string.bytes() }) catch return throwReflection(ctx, "Case not found");
         try ctx.strings.append(ctx.allocator, msg);
         return throwReflection(ctx, msg);
@@ -4638,7 +4604,7 @@ fn reucGetValue(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult
     const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return NativeResult.scalar(.null);
     const case_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
     const cls = ctx.vm.classes.get(class_name) orelse return NativeResult.scalar(.null);
-    return NativeResult.share(cls.static_props.get(case_name) orelse .null);
+    return NativeResult.share(cls.constants.get(case_name) orelse .null);
 }
 
 fn rebcGetBackingValue(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -4646,7 +4612,7 @@ fn rebcGetBackingValue(ctx: *NativeContext, _: []const Value) RuntimeError!Nativ
     const class_name = if (this.get("class") == .string) this.get("class").string.bytes() else return NativeResult.scalar(.null);
     const case_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
     const cls = ctx.vm.classes.get(class_name) orelse return NativeResult.scalar(.null);
-    const case_obj_v = cls.static_props.get(case_name) orelse return NativeResult.scalar(.null);
+    const case_obj_v = cls.constants.get(case_name) orelse return NativeResult.scalar(.null);
     if (case_obj_v != .object) return NativeResult.scalar(.null);
     return NativeResult.share(case_obj_v.object.get("value"));
 }

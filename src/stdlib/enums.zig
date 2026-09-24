@@ -15,7 +15,7 @@ pub fn enumCases(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
     const def = ctx.vm.classes.get(enum_name) orelse return error.RuntimeError;
     var arr = try ctx.createArray();
     for (def.case_order.items) |name| {
-        if (def.static_props.get(name)) |val| {
+        if (def.constants.get(name)) |val| {
             try arr.append(ctx.allocator, val);
         }
     }
@@ -131,7 +131,7 @@ pub fn enumFrom(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     const def = ctx.vm.classes.get(enum_name) orelse return error.RuntimeError;
     if (try checkEnumArgType(ctx, def.backed_type, enum_name, "from", args[0])) |err_val| return NativeResult.borrowed(err_val);
     const lookup = try coerceForLookup(ctx, def.backed_type, args[0]);
-    var iter = def.static_props.iterator();
+    var iter = def.constants.iterator();
     while (iter.next()) |entry| {
         if (entry.value_ptr.* == .object) {
             const case_val = entry.value_ptr.*.object.get("value");
@@ -151,7 +151,7 @@ pub fn enumTryFrom(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     const def = ctx.vm.classes.get(enum_name) orelse return NativeResult.scalar(.null);
     if (try checkEnumArgType(ctx, def.backed_type, enum_name, "tryFrom", args[0])) |err_val| return NativeResult.borrowed(err_val);
     const lookup = try coerceForLookup(ctx, def.backed_type, args[0]);
-    var iter = def.static_props.iterator();
+    var iter = def.constants.iterator();
     while (iter.next()) |entry| {
         if (entry.value_ptr.* == .object) {
             const case_val = entry.value_ptr.*.object.get("value");

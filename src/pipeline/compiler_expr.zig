@@ -1456,6 +1456,22 @@ pub fn compileDynamicStaticCall(self: *Compiler, node: Ast.Node) Error!void {
     }
 }
 
+// Class::{expr} and $class::{expr}
+pub fn compileDynamicClassConst(self: *Compiler, node: Ast.Node) Error!void {
+    const class_node = self.ast.nodes[node.data.lhs];
+    if (class_node.tag == .identifier or class_node.tag == .qualified_name) {
+        const class_name = try resolveNodeClassName(self, class_node);
+        const class_idx = try self.addConstant(.{ .string = Value.String.borrowed(class_name) });
+        try self.compileNode(node.data.rhs);
+        try self.emitOp(.get_class_const_dyn_name);
+        try self.emitU16(class_idx);
+        return;
+    }
+    try self.compileNode(node.data.lhs);
+    try self.compileNode(node.data.rhs);
+    try self.emitOp(.get_class_const_dyn_both);
+}
+
 pub fn compileStaticPropAccess(self: *Compiler, node: Ast.Node) Error!void {
     const class_node = self.ast.nodes[node.data.lhs];
 
@@ -1488,10 +1504,10 @@ pub fn compileStaticPropAccess(self: *Compiler, node: Ast.Node) Error!void {
     // dynamic class expression (function call, method call, etc.)
     if (class_node.tag != .identifier and class_node.tag != .qualified_name) {
         try self.compileNode(node.data.lhs);
-        var prop_name = self.ast.tokenSlice(node.main_token);
-        if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
-        const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
-        try self.emitOp(.get_static_prop_dynamic);
+        const raw_name = self.ast.tokenSlice(node.main_token);
+        const is_prop = raw_name.len > 0 and raw_name[0] == '$';
+        const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(if (is_prop) raw_name[1..] else raw_name) });
+        try self.emitOp(if (is_prop) .get_static_prop_dynamic else .get_class_const_dynamic);
         try self.emitU16(prop_idx);
         return;
     }
