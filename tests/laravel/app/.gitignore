@@ -1,4 +1,6 @@
 /database/database.sqlite
 /storage/logs/
 /storage/framework/views/*.php
+/storage/framework/sessions/*
+!/storage/framework/sessions/.gitkeep
 /.env
