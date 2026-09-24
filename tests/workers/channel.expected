@@ -7,6 +7,8 @@ int(3)
 bool(false)
 string(1) "a"
 array(1) {
+  ["k"]=>
+  int(2)
 }
 NULL
 recv timeout: no value arrived in time

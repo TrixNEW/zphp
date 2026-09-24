@@ -1559,75 +1559,85 @@ fn native_fpassthru(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
 fn native_fread(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .object or args[1] != .int) return NativeResult.scalar(.{ .bool = false });
     const obj = args[0].object;
-    if (std.mem.eql(u8, obj.class_name, "FileHandle")) {
-        const open = obj.get("__open");
-        if (open != .bool or !open.bool) {
-            try ctx.vm.setPendingException("TypeError", "fread(): Argument #1 ($stream) must be an open stream resource");
-            return error.RuntimeError;
-        }
+    if (!isOpenStream(obj)) {
+        try ctx.vm.setPendingException("TypeError", "fread(): Argument #1 ($stream) must be an open stream resource");
+        return error.RuntimeError;
     }
     if (args[1].int <= 0) {
         try ctx.vm.setPendingException("ValueError", "fread(): Argument #2 ($length) must be greater than 0");
         return error.RuntimeError;
     }
-    const length: usize = @intCast(args[1].int);
-    if (fileHandleWrapper(obj)) |wrapper| {
-        const result = try ctx.callMethod(wrapper, "stream_read", &[_]Value{.{ .int = @intCast(length) }});
-        if (result == .string) return NativeResult.share(result);
-        return NativeResult.literal("");
-    }
-    if (getBufferBacking(obj)) |buffer| {
-        const pos = getBufferPos(obj);
-        if (pos >= buffer.len) return NativeResult.literal("");
-        const end = @min(pos + length, buffer.len);
-        const slice = try ctx.allocator.dupe(u8, buffer[pos..end]);
-        setBufferPos(obj, end);
-        return NativeResult.takeString(try Value.String.adopt(ctx.allocator, slice));
-    }
-    const file = getFileHandle(obj) orelse return NativeResult.scalar(.{ .bool = false });
-
-    const buf = try ctx.allocator.alloc(u8, length);
-    const n = file.read(buf) catch |err| {
+    const buf = try ctx.allocator.alloc(u8, @intCast(args[1].int));
+    const n = (try streamReadInto(ctx, obj, buf)) orelse {
         ctx.allocator.free(buf);
-        // non-blocking stream with nothing buffered yet reads as "" in php, not a hard failure
-        if (err == error.WouldBlock) return NativeResult.literal("");
         return NativeResult.scalar(.{ .bool = false });
     };
     if (n == 0) {
         ctx.allocator.free(buf);
-        try obj.set(ctx.allocator, "__eof", .{ .bool = true });
         return NativeResult.literal("");
     }
-    if (n < length) try obj.set(ctx.allocator, "__eof", .{ .bool = true });
-    // shrink to actual read size
-    if (n < length) {
-        const exact = try ctx.allocator.alloc(u8, n);
-        @memcpy(exact, buf[0..n]);
+    const exact = ctx.allocator.realloc(buf, n) catch {
         ctx.allocator.free(buf);
-        return NativeResult.takeString(try Value.String.adopt(ctx.allocator, exact));
+        return error.OutOfMemory;
+    };
+    return NativeResult.takeString(try Value.String.adopt(ctx.allocator, exact));
+}
+
+pub fn isOpenStream(obj: *PhpObject) bool {
+    if (!std.mem.eql(u8, obj.class_name, "FileHandle")) return true;
+    const open = obj.get("__open");
+    return open == .bool and open.bool;
+}
+
+// one read into dest: the byte count (0 at eof or when a non-blocking stream
+// has nothing yet), or null when the stream cannot be read
+pub fn streamReadInto(ctx: *NativeContext, obj: *PhpObject, dest: []u8) RuntimeError!?usize {
+    if (fileHandleWrapper(obj)) |wrapper| {
+        const result = try ctx.callMethod(wrapper, "stream_read", &[_]Value{.{ .int = @intCast(dest.len) }});
+        if (result != .string) return 0;
+        const n = @min(result.string.bytes().len, dest.len);
+        @memcpy(dest[0..n], result.string.bytes()[0..n]);
+        return n;
     }
-    return NativeResult.takeString(try Value.String.adopt(ctx.allocator, buf));
+    if (getBufferBacking(obj)) |buffer| {
+        const pos = getBufferPos(obj);
+        if (pos >= buffer.len) return 0;
+        const n = @min(dest.len, buffer.len - pos);
+        @memcpy(dest[0..n], buffer[pos..][0..n]);
+        setBufferPos(obj, pos + n);
+        return n;
+    }
+    const file = getFileHandle(obj) orelse return null;
+    const n = file.read(dest) catch |err| {
+        // non-blocking stream with nothing buffered yet reads as "" in php, not a hard failure
+        if (err == error.WouldBlock) return 0;
+        return null;
+    };
+    if (n < dest.len) try obj.set(ctx.allocator, "__eof", .{ .bool = true });
+    return n;
 }
 
 fn native_fwrite(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .object or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
     const obj = args[0].object;
-    if (std.mem.eql(u8, obj.class_name, "FileHandle")) {
-        const open = obj.get("__open");
-        if (open != .bool or !open.bool) {
-            try ctx.vm.setPendingException("TypeError", "fwrite(): Argument #1 ($stream) must be an open stream resource");
-            return error.RuntimeError;
-        }
+    if (!isOpenStream(obj)) {
+        try ctx.vm.setPendingException("TypeError", "fwrite(): Argument #1 ($stream) must be an open stream resource");
+        return error.RuntimeError;
     }
     var data = args[1].string.bytes();
     if (args.len >= 3 and args[2] == .int) {
         const lim: i64 = args[2].int;
         if (lim >= 0 and @as(usize, @intCast(lim)) < data.len) data = data[0..@intCast(lim)];
     }
+    const written = (try streamWrite(ctx, obj, data)) orelse return NativeResult.scalar(.{ .bool = false });
+    return NativeResult.scalar(.{ .int = @intCast(written) });
+}
+
+// one write of data: the byte count, or null when the stream cannot be written
+pub fn streamWrite(ctx: *NativeContext, obj: *PhpObject, data: []const u8) RuntimeError!?usize {
     if (fileHandleWrapper(obj)) |wrapper| {
         const result = try ctx.callMethod(wrapper, "stream_write", &[_]Value{.{ .string = Value.String.borrowed(data) }});
-        if (result == .int) return NativeResult.scalar(result);
-        return NativeResult.scalar(.{ .int = 0 });
+        return if (result == .int and result.int >= 0) @intCast(result.int) else 0;
     }
     if (isZlibWriting(obj) or obj.get("__popen_cmd") == .string) {
         const cur = obj.get("__buffer");
@@ -1637,9 +1647,9 @@ fn native_fwrite(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         @memcpy(combined[cur_str.len..], data);
         try ctx.strings.append(ctx.allocator, combined);
         try obj.set(ctx.allocator, "__buffer", .{ .string = Value.String.borrowed(combined) });
-        return NativeResult.scalar(.{ .int = @intCast(data.len) });
+        return data.len;
     }
-    const file = getFileHandle(obj) orelse return NativeResult.scalar(.{ .bool = false });
+    const file = getFileHandle(obj) orelse return null;
     // 'a' / 'a+' modes: writes always append, regardless of where the read cursor is
     const mode_v = obj.get("__mode");
     if (mode_v == .string and mode_v.string.bytes().len > 0 and mode_v.string.bytes()[0] == 'a') {
@@ -1650,7 +1660,7 @@ fn native_fwrite(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     // this call lands before our stderr write
     if (platform.isStdout(file)) {
         try ctx.vm.output.appendSlice(ctx.allocator, data);
-        return NativeResult.scalar(.{ .int = @intCast(data.len) });
+        return data.len;
     }
     if (platform.isStderr(file)) {
         if (ctx.vm.output.items.len > 0) {
@@ -1659,8 +1669,7 @@ fn native_fwrite(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
             ctx.vm.output.clearRetainingCapacity();
         }
     }
-    const written = file.write(data) catch return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.scalar(.{ .int = @intCast(written) });
+    return file.write(data) catch null;
 }
 
 fn native_fgets(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {

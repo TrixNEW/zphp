@@ -1,0 +1,96 @@
+int(8)
+string(16) "0000000000000000"
+bool(false)
+string(16) "0000616263000000"
+int(11)
+string(11) "hello world"
+int(0)
+string(0) ""
+int(0)
+string(5) "Jello"
+string(5) "elrld"
+string(11) "Jello elrld"
+string(2) "lr"
+string(8) "ababcdeh"
+string(8) "cdefgfgh"
+string(32) "efbeaddedeadbeeffeff80ff12343412"
+string(8) "deadbeef"
+string(8) "deadbeef"
+int(-559038737)
+int(-2)
+int(65534)
+int(-128)
+int(128)
+int(-1)
+int(4660)
+int(13330)
+int(13330)
+bool(true)
+int(-1)
+string(16) "8000000000000000"
+float(3)
+float(-0.1)
+bool(true)
+float(-0.1)
+ValueError: offset 13 with length 4 is outside a 16-byte buffer
+ValueError: offset -1 with length 1 is outside a 16-byte buffer
+ValueError: offset 16 with length 1 is outside a 16-byte buffer
+ValueError: offset 17 with length 0 is outside a 16-byte buffer
+ValueError: offset 4 with length 13 is outside a 16-byte buffer
+ValueError: Zphp\Buffer::slice(): Argument #2 ($length) must be greater than or equal to 0
+ValueError: offset 15 with length 2 is outside a 16-byte buffer
+ValueError: Zphp\Buffer::writeUInt8(): Argument #2 ($value) must be between 0 and 255
+ValueError: Zphp\Buffer::writeInt8(): Argument #2 ($value) must be between -128 and 127
+ValueError: Zphp\Buffer::writeUInt32LE(): Argument #2 ($value) must be between 0 and 4294967295
+TypeError: Zphp\Buffer::writeUInt8(): Argument #2 ($value) must be of type int, string given
+TypeError: Zphp\Buffer::writeFloat64LE(): Argument #2 ($value) must be of type float, string given
+TypeError: Zphp\Buffer::readUInt8(): Argument #1 ($offset) must be of type int, string given
+TypeError: Zphp\Buffer::write(): Argument #2 ($data) must be of type Zphp\Buffer|string, int given
+ValueError: Zphp\Buffer::__construct(): Argument #1 ($length) must be greater than or equal to 0
+TypeError: Zphp\Buffer::__construct(): Argument #1 ($length) must be of type int, string given
+TypeError: Zphp\Buffer::fromString(): Argument #1 ($bytes) must be of type string, int given
+ValueError: offset 9223372036854775807 with length 1 is outside a 16-byte buffer
+ValueError: offset 9223372036854775807 with length 0 is outside a 16-byte buffer
+Error: Object of class Zphp\Buffer could not be converted to string
+string(4) "X456"
+string(10) "0123456789"
+string(5) "Y6789"
+string(10) "0123456789"
+Zphp\TransferException: a transferred buffer can only be received by the thread it was sent to
+Zphp\TransferException: invalid buffer data
+int(6)
+int(6)
+int(0)
+string(40) "000073747265616d206279746573000000000000"
+int(8)
+string(8) "the file"
+int(8)
+string(8) "the file"
+int(0)
+TypeError: Zphp\Buffer::readFrom(): Argument #1 ($stream) must be an open stream resource
+TypeError: Zphp\Buffer::writeTo(): Argument #1 ($stream) must be an open stream resource
+bool(true)
+bool(true)
+bool(true)
+Zphp\TransferException: the buffer was transferred to another thread
+Zphp\TransferException: the buffer was transferred to another thread
+Zphp\TransferException: a Buffer that was already transferred cannot be transferred between threads (at args[0])
+Zphp\TransferException: the buffer was transferred to another thread
+bool(false)
+int(1000)
+string(4) "beef"
+int(231)
+int(33048)
+bool(true)
+string(6) "wwww!?"
+string(2) "!?"
+Zphp\TransferException: a Closure cannot be transferred between threads (at args[1])
+bool(false)
+string(10) "still here"
+1 11 21 
+int(3)
+bool(true)
+Zphp\CancelledException: the task was cancelled
+int(19)
+int(7)
+bool(true)

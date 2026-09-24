@@ -13,6 +13,10 @@ string(9) "slept 300"
 bool(true)
 cancelled
 array(2) {
+  [0]=>
+  int(28)
+  [1]=>
+  int(29)
 }
 bool(true)
 bool(true)

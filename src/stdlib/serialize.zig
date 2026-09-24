@@ -1,5 +1,6 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
+const types = @import("types.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
@@ -344,6 +345,11 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
                 if (!state.skip_serialize) try ctx.vm.triggerLazyInit(obj);
             }
             obj = obj.storage();
+            // php writes a resource as int 0, with no back-reference slot of its own
+            if (types.isResourceObject(obj.class_name)) {
+                try buf.appendSlice(a, "i:0;");
+                return;
+            }
             // emit a back-reference if we've already serialized this object
             if (sctx.objects.get(obj)) |existing_slot| {
                 // rewind the slot counter: this r: entry occupies the slot we already consumed
@@ -728,7 +734,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             const name_len = std.fmt.parseInt(usize, s[pos + 2 .. colon1], 10) catch return error.RuntimeError;
             if (colon1 + 2 + name_len + 1 >= s.len) return error.RuntimeError;
             const orig_class = s[colon1 + 2 .. colon1 + 2 + name_len];
-            const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class);
+            const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class) and !types.isResourceObject(orig_class);
             const class_name = try keptClassName(ctx, class_allowed, orig_class);
             var p = colon1 + 2 + name_len + 2;
             const count_end = std.mem.indexOfPos(u8, s, p, ":") orelse return error.RuntimeError;
@@ -850,7 +856,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             const name_len = std.fmt.parseInt(usize, s[pos + 2 .. colon1], 10) catch return error.RuntimeError;
             if (colon1 + 2 + name_len + 1 >= s.len) return error.RuntimeError;
             const orig_class = s[colon1 + 2 .. colon1 + 2 + name_len];
-            const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class);
+            const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class) and !types.isResourceObject(orig_class);
             const class_name = try keptClassName(ctx, class_allowed, orig_class);
             var p = colon1 + 2 + name_len + 2;
             const len_end = std.mem.indexOfPos(u8, s, p, ":") orelse return error.RuntimeError;

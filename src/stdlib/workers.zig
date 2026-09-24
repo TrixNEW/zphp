@@ -20,8 +20,12 @@ const network = @import("network.zig");
 const platform = @import("../platform.zig");
 const extension = @import("../extension.zig");
 const channel = @import("channel.zig");
+const buffer = @import("buffer.zig");
+const types = @import("types.zig");
 const bytecode_format = @import("../bytecode_format.zig");
-const CompileResult = @import("../pipeline/compiler.zig").CompileResult;
+const compiler = @import("../pipeline/compiler.zig");
+const CompileResult = compiler.CompileResult;
+const parser = @import("../pipeline/parser.zig");
 const ObjFunction = @import("../pipeline/bytecode.zig").ObjFunction;
 
 const pool_class = "Zphp\\Pool";
@@ -483,7 +487,7 @@ fn workerMain(w: *Worker) void {
         pool.reportStart("worker: out of memory");
         return;
     };
-    var boot_result: ?*@import("../pipeline/compiler.zig").CompileResult = null;
+    var boot_result: ?*CompileResult = null;
     defer if (boot_result) |r| {
         r.deinit();
         pool.allocator.destroy(r);
@@ -495,24 +499,18 @@ fn workerMain(w: *Worker) void {
     }
     vm.file_loader = pool.file_loader;
     vm.installHooks();
-    if (pool.bootstrap) |path| {
-        boot_result = bootstrap(vm, pool, path) orelse return;
-    }
+    boot_result = bootstrap(vm, pool) orelse return;
     pool.reportStart(null);
     while (pool.queue.pop()) |task| runTask(w, vm, task);
 }
 
-fn bootstrap(vm: *VM, pool: *Pool, path: []const u8) ?*@import("../pipeline/compiler.zig").CompileResult {
-    const loader = vm.file_loader orelse {
-        pool.reportStart("bootstrap: no file loader");
-        return null;
-    };
+// every worker runs a main script, the bootstrap or an empty one, so the
+// natives that run between tasks (serialization hooks on arguments and
+// results) have a frame under them
+fn bootstrap(vm: *VM, pool: *Pool) ?*CompileResult {
     var buf: [1024]u8 = undefined;
-    const result = loader(path, vm.allocator, vm) orelse {
-        const msg = std.fmt.bufPrint(&buf, "bootstrap script {s} could not be compiled", .{path}) catch "bootstrap script could not be compiled";
-        pool.reportStart(msg);
-        return null;
-    };
+    const loaded = if (pool.bootstrap) |path| loadBootstrap(vm, pool, path, &buf) else emptyMain(vm, pool);
+    const result = loaded orelse return null;
     vm.interpret(result) catch {
         const msg = describeError(vm, &buf) orelse "bootstrap script failed";
         flushOutput(vm);
@@ -523,6 +521,35 @@ fn bootstrap(vm: *VM, pool: *Pool, path: []const u8) ?*@import("../pipeline/comp
     };
     flushOutput(vm);
     return result;
+}
+
+fn loadBootstrap(vm: *VM, pool: *Pool, path: []const u8, buf: []u8) ?*CompileResult {
+    const loader = vm.file_loader orelse {
+        pool.reportStart("bootstrap: no file loader");
+        return null;
+    };
+    return loader(path, vm.allocator, vm) orelse {
+        const msg = std.fmt.bufPrint(buf, "bootstrap script {s} could not be compiled", .{path}) catch "bootstrap script could not be compiled";
+        pool.reportStart(msg);
+        return null;
+    };
+}
+
+fn emptyMain(vm: *VM, pool: *Pool) ?*CompileResult {
+    return compileEmpty(vm) catch {
+        pool.reportStart("worker: out of memory");
+        return null;
+    };
+}
+
+fn compileEmpty(vm: *VM) !*CompileResult {
+    var ast = try parser.parse(vm.allocator, "<?php");
+    defer ast.deinit();
+    var result = try compiler.compileWithPath(&ast, vm.allocator, "worker");
+    errdefer result.deinit();
+    const heap = try vm.allocator.create(CompileResult);
+    heap.* = result;
+    return heap;
 }
 
 fn describeError(vm: *VM, buf: []u8) ?[]const u8 {
@@ -687,17 +714,21 @@ fn settleFailure(vm: *VM, task: *Task, callable: Value) void {
 // ---------------------------------------------------------------------------
 // transfer: a value crosses threads as serialized bytes plus a reference to
 // every channel inside it, so a channel that only the bytes name stays alive
-// until the receiver has bound its own wrapper
+// until the receiver has bound its own wrapper, plus the storage of every
+// buffer region it moves, which the receiver claims as it binds windows
 
 pub const Payload = struct {
     bytes: []u8,
     channels: []*channel.Channel,
+    buffers: []?*buffer.Storage,
 
-    pub const empty = Payload{ .bytes = &.{}, .channels = &.{} };
+    pub const empty = Payload{ .bytes = &.{}, .channels = &.{}, .buffers = &.{} };
 
     pub fn free(p: Payload, a: std.mem.Allocator) void {
         for (p.channels) |ch| ch.release();
         a.free(p.channels);
+        for (p.buffers) |b| if (b) |storage| storage.free();
+        a.free(p.buffers);
         a.free(p.bytes);
     }
 };
@@ -707,6 +738,18 @@ const TransferCheck = struct {
     ctx: *NativeContext,
     path: std.ArrayListUnmanaged(u8) = .{},
     channels: std.ArrayListUnmanaged(*channel.Channel) = .{},
+    // containers already checked, so a cycle is walked once
+    seen: std.AutoHashMapUnmanaged(usize, void) = .{},
+
+    fn firstVisit(self: *TransferCheck, container: anytype) RuntimeError!bool {
+        return !(try self.seen.getOrPut(self.ctx.allocator, @intFromPtr(container))).found_existing;
+    }
+
+    fn deinit(self: *TransferCheck) void {
+        self.path.deinit(self.ctx.allocator);
+        self.channels.deinit(self.ctx.allocator);
+        self.seen.deinit(self.ctx.allocator);
+    }
 
     fn refuse(self: *TransferCheck, what: []const u8) RuntimeError {
         const msg = try std.fmt.allocPrint(self.ctx.allocator, "{s} cannot be transferred between threads (at {s})", .{ what, self.path.items });
@@ -720,6 +763,7 @@ const TransferCheck = struct {
             .null, .bool, .int, .float => {},
             .string => |s| if (std.mem.startsWith(u8, s.bytes(), "__closure")) return self.refuse("a Closure"),
             .array => |arr| {
+                if (!try self.firstVisit(arr)) return;
                 const mark = self.path.items.len;
                 for (arr.entries.items) |entry| {
                     try self.path.append(self.ctx.allocator, '[');
@@ -734,8 +778,11 @@ const TransferCheck = struct {
             },
             .object => |obj| {
                 if (obj.native.get(channel.Channel, .channel)) |ch| return self.channels.append(self.ctx.allocator, ch);
+                if (types.isResourceObject(obj.class_name)) return self.refuse("a resource");
+                if (obj.native.kind == .buffer) return if (buffer.isDetached(obj)) self.refuse("a Buffer that was already transferred") else {};
                 if (obj.native.kind != .none) return self.refuse("an object backed by a native handle");
                 if (std.mem.eql(u8, obj.class_name, pool_class) or std.mem.eql(u8, obj.class_name, future_class)) return self.refuse("a pool or future");
+                if (!try self.firstVisit(obj)) return;
                 const mark = self.path.items.len;
                 var it = obj.properties.iterator();
                 while (it.next()) |entry| {
@@ -760,21 +807,33 @@ fn serializedCopy(ctx: *NativeContext, v: Value, allocator: std.mem.Allocator) R
 
 pub fn pack(ctx: *NativeContext, v: Value, root: []const u8, allocator: std.mem.Allocator) RuntimeError!Payload {
     var tc = TransferCheck{ .ctx = ctx };
-    defer tc.path.deinit(ctx.allocator);
-    defer tc.channels.deinit(ctx.allocator);
+    defer tc.deinit();
     try tc.path.appendSlice(ctx.allocator, root);
     try tc.check(v);
-    const bytes = try serializedCopy(ctx, v, allocator);
+    var out = buffer.Outgoing{};
+    defer out.deinit(ctx.allocator);
+    const bytes = blk: {
+        const prev = buffer.beginOutgoing(&out);
+        defer buffer.endOutgoing(prev);
+        break :blk try serializedCopy(ctx, v, allocator);
+    };
     errdefer allocator.free(bytes);
     const channels = try allocator.dupe(*channel.Channel, tc.channels.items);
+    errdefer allocator.free(channels);
+    const buffers = try out.detach(allocator);
     for (channels) |ch| ch.retain();
-    return .{ .bytes = bytes, .channels = channels };
+    return .{ .bytes = bytes, .channels = channels, .buffers = buffers };
 }
 
 // materializes the value in this vm and drops the payload; the wrappers the
-// unserializer bound hold their own channel references
+// unserializer bound hold their own channel references, and the buffer
+// regions they bound own the storage they claimed
 pub fn unpack(ctx: *NativeContext, payload: Payload, allocator: std.mem.Allocator) ?Value {
     defer payload.free(allocator);
+    var in = buffer.Incoming{ .storages = payload.buffers };
+    defer in.deinit(ctx.allocator);
+    const prev = buffer.beginIncoming(&in);
+    defer buffer.endIncoming(prev);
     return serialize.unserializeFromString(ctx, payload.bytes);
 }
 

@@ -37,3 +37,7 @@ class Counter {
 }
 class Maker { public function __construct(private int $k) {} public function job(): Closure { return function (int $x) { return $x * $this->k; }; } }
 function helper(int $x): int { return $x * 3; }
+function buffer_sum(Zphp\Buffer $b): int { $s = 0; for ($i = 0; $i < $b->length(); $i++) $s += $b->readUInt8($i); return $s; }
+function buffer_stamp(Zphp\Buffer $b, Zphp\Buffer $view, int $v): Zphp\Buffer { $view->writeUInt16BE(0, $v); return $b; }
+function buffer_make(int $n): array { $b = Zphp\Buffer::fromString(str_repeat("w", $n)); return ['buf' => $b, 'tail' => $b->slice($n - 2)]; }
+function buffer_echo(Zphp\Channel $in, Zphp\Channel $out): int { $n = 0; foreach ($in as $b) { $b->writeUInt8(0, $b->readUInt8(0) + 1); $out->send($b); $n++; } $out->close(); return $n; }

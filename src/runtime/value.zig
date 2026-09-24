@@ -804,6 +804,7 @@ pub const NativeHandle = struct {
         pool,
         future,
         channel,
+        buffer,
         _,
     };
 

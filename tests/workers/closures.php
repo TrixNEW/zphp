@@ -37,4 +37,21 @@ $w = $pool->submit(function (Zphp\Channel $ch) use ($factor) { $n = 0; foreach (
 foreach ([1, 2, 3] as $v) $ch->send($v); $ch->close(); var_dump($w->await());
 
 $pool->shutdown();
+
+// a pool without a bootstrap runs serialization hooks on arguments and results
+$bare = new Zphp\Pool(1);
+var_dump($bare->submit(fn(ArrayObject $a) => count($a), [new ArrayObject([1, 2, 3])])->await());
+var_dump($bare->submit(fn() => new ArrayObject(['made' => 'there']))->await()['made']);
+var_dump($bare->submit(fn() => Zphp\Buffer::fromString("bare"))->await()->toString());
+
+// cyclic values cross once per container
+$o = new stdClass; $o->me = $o; $o->b = Zphp\Buffer::fromString("cyc"); $o->again = $o->b;
+var_dump($bare->submit(fn($o) => [$o->me === $o, $o->b === $o->again, $o->b->toString()], [$o])->await(), $o->b->isDetached());
+$a = [1]; $a[] = &$a;
+var_dump($bare->submit(fn($a) => count($a[1][1]), [$a])->await());
+$fh = fopen(__FILE__, 'r');
+try { $bare->submit(fn($f) => 1, [['log' => $fh]]); } catch (Zphp\TransferException $e) { echo "stream: ", $e->getMessage(), "\n"; }
+var_dump(strlen(fread($fh, 5)));
+fclose($fh);
+$bare->shutdown();
 echo "end\n";

@@ -19,8 +19,8 @@ check() {
     fi
 }
 
-for script in basic edge channel closures; do
-    actual="$("$ZPHP" run "$SCRIPT_DIR/$script.php" 2>&1 | tr -d '\r' | grep -v '^error(gpa)' | grep -v '^\s' | grep -v '^/')" || true
+for script in basic edge channel closures buffer; do
+    actual="$("$ZPHP" run "$SCRIPT_DIR/$script.php" 2>&1 | tr -d '\r')" || true
     check "$script.php" "$(tr -d '\r' < "$SCRIPT_DIR/$script.expected")" "$actual"
 done
 
@@ -33,6 +33,15 @@ if [ -n "$one" ] && [ -n "$four" ] && [ "$four" -lt "$one" ]; then
 else
     failed=$((failed + 1))
     echo "FAIL four workers were not faster than one"
+fi
+
+copied=$(echo "$bench" | awk '/^string transfer/ {print $3}')
+moved=$(echo "$bench" | awk '/^buffer transfer/ {print $3}')
+if [ -n "$copied" ] && [ -n "$moved" ] && [ "$moved" -lt "$copied" ]; then
+    passed=$((passed + 1))
+else
+    failed=$((failed + 1))
+    echo "FAIL moving a buffer was not faster than copying a string"
 fi
 
 echo "$passed passed, $failed failed"

@@ -1454,6 +1454,7 @@ pub const VM = struct {
         try @import("../stdlib/gmp.zig").register(vm, allocator);
         try @import("../stdlib/workers.zig").register(vm, allocator);
         try @import("../stdlib/channel.zig").register(vm, allocator);
+        try @import("../stdlib/buffer.zig").register(vm, allocator);
         try @import("../stdlib/bcmath.zig").register(vm, allocator);
         try @import("../stdlib/gd.zig").register(vm, allocator);
         try @import("../stdlib/soap.zig").register(vm, allocator);
@@ -2435,6 +2436,7 @@ pub const VM = struct {
         @import("../stdlib/gmp.zig").cleanupResources(self.objects);
         @import("../stdlib/workers.zig").cleanupResources(self.objects);
         @import("../stdlib/channel.zig").cleanupResources(self.objects);
+        @import("../stdlib/buffer.zig").cleanupResources(self.objects);
         extension.cleanupResources(self.objects);
         @import("../stdlib/gd.zig").cleanupResources(self.objects);
         @import("../stdlib/ftp.zig").cleanupResources(self.objects);
