@@ -1676,6 +1676,7 @@ fn rcGetAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!Native
 fn rcGetProperties(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
+    try ctx.vm.resolveClassDefaults(class_name);
     const filter: i64 = if (args.len >= 1 and args[0] == .int) args[0].int else 0;
 
     const arr = try ctx.createArray();
@@ -1765,6 +1766,7 @@ fn rcGetProperty(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     const prop_name = args[0].string.bytes();
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
+    try ctx.vm.resolveClassDefaults(class_name);
 
     if (findPropertyDef(ctx.vm, class_name, prop_name)) |result| {
         const obj = try buildPropertyObjStatic(ctx, class_name, result.prop, result.declaring_class, result.is_static);
@@ -2285,6 +2287,7 @@ fn rcGetEndLine(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult
 fn rcGetDefaultProperties(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
+    try ctx.vm.resolveClassDefaults(class_name);
     const arr = try ctx.createArray();
     var seen = std.StringHashMapUnmanaged(void){};
     defer seen.deinit(ctx.allocator);
@@ -3620,6 +3623,8 @@ fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         raw_class[1..]
     else
         raw_class;
+    try ctx.vm.tryAutoload(class_name);
+    try ctx.vm.resolveClassDefaults(class_name);
 
     const prop_name = if (args[1] == .string)
         args[1].string.bytes()

@@ -15,7 +15,7 @@ const MAGIC = "ZPHPC\x00";
 // Older chunks cannot be decoded by the current VM.
 // v17 adds owning reference-source and array-literal reference opcodes.
 // v16 instantiates capture-free class-scoped static closures.
-pub const FORMAT_VERSION: u16 = 17;
+pub const FORMAT_VERSION: u16 = 18;
 
 // tag bytes for serialized values
 const TAG_NULL: u8 = 0;

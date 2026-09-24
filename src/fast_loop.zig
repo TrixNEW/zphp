@@ -6,6 +6,7 @@ const Value = @import("runtime/value.zig").Value;
 const PhpArray = @import("runtime/value.zig").PhpArray;
 const PhpObject = @import("runtime/value.zig").PhpObject;
 const OpCode = @import("pipeline/bytecode.zig").OpCode;
+const ObjFunction = @import("pipeline/bytecode.zig").ObjFunction;
 
 const InlineCache = VM.InlineCache;
 
@@ -78,7 +79,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         VM.objRetain(val.object);
                         locals[slot] = val;
                     } else if (val == .array) {
-                        locals[slot] = try self.copyValue(val);
+                        locals[slot] = try ic.slow.copy_value(self, val);
                     } else {
                         locals[slot] = val;
                     }
@@ -98,7 +99,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         // the temporaries this statement dropped, as .pop does
                         if (self.hasPendingReleases()) {
                             self.sp = sp;
-                            self.drainPendingDestruct();
+                            ic.slow.drain_pending_destruct(self);
                             sp = self.sp;
                         }
                     }
@@ -383,7 +384,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     // fastLoop owns its own ip; flush it before the deadline check
                     // so a timeout-thrown exception sees a coherent frame state
                     self.frames[self.frame_count - 1].ip = ip;
-                    try self.pollExecutionDeadline();
+                    if (self.deadlineReached()) try ic.slow.expire_execution(self);
                     const _next = code[ip];
                     ip += 1;
                     continue :dispatch @as(OpCode, @enumFromInt(_next));
@@ -408,7 +409,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         self.stackRelease(self.stack[sp]);
                         if (self.hasPendingReleases()) {
                             self.sp = sp;
-                            self.drainPendingDestruct();
+                            ic.slow.drain_pending_destruct(self);
                             sp = self.sp;
                         }
                     }
@@ -427,7 +428,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         self.stackRelease(self.stack[sp]);
                         if (self.hasPendingReleases()) {
                             self.sp = sp;
-                            self.drainPendingDestruct();
+                            ic.slow.drain_pending_destruct(self);
                             sp = self.sp;
                         }
                     }
@@ -452,7 +453,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         // destructors run nested PHP on the shared operand
                         // stack: publish the local stack pointer first
                         self.sp = sp;
-                        self.drainPendingDestruct();
+                        ic.slow.drain_pending_destruct(self);
                         sp = self.sp;
                     }
                     const _next = code[ip];
@@ -652,7 +653,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         return;
                     }
                     if (as_arr == .array) {
-                        self.arraySetOwned(as_arr.array, Value.toArrayKey(as_key), as_val) catch {
+                        ic.slow.array_set_owned(self, as_arr.array, Value.toArrayKey(as_key), as_val) catch {
                             frame.ip = ip - 1;
                             self.sp = sp;
                             return;
@@ -702,7 +703,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         return;
                     }
                     if (ase_arr == .array) {
-                        self.arraySetOwned(ase_arr.array, Value.toArrayKey(ase_key), ase_val) catch {
+                        ic.slow.array_set_owned(self, ase_arr.array, Value.toArrayKey(ase_key), ase_val) catch {
                             frame.ip = ip - 1;
                             self.sp = sp;
                             return;
@@ -752,9 +753,9 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                             return;
                         }
                     }
-                    if (ci_func.has_param_types) {
+                    if (ci_func.has_param_types and !argsHoldDeclared(self, ic, ci_func, ci_name, self.stack[sp - ci_ac .. sp])) {
                         self.sp = sp;
-                        if (try self.checkParamTypes(ci_name, ci_ac)) {
+                        if (try ic.slow.check_param_types(self, ci_name, ci_ac)) {
                             frame.ip = ip;
                             return;
                         }
@@ -779,7 +780,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const ci_bind = @min(ci_acn, ci_func.arity);
                     for (0..ci_bind) |i| ci_locals[i] = self.stack[sp - ci_acn + i];
                     for (ci_bind..ci_func.arity) |i| {
-                        if (i < ci_func.defaults.len) ci_locals[i] = try self.resolveDefault(ci_func.defaults[i]);
+                        if (i < ci_func.defaults.len) ci_locals[i] = try ic.slow.resolve_default(self, ci_func.defaults[i]);
                     }
                     self.sp = sp;
                     self.dropN(ci_acn);
@@ -812,7 +813,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     };
                     ic.arg_counts[self.frame_count] = ci_ac;
                     self.frame_count += 1;
-                    self.retainFrameObjects(self.frame_count - 1);
+                    ic.slow.retain_frame_objects(self, self.frame_count - 1);
                     if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                     continue :reenter;
                 },
@@ -875,7 +876,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                                 // copyValue: clone an array, retain an object for
                                 // the property slot - mirrors runLoop set_prop so a
                                 // property is a consistent durable holder (Stage 1)
-                                const copied = try self.copyValue(sp_val);
+                                const copied = try ic.slow.copy_value(self, sp_val);
                                 // resurrect on write - mirrors runLoop set_prop
                                 const sp_name_idx: u16 = (@as(u16, code[sp_ip]) << 8) | code[sp_ip + 1];
                                 const sp_prop_name = consts[sp_name_idx].string.bytes();
@@ -928,9 +929,9 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     if (mc_entry.key == mc_ip and mc_entry.chunk_key == mc_chunk_key and mc_entry.class_ptr == @intFromPtr(mc_obj.class_name.ptr)) {
                         if (mc_entry.func) |mc_func| {
                             if (mc_func.locals_only and self.captures.items.len == 0) {
-                                if (mc_func.has_param_types) {
+                                if (mc_func.has_param_types and !argsHoldDeclared(self, ic, mc_func, mc_func.name, self.stack[sp - mc_arg_count .. sp])) {
                                     self.sp = sp;
-                                    if (try self.checkParamTypes(mc_func.name, mc_arg_count)) {
+                                    if (try ic.slow.check_param_types(self, mc_func.name, mc_arg_count)) {
                                         frame.ip = ip;
                                         return;
                                     }
@@ -951,7 +952,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                                     mc_locals[i + 1] = self.stack[sp - mc_ac + i];
                                 }
                                 for (@min(mc_ac, mc_func.arity)..mc_func.arity) |i| {
-                                    if (i < mc_func.defaults.len) mc_locals[i + 1] = try self.resolveDefault(mc_func.defaults[i]);
+                                    if (i < mc_func.defaults.len) mc_locals[i + 1] = try ic.slow.resolve_default(self, mc_func.defaults[i]);
                                 }
                                 self.sp = sp;
                                 self.dropN(mc_ac + 1);
@@ -969,7 +970,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                                 };
                                 ic.arg_counts[self.frame_count] = mc_arg_count;
                                 self.frame_count += 1;
-                                self.retainFrameObjects(self.frame_count - 1);
+                                ic.slow.retain_frame_objects(self, self.frame_count - 1);
                                 if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                 continue :reenter;
                             }
@@ -1019,9 +1020,9 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         return;
                     }
 
-                    if (func.has_param_types) {
+                    if (func.has_param_types and !argsHoldDeclared(self, ic, func, name, self.stack[sp - arg_count .. sp])) {
                         self.sp = sp;
-                        if (try self.checkParamTypes(name, arg_count)) {
+                        if (try ic.slow.check_param_types(self, name, arg_count)) {
                             frame.ip = ip;
                             return;
                         }
@@ -1046,7 +1047,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         new_locals[i] = self.stack[sp - ac + i];
                     }
                     for (bind_count..func.arity) |i| {
-                        if (i < func.defaults.len) new_locals[i] = try self.resolveDefault(func.defaults[i]);
+                        if (i < func.defaults.len) new_locals[i] = try ic.slow.resolve_default(self, func.defaults[i]);
                     }
                     self.sp = sp;
                     self.dropN(ac);
@@ -1066,7 +1067,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     };
                     ic.arg_counts[self.frame_count] = arg_count;
                     self.frame_count += 1;
-                    self.retainFrameObjects(self.frame_count - 1);
+                    ic.slow.retain_frame_objects(self, self.frame_count - 1);
                     if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                     continue :reenter;
                 },
@@ -1449,6 +1450,20 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
             }
         }
     }
+}
+
+// arguments that already carry their declared scalar types need no check;
+// coercion, class types and errors take the full path
+inline fn argsHoldDeclared(self: *VM, ic: *InlineCache, func: *const ObjFunction, name: []const u8, args: []const Value) bool {
+    if (ic.typed_func != func) {
+        ic.typed_params = ic.slow.param_types(self, name);
+        ic.typed_func = func;
+    }
+    for (args, 0..) |arg, i| {
+        if (i >= ic.typed_params.len) break;
+        if (!VM.declaredScalarHolds(ic.typed_params[i], arg)) return false;
+    }
+    return true;
 }
 
 fn inlineNativeCall(self: *VM, name: []const u8, arg_count: u8, sp: *usize) bool {

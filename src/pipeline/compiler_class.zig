@@ -1883,10 +1883,16 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
     }
     // set instance-property defaults after class_decl + constants so a default
     // expression like `public int $x = self::CONST` resolves against the
-    // now-registered class (the prelude pushed null placeholders)
+    // now-registered class (the prelude pushed null placeholders). defaults
+    // that read another class or a global constant wait for the class's first
+    // use, like php: the class they name may itself extend this one
+    if (try compileDeferredPropDefaults(self, class_name, members)) {
+        try self.emitOp(.defer_prop_defaults);
+        try self.emitU16(cname_idx);
+    }
     for (members) |member_idx| {
         const member = self.ast.nodes[member_idx];
-        if (member.tag == .class_property and member.data.lhs != 0) {
+        if (member.tag == .class_property and member.data.lhs != 0 and defaultExprIsLiteral(self.ast, member.data.lhs)) {
             try self.compileNode(member.data.lhs);
             var p_name = self.ast.tokenSlice(member.main_token);
             if (p_name.len > 0 and p_name[0] == '$') p_name = p_name[1..];
@@ -2898,6 +2904,107 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
     sub.type_hints.deinit(self.allocator);
     for (sub.new_defaults.items) |nd| try self.new_defaults.append(self.allocator, nd);
     sub.new_defaults.deinit(self.allocator);
+}
+
+// compiles the non-literal instance defaults into the class's hidden
+// initializer; returns whether there were any
+fn compileDeferredPropDefaults(self: *Compiler, class_name: []const u8, members: []const u32) Error!bool {
+    var any = false;
+    for (members) |member_idx| {
+        const member = self.ast.nodes[member_idx];
+        if (member.tag == .class_property and member.data.lhs != 0 and !defaultExprIsLiteral(self.ast, member.data.lhs)) any = true;
+    }
+    if (!any) return false;
+
+    const name = try @import("bytecode.zig").propDefaultsInitializerName(self.allocator, class_name);
+    try self.string_allocs.append(self.allocator, name);
+
+    var sub = Compiler{
+        .ast = self.ast,
+        .chunk = .{},
+        .functions = .{},
+        .string_allocs = .{},
+        .allocator = self.allocator,
+        .scope_depth = self.scope_depth + 1,
+        .loop_start = null,
+        .break_jumps = .{},
+        .continue_jumps = .{},
+        .closure_count = self.closure_count,
+        .cond_fn_count = self.cond_fn_count,
+        .hoistable = false,
+        .file_path = self.file_path,
+        .namespace = self.namespace,
+        .use_aliases = self.use_aliases,
+        .use_fn_aliases = self.use_fn_aliases,
+        .use_const_aliases = self.use_const_aliases,
+        .current_class = class_name,
+        .current_parent = self.current_parent,
+        .current_function = name,
+        .in_trait = self.in_trait,
+    };
+    errdefer {
+        sub.chunk.deinit(self.allocator);
+        sub.break_jumps.deinit(self.allocator);
+        sub.continue_jumps.deinit(self.allocator);
+        sub.string_allocs.deinit(self.allocator);
+        sub.local_slots.deinit(self.allocator);
+        sub.type_hints.deinit(self.allocator);
+        sub.pending_gotos.deinit(self.allocator);
+        sub.labels.deinit(self.allocator);
+    }
+
+    const cname_idx = try sub.addConstant(.{ .string = Value.String.borrowed(class_name) });
+    var first_tok: u32 = 0;
+    for (members) |member_idx| {
+        const member = self.ast.nodes[member_idx];
+        if (member.tag != .class_property or member.data.lhs == 0 or defaultExprIsLiteral(self.ast, member.data.lhs)) continue;
+        if (first_tok == 0) first_tok = member.main_token;
+        try sub.compileNode(member.data.lhs);
+        var p_name = self.ast.tokenSlice(member.main_token);
+        if (p_name.len > 0 and p_name[0] == '$') p_name = p_name[1..];
+        const p_idx = try sub.addConstant(.{ .string = Value.String.borrowed(p_name) });
+        try sub.emitOp(.set_prop_default);
+        try sub.emitU16(cname_idx);
+        try sub.emitU16(p_idx);
+        try sub.emitOp(.pop);
+    }
+    try sub.emitOp(.op_null);
+    try sub.emitOp(.return_val);
+    sub.break_jumps.deinit(self.allocator);
+    sub.pending_gotos.deinit(self.allocator);
+    sub.labels.deinit(self.allocator);
+
+    self.closure_count = sub.closure_count;
+    self.cond_fn_count = sub.cond_fn_count;
+    const slot_names = try sub.buildSlotNames();
+    const local_count = sub.next_slot;
+    sub.local_slots.deinit(self.allocator);
+
+    try self.functions.append(self.allocator, .{
+        .name = name,
+        .arity = 0,
+        .required_params = 0,
+        .is_static = true,
+        .params = &.{},
+        .defaults = &.{},
+        .ref_params = &.{},
+        .chunk = sub.chunk,
+        .local_count = local_count,
+        .slot_names = slot_names,
+        .file_path = self.file_path,
+        .start_line = lineForToken(self, first_tok),
+        .end_line = lineForToken(self, first_tok),
+    });
+
+    for (sub.functions.items) |f| try self.functions.append(self.allocator, f);
+    sub.functions.deinit(self.allocator);
+    for (sub.string_allocs.items) |str| try self.string_allocs.append(self.allocator, str);
+    sub.string_allocs.deinit(self.allocator);
+    for (sub.type_hints.items) |th| try self.type_hints.append(self.allocator, th);
+    sub.type_hints.deinit(self.allocator);
+    for (sub.new_defaults.items) |nd| try self.new_defaults.append(self.allocator, nd);
+    sub.new_defaults.deinit(self.allocator);
+    return true;
 }
 
 fn propertyVirtualFlag(self: *Compiler, member: Ast.Node) u8 {

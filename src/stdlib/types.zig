@@ -1255,6 +1255,7 @@ fn native_get_class_vars(ctx: *NativeContext, args: []const Value) RuntimeError!
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(Value{ .bool = false });
     const raw = args[0].string.bytes();
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
+    try ctx.vm.resolveClassDefaults(class_name);
     const cls = ctx.vm.classes.get(class_name) orelse return NativeResult.scalar(Value{ .bool = false });
     const caller = ctx.vm.currentDefiningClass();
     var arr = try ctx.createArray();

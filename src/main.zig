@@ -11,6 +11,7 @@ const ini_config = @import("ini_config.zig");
 
 comptime {
     if (platform.is_windows) @export(&platform.fcntlStub, .{ .name = "fcntl" });
+    _ = @import("runtime/shared_exports.zig");
 }
 const bytecode_format = @import("bytecode_format.zig");
 const error_format = @import("error_format.zig");

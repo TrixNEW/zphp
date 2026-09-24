@@ -12,6 +12,7 @@ release: ## Build zphp in ReleaseFast (no debug allocator overhead). prefer for 
 .PHONY: test
 test: ## Run zig unit tests
 	zig build test
+	tests/fast_loop_isolation
 
 .PHONY: compat
 compat: build ## Run PHP compatibility tests (requires PHP 8.4)

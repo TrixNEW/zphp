@@ -297,6 +297,8 @@ pub const ClassDef = struct {
     interfaces: std.ArrayListUnmanaged([]const u8) = .{},
     is_enum: bool = false,
     is_internal: bool = true,
+    // its hidden initializer still has to install some instance defaults
+    defaults_pending: bool = false,
     is_abstract: bool = false,
     is_final: bool = false,
     is_readonly: bool = false,
@@ -1193,6 +1195,40 @@ pub const VM = struct {
 
     const ArgEntry = struct { array: *PhpArray, key: PhpArray.Key, source: RefSource };
 
+    // how the fast loop object enters this object's vm for anything beyond
+    // its own hot paths. it compiles the runtime a second time, and a direct
+    // call would run that copy against its own module globals (type table,
+    // gc state, sentinels). function pointers resolve here
+    pub const SlowPaths = struct {
+        drain_pending_destruct: *const fn (*VM) void,
+        check_param_types: *const fn (*VM, []const u8, u8) RuntimeError!bool,
+        resolve_default: *const fn (*VM, Value) RuntimeError!Value,
+        array_set_owned: *const fn (*VM, *PhpArray, PhpArray.Key, Value) RuntimeError!void,
+        copy_value: *const fn (*VM, Value) RuntimeError!Value,
+        retain_frame_objects: *const fn (*VM, usize) void,
+        expire_execution: *const fn (*VM) RuntimeError!void,
+        param_types: *const fn (*VM, []const u8) []const []const u8,
+
+        const main: SlowPaths = .{
+            .drain_pending_destruct = VM.drainPendingDestruct,
+            .check_param_types = VM.checkParamTypes,
+            .resolve_default = resolveDefaultEntry,
+            .array_set_owned = arraySetOwnedEntry,
+            .copy_value = VM.copyValue,
+            .retain_frame_objects = VM.retainFrameObjects,
+            .expire_execution = VM.expireExecution,
+            .param_types = VM.declaredParamTypes,
+        };
+
+        fn resolveDefaultEntry(vm: *VM, val: Value) RuntimeError!Value {
+            return vm.resolveDefault(val) catch |err| @errorCast(err);
+        }
+
+        fn arraySetOwnedEntry(vm: *VM, array: *PhpArray, key: PhpArray.Key, value: Value) RuntimeError!void {
+            return vm.arraySetOwned(array, key, value) catch |err| @errorCast(err);
+        }
+    };
+
     pub const InlineCache = struct {
         // argument guard sites: keyed by (chunk_ptr ^ guard ip); `guard` is the
         // identity of the receiver/callable read from the stack and
@@ -1238,6 +1274,12 @@ pub const VM = struct {
         include_parse_error: ?SourcePositionMessage = null,
         // class names whose autoload is in progress, innermost last
         autoloading: std.ArrayListUnmanaged([]const u8) = .{},
+        // set by initVm, never defaulted: a default would compile these paths
+        // into the fast loop object as well
+        slow: SlowPaths = undefined,
+        // the last typed callee the fast loop checked and its declared types
+        typed_func: ?*const ObjFunction = null,
+        typed_params: []const []const u8 = &.{},
         // per-frame sp save for inline call/ret in fastLoop
         sp_save: [2048]usize = undefined,
         // per-frame actual arg count for func_get_args
@@ -1376,8 +1418,8 @@ pub const VM = struct {
         };
         obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
         if (self.debug_trace_class) |trace_class| if (std.mem.eql(u8, trace_class, class_name)) {
-            @import("value.zig").trace_obj = obj;
-            @import("value.zig").trace_rc_verbose = true;
+            @import("value.zig").hooks().trace_obj = obj;
+            @import("value.zig").hooks().trace_rc_verbose = true;
         };
         return obj;
     }
@@ -1458,6 +1500,7 @@ pub const VM = struct {
         vm.error_reporting_level = 30719;
         vm.ic = try allocator.create(InlineCache);
         vm.ic.?.* = .{};
+        vm.ic.?.slow = SlowPaths.main;
         vm.ic.?.arg_stack = try allocator.alloc(RefSource, 2048);
         @memset(vm.ic.?.arg_stack, .none);
         vm.ic.?.active_args = try allocator.alloc(RefSource, 256);
@@ -2979,9 +3022,10 @@ pub const VM = struct {
     // it is thread-local and worker VMs are built on the main thread but run
     // on their own, so every execution entry point re-installs it
     pub fn installHooks(self: *VM) void {
-        @import("value.zig").release_hook = .{ .ctx = self, .call = releaseHookFn };
-        @import("value.zig").cell_unbind_hook = .{ .ctx = self, .call = cellUnbindHook };
-        @import("value.zig").object_hooks = .{ .ctx = self, .cast = objectCastHook, .compare = objectCompareHook };
+        const hooks = @import("value.zig").hooks();
+        hooks.release = .{ .ctx = self, .call = releaseHookFn };
+        hooks.cell_unbind = .{ .ctx = self, .call = cellUnbindHook };
+        hooks.object = .{ .ctx = self, .cast = objectCastHook, .compare = objectCompareHook };
     }
 
     fn objectCastHook(ctx: *anyopaque, obj: *PhpObject, target: @import("value.zig").NumericCast) ?Value {
@@ -8028,7 +8072,10 @@ pub const VM = struct {
                     const obj = try self.allocUserObject(class_name);
 
                     // set property defaults from class and parent chain
-                    try self.initObjectProperties(obj, class_name);
+                    self.initObjectProperties(obj, class_name) catch {
+                        if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                        return error.RuntimeError;
+                    };
 
                     // call constructor if it exists (walks parent chain)
                     const ac: usize = arg_count;
@@ -8253,7 +8300,10 @@ pub const VM = struct {
                     }
 
                     const obj = try self.allocUserObject(class_name);
-                    try self.initObjectProperties(obj, class_name);
+                    self.initObjectProperties(obj, class_name) catch {
+                        if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                        return error.RuntimeError;
+                    };
 
                     const ctor_name = self.resolveMethod(class_name, "__construct") catch null;
                     if (ctor_name) |cn| {
@@ -10934,6 +10984,15 @@ pub const VM = struct {
                     }
                 },
 
+                .defer_prop_defaults => {
+                    const class_idx = self.readU16();
+                    const class_name = self.currentChunk().constants.items[class_idx].string.bytes();
+                    if (self.classes.getPtr(class_name)) |cls| {
+                        cls.defaults_pending = true;
+                        if (cls.slot_layout) |layout| layout.defaults_ready = false;
+                    }
+                },
+
                 .set_prop_default => {
                     // install an instance property's real default on the now-
                     // registered class. emitted after class_decl so a default
@@ -11129,11 +11188,17 @@ pub const VM = struct {
     // overhead under a percent of a tight loop but still well under a
     // millisecond of slop on the deadline
     pub inline fn pollExecutionDeadline(self: *VM) !void {
-        if (self.execution_deadline_ns == 0) return;
+        if (self.deadlineReached()) return self.expireExecution();
+    }
+
+    pub inline fn deadlineReached(self: *VM) bool {
+        if (self.execution_deadline_ns == 0) return false;
         self.deadline_tick_counter +%= 1;
-        if (self.deadline_tick_counter & 0xFFF != 0) return;
-        const now_ns = std.time.nanoTimestamp();
-        if (now_ns < self.execution_deadline_ns) return;
+        if (self.deadline_tick_counter & 0xFFF != 0) return false;
+        return std.time.nanoTimestamp() >= self.execution_deadline_ns;
+    }
+
+    fn expireExecution(self: *VM) RuntimeError!void {
         const unit: []const u8 = if (self.execution_limit_seconds == 1) "second" else "seconds";
         const msg = try std.fmt.allocPrint(self.allocator, "Maximum execution time of {d} {s} exceeded", .{ self.execution_limit_seconds, unit });
         try self.strings.append(self.allocator, msg);
@@ -11225,11 +11290,16 @@ pub const VM = struct {
     // and the call site's line/file - so an exception thrown by a native
     // function still reports the user functions that led to it
     fn buildExceptionTrace(self: *VM) !*PhpArray {
+        return self.traceBelow(self.frame_count);
+    }
+
+    // the trace of the frames below `top`
+    fn traceBelow(self: *VM, top: usize) !*PhpArray {
         const arr = try self.allocator.create(PhpArray);
         arr.* = .{};
         try self.arrays.append(self.allocator, arr);
-        if (self.frame_count == 0) return arr;
-        var i: usize = self.frame_count - 1;
+        if (top == 0) return arr;
+        var i: usize = top - 1;
         while (true) : (i -= 1) {
             const frame = &self.frames[i];
             if (frame.func) |f| if (f.name.len > 0) {
@@ -12866,10 +12936,6 @@ pub const VM = struct {
             }
         }
 
-        def.slot_layout = try self.buildSlotLayout(&def);
-        // composer's autoloader uses `include` (not require_once), so a class
-        // file can be re-executed multiple times during a single autoload chain.
-        // each re-execution rebuilds slot_layout and the class def. the LAST
         // a non-abstract class cannot declare any abstract methods directly.
         // PHP fatals here: 'Class X declares abstract method Y() and must
         // therefore be declared abstract'
@@ -12910,6 +12976,9 @@ pub const VM = struct {
             var iface_walk_parent: ?[]const u8 = class_name;
             while (iface_walk_parent) |cn| {
                 if (if (std.mem.eql(u8, cn, class_name)) @as(?ClassDef, def) else self.classes.get(cn)) |cd| {
+                    // a built-in class satisfies its own interfaces even when
+                    // zphp registers no method entry for some of them
+                    if (cd.is_internal) break;
                     for (cd.interfaces.items) |iname| {
                         var current_iface: ?[]const u8 = iname;
                         while (current_iface) |in| {
@@ -12974,6 +13043,12 @@ pub const VM = struct {
                 }
             }
         }
+
+        // composer's autoloader uses `include` (not require_once), so a class
+        // file can be re-executed multiple times during a single autoload chain;
+        // each re-execution rebuilds slot_layout and the class def. built after
+        // the declaration checks so a rejected class leaves nothing behind
+        def.slot_layout = try self.buildSlotLayout(&def);
 
         // anonymous classes have a stable structure and are re-executed every
         // time the call site runs. their existing instances point at the old
@@ -16462,7 +16537,7 @@ pub const VM = struct {
         @memcpy(defaults, all_defaults.items);
         @memcpy(decl, all_decl.items);
         @memcpy(priv, all_priv.items);
-        layout.* = .{ .names = names, .defaults = defaults, .declaring_classes = decl, .is_private = priv, .throwable = self.definesThrowable(def) };
+        layout.* = .{ .names = names, .defaults = defaults, .declaring_classes = decl, .is_private = priv, .throwable = self.definesThrowable(def), .defaults_ready = self.ancestorDefaultsReady(def) };
         return layout;
     }
 
@@ -16474,6 +16549,7 @@ pub const VM = struct {
     fn initPropertyDefaults(self: *VM, obj: *PhpObject, class_name: []const u8) RuntimeError!bool {
         const cls = self.classes.get(class_name) orelse return false;
         if (cls.slot_layout) |layout| {
+            if (!layout.defaults_ready) try self.resolveClassDefaults(class_name);
             const slots = self.allocator.alloc(Value, layout.names.len) catch return error.RuntimeError;
             for (layout.defaults, 0..) |def_val, i| {
                 slots[i] = try self.copyDefault(def_val);
@@ -16488,6 +16564,59 @@ pub const VM = struct {
             try obj.set(self.allocator, prop.name, try self.copyDefault(prop.default));
         }
         return self.isThrowableClass(class_name);
+    }
+
+    // the nearest ancestor with a layout carries the chain's state
+    fn ancestorDefaultsReady(self: *VM, def: *const ClassDef) bool {
+        var name = def.parent;
+        while (name) |n| {
+            const cls = self.classes.get(n) orelse return true;
+            if (cls.slot_layout) |layout| return layout.defaults_ready;
+            name = cls.parent;
+        }
+        return true;
+    }
+
+    // php evaluates property defaults that read other classes or global
+    // constants when the class is first used, so such a default may name a
+    // class that extends this one. runs the hidden initializers root first,
+    // then copies the resolved inherited defaults into this class's layout
+    pub fn resolveClassDefaults(self: *VM, class_name: []const u8) RuntimeError!void {
+        const layout = (self.classes.get(class_name) orelse return).slot_layout orelse return;
+        if (layout.defaults_ready) return;
+        layout.defaults_ready = true;
+        if (self.classes.get(class_name).?.parent) |parent| try self.resolveClassDefaults(parent);
+        if (self.classes.getPtr(class_name)) |cls| if (cls.defaults_pending) {
+            cls.defaults_pending = false;
+            const name = try bytecode.propDefaultsInitializerName(self.allocator, class_name);
+            defer self.allocator.free(name);
+            const floor = self.handler_floor;
+            self.handler_floor = self.handler_count;
+            defer self.handler_floor = floor;
+            const instantiating = self.frame_count;
+            _ = self.callByName(name, &.{}) catch |err| {
+                // the defaults belong to the instantiation, not a frame of their own
+                if (self.pending_exception) |exc| if (exc == .object) try self.stampThrowableBelow(exc.object, instantiating);
+                // php evaluates the defaults again on the next attempt
+                if (self.classes.getPtr(class_name)) |retry| retry.defaults_pending = true;
+                layout.defaults_ready = false;
+                return err;
+            };
+        };
+        self.inheritLayoutDefaults(class_name, layout);
+    }
+
+    fn inheritLayoutDefaults(self: *VM, class_name: []const u8, layout: *PhpObject.SlotLayout) void {
+        for (layout.names, layout.declaring_classes, 0..) |name, declaring, i| {
+            if (std.mem.eql(u8, declaring, class_name)) continue;
+            const source = (self.classes.get(declaring) orelse continue).slot_layout orelse continue;
+            for (source.names, source.declaring_classes, source.defaults) |sn, sd, value| {
+                if (std.mem.eql(u8, sn, name) and std.mem.eql(u8, sd, declaring)) {
+                    layout.defaults[i] = value;
+                    break;
+                }
+            }
+        }
     }
 
     // a class being declared is not registered yet, so its chain starts at the parent
@@ -16512,10 +16641,14 @@ pub const VM = struct {
     // php fixes an exception's origin when the object is created, before any
     // constructor runs
     fn stampThrowable(self: *VM, obj: *PhpObject) RuntimeError!void {
-        const at = self.currentSourcePosition();
+        return self.stampThrowableBelow(obj, self.frame_count);
+    }
+
+    fn stampThrowableBelow(self: *VM, obj: *PhpObject, top: usize) RuntimeError!void {
+        const at: SourcePosition = if (top > 0) self.framePosition(top - 1) orelse .{ .file = self.frameFile(top - 1), .line = 0 } else .{ .file = self.file_path, .line = 0 };
         try obj.set(self.allocator, "file", .{ .string = Value.String.borrowed(at.file) });
         try obj.set(self.allocator, "line", .{ .int = at.line });
-        try obj.setForScope(self.allocator, "trace", .{ .array = try self.buildExceptionTrace() }, self.exceptionTraceScope(obj));
+        try obj.setForScope(self.allocator, "trace", .{ .array = try self.traceBelow(top) }, self.exceptionTraceScope(obj));
     }
 
     // copy a template value (a property/static default) into a fresh owner.
@@ -17379,6 +17512,25 @@ pub const VM = struct {
             }
         }
         return self.checkSingleType(val, s[start..]);
+    }
+
+    fn declaredParamTypes(_: *VM, name: []const u8) []const []const u8 {
+        return (g_type_info.get(name) orelse return &.{}).param_types;
+    }
+
+    // an argument that already has its declared scalar type passes without
+    // coercion; everything else needs checkParamTypes
+    pub inline fn declaredScalarHolds(type_str: []const u8, v: Value) bool {
+        if (type_str.len == 0) return true;
+        const tag: []const u8 = switch (v) {
+            .int => "int",
+            .float => "float",
+            .string => "string",
+            .bool => "bool",
+            .array => "array",
+            else => return std.mem.eql(u8, type_str, "mixed"),
+        };
+        return std.mem.eql(u8, type_str, tag) or std.mem.eql(u8, type_str, "mixed");
     }
 
     pub noinline fn checkParamTypes(self: *VM, name: []const u8, arg_count: u8) RuntimeError!bool {
@@ -18745,7 +18897,7 @@ pub const VM = struct {
     // runs a nested runLoop whose own drains are absorbed into this outer
     // pass, which keeps consuming as destructors queue further objects
     pub fn drainPendingDestruct(self: *VM) void {
-        if (@import("value.zig").trace_obj) |obj| self.gcCheckTraced(obj);
+        if (@import("value.zig").hooks().trace_obj) |obj| self.gcCheckTraced(obj);
         if (self.draining_destructors or self.heap_teardown) return;
         self.draining_destructors = true;
         var deferred_stack_arrays: std.ArrayListUnmanaged(*PhpArray) = .{};
@@ -19323,8 +19475,8 @@ pub const VM = struct {
             std.debug.print("  trace {s} {s}#{d} refcount {d} destructed {} in_graph {} scratch {d}\n", .{ when, obj.class_name, obj.id, obj.refcount, obj.destructed, vo.contains(obj), obj.scratch_rc });
             if (platform.getenv("ZPHP_GC_TRACE_FROM")) |from| {
                 const from_run = std.fmt.parseInt(usize, from, 10) catch 0;
-                if (self.gc_runs == from_run and std.mem.eql(u8, when, "after")) @import("value.zig").trace_obj = obj;
-                if (self.gc_runs == from_run + 1 and std.mem.eql(u8, when, "before")) @import("value.zig").trace_obj = null;
+                if (self.gc_runs == from_run and std.mem.eql(u8, when, "after")) @import("value.zig").hooks().trace_obj = obj;
+                if (self.gc_runs == from_run + 1 and std.mem.eql(u8, when, "before")) @import("value.zig").hooks().trace_obj = null;
             }
             gc_verbose = true;
             self.gcVerifyNode(.{ .obj = obj }, vo, va);
@@ -19376,7 +19528,7 @@ pub const VM = struct {
             self.gcVerifyNode(.{ .obj = obj }, &eo, &ea);
             gc_verbose = false;
             std.debug.dumpCurrentStackTrace(null);
-            @import("value.zig").trace_obj = null;
+            @import("value.zig").hooks().trace_obj = null;
         }
     }
 

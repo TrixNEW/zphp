@@ -14,12 +14,9 @@ pub fn cellOf(value: *Value) *RefCell {
     return @fieldParentPtr("value", value);
 }
 pub const CellUnbindHook = struct { ctx: *anyopaque, call: *const fn (*anyopaque, *Value) void };
-pub threadlocal var cell_unbind_hook: ?CellUnbindHook = null;
 fn unbindCell(value: *Value) void {
-    if (cell_unbind_hook) |hook| hook.call(hook.ctx, value);
+    if (hooks().cell_unbind) |hook| hook.call(hook.ctx, value);
 }
-
-pub threadlocal var release_hook: ?ReleaseHook = null;
 
 // a native class whose value lives outside its properties (GMP) answers
 // casts and comparisons through the vm; objects without a native handle
@@ -30,34 +27,49 @@ pub const ObjectHooks = struct {
     cast: *const fn (*anyopaque, *PhpObject, NumericCast) ?Value,
     compare: *const fn (*anyopaque, Value, Value) ?i64,
 };
-pub threadlocal var object_hooks: ?ObjectHooks = null;
+
+// the per-thread hooks the vm installs. the fast loop links as its own
+// object and compiles this file a second time, so it reaches the main
+// object's record through an exported symbol instead of its own copy
+pub const Hooks = struct {
+    cell_unbind: ?CellUnbindHook = null,
+    release: ?ReleaseHook = null,
+    object: ?ObjectHooks = null,
+    trace_obj: ?*PhpObject = null,
+    trace_rc_verbose: bool = false,
+};
+threadlocal var hooks_record: Hooks = .{};
+extern fn zphp_value_hooks() callconv(.c) *anyopaque;
+
+pub inline fn hooks() *Hooks {
+    if (@import("build_role").fast_loop_object) return @ptrCast(@alignCast(zphp_value_hooks()));
+    return &hooks_record;
+}
 
 pub fn nativeCast(obj: *PhpObject, target: NumericCast) ?Value {
     if (obj.native.kind == .none) return null;
-    const hooks = object_hooks orelse return null;
-    return hooks.cast(hooks.ctx, obj, target);
+    const hook = hooks().object orelse return null;
+    return hook.cast(hook.ctx, obj, target);
 }
 
 fn nativeCompare(a: Value, b: Value) ?i64 {
     const native = (a == .object and a.object.native.kind != .none) or (b == .object and b.object.native.kind != .none);
     if (!native) return null;
-    const hooks = object_hooks orelse return null;
-    return hooks.compare(hooks.ctx, a, b);
+    const hook = hooks().object orelse return null;
+    return hook.compare(hook.ctx, a, b);
 }
-
-pub threadlocal var trace_obj: ?*PhpObject = null;
-pub threadlocal var trace_rc_verbose: bool = false;
 
 // ZPHP_TRACE_OBJ_CLASS: stack trace at every retain/release of one object
 pub fn traceObjRc(obj: *PhpObject, what: []const u8) void {
     if (@import("builtin").mode != .Debug) return;
-    if (trace_obj != obj or !trace_rc_verbose) return;
+    const h = hooks();
+    if (h.trace_obj != obj or !h.trace_rc_verbose) return;
     std.debug.print("== trace {s} {s}#{d} refcount now {d}\n", .{ what, obj.class_name, obj.id, obj.refcount });
     std.debug.dumpCurrentStackTrace(null);
 }
 
 fn releaseReplaced(old: Value) void {
-    if (release_hook) |hook| hook.call(hook.ctx, old);
+    if (hooks().release) |hook| hook.call(hook.ctx, old);
 }
 
 fn retainStored(value: Value) void {
@@ -953,6 +965,9 @@ pub const PhpObject = struct {
         is_private: []const bool,
         // instances get their file, line and trace when created
         throwable: bool = false,
+        // false until this class's and its ancestors' deferred defaults ran
+        // (see VM.resolveClassDefaults)
+        defaults_ready: bool = true,
     };
 
     pub fn deinit(self: *PhpObject, allocator: std.mem.Allocator) void {
@@ -2163,9 +2178,9 @@ test "array allocation-free stores preserve ownership metadata and overflow refu
     const value = try PhpString.create(allocator, "same value");
     defer value.release();
     var releases: ArrayStoreTestRelease = .{};
-    const saved = release_hook;
-    release_hook = .{ .ctx = &releases, .call = ArrayStoreTestRelease.call };
-    defer release_hook = saved;
+    const saved = hooks().release;
+    hooks().release = .{ .ctx = &releases, .call = ArrayStoreTestRelease.call };
+    defer hooks().release = saved;
     var arr: PhpArray = .{};
     defer arr.deinit(allocator);
     defer for (arr.entries.items) |entry| {

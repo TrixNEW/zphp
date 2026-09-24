@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# the fast loop links as its own object and compiles the runtime a second
+# time. anything it runs from that copy uses separate module globals, so it may
+# only contain leaf vm helpers; everything else goes through ic.slow
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+zig build fast-loop-object >/dev/null
+obj=zig-out/fast_loop.o
+
+allowed='^(InlineCache\.(intentIndex|methodIndex|propIndex)|arrayRelease|arrayRetain|arrayUnpin|bindCell|clearArgStackFromSlow|countCellMap|currentFrame|dropN|fiberRelease|fiberRetain|freeLocals|gcRecordZeroSite|gcVerifyDeadCell|genRelease|genRetain|getCaptureRange|objRelease|objRetain|queueArrayRelease|queueStringRelease|releaseArgSource|releaseClosureByName|retainArgSource|setArgSource|setEntryRef|stringAllocator|unbindCell)$'
+
+unexpected=$(nm "$obj" | awk '$2 ~ /^[tT]$/ {print $3}' | sed -n 's/^_\{0,1\}runtime\.vm\.VM\.//p' | grep -Ev "$allowed" || true)
+stdlib=$(nm "$obj" | awk '$2 ~ /^[tT]$/ {print $3}' | grep -E '^_?stdlib\.' || true)
+
+if [ -n "$unexpected$stdlib" ]; then
+    echo "fast_loop.o compiles vm code outside its leaf helpers:"
+    printf '  %s\n' $unexpected $stdlib
+    echo "route the call through VM.SlowPaths (ic.slow), or add a leaf helper to the allowlist"
+    exit 1
+fi
+echo "fast loop isolation: ok"

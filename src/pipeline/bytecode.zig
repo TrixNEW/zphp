@@ -323,6 +323,11 @@ pub const OpCode = enum(u8) {
     array_set_elem_ref, // [array, key, source] -> [array], bind entry to source cell
     array_push_ref, // [array, source] -> [array], append source cell
 
+    // u16 class name. the class's defaults that read other classes or global
+    // constants live in its hidden initializer (propDefaultsInitializerName),
+    // run when the class is first instantiated or reflected, as php does
+    defer_prop_defaults,
+
     pub fn width(self: OpCode) usize {
         return switch (self) {
             .arg_variable => 6,
@@ -371,6 +376,7 @@ pub const OpCode = enum(u8) {
             .array_push_bind_ref,
             .foreach_ref_bind,
             .declare_fn,
+            .defer_prop_defaults,
             => 3,
             .ensure_array_var, .call, .call_spread, .new_obj, .method_call, .method_call_spread, .static_call_dyn_method => 4,
             .make_var_ref, .make_var_prop_ref => 5,
@@ -575,6 +581,11 @@ pub const DeferredExpr = struct {
 };
 
 pub const DEFERRED_EXPR_PREFIX = "\x00DX\x00";
+
+// the hidden function holding a class's deferred property defaults
+pub fn propDefaultsInitializerName(allocator: std.mem.Allocator, class_name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "\x00propdefaults\x00{s}", .{class_name});
+}
 
 pub fn isDeferredExprSentinel(s: []const u8) bool {
     return s.len == DEFERRED_EXPR_PREFIX.len + 8 and std.mem.startsWith(u8, s, DEFERRED_EXPR_PREFIX);

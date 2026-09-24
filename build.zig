@@ -13,6 +13,14 @@ pub fn build(b: *std.Build) void {
     });
     fast_loop_mod.link_libc = true;
 
+    // the fast loop object compiles the runtime too; this tells that copy to
+    // reach shared per-thread state through the main object's exports
+    const fast_loop_role = b.addOptions();
+    fast_loop_role.addOption(bool, "fast_loop_object", true);
+    const main_role = b.addOptions();
+    main_role.addOption(bool, "fast_loop_object", false);
+    fast_loop_mod.addOptions("build_role", fast_loop_role);
+
     const fast_loop_obj = b.addObject(.{
         .name = "fast_loop",
         .root_module = fast_loop_mod,
@@ -30,6 +38,7 @@ pub fn build(b: *std.Build) void {
     const extension_sources = b.option([]const []const u8, "extension", "C source of a static extension, repeatable; the file stem is the extension name") orelse &.{};
     const static_extensions = staticExtensionsModule(b, extension_sources);
     exe_mod.addImport("static_extensions", static_extensions);
+    exe_mod.addOptions("build_role", main_role);
     fast_loop_mod.addImport("static_extensions", static_extensions);
     for (extension_sources) |source| {
         exe_mod.addCSourceFile(.{ .file = .{ .cwd_relative = source }, .flags = &.{ "-std=c11", "-DZPHP_STATIC_EXTENSION" } });
@@ -88,6 +97,9 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    const fast_loop_object_step = b.step("fast-loop-object", "Install the fast loop object for inspection");
+    fast_loop_object_step.dependOn(&b.addInstallFile(fast_loop_obj.getEmittedBin(), "fast_loop.o").step);
+
     const run_step = b.step("run", "Run zphp");
     run_step.dependOn(&run_cmd.step);
 
@@ -103,6 +115,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_mod.addImport("static_extensions", static_extensions);
+    test_mod.addOptions("build_role", main_role);
 
     linkLib(b, test_mod, "libpcre2-8", "pcre2-8", .static, .yes);
     linkLib(b, test_mod, "sqlite3", "sqlite3", .static, .yes);

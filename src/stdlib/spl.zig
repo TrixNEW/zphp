@@ -2737,5 +2737,5 @@ fn detachSplReference(ctx: *NativeContext, arr: *PhpArray, key: PhpArray.Key) vo
             _ = ctx.vm.array_ref_bindings.swapRemove(i);
         } else i += 1;
     }
-    if (@import("../runtime/value.zig").cell_unbind_hook) |hook| hook.call(hook.ctx, cell);
+    if (@import("../runtime/value.zig").hooks().cell_unbind) |hook| hook.call(hook.ctx, cell);
 }
