@@ -26,6 +26,8 @@ $kept = new Zphp\Buffer(65536);
 for ($i = 0; $i < 3000; $i++) { $kept = $pool->submit('buffer_stamp', [$kept, $kept->slice(0, 2), $i])->await(); }
 for ($i = 0; $i < 3000; $i++) { $pool->submit('buffer_sum', [new Zphp\Buffer(4096)])->await(); }
 for ($i = 0; $i < 3000; $i++) { $pool->submit('buffer_make', [65536])->await(); }
+$wake = new Zphp\Channel(1);
+for ($i = 0; $i < 3000; $i++) { $f = $pool->submit('square', [$i]); [$key] = Zphp\select(['wake' => $wake, 'f' => $f]); $f->await(); }
 $growth = memory_get_usage() - $before;
 echo $growth < 16 * 1024 * 1024 ? "memory bounded\n" : "memory grew by $growth\n";
 exit($growth < 16 * 1024 * 1024 ? 0 : 1);

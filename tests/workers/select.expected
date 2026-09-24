@@ -1,0 +1,59 @@
+array(2) {
+  [0]=>
+  string(1) "b"
+  [1]=>
+  array(1) {
+    ["n"]=>
+    int(1)
+  }
+}
+array(2) {
+  [0]=>
+  int(0)
+  [1]=>
+  string(5) "first"
+}
+int(0)
+NULL
+NULL
+bool(true)
+array(2) {
+  [0]=>
+  string(1) "b"
+  [1]=>
+  string(4) "last"
+}
+NULL
+Zphp\ChannelException: every channel is closed
+ValueError: Zphp\select(): Argument #1 ($sources) must not be empty
+TypeError: Zphp\select(): Argument #1 ($sources) must contain only Zphp\Channel and Zphp\Future, string given
+TypeError: Zphp\select(): Argument #1 ($sources) must be of type array, string given
+ValueError: Zphp\select(): Argument #2 ($timeout) must be a number of seconds greater than or equal to 0
+array(2) {
+  [0]=>
+  string(1) "n"
+  [1]=>
+  string(7) "by name"
+}
+string(2) "Je"
+int(1)
+Error: Unknown named parameter $valu
+Error: Unknown named parameter $size
+NULL
+fast: slept 20 same future
+mid: slept 70 same future
+slow: slept 120 same future
+boom threw: from select
+array(2) {
+  [0]=>
+  string(4) "wake"
+  [1]=>
+  string(5) "woken"
+}
+bool(true)
+finished 5: 1,2,3,4,5
+int(200)
+bool(true)
+bool(true)
+NULL
+string(9) "slept 100"

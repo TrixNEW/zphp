@@ -19,7 +19,7 @@ check() {
     fi
 }
 
-for script in basic edge channel closures buffer; do
+for script in basic edge channel closures buffer select; do
     actual="$("$ZPHP" run "$SCRIPT_DIR/$script.php" 2>&1 | tr -d '\r')" || true
     check "$script.php" "$(tr -d '\r' < "$SCRIPT_DIR/$script.expected")" "$actual"
 done

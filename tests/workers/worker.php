@@ -41,3 +41,13 @@ function buffer_sum(Zphp\Buffer $b): int { $s = 0; for ($i = 0; $i < $b->length(
 function buffer_stamp(Zphp\Buffer $b, Zphp\Buffer $view, int $v): Zphp\Buffer { $view->writeUInt16BE(0, $v); return $b; }
 function buffer_make(int $n): array { $b = Zphp\Buffer::fromString(str_repeat("w", $n)); return ['buf' => $b, 'tail' => $b->slice($n - 2)]; }
 function buffer_echo(Zphp\Channel $in, Zphp\Channel $out): int { $n = 0; foreach ($in as $b) { $b->writeUInt8(0, $b->readUInt8(0) + 1); $out->send($b); $n++; } $out->close(); return $n; }
+function send_later(Zphp\Channel $ch, int $ms, $value): string { usleep($ms * 1000); $ch->send($value); return "sent"; }
+function report_progress(Zphp\Channel $progress, int $steps): string { for ($i = 1; $i <= $steps; $i++) { usleep(5000); $progress->send($i); } return "finished $steps"; }
+function select_consumer(Zphp\Channel $jobs, Zphp\Channel $quit): array {
+    $got = [];
+    while (true) {
+        [$key, $value] = Zphp\select(['job' => $jobs, 'quit' => $quit]);
+        if ($key === 'quit') return $got;
+        $got[] = $value;
+    }
+}

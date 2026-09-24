@@ -13,15 +13,16 @@ const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 const workers = @import("workers.zig");
 const platform = @import("../platform.zig");
+const select = @import("select.zig");
 
 pub const channel_class = "Zphp\\Channel";
-const channel_exception = "Zphp\\ChannelException";
+pub const channel_exception = "Zphp\\ChannelException";
 const timeout_exception = "Zphp\\TimeoutException";
 
 // ---------------------------------------------------------------------------
 // the shared queue
 
-const Wait = union(enum) { none, forever, until: i128 };
+pub const Wait = union(enum) { none, forever, until: i128 };
 
 fn waitFor(cond: *std.Thread.Condition, mutex: *std.Thread.Mutex, wait: Wait) bool {
     switch (wait) {
@@ -51,9 +52,23 @@ pub const Channel = struct {
     not_full: std.Thread.Condition = .{},
     // one reference per wrapper object, across every vm in the process
     refs: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
+    // selectors waiting for a value or the close
+    waiters: select.WaitList = .{},
 
     const SendResult = enum { ok, full, closed, timeout };
     const RecvResult = union(enum) { value: workers.Payload, empty, closed, timeout };
+
+    pub fn watch(ch: *Channel, w: *select.Waiter) !void {
+        ch.mutex.lock();
+        defer ch.mutex.unlock();
+        try ch.waiters.add(ch.allocator, w);
+    }
+
+    pub fn unwatch(ch: *Channel, w: *select.Waiter) void {
+        ch.mutex.lock();
+        defer ch.mutex.unlock();
+        ch.waiters.remove(w);
+    }
 
     fn send(ch: *Channel, payload: workers.Payload, wait: Wait) SendResult {
         ch.mutex.lock();
@@ -65,10 +80,11 @@ pub const Channel = struct {
         ch.items[(ch.head + ch.len) % ch.items.len] = payload;
         ch.len += 1;
         ch.not_empty.signal();
+        ch.waiters.notifyAll();
         return .ok;
     }
 
-    fn recv(ch: *Channel, wait: Wait) RecvResult {
+    pub fn recv(ch: *Channel, wait: Wait) RecvResult {
         ch.mutex.lock();
         defer ch.mutex.unlock();
         while (ch.len == 0 and !ch.closed) {
@@ -89,6 +105,7 @@ pub const Channel = struct {
         ch.closed = true;
         ch.not_empty.broadcast();
         ch.not_full.broadcast();
+        ch.waiters.notifyAll();
     }
 
     fn count(ch: *Channel) usize {
@@ -124,6 +141,7 @@ pub const Channel = struct {
         var i: usize = 0;
         while (i < ch.len) : (i += 1) ch.items[(ch.head + i) % ch.items.len].free(ch.allocator);
         ch.allocator.free(ch.items);
+        ch.waiters.deinit(ch.allocator);
         ch.allocator.destroy(ch);
     }
 };
@@ -232,7 +250,7 @@ fn channelTrySend(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     }
 }
 
-fn unpackValue(ctx: *NativeContext, ch: *Channel, payload: workers.Payload) RuntimeError!Value {
+pub fn unpackValue(ctx: *NativeContext, ch: *Channel, payload: workers.Payload) RuntimeError!Value {
     return workers.unpack(ctx, payload, ch.allocator) orelse throwNamed(ctx, channel_exception, "the value did not transfer", .{});
 }
 

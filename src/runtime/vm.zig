@@ -1,4 +1,5 @@
 const std = @import("std");
+const native_params = @import("../stdlib/native_params.zig");
 const platform = @import("../platform.zig");
 const Value = @import("value.zig").Value;
 const PhpArray = @import("value.zig").PhpArray;
@@ -1455,6 +1456,7 @@ pub const VM = struct {
         try @import("../stdlib/workers.zig").register(vm, allocator);
         try @import("../stdlib/channel.zig").register(vm, allocator);
         try @import("../stdlib/buffer.zig").register(vm, allocator);
+        try @import("../stdlib/select.zig").register(vm, allocator);
         try @import("../stdlib/bcmath.zig").register(vm, allocator);
         try @import("../stdlib/gd.zig").register(vm, allocator);
         try @import("../stdlib/soap.zig").register(vm, allocator);
@@ -4016,28 +4018,15 @@ pub const VM = struct {
                                 if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                                 return error.RuntimeError;
                             };
-                        } else if (@import("../stdlib/native_params.zig").map.get(name)) |params| {
-                            var resolved: [256]Value = .{.null} ** 256;
+                        } else if (native_params.map.get(name)) |params| {
+                            var resolved: [256]Value = undefined;
                             var resolved_sources: [256]RefSource = undefined;
-                            @memset(resolved_sources[0..@min(resolved_sources.len, params.len + arr.entries.items.len)], .none);
-                            if (params.len > resolved.len) return error.RuntimeError;
-                            var pos: usize = 0;
-                            for (arr.entries.items) |entry| {
-                                if (entry.key == .string) {
-                                    for (params, 0..) |p, pi| {
-                                        if (std.mem.eql(u8, p[1..], entry.key.string.bytes()) or std.mem.eql(u8, p, entry.key.string.bytes())) {
-                                            resolved[pi] = entry.value;
-                                            resolved_sources[pi] = self.argArraySource(arr, entry.key);
-                                            if (pi >= pos) pos = pi + 1;
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    resolved[pos] = entry.value;
-                                    resolved_sources[pos] = self.argArraySource(arr, entry.key);
-                                    pos += 1;
-                                }
+                            const placed = self.placeNativeNamedArgs(arr, params, &resolved, &resolved_sources);
+                            if (placed.unknown) |unknown| {
+                                if (try self.throwUnknownNamedParameter(unknown)) continue;
+                                return error.RuntimeError;
                             }
+                            const pos = placed.count;
                             for (0..pos) |i| {
                                 self.push(resolved[i]);
                                 self.setArgSource(self.sp - 1, resolved_sources[i]);
@@ -7805,6 +7794,19 @@ pub const VM = struct {
                                             self.setArgSource(self.sp - 1, resolved_sources[i]);
                                         }
                                         arg_count = @intCast(count);
+                                    } else if (native_params.map.get(ctn)) |params| {
+                                        var resolved: [256]Value = undefined;
+                                        var resolved_sources: [256]RefSource = undefined;
+                                        const placed = self.placeNativeNamedArgs(arr_val.array, params, &resolved, &resolved_sources);
+                                        if (placed.unknown) |unknown| {
+                                            if (try self.throwUnknownNamedParameter(unknown)) continue;
+                                            return error.RuntimeError;
+                                        }
+                                        for (0..placed.count) |i| {
+                                            self.push(resolved[i]);
+                                            self.setArgSource(self.sp - 1, resolved_sources[i]);
+                                        }
+                                        arg_count = @intCast(placed.count);
                                     } else {
                                         for (entries) |entry| self.pushArgEntry(arr_val.array, entry);
                                         arg_count = @intCast(entries.len);
@@ -9277,6 +9279,18 @@ pub const VM = struct {
                                         self.push(resolved_buf[i]);
                                         self.setArgSource(self.sp - 1, resolved_sources[i]);
                                     }
+                                } else if (native_params.map.get(fn_name)) |params| {
+                                    const placed = self.placeNativeNamedArgs(arr, params, &resolved_buf, &resolved_sources);
+                                    if (placed.unknown) |unknown| {
+                                        self.dropN(1);
+                                        if (try self.throwUnknownNamedParameter(unknown)) continue;
+                                        return error.RuntimeError;
+                                    }
+                                    ac = placed.count;
+                                    for (0..ac) |i| {
+                                        self.push(resolved_buf[i]);
+                                        self.setArgSource(self.sp - 1, resolved_sources[i]);
+                                    }
                                 } else {
                                     for (arr.entries.items) |entry| self.pushArgEntry(arr, entry);
                                 }
@@ -10090,6 +10104,19 @@ pub const VM = struct {
                                 self.setArgSource(self.sp - 1, resolved_sources[i]);
                             }
                             resolved_ac = pos;
+                        } else if (native_params.map.get(full_name)) |params| {
+                            var resolved: [256]Value = undefined;
+                            var resolved_sources: [256]RefSource = undefined;
+                            const placed = self.placeNativeNamedArgs(arr, params, &resolved, &resolved_sources);
+                            if (placed.unknown) |unknown| {
+                                if (try self.throwUnknownNamedParameter(unknown)) continue;
+                                return error.RuntimeError;
+                            }
+                            resolved_ac = placed.count;
+                            for (0..resolved_ac) |i| {
+                                self.push(resolved[i]);
+                                self.setArgSource(self.sp - 1, resolved_sources[i]);
+                            }
                         } else {
                             for (arr.entries.items) |entry| self.pushArgEntry(arr, entry);
                         }
@@ -17344,6 +17371,39 @@ pub const VM = struct {
             _ = sfe.write(m) catch {};
             self.allocator.free(m);
         }
+    }
+
+    const NativeNamedArgs = struct { count: usize, unknown: ?[]const u8 = null };
+
+    // natives declare no parameter list; native_params names their slots so a
+    // named argument lands in its position
+    fn placeNativeNamedArgs(self: *VM, arr: *PhpArray, params: []const []const u8, resolved: *[256]Value, sources: *[256]RefSource) NativeNamedArgs {
+        @memset(resolved, .null);
+        @memset(sources, .none);
+        var pos: usize = 0;
+        for (arr.entries.items) |entry| {
+            if (entry.key == .int) {
+                if (pos >= resolved.len) break;
+                resolved[pos] = entry.value;
+                sources[pos] = self.argArraySource(arr, entry.key);
+                pos += 1;
+                continue;
+            }
+            const name = entry.key.string.bytes();
+            const index = for (params, 0..) |p, pi| {
+                if (std.mem.eql(u8, p, name) or (p.len > 0 and p[0] == '$' and std.mem.eql(u8, p[1..], name))) break pi;
+            } else return .{ .count = pos, .unknown = name };
+            resolved[index] = entry.value;
+            sources[index] = self.argArraySource(arr, entry.key);
+            pos = @max(pos, index + 1);
+        }
+        return .{ .count = pos };
+    }
+
+    fn throwUnknownNamedParameter(self: *VM, name: []const u8) RuntimeError!bool {
+        const msg = try std.fmt.allocPrint(self.allocator, "Unknown named parameter ${s}", .{name});
+        try self.strings.append(self.allocator, msg);
+        return self.throwBuiltinException("Error", msg);
     }
 
     pub fn callMethod(self: *VM, obj: *PhpObject, method_name: []const u8, args: []const Value) RuntimeError!Value {

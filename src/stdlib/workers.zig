@@ -20,6 +20,7 @@ const network = @import("network.zig");
 const platform = @import("../platform.zig");
 const extension = @import("../extension.zig");
 const channel = @import("channel.zig");
+const select = @import("select.zig");
 const buffer = @import("buffer.zig");
 const types = @import("types.zig");
 const bytecode_format = @import("../bytecode_format.zig");
@@ -79,7 +80,7 @@ const ClosureTransfer = struct {
     }
 };
 
-const Task = struct {
+pub const Task = struct {
     id: u64,
     pool: *Pool,
     callable: []u8,
@@ -96,6 +97,32 @@ const Task = struct {
     delivered: bool = false,
     mutex: std.Thread.Mutex = .{},
     finished: std.Thread.Condition = .{},
+    // selectors waiting for this task to settle
+    waiters: select.WaitList = .{},
+
+    pub fn watch(t: *Task, w: *select.Waiter) !void {
+        t.mutex.lock();
+        defer t.mutex.unlock();
+        try t.waiters.add(t.pool.allocator, w);
+    }
+
+    pub fn unwatch(t: *Task, w: *select.Waiter) void {
+        t.mutex.lock();
+        defer t.mutex.unlock();
+        t.waiters.remove(w);
+    }
+
+    pub fn isSettled(t: *Task) bool {
+        t.mutex.lock();
+        defer t.mutex.unlock();
+        return t.settled();
+    }
+
+    // with the task mutex held, once the state is final
+    fn wake(t: *Task) void {
+        t.finished.broadcast();
+        t.waiters.notifyAll();
+    }
 
     fn release(t: *Task) void {
         if (t.refs.fetchSub(1, .acq_rel) == 1) t.destroy();
@@ -114,6 +141,7 @@ const Task = struct {
             a.free(f.file);
         }
         if (t.fatal) |m| a.free(m);
+        t.waiters.deinit(a);
         a.destroy(t);
         pool.release();
     }
@@ -474,7 +502,7 @@ fn markCancelled(task: *Task) void {
     task.mutex.lock();
     defer task.mutex.unlock();
     if (!task.settled()) task.state = .cancelled;
-    task.finished.broadcast();
+    task.wake();
 }
 
 // ---------------------------------------------------------------------------
@@ -563,7 +591,7 @@ fn describeError(vm: *VM, buf: []u8) ?[]const u8 {
     return vm.error_msg;
 }
 
-fn flushOutput(vm: *VM) void {
+pub fn flushOutput(vm: *VM) void {
     if (vm.output.items.len == 0) return;
     platform.writeStdout(vm.output.items);
     vm.output.clearRetainingCapacity();
@@ -638,7 +666,7 @@ fn execute(ctx: *NativeContext, w: *Worker, task: *Task) void {
     defer task.mutex.unlock();
     task.result = payload;
     task.state = .done;
-    task.finished.broadcast();
+    task.wake();
 }
 
 // containers come out of unserialize at refcount 0, the way the interpreter
@@ -658,7 +686,7 @@ fn settleFatal(task: *Task, msg: []const u8) void {
     defer task.mutex.unlock();
     task.fatal = task.pool.allocator.dupe(u8, msg) catch null;
     task.state = .failed;
-    task.finished.broadcast();
+    task.wake();
 }
 
 // callByName fails without an exception when the name resolves to nothing
@@ -681,7 +709,7 @@ fn settleUndefined(task: *Task, callable: Value) void {
     defer task.mutex.unlock();
     task.failure = failure;
     task.state = .failed;
-    task.finished.broadcast();
+    task.wake();
 }
 
 // the thrown object stays in the worker; its identity crosses as text
@@ -708,7 +736,7 @@ fn settleFailure(vm: *VM, task: *Task, callable: Value) void {
     defer task.mutex.unlock();
     task.failure = failure;
     task.state = .failed;
-    task.finished.broadcast();
+    task.wake();
 }
 
 // ---------------------------------------------------------------------------
@@ -1005,6 +1033,10 @@ fn poolOf(ctx: *NativeContext, obj: *PhpObject) RuntimeError!*Pool {
     const pool = obj.native.get(Pool, .pool) orelse return throwNamed(ctx, pool_exception, "the pool is not running", .{});
     if (pool.owner != ctx.vm) return throwNamed(ctx, pool_exception, "a pool belongs to the thread that created it", .{});
     return pool;
+}
+
+pub fn futureTask(obj: *PhpObject) ?*Task {
+    return taskOf(obj);
 }
 
 fn taskOf(obj: *PhpObject) ?*Task {
