@@ -1,4 +1,7 @@
 const std = @import("std");
+
+// a const_decl flag: this name continues the declaration before it
+pub const const_continuation: u32 = 1 << 5;
 const ast_mod = @import("ast.zig");
 const Ast = ast_mod.Ast;
 const AttrRange = ast_mod.AttrRange;
@@ -791,15 +794,24 @@ const Parser = struct {
         return self.addNode(.{ .tag = .foreach_stmt, .main_token = tok, .data = .{ .lhs = extra, .rhs = body } });
     }
 
+    // `const A = 1, B = 2;` as a statement: one declaration, or a block of them
     fn parseConstDecl(self: *Parser) Error!u32 {
+        const const_tok = self.pos;
+        var decls = std.ArrayListUnmanaged(u32){};
+        defer decls.deinit(self.allocator);
+        try self.parseConstList(&decls);
+        if (decls.items.len == 1) return decls.items[0];
+        const extra = try self.addExtraList(decls.items);
+        return self.addNode(.{ .tag = .block, .main_token = const_tok, .data = .{ .lhs = extra } });
+    }
+
+    // `const [type] A = expr, B = expr;`: one const_decl node per name, all
+    // carrying the declared type
+    fn parseConstList(self: *Parser, out: *std.ArrayListUnmanaged(u32)) Error!void {
         _ = self.advance(); // const
-        // PHP 8.3 typed class constants: `const string NAME = "hi";`. accept
-        // and discard the type annotation since constants are dynamic anyway.
-        // detect by lookahead: if current is a type-like token and next is an
-        // identifier followed by `=`, the current token is the type
-        // detect `?T NAME = ...` or `T NAME = ...` (PHP 8.3 typed const) by
-        // looking past an optional `?` and a type token to see whether a const
-        // name + `=` follows
+        // PHP 8.3 typed class constants: `const string NAME = "hi";`. detect
+        // `?T NAME = ...` or `T NAME = ...` by looking past an optional `?` and
+        // a type token to see whether a const name + `=` follows
         const at0 = self.peek();
         var type_range: [2]u32 = .{ 0, 0 };
         if (at0 == .question or (self.isTypeName() and at0 != .identifier) or
@@ -812,16 +824,36 @@ const Parser = struct {
                 type_range = self.collectTypeHint();
             }
         }
-        const name_tok = try self.expectFunctionName();
-        _ = try self.expect(.equal);
-        const value = try self.parseExpression();
-        _ = try self.expect(.semicolon);
         var rhs: u32 = 0;
         if (type_range[0] != type_range[1]) {
             const ext = try self.addExtra(&type_range);
             rhs = (ext + 1) << 16;
         }
-        return self.addNode(.{ .tag = .const_decl, .main_token = name_tok, .data = .{ .lhs = value, .rhs = rhs } });
+        // bit 5 marks the names after the first, so the formatter can print
+        // the declaration back as one statement
+        var continuation: u32 = 0;
+        while (true) {
+            const name_tok = try self.expectFunctionName();
+            _ = try self.expect(.equal);
+            const value = try self.parseExpression();
+            try out.append(self.allocator, try self.addNode(.{ .tag = .const_decl, .main_token = name_tok, .data = .{ .lhs = value, .rhs = rhs | continuation } }));
+            if (self.peek() != .comma) break;
+            _ = self.advance();
+            continuation = const_continuation;
+        }
+        _ = try self.expect(.semicolon);
+    }
+
+    // class-body constants: each declared name takes the member's visibility
+    // and final flag (bits 0-1 visibility, bit 4 final, bit 5 continuation,
+    // bits 16+ type extra)
+    fn parseConstMembers(self: *Parser, members: *std.ArrayListUnmanaged(u32), flags: u32) Error!void {
+        const first = members.items.len;
+        try self.parseConstList(members);
+        for (members.items[first..]) |cd| {
+            const kept = self.nodes.items[cd].data.rhs & (~@as(u32, 0xffff) | const_continuation);
+            self.nodes.items[cd].data.rhs = flags | kept;
+        }
     }
 
     fn parseSwitchStmt(self: *Parser) Error!u32 {
@@ -1392,11 +1424,7 @@ const Parser = struct {
                 self.nodes.items[prop].data.rhs = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                 try members.append(self.allocator, prop);
             } else if (self.peek() == .kw_const) {
-                const cd = try self.parseConstDecl();
-                // bits 0-1: visibility, bit 4: final, bits 16+: type extra idx
-                const type_bits = self.nodes.items[cd].data.rhs & ~@as(u32, 0xffff);
-                self.nodes.items[cd].data.rhs = visibility | (if (is_final) @as(u32, 1) << 4 else 0) | type_bits;
-                try members.append(self.allocator, cd);
+                try self.parseConstMembers(&members, visibility | (if (is_final) @as(u32, 1) << 4 else 0));
             } else if (self.isTypeName() or self.peek() == .question or self.peek() == .l_paren) {
                 const tr = self.collectTypeHint();
                 if (self.peek() == .variable) {
@@ -1596,11 +1624,7 @@ const Parser = struct {
                 self.nodes.items[prop].data.rhs = encodePropertyFlags(visibility, set_visibility, has_set_vis, is_readonly, is_final);
                 try members.append(self.allocator, prop);
             } else if (self.peek() == .kw_const) {
-                const cd = try self.parseConstDecl();
-                // bits 0-1: visibility, bit 4: final, bits 16+: type extra idx
-                const type_bits = self.nodes.items[cd].data.rhs & ~@as(u32, 0xffff);
-                self.nodes.items[cd].data.rhs = visibility | (if (is_final) @as(u32, 1) << 4 else 0) | type_bits;
-                try members.append(self.allocator, cd);
+                try self.parseConstMembers(&members, visibility | (if (is_final) @as(u32, 1) << 4 else 0));
             } else if (self.isTypeName() or self.peek() == .question or self.peek() == .l_paren) {
                 const tr = self.collectTypeHint();
                 if (self.peek() == .variable) {
@@ -1670,7 +1694,7 @@ const Parser = struct {
             if (self.peek() == .kw_function) {
                 try methods.append(self.allocator, try self.parseInterfaceMethod());
             } else if (self.peek() == .kw_const) {
-                try methods.append(self.allocator, try self.parseConstDecl());
+                try self.parseConstMembers(&methods, 0);
             } else {
                 const tr = self.collectTypeHint();
                 if (self.peek() != .variable) return error.ParseError;
@@ -1869,7 +1893,7 @@ const Parser = struct {
                     _ = self.advance();
                 }
             } else if (self.peek() == .kw_const) {
-                try members.append(self.allocator, try self.parseConstDecl());
+                try self.parseConstMembers(&members, 0);
             } else if (self.peek() == .kw_use) {
                 try members.append(self.allocator, try self.parseTraitUse());
             } else {
@@ -1933,7 +1957,7 @@ const Parser = struct {
                     .data = .{ .lhs = value_expr },
                 }));
             } else if (self.peek() == .kw_const) {
-                try members.append(self.allocator, try self.parseConstDecl());
+                try self.parseConstMembers(&members, 0);
             } else if (self.peek() == .kw_use) {
                 try members.append(self.allocator, try self.parseTraitUse());
             } else {
@@ -1955,7 +1979,7 @@ const Parser = struct {
                     self.nodes.items[method].data.rhs = self.nodes.items[method].data.rhs | (visibility << 30);
                     try members.append(self.allocator, method);
                 } else if (self.peek() == .kw_const) {
-                    try members.append(self.allocator, try self.parseConstDecl());
+                    try self.parseConstMembers(&members, 0);
                 } else {
                     _ = self.advance();
                 }

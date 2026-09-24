@@ -398,6 +398,20 @@ b_content=$(cat "$WORKDIR/b.php")
 check_contains "multi-file a formatted" 'echo "a";' "$a_content"
 check_contains "multi-file b formatted" 'echo "b";' "$b_content"
 
+cat > "$WORKDIR/constlist.php" << 'EOFPHP'
+<?php
+const A = 1,   B = 2;
+class C {
+    final   public const int WIDTH = 80,HEIGHT = 24;
+    private const X = 'x', Y = 'y';
+}
+EOFPHP
+"$ZPHP" fmt "$WORKDIR/constlist.php" 2>/dev/null
+content=$(cat "$WORKDIR/constlist.php")
+check_contains "top-level constant list stays one statement" 'const A = 1, B = 2;' "$content"
+check_contains "typed class constant list keeps modifiers and type" 'final public const int WIDTH = 80, HEIGHT = 24;' "$content"
+check_contains "private class constant list keeps visibility" "private const X = 'x', Y = 'y';" "$content"
+
 echo ""
 echo "$passed passed, $failed failed"
 

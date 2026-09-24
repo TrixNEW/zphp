@@ -165,6 +165,9 @@ const Formatter = struct {
     indent: u32,
     allocator: Allocator,
     last_was_newline: bool,
+    // the siblings after the node being formatted, for a constant
+    // declaration that continues into them
+    const_tail: []const u32 = &.{},
 
     fn init(allocator: Allocator, ast: *const Ast, source: []const u8, trivia: []const Trivia) Formatter {
         return .{
@@ -235,8 +238,10 @@ const Formatter = struct {
         const stmts = self.ast.extraSlice(root.data.lhs);
 
         var prev_tag: ?NodeTag = null;
-        for (stmts) |stmt_idx| {
+        for (stmts, 0..) |stmt_idx, stmt_pos| {
             const node = self.ast.nodes[stmt_idx];
+            if (self.isConstContinuation(stmt_idx)) continue;
+            self.const_tail = stmts[stmt_pos + 1 ..];
 
             if (node.tag == .inline_html) {
                 self.write(self.ast.tokens[node.main_token].lexeme(self.source));
@@ -594,10 +599,18 @@ const Formatter = struct {
     fn formatBlock(self: *Formatter, node_idx: u32) void {
         const node = self.ast.nodes[node_idx];
         const stmts = self.ast.extraSlice(node.data.lhs);
+        // `const A = 1, B = 2;` parses as a block of declarations, not a scope
+        if (stmts.len > 0 and self.ast.tokens[node.main_token].tag == .kw_const and self.ast.nodes[stmts[0]].tag == .const_decl) {
+            self.const_tail = stmts[1..];
+            self.formatNode(stmts[0]);
+            return;
+        }
         self.write("{");
         if (stmts.len > 0) {
             self.indent += 1;
-            for (stmts) |stmt_idx| {
+            for (stmts, 0..) |stmt_idx, stmt_pos| {
+                if (self.isConstContinuation(stmt_idx)) continue;
+                self.const_tail = stmts[stmt_pos + 1 ..];
                 self.newline();
                 self.emitTriviaForNode(stmt_idx);
                 self.writeIndent();
@@ -809,15 +822,24 @@ const Formatter = struct {
         }
     }
 
+    fn isConstContinuation(self: *Formatter, node_idx: u32) bool {
+        const node = self.ast.nodes[node_idx];
+        return node.tag == .const_decl and (node.data.rhs & parser.const_continuation) != 0;
+    }
+
+    // a constant declaration and the names that continue it (`const A = 1,
+    // B = 2;`), which the enclosing loop hands over in const_tail
     fn formatConstDecl(self: *Formatter, node: Ast.Node) void {
-        // scan backward for visibility/final modifiers (class constants)
-        if (node.main_token >= 2 and self.ast.tokens[node.main_token - 1].tag == .kw_const) {
+        const type_plus_one = node.data.rhs >> 16;
+        const type_start = if (type_plus_one != 0) self.ast.extra_data[type_plus_one - 1] else node.main_token;
+        const type_end = if (type_plus_one != 0) self.ast.extra_data[type_plus_one] else node.main_token;
+        const const_tok = type_start - 1;
+        if (const_tok >= 1 and self.ast.tokens[const_tok].tag == .kw_const) {
             var is_final = false;
             var visibility: ?[]const u8 = null;
-            var i: i64 = @as(i64, node.main_token) - 2;
+            var i: i64 = @as(i64, const_tok) - 1;
             while (i >= 0) {
-                const tag = self.ast.tokens[@intCast(i)].tag;
-                switch (tag) {
+                switch (self.ast.tokens[@intCast(i)].tag) {
                     .kw_public => visibility = "public",
                     .kw_protected => visibility = "protected",
                     .kw_private => visibility = "private",
@@ -833,10 +855,27 @@ const Formatter = struct {
             }
         }
         self.write("const ");
+        var t = type_start;
+        while (t < type_end) : (t += 1) {
+            self.write(self.ast.tokens[t].lexeme(self.source));
+            if (t + 1 < type_end and self.ast.tokens[t + 1].start > self.ast.tokens[t].end) self.write(" ");
+        }
+        if (type_start < type_end) self.write(" ");
+        self.writeConstAssignment(node);
+        const tail = self.const_tail;
+        self.const_tail = &.{};
+        for (tail) |next_idx| {
+            if (!self.isConstContinuation(next_idx)) break;
+            self.write(", ");
+            self.writeConstAssignment(self.ast.nodes[next_idx]);
+        }
+        self.write(";");
+    }
+
+    fn writeConstAssignment(self: *Formatter, node: Ast.Node) void {
         self.write(self.ast.tokens[node.main_token].lexeme(self.source));
         self.write(" = ");
         self.formatNode(node.data.lhs);
-        self.write(";");
     }
 
     fn formatSwitch(self: *Formatter, node: Ast.Node) void {
@@ -1053,8 +1092,10 @@ const Formatter = struct {
         if (members.len > 0) {
             self.indent += 1;
             var prev_member_tag: ?NodeTag = null;
-            for (members) |member_idx| {
+            for (members, 0..) |member_idx, member_pos| {
                 const member = self.ast.nodes[member_idx];
+                if (self.isConstContinuation(member_idx)) continue;
+                self.const_tail = members[member_pos + 1 ..];
                 const is_method = member.tag == .class_method or member.tag == .static_class_method or member.tag == .interface_method;
                 if (prev_member_tag != null and (is_method or prev_member_tag == .class_method or prev_member_tag == .static_class_method or prev_member_tag == .interface_method)) {
                     self.blankLine();
@@ -1238,8 +1279,10 @@ const Formatter = struct {
         if (members.len > 0) {
             self.indent += 1;
             var prev_member_tag: ?NodeTag = null;
-            for (members) |member_idx| {
+            for (members, 0..) |member_idx, member_pos| {
                 const member = self.ast.nodes[member_idx];
+                if (self.isConstContinuation(member_idx)) continue;
+                self.const_tail = members[member_pos + 1 ..];
                 const is_method = member.tag == .class_method or member.tag == .static_class_method;
                 if (prev_member_tag != null and (is_method or prev_member_tag == .class_method or prev_member_tag == .static_class_method)) {
                     self.blankLine();
