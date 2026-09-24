@@ -1,26 +1,39 @@
-# benchmarks
+# Benchmarks
 
-## runtime
+Build a release binary first. Debug builds are 30 to 50 times slower.
 
-Six benchmarks comparing zphp vs PHP on compute-heavy tasks. Each runs both runtimes and reports best of 5.
-
-```
-zig build -Doptimize=ReleaseFast
-./benchmarks/runtime/run
+```sh
+make release
 ```
 
-Requires PHP installed locally. zphp must be built with ReleaseFast - debug builds are 30-50x slower due to safety checks.
+## Real applications
 
-- **fibonacci** - recursive fib(32), tests function call overhead
-- **loops** - tight integer arithmetic, nested loops with conditionals
-- **closures** - closure creation, captures, higher-order composition
-- **objects** - class instantiation, method calls, property access
-- **array_ops** - array building, filtering, mapping via loops
-- **string_ops** - string concatenation in loop, substr_count, str_replace, explode/implode
+Each harness boots WordPress or Laravel and does real work: rendering, queries, validation, caching. Each is timed as a one-shot CLI run, startup included, taking the best of seven.
 
-### Results (Apple M4, PHP 8.5.4 no JIT, zphp ReleaseFast)
+```sh
+make bench-macro
+```
 
-| benchmark | php | zphp | ratio |
+Apple M4, PHP 8.5.4. Across all 25 harnesses zphp takes 0.43x PHP's time (geometric mean), and it is faster on every one:
+
+| Harness | zphp/PHP |
+|---|---|
+| Laravel JSON API | 0.61x |
+| Laravel Blade | 0.62x |
+| Laravel Eloquent | 0.88x |
+| WordPress transients | 0.95x |
+
+## Runtime
+
+Six compute-heavy scripts, best of five runs under each runtime. PHP runs without JIT.
+
+```sh
+make bench
+```
+
+Apple M4, PHP 8.5.4:
+
+| Benchmark | PHP | zphp | zphp/PHP |
 |---|---|---|---|
 | string_ops | 99 ms | 37 ms | 0.37x |
 | array_ops | 81 ms | 43 ms | 0.53x |
@@ -29,55 +42,48 @@ Requires PHP installed locally. zphp must be built with ReleaseFast - debug buil
 | fibonacci | 171 ms | 260 ms | 1.52x |
 | loops | 132 ms | 209 ms | 1.58x |
 
-zphp remains faster on the array, string, and object benchmarks. Sequential-array key lookup, fastLoop concat handling, the growable concat-assignment buffer, property slot indices, and inline-cached property access are the main advantages in those workloads.
+These catch regressions in the interpreter. They don't predict how a framework application performs.
 
-Closures are approximately even with PHP; Fibonacci and loops are slower in the current ownership-correct runtime. Object, array, generator, and fiber lifetime tracking adds tag checks to general operand-stack operations. A conservative compile-time proof for scalar-only function stacks was implemented and fully tested, but it made Fibonacci and loops slower through VM code-generation perturbation, so it was not shipped. The table reports the measured implementation rather than retaining earlier results from before the ownership model changed.
+## Comparing two builds
 
-These six microbenchmarks are code-generation canaries, not the primary performance target. Real WordPress and Laravel harnesses are measured separately with `benchmarks/macro/run`; request and application throughput take priority over an isolated recursive call or arithmetic loop.
-
-## serve
-
-HTTP throughput benchmark comparing `zphp serve` against nginx + php-fpm (the standard production PHP deployment). Uses [wrk](https://github.com/wg/wrk) for load generation.
-
+```sh
+make bench-compare              # this tree against its merge base with main
+make bench-compare BASE=v0.10.0
 ```
-zig build -Doptimize=ReleaseFast
+
+Builds both, runs every benchmark interleaved on the same machine, and prints the ratios. Differences under 5% are noise.
+
+## HTTP
+
+`zphp serve` against nginx with PHP-FPM and `php -S`, all serving `echo "hello"`. Requires [wrk](https://github.com/wg/wrk) and Docker.
+
+```sh
 ./benchmarks/serve/wrk_bench [duration] [threads] [connections]
 ```
 
-Defaults: 10s duration, 4 threads, 100 connections. Requires wrk. Requires Docker for the nginx + php-fpm comparison. PHP's built-in server (`php -S`) is included as a baseline but is single-threaded and not a production server.
+Defaults are 10 seconds, 4 threads, and 100 connections.
 
-All servers run the same file: `echo "hello"`.
+Apple M4, 14 cores, `wrk -t4 -c100 -d10s`:
 
-### Results (Apple M4, 14 cores, wrk -t4 -c100 -d10s)
-
-| server | req/s | avg latency |
+| Server | Requests/s | Avg latency |
 |---|---|---|
 | zphp serve | 92,343 | 1.12 ms |
-| nginx + php-fpm (128 workers) | 42,088 | 50.37 ms |
-| php -S (dev only) | 3,652 | 2.91 ms |
+| nginx + PHP-FPM (128 workers) | 42,088 | 50.37 ms |
+| php -S | 3,652 | 2.91 ms |
 
-zphp is 2.2x higher throughput and 45x lower latency than nginx + php-fpm on the same trivial endpoint.
+nginx and PHP-FPM ran in Docker under x86 emulation, which slows them down; on native Linux the gap is smaller. `php -S` is PHP's single-threaded development server.
 
-### Caveats
+## Formatter
 
-- nginx + php-fpm runs in Docker with linux/amd64 emulation on Apple Silicon. native Linux performance would be significantly better for php-fpm. on a real Linux x86_64 server, expect the gap to narrow
-- zphp runs natively. this is representative of real deployment - zphp is a single binary with a built-in production server
-- `php -S` is PHP's built-in development server. single-threaded, not intended for production. included only as a baseline
-- this benchmarks I/O and dispatch overhead on a trivial endpoint. real-world PHP with database queries, template rendering, etc. would shift the bottleneck from the server to the application layer
+`zphp fmt`, php-cs-fixer, and prettier's PHP plugin on `sample.php` (416 lines), best of ten runs. The tools apply different rules, so this compares speed, not output.
 
-## fmt
-
-Formats `sample.php` (416 lines) with each tool, reports best of 10 runs.
-
-```
+```sh
 ./benchmarks/fmt
 ```
 
-Requires `zig build` first. Installs prettier locally if node/npm is available. Skips php-cs-fixer if php is not installed (use `./php` docker wrapper to run it manually).
+Apple M4:
 
-### Results (Apple M4)
-
-| tool | best of 10 |
+| Tool | Time |
 |---|---|
 | zphp fmt | 5 ms |
 | php-cs-fixer (PSR-12) | 92 ms |

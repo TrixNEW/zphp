@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# internal macro-perf tracker (NOT for publication / the public benchmarks README).
+# real-app perf tracker, results published in benchmarks/README.md.
 # the north star: real-world PHP apps must not be slower under zphp than under php.
 # php is the live baseline - measured fresh every run - so there is nothing stored
-# to go stale and no perf claim to leak. each real-app harness is timed under both
-# runtimes and anything where zphp is slower is flagged.
+# to go stale. each real-app harness is timed under both runtimes and anything
+# where zphp is slower is flagged.
 #
 # usage:
 #   make bench-macro                 # build release + run everything
