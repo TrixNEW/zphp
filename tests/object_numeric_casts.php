@@ -1,0 +1,1 @@
+<?php class S { function __toString(): string { return "5"; } } var_dump((int) new S, (float) new S, floatval(new S), intval(new S), (int) gmp_init("123456789012345678901234567890"), intval(gmp_init(7)));

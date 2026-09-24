@@ -3,6 +3,7 @@ const Value = @import("../runtime/value.zig").Value;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const vm_mod = @import("../runtime/vm.zig");
+const native_params = @import("native_params.zig");
 const VM = vm_mod.VM;
 const NativeContext = vm_mod.NativeContext;
 const ClassDef = vm_mod.ClassDef;
@@ -329,8 +330,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionMethod::setAccessible", reflectionNoop);
     try vm.native_fns.put(a, "ReflectionMethod::invoke", rmInvoke);
     try vm.native_fns.put(a, "ReflectionMethod::hasReturnType", rmHasReturnType);
-    try vm.native_fns.put(a, "ReflectionMethod::hasTentativeReturnType", reflectionFalse);
-    try vm.native_fns.put(a, "ReflectionMethod::getTentativeReturnType", reflectionNoop);
+    try vm.native_fns.put(a, "ReflectionMethod::hasTentativeReturnType", rmHasTentativeReturnType);
+    try vm.native_fns.put(a, "ReflectionMethod::getTentativeReturnType", rmGetTentativeReturnType);
     try vm.native_fns.put(a, "ReflectionMethod::invokeArgs", rmInvokeArgs);
     try vm.native_fns.put(a, "ReflectionMethod::isAbstract", rmIsAbstract);
     try vm.native_fns.put(a, "ReflectionMethod::isFinal", rmIsFinal);
@@ -932,6 +933,9 @@ fn buildMethodObj(ctx: *NativeContext, class_name: []const u8, method_name: []co
     if (ctx.vm.functions.get(key)) |func| {
         try obj.set(ctx.allocator, "_arity", .{ .int = func.arity });
         try obj.set(ctx.allocator, "_required_params", .{ .int = func.required_params });
+    } else if (native_params.get(key)) |sig| {
+        try obj.set(ctx.allocator, "_arity", .{ .int = @intCast(sig.params.len) });
+        try obj.set(ctx.allocator, "_required_params", .{ .int = @intCast(nativeRequiredCount(sig)) });
     } else {
         try obj.set(ctx.allocator, "_arity", .{ .int = info.arity });
         try obj.set(ctx.allocator, "_required_params", .{ .int = info.arity });
@@ -2386,6 +2390,9 @@ fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     if (ctx.vm.functions.get(key)) |func| {
         try this.set(ctx.allocator, "_arity", .{ .int = func.arity });
         try this.set(ctx.allocator, "_required_params", .{ .int = func.required_params });
+    } else if (native_params.get(key)) |sig| {
+        try this.set(ctx.allocator, "_arity", .{ .int = @intCast(sig.params.len) });
+        try this.set(ctx.allocator, "_required_params", .{ .int = @intCast(nativeRequiredCount(sig)) });
     } else {
         try this.set(ctx.allocator, "_arity", .{ .int = info.arity });
         try this.set(ctx.allocator, "_required_params", .{ .int = info.arity });
@@ -2449,7 +2456,10 @@ fn rmGetParameters(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
 
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return NativeResult.scalar(.null);
-    const func = ctx.vm.functions.get(key) orelse return NativeResult.borrowed(.{ .array = try ctx.createArray() });
+    const func = ctx.vm.functions.get(key) orelse {
+        if (native_params.get(key)) |sig| return NativeResult.borrowed(try buildNativeParamArray(ctx, sig, key));
+        return NativeResult.borrowed(.{ .array = try ctx.createArray() });
+    };
 
     const result = try buildParamArray(ctx, func, key);
     if (this.get("_hook_method") == .string and result == .array) {
@@ -2506,10 +2516,10 @@ fn rmGetReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
 
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return NativeResult.scalar(.null);
-    const type_info = vm_mod.getTypeInfo(key) orelse return NativeResult.scalar(.null);
-    if (type_info.return_type.len == 0) return NativeResult.scalar(.null);
+    const return_type = if (vm_mod.getTypeInfo(key)) |ti| ti.return_type else nativeReturnType(ctx, key);
+    if (return_type.len == 0) return NativeResult.scalar(.null);
 
-    const obj = try createTypeObj(ctx, type_info.return_type, false, declaring);
+    const obj = try createTypeObj(ctx, return_type, false, declaring);
     return NativeResult.borrowed(.{ .object = obj });
 }
 
@@ -2524,8 +2534,33 @@ fn rmHasReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
 
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return NativeResult.scalar(.{ .bool = false });
-    const type_info = vm_mod.getTypeInfo(key) orelse return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.scalar(.{ .bool = type_info.return_type.len > 0 });
+    const return_type = if (vm_mod.getTypeInfo(key)) |ti| ti.return_type else nativeReturnType(ctx, key);
+    return NativeResult.scalar(.{ .bool = return_type.len > 0 });
+}
+
+// php 8.1+ internal methods declare tentative return types that a user
+// override may still differ from; user methods never have one
+fn methodTentativeReturnType(ctx: *NativeContext, this: *PhpObject) []const u8 {
+    const method_name = methodLookupName(this) orelse return "";
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return "";
+    var buf: [256]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return "";
+    if (ctx.vm.functions.contains(key)) return "";
+    const sig = native_params.get(key) orelse return "";
+    return sig.tentative_returns;
+}
+
+fn rmHasTentativeReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
+    return NativeResult.scalar(.{ .bool = methodTentativeReturnType(ctx, this).len > 0 });
+}
+
+fn rmGetTentativeReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const this = getThis(ctx) orelse return NativeResult.scalar(.null);
+    const tentative = methodTentativeReturnType(ctx, this);
+    if (tentative.len == 0) return NativeResult.scalar(.null);
+    const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else null;
+    return NativeResult.borrowed(.{ .object = try createTypeObj(ctx, tentative, false, declaring) });
 }
 
 fn rmIsConstructor(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -2591,6 +2626,8 @@ fn rpGetDefaultValue(ctx: *NativeContext, _: []const Value) RuntimeError!NativeR
 
 fn rpIsOptional(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
+    const optional = this.get("_optional");
+    if (optional == .bool) return NativeResult.scalar(optional);
     const has_default = this.get("_has_default");
     if (has_default == .bool and has_default.bool) return NativeResult.scalar(.{ .bool = true });
     const is_var = this.get("_is_variadic");
@@ -2886,7 +2923,10 @@ fn rfGetParameters(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
 
-    const func = ctx.vm.functions.get(func_name) orelse return NativeResult.borrowed(.{ .array = try ctx.createArray() });
+    const func = ctx.vm.functions.get(func_name) orelse {
+        if (native_params.get(func_name)) |sig| return NativeResult.borrowed(try buildNativeParamArray(ctx, sig, func_name));
+        return NativeResult.borrowed(.{ .array = try ctx.createArray() });
+    };
     return NativeResult.borrowed(try buildParamArray(ctx, func, func_name));
 }
 
@@ -2894,11 +2934,18 @@ fn rfGetReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
 
-    const type_info = closureAwareTypeInfo(func_name) orelse return NativeResult.scalar(.null);
-    if (type_info.return_type.len == 0) return NativeResult.scalar(.null);
+    const return_type = if (closureAwareTypeInfo(func_name)) |ti| ti.return_type else nativeReturnType(ctx, func_name);
+    if (return_type.len == 0) return NativeResult.scalar(.null);
 
-    const obj = try createTypeObj(ctx, type_info.return_type, false, null);
+    const obj = try createTypeObj(ctx, return_type, false, null);
     return NativeResult.borrowed(.{ .object = obj });
+}
+
+// a built-in's declared return type, from the signature table
+fn nativeReturnType(ctx: *NativeContext, name: []const u8) []const u8 {
+    if (ctx.vm.functions.contains(name)) return "";
+    const sig = native_params.get(name) orelse return "";
+    return sig.returns;
 }
 
 fn closureAwareTypeInfo(func_name: []const u8) ?@TypeOf(vm_mod.getTypeInfo("").?) {
@@ -2917,22 +2964,36 @@ fn rfHasReturnType(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .bool = false });
 
-    const type_info = closureAwareTypeInfo(func_name) orelse return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.scalar(.{ .bool = type_info.return_type.len > 0 });
+    const return_type = if (closureAwareTypeInfo(func_name)) |ti| ti.return_type else nativeReturnType(ctx, func_name);
+    return NativeResult.scalar(.{ .bool = return_type.len > 0 });
 }
 
 fn rfGetNumberOfParameters(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .int = 0 });
     const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .int = 0 });
-    const func = ctx.vm.functions.get(func_name) orelse return NativeResult.scalar(.{ .int = 0 });
+    const func = ctx.vm.functions.get(func_name) orelse {
+        const sig = native_params.get(func_name) orelse return NativeResult.scalar(.{ .int = 0 });
+        return NativeResult.scalar(.{ .int = @intCast(sig.params.len) });
+    };
     return NativeResult.scalar(.{ .int = func.arity });
 }
 
 fn rfGetNumberOfRequiredParameters(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .int = 0 });
     const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .int = 0 });
-    const func = ctx.vm.functions.get(func_name) orelse return NativeResult.scalar(.{ .int = 0 });
+    const func = ctx.vm.functions.get(func_name) orelse {
+        const sig = native_params.get(func_name) orelse return NativeResult.scalar(.{ .int = 0 });
+        return NativeResult.scalar(.{ .int = @intCast(nativeRequiredCount(sig)) });
+    };
     return NativeResult.scalar(.{ .int = func.required_params });
+}
+
+fn nativeRequiredCount(sig: native_params.Signature) usize {
+    var n: usize = 0;
+    for (sig.params) |p| {
+        if (p.default == .required and !p.variadic) n += 1;
+    }
+    return n;
 }
 
 // internal builtins (registered in vm.native_fns) have no file/line. user-
@@ -3022,7 +3083,11 @@ fn rfIsGenerator(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
 fn rfIsVariadic(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const func_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .bool = false });
-    const func = ctx.vm.functions.get(func_name) orelse return NativeResult.scalar(.{ .bool = false });
+    const func = ctx.vm.functions.get(func_name) orelse {
+        const sig = native_params.get(func_name) orelse return NativeResult.scalar(.{ .bool = false });
+        for (sig.params) |p| if (p.variadic) return NativeResult.scalar(.{ .bool = true });
+        return NativeResult.scalar(.{ .bool = false });
+    };
     return NativeResult.scalar(.{ .bool = func.is_variadic });
 }
 
@@ -3182,7 +3247,18 @@ fn rpConstructParam(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
         else => return throwReflection(ctx, "ReflectionParameter expects a function name or [class, method]"),
     }
 
-    const func = ctx.vm.functions.get(lookup_key) orelse return throwReflection(ctx, "ReflectionParameter could not find function");
+    const func = ctx.vm.functions.get(lookup_key) orelse {
+        const sig = native_params.get(lookup_key) orelse return throwReflection(ctx, "ReflectionParameter could not find function");
+        const index: ?usize = switch (args[1]) {
+            .int => |n| if (n >= 0 and @as(usize, @intCast(n)) < sig.params.len) @intCast(n) else null,
+            .string => |want| for (sig.params, 0..) |p, i| {
+                if (std.mem.eql(u8, p.name, want.bytes())) break i;
+            } else null,
+            else => null,
+        };
+        try populateNativeRpFields(ctx, this, sig, lookup_key, index orelse return throwReflection(ctx, "ReflectionParameter could not find parameter"));
+        return NativeResult.scalar(.null);
+    };
 
     var idx: ?usize = null;
     switch (args[1]) {
@@ -3204,6 +3280,46 @@ fn rpConstructParam(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
 
     try populateRpFields(ctx, this, func, lookup_key, idx.?);
     return NativeResult.scalar(.null);
+}
+
+fn buildNativeParamArray(ctx: *NativeContext, sig: native_params.Signature, key: []const u8) RuntimeError!Value {
+    const arr = try ctx.createArray();
+    for (0..sig.params.len) |i| {
+        const obj = try ctx.createObject("ReflectionParameter");
+        try populateNativeRpFields(ctx, obj, sig, key, i);
+        try arr.append(ctx.allocator, .{ .object = obj });
+    }
+    return .{ .array = arr };
+}
+
+// the same fields buildParamArray sets for a user parameter, read from a
+// built-in's signature. an optional parameter whose default php does not
+// publish is optional without an available default
+fn populateNativeRpFields(ctx: *NativeContext, obj: *PhpObject, sig: native_params.Signature, key: []const u8, i: usize) RuntimeError!void {
+    const p = sig.params[i];
+    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(p.name) });
+    try obj.set(ctx.allocator, "_position", .{ .int = @intCast(i) });
+    const nullable_prefix = p.type.len > 0 and p.type[0] == '?';
+    const type_name = if (nullable_prefix) p.type[1..] else p.type;
+    const in_union = std.mem.indexOf(u8, type_name, "|null") != null or std.mem.startsWith(u8, type_name, "null|");
+    try obj.set(ctx.allocator, "_type_name", .{ .string = Value.String.borrowed(type_name) });
+    try obj.set(ctx.allocator, "_nullable", .{ .bool = nullable_prefix or in_union });
+    try obj.set(ctx.allocator, "_is_variadic", .{ .bool = p.variadic });
+    const has_default = !p.variadic and p.default != .required and p.default != .unknown;
+    try obj.set(ctx.allocator, "_has_default", .{ .bool = has_default });
+    try obj.set(ctx.allocator, "_optional", .{ .bool = p.variadic or p.default != .required });
+    if (has_default) try obj.set(ctx.allocator, "_default_value", try ctx.vm.nativeDefault(p.default));
+    if (p.default_constant.len > 0) try obj.set(ctx.allocator, "_default_const_name", .{ .string = Value.String.borrowed(p.default_constant) });
+    try obj.set(ctx.allocator, "_by_reference", .{ .bool = p.by_ref });
+    if (std.mem.indexOf(u8, key, "::")) |sep| {
+        const decl_class = try ctx.createString(key[0..sep]);
+        const meth_name = try ctx.createString(key[sep + 2 ..]);
+        try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(decl_class) });
+        try obj.set(ctx.allocator, "_method_name", .{ .string = Value.String.borrowed(meth_name) });
+        try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(meth_name) });
+    } else {
+        try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(try ctx.createString(key)) });
+    }
 }
 
 fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []const u8) RuntimeError!Value {
@@ -4283,7 +4399,8 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
                     }
                 }
                 if (count > 0) _ = try ctx.callMethod(obj, "__construct", resolved[0..count]);
-            } else if (@import("native_params.zig").get(ctor_key)) |params| {
+            } else if (@import("native_params.zig").get(ctor_key)) |signature| {
+                const params = signature.params;
                 // a native attribute constructor (#[Deprecated]) places its
                 // arguments the way a named call does
                 var resolved: [256]Value = undefined;

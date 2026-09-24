@@ -160,10 +160,18 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .less => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
+                    const result = if (a == .int and b == .int) a.int < b.int else if (a == .float and b == .float) a.float < b.float else blk: {
+                        if (a == .object or b == .object) {
+                            frame.ip = ip - 1;
+                            self.sp = sp;
+                            return;
+                        }
+                        break :blk Value.lessThan(a, b);
+                    };
                     sp -= 2;
                     self.stackRelease(a);
                     self.stackRelease(b);
-                    self.stack[sp] = .{ .bool = if (a == .int and b == .int) a.int < b.int else if (a == .float and b == .float) a.float < b.float else Value.lessThan(a, b) };
+                    self.stack[sp] = .{ .bool = result };
                     sp += 1;
                     const _next = code[ip];
                     ip += 1;
@@ -172,10 +180,18 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .less_equal => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
+                    const result = if (a == .int and b == .int) a.int <= b.int else blk: {
+                        if (a == .object or b == .object) {
+                            frame.ip = ip - 1;
+                            self.sp = sp;
+                            return;
+                        }
+                        break :blk !Value.lessThan(b, a);
+                    };
                     sp -= 2;
                     self.stackRelease(a);
                     self.stackRelease(b);
-                    self.stack[sp] = .{ .bool = if (a == .int and b == .int) a.int <= b.int else !Value.lessThan(b, a) };
+                    self.stack[sp] = .{ .bool = result };
                     sp += 1;
                     const _next = code[ip];
                     ip += 1;
@@ -184,10 +200,18 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .greater => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
+                    const result = if (a == .int and b == .int) a.int > b.int else blk: {
+                        if (a == .object or b == .object) {
+                            frame.ip = ip - 1;
+                            self.sp = sp;
+                            return;
+                        }
+                        break :blk Value.lessThan(b, a);
+                    };
                     sp -= 2;
                     self.stackRelease(a);
                     self.stackRelease(b);
-                    self.stack[sp] = .{ .bool = if (a == .int and b == .int) a.int > b.int else Value.lessThan(b, a) };
+                    self.stack[sp] = .{ .bool = result };
                     sp += 1;
                     const _next = code[ip];
                     ip += 1;
@@ -196,10 +220,18 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .greater_equal => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
+                    const result = if (a == .int and b == .int) a.int >= b.int else blk: {
+                        if (a == .object or b == .object) {
+                            frame.ip = ip - 1;
+                            self.sp = sp;
+                            return;
+                        }
+                        break :blk !Value.lessThan(a, b);
+                    };
                     sp -= 2;
                     self.stackRelease(a);
                     self.stackRelease(b);
-                    self.stack[sp] = .{ .bool = if (a == .int and b == .int) a.int >= b.int else !Value.lessThan(a, b) };
+                    self.stack[sp] = .{ .bool = result };
                     sp += 1;
                     const _next = code[ip];
                     ip += 1;
@@ -327,7 +359,13 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     return;
                 },
                 .negate => {
-                    self.stack[sp - 1] = self.stack[sp - 1].negate();
+                    const operand = self.stack[sp - 1];
+                    if (operand != .int and operand != .float) {
+                        frame.ip = ip - 1;
+                        self.sp = sp;
+                        return;
+                    }
+                    self.stack[sp - 1] = operand.negate();
                     const _next = code[ip];
                     ip += 1;
                     continue :dispatch @as(OpCode, @enumFromInt(_next));

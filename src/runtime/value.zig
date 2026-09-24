@@ -21,6 +21,30 @@ fn unbindCell(value: *Value) void {
 
 pub threadlocal var release_hook: ?ReleaseHook = null;
 
+// a native class whose value lives outside its properties (GMP) answers
+// casts and comparisons through the vm; objects without a native handle
+// never ask, so ordinary objects pay one tag check
+pub const NumericCast = enum { int, float, bool, number };
+pub const ObjectHooks = struct {
+    ctx: *anyopaque,
+    cast: *const fn (*anyopaque, *PhpObject, NumericCast) ?Value,
+    compare: *const fn (*anyopaque, Value, Value) ?i64,
+};
+pub threadlocal var object_hooks: ?ObjectHooks = null;
+
+pub fn nativeCast(obj: *PhpObject, target: NumericCast) ?Value {
+    if (obj.native.kind == .none) return null;
+    const hooks = object_hooks orelse return null;
+    return hooks.cast(hooks.ctx, obj, target);
+}
+
+fn nativeCompare(a: Value, b: Value) ?i64 {
+    const native = (a == .object and a.object.native.kind != .none) or (b == .object and b.object.native.kind != .none);
+    if (!native) return null;
+    const hooks = object_hooks orelse return null;
+    return hooks.compare(hooks.ctx, a, b);
+}
+
 pub threadlocal var trace_obj: ?*PhpObject = null;
 pub threadlocal var trace_rc_verbose: bool = false;
 
@@ -1159,7 +1183,8 @@ pub const Value = union(enum) {
             .float => |f| f != 0.0,
             .string => |s| s.len > 0 and !std.mem.eql(u8, s.bytes(), "0"),
             .array => |a| a.entries.items.len > 0,
-            .object, .generator, .fiber => true,
+            .object => |o| if (nativeCast(o, .bool)) |v| v.bool else true,
+            .generator, .fiber => true,
         };
     }
 
@@ -1294,10 +1319,14 @@ pub const Value = union(enum) {
     pub fn equal(a: Value, b: Value) bool {
         if (a == .object and b == .object) {
             if (a.object == b.object) return true;
+            if (nativeCompare(a, b)) |order| return order == 0;
             if (!std.mem.eql(u8, a.object.class_name, b.object.class_name)) return false;
             return objectsCompare(a.object, b.object) == 0;
         }
-        if (a == .object or b == .object or a == .fiber or b == .fiber) return false;
+        if (a == .object or b == .object or a == .fiber or b == .fiber) {
+            if (nativeCompare(a, b)) |order| return order == 0;
+            return false;
+        }
         if (a == .array and b == .array) return arrayEqual(a.array, b.array, false);
         if (a == .array or b == .array) {
             const arr_side = if (a == .array) a else b;
@@ -1382,10 +1411,14 @@ pub const Value = union(enum) {
     pub fn compare(a: Value, b: Value) i64 {
         if (a == .object and b == .object) {
             if (a.object == b.object) return 0;
+            if (nativeCompare(a, b)) |order| return order;
             if (!std.mem.eql(u8, a.object.class_name, b.object.class_name)) return 1;
             return objectsCompare(a.object, b.object);
         }
-        if (a == .object or b == .object or a == .generator or b == .generator or a == .fiber or b == .fiber) return 0;
+        if (a == .object or b == .object or a == .generator or b == .generator or a == .fiber or b == .fiber) {
+            if (nativeCompare(a, b)) |order| return order;
+            return 0;
+        }
         if (a == .array and b == .array) {
             const al = a.array.entries.items.len;
             const bl = b.array.entries.items.len;
@@ -1532,7 +1565,8 @@ pub const Value = union(enum) {
             .float => |f| dvalToLval(f),
             .string => |s| parseLeadingInt(s.bytes()),
             .array => |arr| if (arr.entries.items.len > 0) @as(i64, 1) else 0,
-            .object, .generator, .fiber => 1,
+            .object => |o| if (nativeCast(o, .int)) |n| n.int else 1,
+            .generator, .fiber => 1,
         };
     }
 
@@ -1543,7 +1577,8 @@ pub const Value = union(enum) {
             .int => |i| @floatFromInt(i),
             .float => |f| f,
             .string => |s| parseLeadingFloat(s.bytes()),
-            .array, .object, .generator, .fiber => 0.0,
+            .object => |o| if (nativeCast(o, .float)) |n| n.float else 1.0,
+            .array, .generator, .fiber => 0.0,
         };
     }
 

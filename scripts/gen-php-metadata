@@ -2,9 +2,10 @@
 # Regenerates what zphp takes from php's own reflection for the natives and
 # classes the two share:
 #
-#   src/stdlib/native_params_generated.zig    the parameter list of every native
-#       function and method: names, defaults, which are required, which one is
-#       variadic. named arguments to natives are placed and defaulted from it
+#   src/stdlib/native_params_generated.zig    the signature of every native
+#       function and method: parameter names, types, defaults, which are
+#       required, by reference, or variadic, and the return type. named
+#       arguments to natives are placed by it and reflection reports it
 #   src/stdlib/serialization_generated.zig    the internal classes php refuses
 #       to serialize, and whether a subclass may opt back in by implementing
 #       __serialize/__unserialize
@@ -64,13 +65,20 @@ foreach (explode("\n", trim(stream_get_contents(STDIN))) as $name) {
     }
     $params = [];
     foreach ($r->getParameters() as $p) {
-        $param = ['name' => $p->getName(), 'variadic' => $p->isVariadic()];
+        $param = [
+            'name' => $p->getName(),
+            'variadic' => $p->isVariadic(),
+            'by_ref' => $p->isPassedByReference(),
+            'type' => $p->hasType() ? (string) $p->getType() : '',
+            'constant' => '',
+        ];
         if (!$p->isOptional()) {
             $param['default'] = ['kind' => 'required'];
         } elseif (!$p->isDefaultValueAvailable()) {
             $param['default'] = ['kind' => 'unknown'];
         } else {
             $v = $p->getDefaultValue();
+            if ($p->isDefaultValueConstant()) $param['constant'] = $p->getDefaultValueConstantName();
             $param['default'] = match (true) {
                 $v === null => ['kind' => 'null'],
                 is_bool($v) => ['kind' => 'bool', 'value' => $v],
@@ -84,7 +92,11 @@ foreach (explode("\n", trim(stream_get_contents(STDIN))) as $name) {
         }
         $params[] = $param;
     }
-    $out[$name] = $params;
+    $out[$name] = [
+        'params' => $params,
+        'returns' => $r->hasReturnType() ? (string) $r->getReturnType() : '',
+        'tentative' => $r->hasTentativeReturnType() ? (string) $r->getTentativeReturnType() : '',
+    ];
 }
 echo json_encode($out, JSON_PRESERVE_ZERO_FRACTION);
 '''
@@ -137,7 +149,23 @@ def zig_param(p) -> str:
         fields.append(".default = %s" % zig_default(p["default"]))
     if p["variadic"]:
         fields.append(".variadic = true")
+    if p["by_ref"]:
+        fields.append(".by_ref = true")
+    if p["type"]:
+        fields.append(".type = %s" % zig_string(p["type"].encode()))
+    if p["constant"]:
+        fields.append(".default_constant = %s" % zig_string(p["constant"].encode()))
     return ".{ " + ", ".join(fields) + " }"
+
+
+def zig_signature(sig) -> str:
+    body = ", ".join(zig_param(p) for p in sig["params"])
+    fields = [".params = &[_]Param{%s}" % ((" " + body + " ") if body else "")]
+    if sig["returns"]:
+        fields.append(".returns = %s" % zig_string(sig["returns"].encode()))
+    if sig["tentative"]:
+        fields.append(".tentative_returns = %s" % zig_string(sig["tentative"].encode()))
+    return "Signature{ " + ", ".join(fields) + " }"
 
 
 def run_script(binary, source, stdin=""):
@@ -159,13 +187,14 @@ def main():
     lines = [
         header,
         "const std = @import(\"std\");",
-        "const Param = @import(\"native_params.zig\").Param;",
+        "const native_params = @import(\"native_params.zig\");",
+        "const Param = native_params.Param;",
+        "const Signature = native_params.Signature;",
         "",
-        "pub const map = std.StaticStringMap([]const Param).initComptime(.{",
+        "pub const map = std.StaticStringMap(Signature).initComptime(.{",
     ]
     for name in sorted(signatures):
-        body = ", ".join(zig_param(p) for p in signatures[name])
-        lines.append("    .{ %s, &[_]Param{%s} }," % (zig_string(name.encode()), (" " + body + " ") if body else ""))
+        lines.append("    .{ %s, %s }," % (zig_string(name.encode()), zig_signature(signatures[name])))
     lines.append("});")
     with open(PARAMS_OUT, "w") as f:
         f.write("\n".join(lines) + "\n")

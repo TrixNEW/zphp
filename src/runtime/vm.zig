@@ -230,7 +230,7 @@ pub const NativeContext = struct {
 pub const NativeResult = @import("native_result.zig").NativeResult;
 const extension = @import("../extension.zig");
 pub const NativeFn = *const fn (*NativeContext, []const Value) RuntimeError!NativeResult;
-pub const NativeBinop = enum { add, sub, mul, div, mod, pow, compare, negate };
+pub const NativeBinop = enum { add, sub, mul, div, mod, pow, compare, negate, bit_and, bit_or, bit_xor, bit_not, shl, shr };
 
 pub const CaptureEntry = struct {
     closure_name: []const u8,
@@ -297,6 +297,9 @@ pub const ClassDef = struct {
     // what var_dump and print_r list for an instance, the way php's internal
     // classes report state that lives outside their properties (GMP's num)
     native_debug_info: ?*const fn (*NativeContext, *PhpObject) RuntimeError!*PhpArray = null,
+    // (int), (float), (bool), and the numeric conversion array_sum uses, for a
+    // class whose value lives in its native handle (GMP)
+    native_cast: ?*const fn (*PhpObject, @import("value.zig").NumericCast) ?Value = null,
     // set when any property-hook method ($hook_get/$hook_set) is registered on
     // this class. lets hasPropHook skip the per-access bufPrint + method lookup
     // for the >99% of classes that declare no hooks (PHP 8.4 feature). does not
@@ -2939,6 +2942,29 @@ pub const VM = struct {
     pub fn installHooks(self: *VM) void {
         @import("value.zig").release_hook = .{ .ctx = self, .call = releaseHookFn };
         @import("value.zig").cell_unbind_hook = .{ .ctx = self, .call = cellUnbindHook };
+        @import("value.zig").object_hooks = .{ .ctx = self, .cast = objectCastHook, .compare = objectCompareHook };
+    }
+
+    fn objectCastHook(ctx: *anyopaque, obj: *PhpObject, target: @import("value.zig").NumericCast) ?Value {
+        const self: *VM = @ptrCast(@alignCast(ctx));
+        var name: ?[]const u8 = obj.class_name;
+        while (name) |n| {
+            const def = self.classes.get(n) orelse return null;
+            if (def.native_cast) |cast| return cast(obj, target);
+            name = def.parent;
+        }
+        return null;
+    }
+
+    // natives compare without a way to raise, so an operand the class
+    // rejects falls back to the ordinary object comparison
+    fn objectCompareHook(ctx: *anyopaque, a: Value, b: Value) ?i64 {
+        const self: *VM = @ptrCast(@alignCast(ctx));
+        const order = self.objectBinop(.compare, a, b) catch {
+            self.pending_exception = null;
+            return null;
+        };
+        return if (order) |v| v.int else null;
     }
 
     pub fn interpret(self: *VM, result: *const CompileResult) RuntimeError!void {
@@ -3609,7 +3635,12 @@ pub const VM = struct {
                     if (a == .array and b == .array) {
                         self.push(.{ .array = try self.arrayUnion(a.array, b.array) });
                     } else {
-                        if (try self.objectBinop(.add, a, b)) |r| {
+                        const handlers_before = self.handler_count;
+                        const overloaded = self.objectBinop(.add, a, b) catch {
+                            if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                            return error.RuntimeError;
+                        };
+                        if (overloaded) |r| {
                             self.push(r);
                             continue;
                         }
@@ -3620,7 +3651,12 @@ pub const VM = struct {
                 .subtract => {
                     const b = self.pop();
                     const a = self.pop();
-                    if (try self.objectBinop(.sub, a, b)) |r| {
+                    const handlers_before = self.handler_count;
+                    const overloaded = self.objectBinop(.sub, a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (overloaded) |r| {
                         self.push(r);
                         continue;
                     }
@@ -3630,7 +3666,12 @@ pub const VM = struct {
                 .multiply => {
                     const b = self.pop();
                     const a = self.pop();
-                    if (try self.objectBinop(.mul, a, b)) |r| {
+                    const handlers_before = self.handler_count;
+                    const overloaded = self.objectBinop(.mul, a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (overloaded) |r| {
                         self.push(r);
                         continue;
                     }
@@ -3650,7 +3691,12 @@ pub const VM = struct {
                 .divide => {
                     const b = self.pop();
                     const a = self.pop();
-                    if (try self.objectBinop(.div, a, b)) |r| {
+                    const handlers_before = self.handler_count;
+                    const overloaded = self.objectBinop(.div, a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (overloaded) |r| {
                         self.push(r);
                         continue;
                     }
@@ -3665,7 +3711,12 @@ pub const VM = struct {
                 .modulo => {
                     const b = self.pop();
                     const a = self.pop();
-                    if (try self.objectBinop(.mod, a, b)) |r| {
+                    const handlers_before = self.handler_count;
+                    const overloaded = self.objectBinop(.mod, a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (overloaded) |r| {
                         self.push(r);
                         continue;
                     }
@@ -3680,7 +3731,12 @@ pub const VM = struct {
                 .power => {
                     const b = self.pop();
                     const a = self.pop();
-                    if (try self.objectBinop(.pow, a, b)) |r| {
+                    const handlers_before = self.handler_count;
+                    const overloaded = self.objectBinop(.pow, a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (overloaded) |r| {
                         self.push(r);
                         continue;
                     }
@@ -3689,7 +3745,12 @@ pub const VM = struct {
                 },
                 .negate => {
                     const v = self.pop();
-                    if (try self.objectBinop(.negate, v, .null)) |r| {
+                    const handlers_before = self.handler_count;
+                    const overloaded = self.objectBinop(.negate, v, .null) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (overloaded) |r| {
                         self.push(r);
                         continue;
                     }
@@ -3748,6 +3809,15 @@ pub const VM = struct {
                         const result = try self.bitwiseStrings(a.string.bytes(), b.string.bytes(), .and_op);
                         self.push(.{ .string = Value.String.borrowed(result) });
                     } else {
+                        const handlers_before = self.handler_count;
+                        const overloaded = self.objectBinop(.bit_and, a, b) catch {
+                            if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                            return error.RuntimeError;
+                        };
+                        if (overloaded) |r| {
+                            self.push(r);
+                            continue;
+                        }
                         if (try self.checkArithOperands(a, b, "&")) continue;
                         self.push(.{ .int = Value.toInt(a) & Value.toInt(b) });
                     }
@@ -3759,6 +3829,15 @@ pub const VM = struct {
                         const result = try self.bitwiseStrings(a.string.bytes(), b.string.bytes(), .or_op);
                         self.push(.{ .string = Value.String.borrowed(result) });
                     } else {
+                        const handlers_before = self.handler_count;
+                        const overloaded = self.objectBinop(.bit_or, a, b) catch {
+                            if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                            return error.RuntimeError;
+                        };
+                        if (overloaded) |r| {
+                            self.push(r);
+                            continue;
+                        }
                         if (try self.checkArithOperands(a, b, "|")) continue;
                         self.push(.{ .int = Value.toInt(a) | Value.toInt(b) });
                     }
@@ -3770,6 +3849,15 @@ pub const VM = struct {
                         const result = try self.bitwiseStrings(a.string.bytes(), b.string.bytes(), .xor_op);
                         self.push(.{ .string = Value.String.borrowed(result) });
                     } else {
+                        const handlers_before = self.handler_count;
+                        const overloaded = self.objectBinop(.bit_xor, a, b) catch {
+                            if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                            return error.RuntimeError;
+                        };
+                        if (overloaded) |r| {
+                            self.push(r);
+                            continue;
+                        }
                         if (try self.checkArithOperands(a, b, "^")) continue;
                         self.push(.{ .int = Value.toInt(a) ^ Value.toInt(b) });
                     }
@@ -3782,11 +3870,49 @@ pub const VM = struct {
                 },
                 .bit_not => {
                     const v = self.pop();
-                    self.push(.{ .int = ~Value.toInt(v) });
+                    const handlers_before = self.handler_count;
+                    const overloaded = self.objectBinop(.bit_not, v, .null) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (overloaded) |r| {
+                        self.push(r);
+                        continue;
+                    }
+                    switch (v) {
+                        .int, .float => self.push(.{ .int = ~Value.toInt(v) }),
+                        .string => |str| {
+                            const out = try self.allocator.alloc(u8, str.bytes().len);
+                            try self.strings.append(self.allocator, out);
+                            for (str.bytes(), out) |c, *o| o.* = ~c;
+                            self.push(.{ .string = Value.String.borrowed(out) });
+                        },
+                        else => {
+                            const what = switch (v) {
+                                .bool => |bv| if (bv) "true" else "false",
+                                .object => |o| o.class_name,
+                                else => arithTypeName(v),
+                            };
+                            const msg = try std.fmt.allocPrint(self.allocator, "Cannot perform bitwise not on {s}", .{what});
+                            try self.strings.append(self.allocator, msg);
+                            if (try self.throwBuiltinException("TypeError", msg)) continue;
+                            return error.RuntimeError;
+                        },
+                    }
                 },
                 .shift_left => {
                     const b = self.pop();
                     const a = self.pop();
+                    const handlers_before = self.handler_count;
+                    const overloaded = self.objectBinop(.shl, a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (overloaded) |r| {
+                        self.push(r);
+                        continue;
+                    }
+                    if (try self.checkArithOperands(a, b, "<<")) continue;
                     const sh = Value.toInt(b);
                     if (sh < 0) {
                         self.sp += 2;
@@ -3803,6 +3929,16 @@ pub const VM = struct {
                 .shift_right => {
                     const b = self.pop();
                     const a = self.pop();
+                    const handlers_before = self.handler_count;
+                    const overloaded = self.objectBinop(.shr, a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (overloaded) |r| {
+                        self.push(r);
+                        continue;
+                    }
+                    if (try self.checkArithOperands(a, b, ">>")) continue;
                     const sh = Value.toInt(b);
                     if (sh < 0) {
                         self.sp += 2;
@@ -3822,12 +3958,22 @@ pub const VM = struct {
                 .equal => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(.{ .bool = try self.looseEqualWithStringable(a, b) });
+                    const handlers_before = self.handler_count;
+                    const compared = self.looseEqualWithStringable(a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    self.push(.{ .bool = compared });
                 },
                 .not_equal => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(.{ .bool = !try self.looseEqualWithStringable(a, b) });
+                    const handlers_before = self.handler_count;
+                    const compared = self.looseEqualWithStringable(a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    self.push(.{ .bool = !compared });
                 },
                 .identical => {
                     const b = self.pop();
@@ -3842,27 +3988,52 @@ pub const VM = struct {
                 .less => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(.{ .bool = try self.compareWithStringable(a, b) < 0 });
+                    const handlers_before = self.handler_count;
+                    const compared = self.compareWithStringable(a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    self.push(.{ .bool = compared < 0 });
                 },
                 .less_equal => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(.{ .bool = try self.compareWithStringable(a, b) <= 0 });
+                    const handlers_before = self.handler_count;
+                    const compared = self.compareWithStringable(a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    self.push(.{ .bool = compared <= 0 });
                 },
                 .greater => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(.{ .bool = try self.compareWithStringable(a, b) > 0 });
+                    const handlers_before = self.handler_count;
+                    const compared = self.compareWithStringable(a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    self.push(.{ .bool = compared > 0 });
                 },
                 .greater_equal => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(.{ .bool = try self.compareWithStringable(a, b) >= 0 });
+                    const handlers_before = self.handler_count;
+                    const compared = self.compareWithStringable(a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    self.push(.{ .bool = compared >= 0 });
                 },
                 .spaceship => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(.{ .int = try self.compareWithStringable(a, b) });
+                    const handlers_before = self.handler_count;
+                    const compared = self.compareWithStringable(a, b) catch {
+                        if (self.resumeAfterThrow(base_frame, handlers_before)) continue;
+                        return error.RuntimeError;
+                    };
+                    self.push(.{ .int = compared });
                 },
 
                 .not => {
@@ -4127,7 +4298,8 @@ pub const VM = struct {
                                 if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                                 return error.RuntimeError;
                             };
-                        } else if (native_params.get(name)) |params| {
+                        } else if (native_params.get(name)) |signature| {
+                            const params = signature.params;
                             var resolved: [256]Value = undefined;
                             var resolved_sources: [256]RefSource = undefined;
                             const placed = try self.placeNativeNamedArgs(arr, params, &resolved, &resolved_sources);
@@ -6897,41 +7069,25 @@ pub const VM = struct {
 
                 .cast_int => {
                     const v = self.pop();
-                    if (v == .object and self.hasMethod(v.object.class_name, "__toString")) {
-                        const s = self.objectToString(v.object) catch {
-                            if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
-                            return error.RuntimeError;
-                        };
-                        self.push(.{ .int = Value.toInt(.{ .string = Value.String.borrowed(s) }) });
-                    } else {
-                        if (v == .object) {
-                            const w = std.fmt.allocPrint(self.allocator, "Object of class {s} could not be converted to int", .{v.object.class_name}) catch null;
-                            if (w) |m| {
-                                self.strings.append(self.allocator, m) catch {};
-                                self.emitWarning(m);
-                            }
+                    if (v == .object and @import("value.zig").nativeCast(v.object, .int) == null) {
+                        const w = std.fmt.allocPrint(self.allocator, "Object of class {s} could not be converted to int", .{v.object.class_name}) catch null;
+                        if (w) |m| {
+                            self.strings.append(self.allocator, m) catch {};
+                            self.emitWarning(m);
                         }
-                        self.push(.{ .int = Value.toInt(v) });
                     }
+                    self.push(.{ .int = Value.toInt(v) });
                 },
                 .cast_float => {
                     const v = self.pop();
-                    if (v == .object and self.hasMethod(v.object.class_name, "__toString")) {
-                        const s = self.objectToString(v.object) catch {
-                            if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
-                            return error.RuntimeError;
-                        };
-                        self.push(.{ .float = Value.toFloat(.{ .string = Value.String.borrowed(s) }) });
-                    } else {
-                        if (v == .object) {
-                            const w = std.fmt.allocPrint(self.allocator, "Object of class {s} could not be converted to float", .{v.object.class_name}) catch null;
-                            if (w) |m| {
-                                self.strings.append(self.allocator, m) catch {};
-                                self.emitWarning(m);
-                            }
+                    if (v == .object and @import("value.zig").nativeCast(v.object, .float) == null) {
+                        const w = std.fmt.allocPrint(self.allocator, "Object of class {s} could not be converted to float", .{v.object.class_name}) catch null;
+                        if (w) |m| {
+                            self.strings.append(self.allocator, m) catch {};
+                            self.emitWarning(m);
                         }
-                        self.push(.{ .float = Value.toFloat(v) });
                     }
+                    self.push(.{ .float = Value.toFloat(v) });
                 },
                 .cast_string => {
                     const v = self.pop();
@@ -7904,7 +8060,8 @@ pub const VM = struct {
                                             self.setArgSource(self.sp - 1, resolved_sources[i]);
                                         }
                                         arg_count = @intCast(count);
-                                    } else if (native_params.get(ctn)) |params| {
+                                    } else if (native_params.get(ctn)) |signature| {
+                                        const params = signature.params;
                                         var resolved: [256]Value = undefined;
                                         var resolved_sources: [256]RefSource = undefined;
                                         const placed = try self.placeNativeNamedArgs(arr_val.array, params, &resolved, &resolved_sources);
@@ -9389,7 +9546,8 @@ pub const VM = struct {
                                         self.push(resolved_buf[i]);
                                         self.setArgSource(self.sp - 1, resolved_sources[i]);
                                     }
-                                } else if (native_params.get(fn_name)) |params| {
+                                } else if (native_params.get(fn_name)) |signature| {
+                                    const params = signature.params;
                                     const placed = try self.placeNativeNamedArgs(arr, params, &resolved_buf, &resolved_sources);
                                     if (placed.problem) |problem| {
                                         self.dropN(1);
@@ -10214,7 +10372,8 @@ pub const VM = struct {
                                 self.setArgSource(self.sp - 1, resolved_sources[i]);
                             }
                             resolved_ac = pos;
-                        } else if (native_params.get(full_name)) |params| {
+                        } else if (native_params.get(full_name)) |signature| {
+                            const params = signature.params;
                             var resolved: [256]Value = undefined;
                             var resolved_sources: [256]RefSource = undefined;
                             const placed = try self.placeNativeNamedArgs(arr, params, &resolved, &resolved_sources);
@@ -11423,6 +11582,7 @@ pub const VM = struct {
     /// PHP 8 rejects non-numeric strings, arrays (except for +), and objects
     /// without __toString as arithmetic operands with TypeError. returns true
     /// when the throw was caught in-frame and the caller should `continue`
+    // an operator on an instance of a native class that overloads it
     fn objectBinop(self: *VM, op: NativeBinop, a: Value, b: Value) RuntimeError!?Value {
         if (a != .object and b != .object) return null;
         const hook = blk: {
@@ -11432,6 +11592,14 @@ pub const VM = struct {
         };
         var ctx = self.makeContext(null);
         return hook(&ctx, op, a, b);
+    }
+
+    // an opcode that ran a helper which threw: true when the exception reached
+    // a catch block in this run, whether the thrower dispatched it in place or
+    // left it pending, so the handler resumes there
+    fn resumeAfterThrow(self: *VM, base_frame: usize, handlers_before: usize) bool {
+        if (self.handler_count < handlers_before) return true;
+        return self.pending_exception != null and self.dispatchPendingException(base_frame);
     }
 
     pub fn checkArithOperands(self: *VM, a: Value, b: Value, comptime op: []const u8) RuntimeError!bool {
@@ -17550,7 +17718,7 @@ pub const VM = struct {
         return .{ .count = count };
     }
 
-    fn nativeDefault(self: *VM, d: native_params.Default) RuntimeError!Value {
+    pub fn nativeDefault(self: *VM, d: native_params.Default) RuntimeError!Value {
         return switch (d) {
             .required, .unknown, .null => .null,
             .bool => |b| .{ .bool = b },

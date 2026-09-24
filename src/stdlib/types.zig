@@ -295,8 +295,17 @@ pub fn phpTypeName(v: Value) []const u8 {
     };
 }
 
-fn intval(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+// php warns when an object without a numeric conversion is cast to a number
+fn warnObjectToNumber(ctx: *NativeContext, v: Value, comptime target: []const u8) RuntimeError!void {
+    if (v != .object or @import("../runtime/value.zig").nativeCast(v.object, .number) != null) return;
+    const msg = try std.fmt.allocPrint(ctx.allocator, "Object of class {s} could not be converted to " ++ target, .{v.object.class_name});
+    try ctx.strings.append(ctx.allocator, msg);
+    ctx.vm.emitWarning(msg);
+}
+
+fn intval(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0) return NativeResult.scalar(.{ .int = 0 });
+    try warnObjectToNumber(ctx, args[0], "int");
     if (args.len >= 2 and args[1] == .int and args[1].int != 10 and args[0] == .string) {
         var base: u8 = @intCast(@max(0, @min(36, args[1].int)));
         var s = std.mem.trim(u8, args[0].string.bytes(), " \t\n\r");
@@ -341,8 +350,9 @@ fn intval(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     return NativeResult.scalar(.{ .int = Value.toInt(args[0]) });
 }
 
-fn floatval(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+fn floatval(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0) return NativeResult.scalar(.{ .float = 0.0 });
+    try warnObjectToNumber(ctx, args[0], "float");
     return NativeResult.scalar(.{ .float = Value.toFloat(args[0]) });
 }
 

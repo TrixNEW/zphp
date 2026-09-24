@@ -1562,6 +1562,10 @@ fn numberBinop(ctx: *NativeContext, op: vm_mod.NativeBinop, a: Value, b: Value) 
             return isNumberObject(v) or v == .int or v == .string or v == .float or v == .bool;
         }
     };
+    switch (op) {
+        .bit_and, .bit_or, .bit_xor, .bit_not, .shl, .shr => return null,
+        else => {},
+    }
     if (!supported.ok(a)) return null;
     if (op != .negate and !supported.ok(b)) return null;
     const sa = try operandString(ctx, a, "add", "num");

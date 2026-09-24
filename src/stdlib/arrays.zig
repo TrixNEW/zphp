@@ -1331,17 +1331,49 @@ fn array_sum(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
                 float_sum += f;
             },
             else => {
-                const v = Value.toFloat(entry.value);
-                if (v != 0) {
-                    float_sum += v;
-                    if (v != @trunc(v)) has_float = true;
-                    int_sum +%= Value.toInt(entry.value);
+                const operand = (try arithmeticOperand(ctx, entry.value, "array_sum(): Addition")) orelse continue;
+                switch (operand) {
+                    .int => |i| {
+                        int_sum +%= i;
+                        float_sum += @floatFromInt(i);
+                    },
+                    .float => |f| {
+                        has_float = true;
+                        float_sum += f;
+                    },
+                    else => {
+                        const v = Value.toFloat(operand);
+                        if (v != 0) {
+                            float_sum += v;
+                            if (v != @trunc(v)) has_float = true;
+                            int_sum +%= Value.toInt(operand);
+                        }
+                    },
                 }
             },
         }
     }
     if (has_float) return NativeResult.scalar(.{ .float = float_sum });
     return NativeResult.scalar(.{ .int = int_sum });
+}
+
+// an element array_sum/array_product can use: arrays and objects that do
+// not convert to a number are skipped with php's warning
+fn arithmeticOperand(ctx: *NativeContext, v: Value, comptime what: []const u8) RuntimeError!?Value {
+    switch (v) {
+        .array => {
+            ctx.vm.emitWarning(what ++ " is not supported on type array");
+            return null;
+        },
+        .object => |o| {
+            if (@import("../runtime/value.zig").nativeCast(o, .number)) |n| return n;
+            const msg = try std.fmt.allocPrint(ctx.allocator, what ++ " is not supported on type {s}", .{o.class_name});
+            try ctx.strings.append(ctx.allocator, msg);
+            ctx.vm.emitWarning(msg);
+            return null;
+        },
+        else => return v,
+    }
 }
 
 fn array_product(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -1363,8 +1395,10 @@ fn array_product(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
                 float_prod *= f;
             },
             else => {
-                int_prod *%= Value.toInt(entry.value);
-                float_prod *= Value.toFloat(entry.value);
+                const operand = (try arithmeticOperand(ctx, entry.value, "array_product(): Multiplication")) orelse continue;
+                if (operand == .float) has_float = true;
+                int_prod *%= Value.toInt(operand);
+                float_prod *= Value.toFloat(operand);
             },
         }
     }

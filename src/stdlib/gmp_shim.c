@@ -82,6 +82,9 @@ void zphp_mpz_lcm(zphp_mpz* r, const zphp_mpz* a, const zphp_mpz* b) { mpz_lcm(r
 int zphp_mpz_invert(zphp_mpz* r, const zphp_mpz* a, const zphp_mpz* m) { return mpz_invert(r->v, a->v, m->v); }
 void zphp_mpz_mul_2exp(zphp_mpz* r, const zphp_mpz* a, unsigned long e) { mpz_mul_2exp(r->v, a->v, e); }
 void zphp_mpz_tdiv_q_2exp(zphp_mpz* r, const zphp_mpz* a, unsigned long e) { mpz_tdiv_q_2exp(r->v, a->v, e); }
+double zphp_mpz_get_d(const zphp_mpz* a) { return mpz_get_d(a->v); }
+int zphp_mpz_fits_slong(const zphp_mpz* a) { return mpz_fits_slong_p(a->v); }
+void zphp_mpz_fdiv_q_2exp(zphp_mpz* r, const zphp_mpz* a, unsigned long e) { mpz_fdiv_q_2exp(r->v, a->v, e); }
 int zphp_mpz_probab_prime_p(const zphp_mpz* a, int reps) { return mpz_probab_prime_p(a->v, reps); }
 void zphp_mpz_nextprime(zphp_mpz* r, const zphp_mpz* a) { mpz_nextprime(r->v, a->v); }
 size_t zphp_mpz_sizeinbase(const zphp_mpz* a, int base) { return mpz_sizeinbase(a->v, base); }

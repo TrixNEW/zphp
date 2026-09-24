@@ -47,6 +47,9 @@ extern fn zphp_mpz_lcm(r: *ZphpMpz, a: *const ZphpMpz, b: *const ZphpMpz) void;
 extern fn zphp_mpz_invert(r: *ZphpMpz, a: *const ZphpMpz, m: *const ZphpMpz) c_int;
 extern fn zphp_mpz_mul_2exp(r: *ZphpMpz, a: *const ZphpMpz, e: c_ulong) void;
 extern fn zphp_mpz_tdiv_q_2exp(r: *ZphpMpz, a: *const ZphpMpz, e: c_ulong) void;
+extern fn zphp_mpz_fdiv_q_2exp(r: *ZphpMpz, a: *const ZphpMpz, e: c_ulong) void;
+extern fn zphp_mpz_get_d(a: *const ZphpMpz) f64;
+extern fn zphp_mpz_fits_slong(a: *const ZphpMpz) c_int;
 extern fn zphp_mpz_probab_prime_p(a: *const ZphpMpz, reps: c_int) c_int;
 extern fn zphp_mpz_nextprime(r: *ZphpMpz, a: *const ZphpMpz) void;
 extern fn zphp_mpz_sizeinbase(a: *const ZphpMpz, base: c_int) usize;
@@ -523,7 +526,7 @@ fn cloneGmp(_: *VM, src: *PhpObject, copy: *PhpObject) bool {
 }
 
 pub fn register(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "GMP", .native_cleanup = cleanupGmp, .native_clone = cloneGmp, .native_debug_info = gmpDebugInfo };
+    var def = ClassDef{ .name = "GMP", .native_cleanup = cleanupGmp, .native_clone = cloneGmp, .native_debug_info = gmpDebugInfo, .native_binop = gmpBinop, .native_cast = gmpCast };
     // GMP is mostly a value-holding class; user-facing methods are
     // PHP's procedural ones. providing __toString lets `(string)$gmp` work
     try def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
@@ -600,6 +603,118 @@ fn gmpUnserialize(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
         if (e.key == .string) try obj.set(ctx.allocator, try ctx.createString(e.key.string.bytes()), e.value);
     };
     return NativeResult.scalar(.null);
+}
+
+// ---------------------------------------------------------------------------
+// operators: php overloads arithmetic, bitwise, shift, and comparison
+// operators for GMP, converting the other operand the way the gmp_*
+// functions do and raising their errors
+
+fn typeName(v: Value) []const u8 {
+    return switch (v) {
+        .null => "null",
+        .bool => "bool",
+        .int => "int",
+        .float => "float",
+        .string => "string",
+        .array => "array",
+        .object => |o| o.class_name,
+        .generator => "Generator",
+        .fiber => "Fiber",
+    };
+}
+
+// left pending: an operator can be reached from inside a native (sort, max),
+// which must unwind before anything is dispatched
+fn throwOperand(ctx: *NativeContext, class_name: []const u8, comptime fmt: []const u8, args: anytype) RuntimeError {
+    const msg = try std.fmt.allocPrint(ctx.allocator, fmt, args);
+    try ctx.vm.strings.append(ctx.allocator, msg);
+    try ctx.vm.setPendingException(class_name, msg);
+    return error.RuntimeError;
+}
+
+// (int) keeps the low bits the way mpz_get_si does; the numeric conversion
+// array_sum uses falls back to float when the value does not fit
+fn gmpCast(obj: *PhpObject, target: @import("../runtime/value.zig").NumericCast) ?Value {
+    const p = getMpz(obj) orelse return null;
+    return switch (target) {
+        .int => .{ .int = zphp_mpz_get_si(p) },
+        .float => .{ .float = zphp_mpz_get_d(p) },
+        .bool => .{ .bool = zphp_mpz_sgn(p) != 0 },
+        .number => if (zphp_mpz_fits_slong(p) != 0) .{ .int = zphp_mpz_get_si(p) } else .{ .float = zphp_mpz_get_d(p) },
+    };
+}
+
+// a fresh mpz holding the operand; the caller destroys it
+fn operandMpz(ctx: *NativeContext, v: Value) RuntimeError!*ZphpMpz {
+    const p = zphp_mpz_create() orelse return error.OutOfMemory;
+    errdefer zphp_mpz_destroy(p);
+    switch (v) {
+        .int => |i| _ = zphp_mpz_set_si(p, i),
+        .bool => |b| _ = zphp_mpz_set_si(p, @intFromBool(b)),
+        .float => |f| _ = zphp_mpz_set_si(p, Value.toInt(.{ .float = f })),
+        .string => |str| {
+            const z = try dupZ(ctx, str.bytes());
+            if (zphp_mpz_set_str(p, z.ptr, 0) != 0) return throwOperand(ctx, "ValueError", "Number is not an integer string", .{});
+        },
+        .object => |o| {
+            const src = if (std.mem.eql(u8, o.class_name, "GMP")) getMpz(o) else null;
+            zphp_mpz_set(p, src orelse return throwOperand(ctx, "TypeError", "Number must be of type GMP|string|int, {s} given", .{o.class_name}));
+        },
+        else => return throwOperand(ctx, "TypeError", "Number must be of type GMP|string|int, {s} given", .{typeName(v)}),
+    }
+    return p;
+}
+
+// a shift count or exponent: an int that is not negative
+fn operandCount(ctx: *NativeContext, v: Value, comptime what: []const u8) RuntimeError!c_ulong {
+    const p = try operandMpz(ctx, v);
+    defer zphp_mpz_destroy(p);
+    const n = zphp_mpz_get_si(p);
+    if (n < 0) return throwOperand(ctx, "ValueError", what ++ " must be greater than or equal to 0", .{});
+    return @intCast(n);
+}
+
+fn gmpBinop(ctx: *NativeContext, op: vm_mod.NativeBinop, a: Value, b: Value) RuntimeError!?Value {
+    const lhs = try operandMpz(ctx, a);
+    defer zphp_mpz_destroy(lhs);
+    const unary = op == .negate or op == .bit_not;
+    if (op == .compare) {
+        const rhs = try operandMpz(ctx, b);
+        defer zphp_mpz_destroy(rhs);
+        const r = zphp_mpz_cmp(lhs, rhs);
+        return .{ .int = if (r > 0) 1 else if (r < 0) -1 else 0 };
+    }
+    const obj = try createGmpObj(ctx);
+    const out = getMpz(obj).?;
+    if (unary) {
+        if (op == .negate) zphp_mpz_neg(out, lhs) else zphp_mpz_com(out, lhs);
+        return .{ .object = obj };
+    }
+    switch (op) {
+        .pow => zphp_mpz_pow_ui(out, lhs, try operandCount(ctx, b, "Exponent")),
+        .shl => zphp_mpz_mul_2exp(out, lhs, try operandCount(ctx, b, "Shift")),
+        .shr => zphp_mpz_fdiv_q_2exp(out, lhs, try operandCount(ctx, b, "Shift")),
+        else => {
+            const rhs = try operandMpz(ctx, b);
+            defer zphp_mpz_destroy(rhs);
+            if ((op == .div or op == .mod) and zphp_mpz_sgn(rhs) == 0) {
+                return throwOperand(ctx, "DivisionByZeroError", "{s}", .{if (op == .div) "Division by zero" else "Modulo by zero"});
+            }
+            switch (op) {
+                .add => zphp_mpz_add(out, lhs, rhs),
+                .sub => zphp_mpz_sub(out, lhs, rhs),
+                .mul => zphp_mpz_mul(out, lhs, rhs),
+                .div => zphp_mpz_tdiv_q(out, lhs, rhs),
+                .mod => zphp_mpz_mod(out, lhs, rhs),
+                .bit_and => zphp_mpz_and(out, lhs, rhs),
+                .bit_or => zphp_mpz_ior(out, lhs, rhs),
+                .bit_xor => zphp_mpz_xor(out, lhs, rhs),
+                else => unreachable,
+            }
+        },
+    }
+    return .{ .object = obj };
 }
 
 // php lists a GMP's own properties and then its value in decimal as num
