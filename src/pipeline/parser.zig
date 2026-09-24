@@ -57,6 +57,7 @@ pub fn parse(allocator: Allocator, source: []const u8) Allocator.Error!Ast {
     const attr_slice = try p.attr_ranges.toOwnedSlice(allocator);
 
     return .{
+        .halt_offset = if (lexer.halt_offset) |o| @intCast(o) else null,
         .source = source,
         .tokens = tok_slice,
         .nodes = nodes_slice,
@@ -177,7 +178,7 @@ const Parser = struct {
             .kw_enum => self.parseEnumDecl(),
             .kw_throw => self.parseThrowStmt(),
             .kw_try => self.parseTryCatch(),
-            .kw_declare => self.skipDeclare(),
+            .kw_declare => self.parseDeclare(),
             .kw_global => self.parseGlobalStmt(),
             .kw_static => self.parseStaticVarStmt(),
             .kw_namespace => self.parseNamespaceDecl(),
@@ -258,18 +259,22 @@ const Parser = struct {
         return false;
     }
 
-    // declare(strict_types=1); - skip the entire directive
-    fn skipDeclare(self: *Parser) Error!u32 {
-        _ = self.advance(); // declare
-        if (self.peek() == .l_paren) {
+    fn parseDeclare(self: *Parser) Error!u32 {
+        const tok = self.advance(); // declare
+        _ = try self.expect(.l_paren);
+        while (self.peek() != .r_paren and self.peek() != .eof) _ = self.advance();
+        const close = try self.expect(.r_paren);
+        var body: u32 = 0;
+        if (self.peek() == .semicolon) {
             _ = self.advance();
-            while (self.peek() != .r_paren and self.peek() != .eof) {
-                _ = self.advance();
-            }
-            if (self.peek() == .r_paren) _ = self.advance();
+        } else if (self.peek() == .colon) {
+            body = try self.parseAltBlock(&.{.kw_enddeclare});
+            _ = try self.expect(.kw_enddeclare);
+            _ = try self.expect(.semicolon);
+        } else {
+            body = try self.parseStatement();
         }
-        if (self.peek() == .semicolon) _ = self.advance();
-        return self.parseStatement();
+        return self.addNode(.{ .tag = .declare_stmt, .main_token = tok, .data = .{ .lhs = close, .rhs = body } });
     }
 
     fn parseGotoStmt(self: *Parser) Error!u32 {
@@ -406,6 +411,8 @@ const Parser = struct {
         var prefix = std.ArrayListUnmanaged(u32){};
         defer prefix.deinit(self.allocator);
 
+        // an imported name is always fully qualified, so a leading `\` changes nothing
+        if (self.peek() == .backslash) _ = self.advance();
         try prefix.append(self.allocator, self.pos);
         if (self.peek() == .identifier or isSemiReserved(self.peek())) {
             _ = self.advance();
@@ -486,6 +493,7 @@ const Parser = struct {
                 _ = self.advance();
                 var parts = std.ArrayListUnmanaged(u32){};
                 defer parts.deinit(self.allocator);
+                if (self.peek() == .backslash) _ = self.advance();
                 try parts.append(self.allocator, self.pos);
                 if (self.peek() == .identifier or isSemiReserved(self.peek())) _ = self.advance() else _ = try self.expect(.identifier);
                 while (self.peek() == .backslash) {

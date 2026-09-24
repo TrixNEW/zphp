@@ -439,6 +439,7 @@ const Formatter = struct {
             .use_stmt => self.formatUseStmt(node, false),
             .use_fn_stmt => self.formatUseStmt(node, true),
             .use_const_stmt => self.formatUseStmt(node, false),
+            .declare_stmt => self.formatDeclare(node),
             .goto_stmt => {
                 self.write("goto ");
                 self.write(self.ast.tokens[node.main_token].lexeme(self.source));
@@ -594,6 +595,23 @@ const Formatter = struct {
             self.write(s);
         }
         self.write(";");
+    }
+
+    fn formatDeclare(self: *Formatter, node: Ast.Node) void {
+        self.write("declare(");
+        var i = node.main_token + 2;
+        while (i < node.data.lhs) : (i += 1) {
+            const lexeme = self.ast.tokens[i].lexeme(self.source);
+            self.write(lexeme);
+            if (std.mem.eql(u8, lexeme, ",")) self.write(" ");
+        }
+        self.write(")");
+        if (node.data.rhs == 0) {
+            self.write(";");
+            return;
+        }
+        self.write(" ");
+        self.formatBlock(node.data.rhs);
     }
 
     fn formatBlock(self: *Formatter, node_idx: u32) void {
@@ -1690,8 +1708,19 @@ pub fn formatSource(allocator: Allocator, ast: *const Ast, source: []const u8) !
     }
 
     f.formatRoot();
+    if (ast.halt_offset) |offset| f.write(source[haltStatementStart(source, offset)..]);
 
     return f.toOwnedSlice();
+}
+
+// `__halt_compiler();` and the data after it are kept byte for byte
+fn haltStatementStart(source: []const u8, offset: usize) usize {
+    var i = offset;
+    while (i >= "__halt_compiler".len) : (i -= 1) {
+        const start = i - "__halt_compiler".len;
+        if (std.ascii.eqlIgnoreCase(source[start..i], "__halt_compiler")) return start;
+    }
+    return offset;
 }
 
 fn writeStderr(msg: []const u8) !void {

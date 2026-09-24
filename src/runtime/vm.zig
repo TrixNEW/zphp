@@ -441,6 +441,9 @@ pub const ClassDef = struct {
 
 const TraitStaticProp = struct { name: []const u8, value: Value, doc_comment: []const u8 = "" };
 
+// where a class-like was declared, for reflection
+pub const DeclSite = struct { file: []const u8 = "", start_line: u32 = 0, end_line: u32 = 0, doc_comment: []const u8 = "" };
+
 pub const InterfaceDef = struct {
     name: []const u8,
     methods: std.ArrayListUnmanaged([]const u8) = .{},
@@ -1277,6 +1280,8 @@ pub const VM = struct {
         // set by initVm, never defaulted: a default would compile these paths
         // into the fast loop object as well
         slow: SlowPaths = undefined,
+        // declaration sites of traits, which have no ClassDef of their own
+        trait_sites: std.StringHashMapUnmanaged(DeclSite) = .{},
         // the last typed callee the fast loop checked and its declared types
         typed_func: ?*const ObjFunction = null,
         typed_params: []const []const u8 = &.{},
@@ -1557,6 +1562,7 @@ pub const VM = struct {
         try @import("../stdlib/gd.zig").register(vm, allocator);
         try @import("../stdlib/soap.zig").register(vm, allocator);
         try @import("../stdlib/mysqli.zig").register(vm, allocator);
+        try @import("../stdlib/tokenizer.zig").register(vm, allocator);
 
         // HashContext is the type returned by hash_init - register so
         // class_exists('HashContext') and instanceof checks see it
@@ -2229,160 +2235,6 @@ pub const VM = struct {
         try c.put(a, "INPUT_SERVER", .{ .int = 5 });
         try c.put(a, "INPUT_SESSION", .{ .int = 6 });
         try c.put(a, "INPUT_REQUEST", .{ .int = 99 });
-        try c.put(a, "TOKEN_PARSE", .{ .int = 1 });
-        try c.put(a, "T_ABSTRACT", .{ .int = 322 });
-        try c.put(a, "T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG", .{ .int = 409 });
-        try c.put(a, "T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG", .{ .int = 410 });
-        try c.put(a, "T_AND_EQUAL", .{ .int = 362 });
-        try c.put(a, "T_ARRAY", .{ .int = 344 });
-        try c.put(a, "T_ARRAY_CAST", .{ .int = 384 });
-        try c.put(a, "T_AS", .{ .int = 301 });
-        try c.put(a, "T_ATTRIBUTE", .{ .int = 355 });
-        try c.put(a, "T_BAD_CHARACTER", .{ .int = 411 });
-        try c.put(a, "T_BOOLEAN_AND", .{ .int = 369 });
-        try c.put(a, "T_BOOLEAN_OR", .{ .int = 368 });
-        try c.put(a, "T_BOOL_CAST", .{ .int = 386 });
-        try c.put(a, "T_BREAK", .{ .int = 307 });
-        try c.put(a, "T_CALLABLE", .{ .int = 345 });
-        try c.put(a, "T_CASE", .{ .int = 304 });
-        try c.put(a, "T_CATCH", .{ .int = 315 });
-        try c.put(a, "T_CLASS", .{ .int = 336 });
-        try c.put(a, "T_CLASS_C", .{ .int = 349 });
-        try c.put(a, "T_CLONE", .{ .int = 285 });
-        try c.put(a, "T_CLOSE_TAG", .{ .int = 396 });
-        try c.put(a, "T_COALESCE", .{ .int = 405 });
-        try c.put(a, "T_COALESCE_EQUAL", .{ .int = 367 });
-        try c.put(a, "T_COMMENT", .{ .int = 392 });
-        try c.put(a, "T_CONCAT_EQUAL", .{ .int = 360 });
-        try c.put(a, "T_CONST", .{ .int = 312 });
-        try c.put(a, "T_CONSTANT_ENCAPSED_STRING", .{ .int = 269 });
-        try c.put(a, "T_CONTINUE", .{ .int = 308 });
-        try c.put(a, "T_CURLY_OPEN", .{ .int = 401 });
-        try c.put(a, "T_DEC", .{ .int = 380 });
-        try c.put(a, "T_DECLARE", .{ .int = 299 });
-        try c.put(a, "T_DEFAULT", .{ .int = 305 });
-        try c.put(a, "T_DIR", .{ .int = 348 });
-        try c.put(a, "T_DIV_EQUAL", .{ .int = 359 });
-        try c.put(a, "T_DNUMBER", .{ .int = 261 });
-        try c.put(a, "T_DO", .{ .int = 292 });
-        try c.put(a, "T_DOC_COMMENT", .{ .int = 393 });
-        try c.put(a, "T_DOLLAR_OPEN_CURLY_BRACES", .{ .int = 400 });
-        try c.put(a, "T_DOUBLE_ARROW", .{ .int = 391 });
-        try c.put(a, "T_DOUBLE_CAST", .{ .int = 382 });
-        try c.put(a, "T_DOUBLE_COLON", .{ .int = 402 });
-        try c.put(a, "T_ECHO", .{ .int = 291 });
-        try c.put(a, "T_ELLIPSIS", .{ .int = 404 });
-        try c.put(a, "T_ELSE", .{ .int = 289 });
-        try c.put(a, "T_ELSEIF", .{ .int = 288 });
-        try c.put(a, "T_EMPTY", .{ .int = 334 });
-        try c.put(a, "T_ENCAPSED_AND_WHITESPACE", .{ .int = 268 });
-        try c.put(a, "T_ENDDECLARE", .{ .int = 300 });
-        try c.put(a, "T_ENDFOR", .{ .int = 296 });
-        try c.put(a, "T_ENDFOREACH", .{ .int = 298 });
-        try c.put(a, "T_ENDIF", .{ .int = 290 });
-        try c.put(a, "T_ENDSWITCH", .{ .int = 303 });
-        try c.put(a, "T_ENDWHILE", .{ .int = 294 });
-        try c.put(a, "T_END_HEREDOC", .{ .int = 399 });
-        try c.put(a, "T_ENUM", .{ .int = 339 });
-        try c.put(a, "T_EVAL", .{ .int = 274 });
-        try c.put(a, "T_EXIT", .{ .int = 286 });
-        try c.put(a, "T_EXTENDS", .{ .int = 340 });
-        try c.put(a, "T_FILE", .{ .int = 347 });
-        try c.put(a, "T_FINAL", .{ .int = 323 });
-        try c.put(a, "T_FINALLY", .{ .int = 316 });
-        try c.put(a, "T_FN", .{ .int = 311 });
-        try c.put(a, "T_FOR", .{ .int = 295 });
-        try c.put(a, "T_FOREACH", .{ .int = 297 });
-        try c.put(a, "T_FUNCTION", .{ .int = 310 });
-        try c.put(a, "T_FUNC_C", .{ .int = 352 });
-        try c.put(a, "T_GLOBAL", .{ .int = 320 });
-        try c.put(a, "T_GOTO", .{ .int = 309 });
-        try c.put(a, "T_HALT_COMPILER", .{ .int = 335 });
-        try c.put(a, "T_IF", .{ .int = 287 });
-        try c.put(a, "T_IMPLEMENTS", .{ .int = 341 });
-        try c.put(a, "T_INC", .{ .int = 379 });
-        try c.put(a, "T_INCLUDE", .{ .int = 272 });
-        try c.put(a, "T_INCLUDE_ONCE", .{ .int = 273 });
-        try c.put(a, "T_INLINE_HTML", .{ .int = 267 });
-        try c.put(a, "T_INSTANCEOF", .{ .int = 283 });
-        try c.put(a, "T_INSTEADOF", .{ .int = 319 });
-        try c.put(a, "T_INTERFACE", .{ .int = 338 });
-        try c.put(a, "T_INT_CAST", .{ .int = 381 });
-        try c.put(a, "T_ISSET", .{ .int = 333 });
-        try c.put(a, "T_IS_EQUAL", .{ .int = 370 });
-        try c.put(a, "T_IS_GREATER_OR_EQUAL", .{ .int = 375 });
-        try c.put(a, "T_IS_IDENTICAL", .{ .int = 372 });
-        try c.put(a, "T_IS_NOT_EQUAL", .{ .int = 371 });
-        try c.put(a, "T_IS_NOT_IDENTICAL", .{ .int = 373 });
-        try c.put(a, "T_IS_SMALLER_OR_EQUAL", .{ .int = 374 });
-        try c.put(a, "T_LINE", .{ .int = 346 });
-        try c.put(a, "T_LIST", .{ .int = 343 });
-        try c.put(a, "T_LNUMBER", .{ .int = 260 });
-        try c.put(a, "T_LOGICAL_AND", .{ .int = 279 });
-        try c.put(a, "T_LOGICAL_OR", .{ .int = 277 });
-        try c.put(a, "T_LOGICAL_XOR", .{ .int = 278 });
-        try c.put(a, "T_MATCH", .{ .int = 306 });
-        try c.put(a, "T_METHOD_C", .{ .int = 351 });
-        try c.put(a, "T_MINUS_EQUAL", .{ .int = 357 });
-        try c.put(a, "T_MOD_EQUAL", .{ .int = 361 });
-        try c.put(a, "T_MUL_EQUAL", .{ .int = 358 });
-        try c.put(a, "T_NAMESPACE", .{ .int = 342 });
-        try c.put(a, "T_NAME_FULLY_QUALIFIED", .{ .int = 263 });
-        try c.put(a, "T_NAME_QUALIFIED", .{ .int = 265 });
-        try c.put(a, "T_NAME_RELATIVE", .{ .int = 264 });
-        try c.put(a, "T_NEW", .{ .int = 284 });
-        try c.put(a, "T_NS_C", .{ .int = 354 });
-        try c.put(a, "T_NS_SEPARATOR", .{ .int = 403 });
-        try c.put(a, "T_NULLSAFE_OBJECT_OPERATOR", .{ .int = 390 });
-        try c.put(a, "T_NUM_STRING", .{ .int = 271 });
-        try c.put(a, "T_OBJECT_CAST", .{ .int = 385 });
-        try c.put(a, "T_OBJECT_OPERATOR", .{ .int = 389 });
-        try c.put(a, "T_OPEN_TAG", .{ .int = 394 });
-        try c.put(a, "T_OPEN_TAG_WITH_ECHO", .{ .int = 395 });
-        try c.put(a, "T_OR_EQUAL", .{ .int = 363 });
-        try c.put(a, "T_PAAMAYIM_NEKUDOTAYIM", .{ .int = 402 });
-        try c.put(a, "T_PIPE", .{ .int = 408 });
-        try c.put(a, "T_PLUS_EQUAL", .{ .int = 356 });
-        try c.put(a, "T_POW", .{ .int = 406 });
-        try c.put(a, "T_POW_EQUAL", .{ .int = 407 });
-        try c.put(a, "T_PRINT", .{ .int = 280 });
-        try c.put(a, "T_PRIVATE", .{ .int = 324 });
-        try c.put(a, "T_PRIVATE_SET", .{ .int = 327 });
-        try c.put(a, "T_PROPERTY_C", .{ .int = 353 });
-        try c.put(a, "T_PROTECTED", .{ .int = 325 });
-        try c.put(a, "T_PROTECTED_SET", .{ .int = 328 });
-        try c.put(a, "T_PUBLIC", .{ .int = 326 });
-        try c.put(a, "T_PUBLIC_SET", .{ .int = 329 });
-        try c.put(a, "T_READONLY", .{ .int = 330 });
-        try c.put(a, "T_REQUIRE", .{ .int = 275 });
-        try c.put(a, "T_REQUIRE_ONCE", .{ .int = 276 });
-        try c.put(a, "T_RETURN", .{ .int = 313 });
-        try c.put(a, "T_SL", .{ .int = 377 });
-        try c.put(a, "T_SL_EQUAL", .{ .int = 365 });
-        try c.put(a, "T_SPACESHIP", .{ .int = 376 });
-        try c.put(a, "T_SR", .{ .int = 378 });
-        try c.put(a, "T_SR_EQUAL", .{ .int = 366 });
-        try c.put(a, "T_START_HEREDOC", .{ .int = 398 });
-        try c.put(a, "T_STATIC", .{ .int = 321 });
-        try c.put(a, "T_STRING", .{ .int = 262 });
-        try c.put(a, "T_STRING_CAST", .{ .int = 383 });
-        try c.put(a, "T_STRING_VARNAME", .{ .int = 270 });
-        try c.put(a, "T_SWITCH", .{ .int = 302 });
-        try c.put(a, "T_THROW", .{ .int = 317 });
-        try c.put(a, "T_TRAIT", .{ .int = 337 });
-        try c.put(a, "T_TRAIT_C", .{ .int = 350 });
-        try c.put(a, "T_TRY", .{ .int = 314 });
-        try c.put(a, "T_UNSET", .{ .int = 332 });
-        try c.put(a, "T_UNSET_CAST", .{ .int = 387 });
-        try c.put(a, "T_USE", .{ .int = 318 });
-        try c.put(a, "T_VAR", .{ .int = 331 });
-        try c.put(a, "T_VARIABLE", .{ .int = 266 });
-        try c.put(a, "T_VOID_CAST", .{ .int = 388 });
-        try c.put(a, "T_WHILE", .{ .int = 293 });
-        try c.put(a, "T_WHITESPACE", .{ .int = 397 });
-        try c.put(a, "T_XOR_EQUAL", .{ .int = 364 });
-        try c.put(a, "T_YIELD", .{ .int = 281 });
-        try c.put(a, "T_YIELD_FROM", .{ .int = 282 });
     }
 
     // free_all=true frees the whole heap (deinit). free_all=false (serve-mode
@@ -2639,6 +2491,7 @@ pub const VM = struct {
             self.interfaces.clearRetainingCapacity();
         }
         self.traits.clearRetainingCapacity();
+        self.ic.?.trait_sites.clearRetainingCapacity();
         var tu_iter = self.trait_uses.valueIterator();
         while (tu_iter.next()) |subs| self.allocator.free(subs.*);
         self.trait_uses.clearRetainingCapacity();
@@ -2704,6 +2557,7 @@ pub const VM = struct {
             self.allocator.free(ic_ptr.intent);
             ic_ptr.concat_buf.deinit(self.allocator);
             ic_ptr.autoloading.deinit(self.allocator);
+            ic_ptr.trait_sites.deinit(self.allocator);
             freeOwnedKeys(self.allocator, &ic_ptr.fn_lower);
             freeOwnedKeys(self.allocator, &ic_ptr.native_lower);
             freeOwnedKeys(self.allocator, &ic_ptr.resolved_calls);
@@ -3295,6 +3149,22 @@ pub const VM = struct {
     // directions; this implementation is forward-only - sufficient for
     // mock/template generators that eval class declarations at runtime).
     // returns null on success, throws ParseError on syntax error
+    // token_get_all(..., TOKEN_PARSE) parses the code and raises the syntax
+    // error, located in no file, the way php's parser would
+    pub fn checkSyntax(self: *VM, source: []const u8) RuntimeError!void {
+        var ast = parser_mod.parse(self.allocator, source) catch return error.OutOfMemory;
+        defer ast.deinit();
+        if (ast.errors.len == 0) return;
+        const summary = @import("../error_format.zig").parseErrorSummary(self.allocator, &ast) catch null;
+        if (summary) |s| try self.strings.append(self.allocator, s);
+        try self.setPendingException("ParseError", summary orelse "syntax error");
+        if (self.pending_exception) |exc| if (exc == .object) {
+            try exc.object.set(self.allocator, "file", .{ .string = Value.String.borrowed("") });
+            try exc.object.set(self.allocator, "line", .{ .int = @import("../error_format.zig").parseErrorLine(&ast) });
+        };
+        return error.RuntimeError;
+    }
+
     pub fn evalSource(self: *VM, source: []const u8) RuntimeError!Value {
         // prepend <?php so the lexer enters PHP mode. dupe so the source
         // slice can be owned by the heap CompileResult's string_allocs
@@ -7701,6 +7571,7 @@ pub const VM = struct {
                 .interface_decl => {
                     const name_idx = self.readU16();
                     const iface_name = self.currentChunk().constants.items[name_idx].string.bytes();
+                    const iface_site = self.readDeclSite();
                     const method_count = self.readU16();
 
                     var idef = InterfaceDef{ .name = iface_name };
@@ -7722,7 +7593,7 @@ pub const VM = struct {
                     }
 
                     const const_count = self.readByte();
-                    var def = ClassDef{ .name = iface_name };
+                    var def = ClassDef{ .name = iface_name, .file_path = iface_site.file, .start_line = iface_site.start_line, .end_line = iface_site.end_line, .doc_comment = iface_site.doc_comment };
                     if (const_count > 0) {
                         var ci: usize = const_count;
                         while (ci > 0) : (ci -= 1) {
@@ -7809,6 +7680,7 @@ pub const VM = struct {
                     const name_idx = self.readU16();
                     const trait_name = self.currentChunk().constants.items[name_idx].string.bytes();
                     try self.traits.put(self.allocator, trait_name, {});
+                    try self.ic.?.trait_sites.put(self.allocator, trait_name, self.readDeclSite());
                     const sub_count = self.readByte();
                     if (sub_count > 0) {
                         const subs = try self.allocator.alloc([]const u8, sub_count);
@@ -11941,6 +11813,26 @@ pub const VM = struct {
         return self.throwBuiltinExceptionAt(class_name, message, null);
     }
 
+    // the declaration-site operands of class-like opcodes: start line, end
+    // line, doc comment constant; the file is the executing script
+    fn readDeclSite(self: *VM) DeclSite {
+        const start_line = self.readU32();
+        const end_line = self.readU32();
+        const doc_idx = self.readU16();
+        return .{
+            .file = if (self.frame_count > 0 and self.currentFrame().script_path.len > 0) self.currentFrame().script_path else self.file_path,
+            .start_line = start_line,
+            .end_line = end_line,
+            .doc_comment = if (doc_idx == 0xffff) "" else self.currentChunk().constants.items[doc_idx].string.bytes(),
+        };
+    }
+
+    pub fn declSite(self: *VM, name: []const u8) ?DeclSite {
+        if (self.ic.?.trait_sites.get(name)) |site| return site;
+        const cls = self.classes.get(name) orelse return null;
+        return .{ .file = cls.file_path, .start_line = cls.start_line, .end_line = cls.end_line, .doc_comment = cls.doc_comment };
+    }
+
     pub const SourcePosition = struct { file: []const u8, line: i64 };
 
     // the file and line the executing frame is at
@@ -13138,10 +13030,11 @@ pub const VM = struct {
     fn handleEnumDecl(self: *VM) RuntimeError!void {
         const name_idx = self.readU16();
         const enum_name = self.currentChunk().constants.items[name_idx].string.bytes();
+        const site = self.readDeclSite();
         const backed_type_byte = self.readByte();
         const case_count = self.readByte();
 
-        var def = ClassDef{ .name = enum_name, .is_enum = true };
+        var def = ClassDef{ .name = enum_name, .is_enum = true, .file_path = site.file, .start_line = site.start_line, .end_line = site.end_line, .doc_comment = site.doc_comment };
         def.backed_type = @enumFromInt(backed_type_byte);
 
         const case_names = try self.allocator.alloc([]const u8, case_count);

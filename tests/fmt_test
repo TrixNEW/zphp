@@ -412,6 +412,17 @@ check_contains "top-level constant list stays one statement" 'const A = 1, B = 2
 check_contains "typed class constant list keeps modifiers and type" 'final public const int WIDTH = 80, HEIGHT = 24;' "$content"
 check_contains "private class constant list keeps visibility" "private const X = 'x', Y = 'y';" "$content"
 
+cat > "$WORKDIR/declare.php" << 'EOFPHP'
+<?php
+declare( strict_types = 1 );
+echo 1;
+__halt_compiler(); raw data
+EOFPHP
+"$ZPHP" fmt "$WORKDIR/declare.php" 2>/dev/null
+content=$(cat "$WORKDIR/declare.php")
+check_contains "declare directive is kept" 'declare(strict_types=1);' "$content"
+check_contains "halt compiler data is kept" '__halt_compiler(); raw data' "$content"
+
 echo ""
 echo "$passed passed, $failed failed"
 

@@ -15,6 +15,7 @@ pub const Ast = struct {
     errors: []const Error,
     attr_ranges: []const AttrRange = &.{},
     allocator: std.mem.Allocator,
+    halt_offset: ?u32 = null,
 
     pub fn deinit(self: *Ast) void {
         self.allocator.free(self.tokens);
@@ -185,6 +186,7 @@ pub const Ast = struct {
             goto_stmt, // main_token = label identifier
             label_stmt, // main_token = label identifier
             qualified_name, // main_token = first identifier, lhs = extra index -> {count, token_indices...} for multi-part names
+            declare_stmt, // main_token = declare keyword, lhs = token index of the closing `)`, rhs = body (0 = `declare(...);`)
         };
     };
 

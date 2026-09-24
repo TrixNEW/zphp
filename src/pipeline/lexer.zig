@@ -6,6 +6,8 @@ pub const Lexer = struct {
     source: []const u8,
     pos: usize,
     state: State,
+    // byte offset just past `__halt_compiler();`, where the file's data begins
+    halt_offset: ?usize = null,
 
     const State = enum { html, php };
 
@@ -322,6 +324,7 @@ pub const Lexer = struct {
     fn lexIdentifier(self: *Lexer, start: usize) Token {
         while (self.pos < self.source.len and isIdentChar(self.source[self.pos])) self.pos += 1;
         const ident = self.source[start..self.pos];
+        if (std.ascii.eqlIgnoreCase(ident, "__halt_compiler") and self.haltCompiler()) return self.makeEof();
         if (Tag.keyword(ident)) |kw| return self.makeToken(kw, start);
         return self.makeToken(.identifier, start);
     }
@@ -536,6 +539,42 @@ pub const Lexer = struct {
             return true;
         }
         return false;
+    }
+
+    // `__halt_compiler();` (or `__halt_compiler() ?>`) ends the code; what
+    // follows is data the script reads through __COMPILER_HALT_OFFSET__
+    fn haltCompiler(self: *Lexer) bool {
+        var i = self.pos;
+        for ([_]u8{ '(', ')' }) |expected| {
+            i = self.skipTriviaFrom(i);
+            if (i >= self.source.len or self.source[i] != expected) return false;
+            i += 1;
+        }
+        i = self.skipTriviaFrom(i);
+        if (i < self.source.len and self.source[i] == ';') {
+            i += 1;
+        } else if (std.mem.startsWith(u8, self.source[i..], "?>")) {
+            i += 2;
+            if (std.mem.startsWith(u8, self.source[i..], "\r\n")) i += 2 else if (i < self.source.len and (self.source[i] == '\n' or self.source[i] == '\r')) i += 1;
+        } else return false;
+        self.halt_offset = i;
+        self.pos = self.source.len;
+        return true;
+    }
+
+    fn skipTriviaFrom(self: *const Lexer, from: usize) usize {
+        var i = from;
+        while (i < self.source.len) {
+            const c = self.source[i];
+            if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
+                i += 1;
+            } else if (std.mem.startsWith(u8, self.source[i..], "/*")) {
+                i = if (std.mem.indexOf(u8, self.source[i + 2 ..], "*/")) |e| i + 2 + e + 2 else self.source.len;
+            } else if (c == '#' or std.mem.startsWith(u8, self.source[i..], "//")) {
+                while (i < self.source.len and self.source[i] != '\n') i += 1;
+            } else break;
+        }
+        return i;
     }
 
     fn makeToken(self: *const Lexer, tag: Tag, start: usize) Token {

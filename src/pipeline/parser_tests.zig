@@ -497,6 +497,14 @@ fn renderNode(ast: *const Ast, idx: u32, buf: *Buf) !void {
             }
             try w.writeByte(')');
         },
+        .declare_stmt => {
+            try w.writeAll("(declare");
+            if (node.data.rhs != 0) {
+                try w.writeByte(' ');
+                try renderNode(ast, node.data.rhs, buf);
+            }
+            try w.writeByte(')');
+        },
         .goto_stmt => {
             try w.writeAll("(goto ");
             try w.writeAll(ast.tokenSlice(node.main_token));

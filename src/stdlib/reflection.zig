@@ -127,6 +127,16 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "Reflection::getModifierNames", reflectionGetModifierNames);
 
     var rc_def = ClassDef{ .name = "ReflectionClass" };
+    try rc_def.static_props.put(a, "IS_IMPLICIT_ABSTRACT", .{ .int = 16 });
+    try rc_def.constant_names.put(a, "IS_IMPLICIT_ABSTRACT", {});
+    try rc_def.static_props.put(a, "IS_EXPLICIT_ABSTRACT", .{ .int = 64 });
+    try rc_def.constant_names.put(a, "IS_EXPLICIT_ABSTRACT", {});
+    try rc_def.static_props.put(a, "IS_FINAL", .{ .int = 32 });
+    try rc_def.constant_names.put(a, "IS_FINAL", {});
+    try rc_def.static_props.put(a, "IS_READONLY", .{ .int = 65536 });
+    try rc_def.constant_names.put(a, "IS_READONLY", {});
+    try rc_def.static_props.put(a, "SKIP_DESTRUCTOR", .{ .int = 16 });
+    try rc_def.constant_names.put(a, "SKIP_DESTRUCTOR", {});
     try rc_def.interfaces.append(a, "Reflector");
     try rc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
@@ -317,9 +327,11 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try rm_def.methods.put(a, "isInternal", .{ .name = "isInternal", .arity = 0 });
     try rm_def.methods.put(a, "isUserDefined", .{ .name = "isUserDefined", .arity = 0 });
     try rm_def.methods.put(a, "isDeprecated", .{ .name = "isDeprecated", .arity = 0 });
+    try rm_def.methods.put(a, "createFromMethodName", .{ .name = "createFromMethodName", .arity = 1, .is_static = true });
     try vm.classes.put(a, "ReflectionMethod", rm_def);
 
     try vm.native_fns.put(a, "ReflectionMethod::__construct", rmConstruct);
+    try vm.native_fns.put(a, "ReflectionMethod::createFromMethodName", rmCreateFromMethodName);
     try vm.native_fns.put(a, "ReflectionMethod::getName", rmGetName);
     try vm.native_fns.put(a, "ReflectionMethod::getParameters", rmGetParameters);
     try vm.native_fns.put(a, "ReflectionMethod::isPublic", rmIsPublic);
@@ -479,6 +491,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnumBackedCase::getBackingValue", rebcGetBackingValue);
 
     var rf_def = ClassDef{ .name = "ReflectionFunction", .parent = "ReflectionFunctionAbstract" };
+    try rf_def.static_props.put(a, "IS_DEPRECATED", .{ .int = 2048 });
+    try rf_def.constant_names.put(a, "IS_DEPRECATED", {});
     try rf_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rf_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try rf_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -653,6 +667,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionProperty::isVirtual", rpropIsVirtual);
 
     var ra_def = ClassDef{ .name = "ReflectionAttribute" };
+    try ra_def.static_props.put(a, "IS_INSTANCEOF", .{ .int = 2 });
+    try ra_def.constant_names.put(a, "IS_INSTANCEOF", {});
     try ra_def.interfaces.append(a, "Reflector");
     try ra_def.static_props.put(a, "IS_INSTANCEOF", .{ .int = 2 });
     try ra_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -1639,9 +1655,9 @@ fn buildAttributeArrayWithFlags(ctx: *NativeContext, attrs: []const AttributeDef
 fn rcGetDocComment(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .bool = false });
-    const cls = ctx.vm.classes.get(name) orelse return NativeResult.scalar(.{ .bool = false });
-    if (cls.doc_comment.len == 0) return NativeResult.scalar(.{ .bool = false });
-    return try NativeResult.copyString(ctx.allocator, cls.doc_comment);
+    const site = ctx.vm.declSite(name) orelse return NativeResult.scalar(.{ .bool = false });
+    if (site.doc_comment.len == 0) return NativeResult.scalar(.{ .bool = false });
+    return try NativeResult.copyString(ctx.allocator, site.doc_comment);
 }
 
 fn rmGetDocComment(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -2263,25 +2279,25 @@ fn isInternalClassName(name: []const u8) bool {
 fn rcGetFileName(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .bool = false });
-    const cls = ctx.vm.classes.get(name) orelse return NativeResult.scalar(.{ .bool = false });
-    if (cls.file_path.len == 0) return NativeResult.scalar(.{ .bool = false });
-    return try NativeResult.copyString(ctx.allocator, cls.file_path);
+    const site = ctx.vm.declSite(name) orelse return NativeResult.scalar(.{ .bool = false });
+    if (site.file.len == 0) return NativeResult.scalar(.{ .bool = false });
+    return try NativeResult.copyString(ctx.allocator, site.file);
 }
 
 fn rcGetStartLine(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .bool = false });
-    const cls = ctx.vm.classes.get(name) orelse return NativeResult.scalar(.{ .bool = false });
-    if (cls.start_line == 0) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.scalar(.{ .int = @intCast(cls.start_line) });
+    const site = ctx.vm.declSite(name) orelse return NativeResult.scalar(.{ .bool = false });
+    if (site.start_line == 0) return NativeResult.scalar(.{ .bool = false });
+    return NativeResult.scalar(.{ .int = @intCast(site.start_line) });
 }
 
 fn rcGetEndLine(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .bool = false });
-    const cls = ctx.vm.classes.get(name) orelse return NativeResult.scalar(.{ .bool = false });
-    if (cls.end_line == 0) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.scalar(.{ .int = @intCast(cls.end_line) });
+    const site = ctx.vm.declSite(name) orelse return NativeResult.scalar(.{ .bool = false });
+    if (site.end_line == 0) return NativeResult.scalar(.{ .bool = false });
+    return NativeResult.scalar(.{ .int = @intCast(site.end_line) });
 }
 
 fn rcGetDefaultProperties(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -2360,9 +2376,24 @@ fn rcSetStaticPropertyValue(ctx: *NativeContext, args: []const Value) RuntimeErr
     return throwReflection(ctx, "Static property does not exist");
 }
 
+// ReflectionMethod::createFromMethodName('Class::method'), an instance of the
+// class it was called on
+fn rmCreateFromMethodName(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const valid = args.len > 0 and args[0] == .string and std.mem.indexOf(u8, args[0].string.bytes(), "::") != null;
+    if (!valid) return throwReflection(ctx, "ReflectionMethod::createFromMethodName(): Argument #1 ($method) must be a valid method name");
+    const class_name = ctx.vm.currentFrame().called_class orelse "ReflectionMethod";
+    const obj = try ctx.createObject(class_name);
+    _ = try initMethodReflection(ctx, obj, args[0..1]);
+    return NativeResult.borrowed(.{ .object = obj });
+}
+
 fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 1) return throwReflection(ctx, "ReflectionMethod::__construct() expects parameters");
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
+    return initMethodReflection(ctx, this, args);
+}
+
+fn initMethodReflection(ctx: *NativeContext, this: *PhpObject, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 1) return throwReflection(ctx, "ReflectionMethod::__construct() expects parameters");
 
     var class_name: []const u8 = undefined;
     var method_name: []const u8 = undefined;
@@ -2415,9 +2446,10 @@ fn rmConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         }
     };
 
-    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(method_name) });
-    try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
-    try this.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(declaring) });
+    // the names may be slices of an argument string that dies with the call
+    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(try ctx.vm.internName(method_name)) });
+    try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(try ctx.vm.internName(class_name)) });
+    try this.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(try ctx.vm.internName(declaring)) });
     try this.set(ctx.allocator, "_is_static", .{ .bool = info.is_static });
     try this.set(ctx.allocator, "_visibility", .{ .int = @intFromEnum(info.visibility) });
 

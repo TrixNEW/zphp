@@ -15,7 +15,9 @@ const MAGIC = "ZPHPC\x00";
 // Older chunks cannot be decoded by the current VM.
 // v17 adds owning reference-source and array-literal reference opcodes.
 // v16 instantiates capture-free class-scoped static closures.
-pub const FORMAT_VERSION: u16 = 18;
+// v18 adds defer_prop_defaults; v19 gives interface, trait and enum
+// declarations their start line, end line and doc comment.
+pub const FORMAT_VERSION: u16 = 19;
 
 // tag bytes for serialized values
 const TAG_NULL: u8 = 0;

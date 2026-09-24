@@ -564,6 +564,8 @@ pub const Compiler = struct {
             .label_stmt => {
                 try self.labels.put(self.allocator, self.ast.tokenSlice(node.main_token), self.chunk.offset());
             },
+            // strict_types is read from the file's tokens; ticks and encoding have no effect
+            .declare_stmt => if (node.data.rhs != 0) try self.compileNode(node.data.rhs),
             .goto_stmt => {
                 const label = self.ast.tokenSlice(node.main_token);
                 if (self.labels.get(label)) |target| {
@@ -672,6 +674,11 @@ pub const Compiler = struct {
             try self.emitConstant(idx);
             return;
         }
+        if (self.ast.halt_offset) |offset| if (std.mem.eql(u8, name, "__COMPILER_HALT_OFFSET__")) {
+            const idx = try self.addConstant(.{ .int = offset });
+            try self.emitConstant(idx);
+            return;
+        };
         if (std.mem.eql(u8, name, "__LINE__")) {
             const line = self.getLineNumber();
             const idx = try self.addConstant(.{ .int = @intCast(line) });

@@ -76,6 +76,7 @@ pub const classes = std.StaticStringMap(Rule).initComptime(.{
     .{ "ReflectionReference", Rule.always },
     .{ "ReflectionType", Rule.always },
     .{ "ReflectionUnionType", Rule.always },
+    .{ "ReflectionZendExtension", Rule.always },
     .{ "SensitiveParameterValue", Rule.always },
     .{ "SimpleXMLElement", Rule.always },
     .{ "SimpleXMLIterator", Rule.always },

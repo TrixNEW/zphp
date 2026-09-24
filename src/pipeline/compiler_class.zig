@@ -2231,6 +2231,9 @@ pub fn compileInterfaceDecl(self: *Compiler, node: Ast.Node) Error!void {
     const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(iface_name) });
     try self.emitOp(.interface_decl);
     try self.emitU16(name_idx);
+    try self.emitU32(lineForToken(self, node.main_token));
+    try self.emitU32(endLineForBlockStartingAt(self, node.main_token));
+    try self.emitU16(try docCommentConst(self, node.main_token));
     try self.emitU16(method_count);
 
     for (members) |m| {
@@ -2451,6 +2454,9 @@ pub fn compileTraitDecl(self: *Compiler, node: Ast.Node) Error!void {
     const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(trait_name) });
     try self.emitOp(.trait_decl);
     try self.emitU16(name_idx);
+    try self.emitU32(lineForToken(self, node.main_token));
+    try self.emitU32(endLineForBlockStartingAt(self, node.main_token));
+    try self.emitU16(try docCommentConst(self, node.main_token));
     try self.emitByte(@intCast(sub_traits.items.len));
     for (sub_traits.items) |st| {
         const st_idx = try self.addConstant(.{ .string = Value.String.borrowed(st) });
@@ -2585,6 +2591,9 @@ pub fn compileEnumDecl(self: *Compiler, node: Ast.Node) Error!void {
     const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(enum_name) });
     try self.emitOp(.enum_decl);
     try self.emitU16(name_idx);
+    try self.emitU32(lineForToken(self, node.main_token));
+    try self.emitU32(endLineForBlockStartingAt(self, node.main_token));
+    try self.emitU16(try docCommentConst(self, node.main_token));
     try self.emitByte(backed_type);
     try self.emitByte(case_count);
 
