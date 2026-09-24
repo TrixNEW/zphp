@@ -15,36 +15,41 @@ The buffer times are the cost of submitting and awaiting a task, with no copying
 
 ## Moving to another thread
 
-Passing a buffer to a worker, returning one from a task, or sending one on a [channel](./channels.md) moves its bytes. The sending thread keeps its `Zphp\Buffer` objects, but they are detached: `isDetached()` returns `true`, and any other method throws `Zphp\TransferException`. Use the buffer that arrives on the other side instead.
+This worker builds an 8 MB binary file, one 64-bit number per entry, and hands it back without a copy:
 
 ```php
 <?php
 $pool = new Zphp\Pool(workers: 1);
 
-$frame = new Zphp\Buffer(64 << 20);
-$header = $frame->slice(0, 16);
+$export = $pool->submit(function (int $count) {
+    $data = new Zphp\Buffer($count * 8);
+    for ($i = 0; $i < $count; $i++) {
+        $data->writeInt64LE($i * 8, $i * $i);
+    }
+    return $data;
+}, [1_000_000]);
 
-$future = $pool->submit(function (Zphp\Buffer $frame) {
-    $frame->writeUInt32LE(0, 0xCAFE);
-    return $frame;
-}, [$frame]);
+$data = $export->await();
+echo $data->length(), " bytes\n";
 
-var_dump($frame->isDetached(), $header->isDetached());
-try {
-    $frame->length();
-} catch (Zphp\TransferException $e) {
-    echo $e->getMessage(), "\n";
-}
-
-$frame = $future->await();
-printf("%x\n", $frame->readUInt32LE(0));
+$file = fopen('squares.bin', 'wb');
+$data->writeTo($file);
+fclose($file);
 ```
 
 ```
-bool(true)
-bool(true)
-the buffer was transferred to another thread
-cafe
+8000000 bytes
+```
+
+Passing a buffer to a worker, returning one from a task, or sending one on a [channel](./channels.md) moves its bytes. The thread that sent it keeps the `Zphp\Buffer` object, but it is detached: `isDetached()` returns `true`, and any other method throws `Zphp\TransferException`.
+
+```php
+<?php
+$data = Zphp\Buffer::fromString('some bytes');
+$pool->submit(fn(Zphp\Buffer $data) => $data->length(), [$data])->await();
+
+var_dump($data->isDetached()); // bool(true)
+$data->toString();             // throws Zphp\TransferException
 ```
 
 Only one thread can use the bytes at a time, so there are no data races and no locks.
@@ -53,26 +58,54 @@ Only one thread can use the bytes at a time, so there are no data races and no l
 
 `slice($offset, $length)` returns a view of part of a buffer without copying. A slice shares its parent's bytes, so a write through either one is visible in both. Omitting the length extends the slice to the end of the buffer.
 
+```php
+<?php
+$text = Zphp\Buffer::fromString('hello world');
+$first = $text->slice(0, 5);
+$first->write(0, 'J');
+echo $text->toString(), "\n";
+```
+
+```
+Jello world
+```
+
 A slice always refers to the whole block it was cut from. Moving a slice to another thread moves the entire block and detaches the parent and every other slice of it. To send only part of a large buffer, clone the slice first: `clone $buffer->slice(0, 1024)` copies those 1024 bytes into a new, independent buffer.
 
 ## Reading and writing
 
+A PNG file stores the image's width and height as 32-bit big-endian numbers at bytes 16 and 20. This reads them without loading the rest of the file:
+
 ```php
 <?php
-// a length-prefixed message: 4-byte big-endian length, 2-byte type, payload
-$body = '{"user":42}';
-$packet = new Zphp\Buffer(6 + strlen($body));
-$packet->writeUInt32BE(0, strlen($body));
-$packet->writeUInt16BE(4, 7);
-$packet->write(6, $body);
+$file = fopen('photo.png', 'rb');
+$header = new Zphp\Buffer(24);
+$header->readFrom($file);
+fclose($file);
 
-$header = $packet->slice(0, 6);
-$payload = $packet->slice(6);
-echo $header->readUInt32BE(0), ' bytes, type ', $header->readUInt16BE(4), ': ', $payload->toString(), "\n";
+echo $header->readUInt32BE(16), ' x ', $header->readUInt32BE(20), "\n";
 ```
 
 ```
-11 bytes, type 7: {"user":42}
+640 x 480
+```
+
+Writing works the same way. This builds a message with a 4-byte length in front of it, a common format for network protocols:
+
+```php
+<?php
+$message = '{"user":42}';
+
+$packet = new Zphp\Buffer(4 + strlen($message));
+$packet->writeUInt32BE(0, strlen($message));
+$packet->write(4, $message);
+
+$length = $packet->readUInt32BE(0);
+echo $packet->slice(4, $length)->toString(), "\n";
+```
+
+```
+{"user":42}
 ```
 
 | Method | Behavior |
@@ -87,18 +120,7 @@ echo $header->readUInt32BE(0), ' bytes, type ', $header->readUInt16BE(4), ': ', 
 | `writeTo($stream)` | Writes the buffer to a stream; returns the bytes written, or `false` if the stream cannot be written |
 | `isDetached()` | Whether the bytes moved to another thread |
 
-`readFrom` and `writeTo` accept anything `fread` and `fwrite` accept, including files, sockets, `php://memory`, and user stream wrappers. Combined with `slice`, they fill or send a region of a buffer without building an intermediate string:
-
-```php
-<?php
-$in = fopen($path, 'r');
-$data = new Zphp\Buffer(filesize($path));
-$read = 0;
-while ($read < $data->length() && ($n = $data->slice($read)->readFrom($in)) > 0) {
-    $read += $n;
-}
-fclose($in);
-```
+`readFrom` and `writeTo` accept anything `fread` and `fwrite` accept, including files, sockets, `php://memory`, and user stream wrappers. Like `fread`, one `readFrom` call can return fewer bytes than the buffer holds, for example from a socket; read into `$buffer->slice($read)` to continue where the last call stopped.
 
 Fixed-width numbers have a read and a write method for each type:
 

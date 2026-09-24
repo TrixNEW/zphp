@@ -4,29 +4,30 @@ PHP runs your code on one thread. `Zphp\Pool` runs PHP on several threads at onc
 
 Each worker thread owns its own VM for the life of the pool. Workers never share PHP variables. A task's arguments are copied into the worker, and its result is copied back. Code that never creates a pool pays nothing for this.
 
+This computes checksums for three files at the same time:
+
 ```php
 <?php
-$files = glob(__DIR__ . '/*.bin');
-
 $pool = new Zphp\Pool(workers: 4);
 
-$futures = [];
+$files = ['january.csv', 'february.csv', 'march.csv'];
+$checksums = [];
 foreach ($files as $file) {
-    $futures[$file] = $pool->submit(fn(string $path) => hash_file('sha256', $path), [$file]);
+    $checksums[$file] = $pool->submit('md5_file', [$file]);
 }
 
-foreach ($futures as $file => $future) {
-    echo basename($file), ' ', substr($future->await(), 0, 16), "\n";
+foreach ($checksums as $file => $future) {
+    echo $file, ': ', $future->await(), "\n";
 }
-
-$pool->shutdown();
 ```
 
 ```
-file1.bin 62dfc330b8caee85
-file2.bin 53a09fe50e4102c7
-file3.bin bc34581d1ae4554e
+january.csv: 56153e6036e3e33e8524168b0803204d
+february.csv: 214ec5aa5320ad8d9cde0dd99db917dd
+march.csv: e6e5eeeb53c8b7311acfdccbfe60cefd
 ```
+
+`submit` hands the task to a free worker and returns a `Zphp\Future` right away. `await()` waits for that task and returns what it returned.
 
 Splitting 32 CPU-bound tasks over more workers scales with the number of cores. On an Apple M4 Pro, with a release build, the same work took 240 ms on one worker, 123 ms on two, 63 ms on four, and 32 ms on eight.
 
@@ -50,21 +51,21 @@ The bootstrap script is where workers load an autoloader, define functions, or o
 
 ```php
 <?php
-// bootstrap.php
-function resize(string $path, int $width): string
+// worker.php
+function slugify(string $title): string
 {
-    return "$path resized to {$width}px on worker " . Zphp\Task::worker();
+    return trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($title)), '-');
 }
 ```
 
 ```php
 <?php
-$pool = new Zphp\Pool(workers: 2, bootstrap: __DIR__ . '/bootstrap.php');
-echo $pool->submit('resize', ['photo.jpg', 800])->await(), "\n";
+$pool = new Zphp\Pool(workers: 2, bootstrap: __DIR__ . '/worker.php');
+echo $pool->submit('slugify', ['Hello, World!'])->await(), "\n";
 ```
 
 ```
-photo.jpg resized to 800px on worker 0
+hello-world
 ```
 
 A closure travels with its compiled code and its captured variables. `use` variables, `$this` for a bound closure, and the variables an arrow function reads from the enclosing scope are copied at submit time. Capturing by reference (`use (&$x)`) is refused, because the worker cannot write back into the caller's variable.
@@ -80,26 +81,37 @@ When the queue is full, `submit` waits for room. `trySubmit` returns `null` inst
 ```php
 <?php
 $pool = new Zphp\Pool(workers: 2);
+$average = fn(array $values) => intdiv(array_sum($values), count($values));
 
 try {
-    $pool->submit(function () { throw new InvalidArgumentException('bad input', 42); })->await();
-} catch (InvalidArgumentException $e) {
-    echo get_class($e), ': ', $e->getMessage(), ' (', $e->getCode(), ")\n";
+    $pool->submit($average, [[]])->await();
+} catch (DivisionByZeroError $e) {
+    echo 'Could not average: ', $e->getMessage(), "\n";
 }
-
-$slow = $pool->submit(function () { usleep(200_000); return 'done'; });
-try {
-    $slow->await(0.05);
-} catch (Zphp\TimeoutException $e) {
-    echo "not yet\n";
-}
-echo $slow->await(), "\n";
 ```
 
 ```
-InvalidArgumentException: bad input (42)
-not yet
-done
+Could not average: Division by zero
+```
+
+```php
+<?php
+$report = $pool->submit(function () {
+    sleep(1);
+    return 'report ready';
+});
+
+try {
+    $report->await(0.1);
+} catch (Zphp\TimeoutException) {
+    echo "still working\n";
+}
+echo $report->await(), "\n";
+```
+
+```
+still working
+report ready
 ```
 
 To handle results in completion order instead of submission order, call `$pool->collect($seconds)`. It returns the next finished future, or `null` when nothing finishes within the timeout.
@@ -107,19 +119,27 @@ To handle results in completion order instead of submission order, call `$pool->
 ```php
 <?php
 $pool = new Zphp\Pool(workers: 3);
-foreach ([300, 100, 200] as $ms) {
-    $pool->submit(function (int $ms) { usleep($ms * 1000); return $ms; }, [$ms]);
-}
-while ($future = $pool->collect(timeout: 1.0)) {
-    echo $future->await(), " ms task finished\n";
+$build = function (string $name, int $ms) {
+    usleep($ms * 1000);
+    return $name;
+};
+
+$pool->submit($build, ['yearly report', 300]);
+$pool->submit($build, ['daily report', 100]);
+$pool->submit($build, ['monthly report', 200]);
+
+while ($future = $pool->collect(timeout: 1)) {
+    echo $future->await(), " finished\n";
 }
 ```
 
 ```
-100 ms task finished
-200 ms task finished
-300 ms task finished
+daily report finished
+monthly report finished
+yearly report finished
 ```
+
+To wait on futures together with [channels](./channels.md#waiting-on-several-sources), or on futures from more than one pool, use `Zphp\select`.
 
 An event loop can watch `$pool->readiness()` instead of polling. It returns a stream that becomes readable when a completed task is waiting, so it can go into `stream_select()` next to sockets.
 
