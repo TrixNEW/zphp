@@ -1283,7 +1283,7 @@ fn statOne(ctx: *NativeContext, args: []const Value, comptime field: StatField, 
     if (value) |v| return NativeResult.scalar(.{ .int = v });
     const msg = try std.fmt.allocPrint(ctx.allocator, fn_name ++ "(): stat failed for {s}", .{path});
     try ctx.strings.append(ctx.allocator, msg);
-    ctx.vm.emitWarning(msg);
+    try ctx.vm.emitWarning(msg);
     return NativeResult.scalar(.{ .bool = false });
 }
 
@@ -1517,7 +1517,7 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
         const reason = openErrorReason(err);
         const msg = std.fmt.allocPrint(ctx.allocator, "fopen({s}): Failed to open stream: {s}", .{ path, reason }) catch return NativeResult.scalar(.{ .bool = false });
         ctx.vm.strings.append(ctx.allocator, msg) catch {};
-        ctx.vm.emitWarning(msg);
+        try ctx.vm.emitWarning(msg);
         return NativeResult.scalar(.{ .bool = false });
     };
 
@@ -2719,7 +2719,7 @@ fn native_stat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         .missing => {
             const msg = try std.fmt.allocPrint(ctx.allocator, "stat(): stat failed for {s}", .{path});
             try ctx.strings.append(ctx.allocator, msg);
-            ctx.vm.emitWarning(msg);
+            try ctx.vm.emitWarning(msg);
             return NativeResult.scalar(.{ .bool = false });
         },
         .not_wrapped => {},

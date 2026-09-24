@@ -997,6 +997,27 @@ pub const VM = struct {
         old.deinit(self.allocator);
     }
 
+    // `$v = &$arr[$k]`: an element another name already references shares
+    // that cell, anything else gets a fresh one
+    fn bindSlotToElement(self: *VM, frame: *CallFrame, name: []const u8, arr: *PhpArray, key: PhpArray.Key) RuntimeError!void {
+        if (arr.getPtr(key)) |entry| if (entry.ref) |cell| if (cellOf(cell).binders > 1) {
+            return self.bindRefSlot(&frame.ref_slots, name, cell);
+        };
+        const cell = try self.newRefCell();
+        var elem = arr.get(key);
+        // a referenced element can't stay COW-shared, so a shared array
+        // element is separated first (php separates at each `&` level)
+        if (elem == .array and elem.array.refcount > 1) {
+            elem = .{ .array = try self.shallowCloneCow(elem.array) };
+            try self.arraySetOwned(arr, key, elem);
+        }
+        self.setCell(cell, elem);
+        try self.bindRefSlot(&frame.ref_slots, name, cell);
+        try self.regRefArray(try self.ensureRefOwner(frame), cell, arr, key);
+        if (arr.getPtr(key)) |ep| self.setEntryRef(ep, cell);
+        self.array_ref_active = true;
+    }
+
     fn setEntryRef(self: *VM, entry: *PhpArray.Entry, cell: ?*Value) void {
         const old = entry.ref;
         entry.ref = cell;
@@ -1215,6 +1236,8 @@ pub const VM = struct {
         // the syntax error that made the file loader refuse an include, for
         // the include opcode to raise as ParseError
         include_parse_error: ?SourcePositionMessage = null,
+        // class names whose autoload is in progress, innermost last
+        autoloading: std.ArrayListUnmanaged([]const u8) = .{},
         // per-frame sp save for inline call/ret in fastLoop
         sp_save: [2048]usize = undefined,
         // per-frame actual arg count for func_get_args
@@ -2604,6 +2627,7 @@ pub const VM = struct {
     }
 
     pub fn deinit(self: *VM) void {
+        self.clearLastError();
         extension.vmDeinit(self);
         if (self.ic) |ic| for (ic.arg_stack) |*source| self.releaseArgSource(source);
         self.clearActiveArgSources();
@@ -2636,6 +2660,7 @@ pub const VM = struct {
             self.allocator.free(ic_ptr.active_args);
             self.allocator.free(ic_ptr.intent);
             ic_ptr.concat_buf.deinit(self.allocator);
+            ic_ptr.autoloading.deinit(self.allocator);
             freeOwnedKeys(self.allocator, &ic_ptr.fn_lower);
             freeOwnedKeys(self.allocator, &ic_ptr.native_lower);
             freeOwnedKeys(self.allocator, &ic_ptr.resolved_calls);
@@ -2890,10 +2915,7 @@ pub const VM = struct {
         self.rng_seeded = false;
         self.strtok_state = null;
         self.strtok_pos = 0;
-        self.last_error_type = 0;
-        self.last_error_message = "";
-        self.last_error_file = "";
-        self.last_error_line = 0;
+        self.clearLastError();
         self.last_dt_error_count = 0;
         self.last_dt_error_text = "";
         self.last_dt_error_pos = 0;
@@ -3190,6 +3212,17 @@ pub const VM = struct {
 
     pub fn functionExists(self: *VM, raw_name: []const u8) bool {
         return self.canonicalFunctionName(raw_name) != null;
+    }
+
+    // a chunk's line offsets index into its own compile result's source; a
+    // result loaded from bytecode has no source and stores line numbers
+    pub fn chunkSource(self: *const VM, chunk: *const Chunk) []const u8 {
+        const result = self.chunk_to_result.get(@intFromPtr(chunk)) orelse return self.source;
+        return result.source;
+    }
+
+    pub fn sourceLocation(self: *const VM, chunk: *const Chunk, ip: usize) ?bytecode.SourceLocation {
+        return chunk.getSourceLocation(ip, self.chunkSource(chunk));
     }
 
     // register a compile result's functions: unconditional declarations are
@@ -3788,7 +3821,7 @@ pub const VM = struct {
                         if (try self.throwBuiltinException("TypeError", msg)) continue;
                         return error.RuntimeError;
                     }
-                    if (v == .string and isPartialNumericString(v.string.bytes())) self.emitNonNumericWarning();
+                    if (v == .string and isPartialNumericString(v.string.bytes())) self.emitNonNumericWarning() catch if (try self.resumeRaised()) continue;
                     self.push(v.negate());
                 },
                 .concat => {
@@ -3806,8 +3839,8 @@ pub const VM = struct {
                         @memcpy(owned[as.len..], bs);
                         self.pushTransfer(.{ .string = try Value.String.adopt(self.stringAllocator(), owned) });
                     } else {
-                        if (a == .array) self.emitWarning("Array to string conversion");
-                        if (b == .array) self.emitWarning("Array to string conversion");
+                        if (a == .array) self.emitWarning("Array to string conversion") catch if (try self.resumeRaised()) continue;
+                        if (b == .array) self.emitWarning("Array to string conversion") catch if (try self.resumeRaised()) continue;
                         var buf = std.ArrayListUnmanaged(u8){};
                         defer buf.deinit(self.stringAllocator());
                         if (a == .object) {
@@ -4137,8 +4170,8 @@ pub const VM = struct {
                         self.dropN(ac + 1);
                         const result = if (std.mem.eql(u8, name_val.object.class_name, "Closure")) blk: {
                             const callable = name_val.object.get("__callable");
-                            break :blk try self.callValueCallable(callable, args_buf[0..ac]);
-                        } else try self.callMethod(name_val.object, "__invoke", args_buf[0..ac]);
+                            break :blk (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callValueCallable(callable, args_buf[0..ac]) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
+                        } else (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(name_val.object, "__invoke", args_buf[0..ac]) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                         self.pushCallResult(result);
                     } else if (name_val == .array) {
                         const arr = name_val.array;
@@ -4536,9 +4569,9 @@ pub const VM = struct {
                         defer self.allocator.free(args_buf);
                         for (0..ac) |i| args_buf[i] = arr.entries.items[i].value;
                         const result = if (std.mem.eql(u8, name_val.object.class_name, "Closure"))
-                            try self.callValueCallable(name_val.object.get("__callable"), args_buf[0..ac])
+                            (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callValueCallable(name_val.object.get("__callable"), args_buf[0..ac]) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; })
                         else
-                            try self.callMethod(name_val.object, "__invoke", args_buf[0..ac]);
+                            (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(name_val.object, "__invoke", args_buf[0..ac]) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                         self.pushCallResult(result);
                     } else {
                         var buf2: [256]u8 = undefined;
@@ -4641,7 +4674,7 @@ pub const VM = struct {
                         };
                         try self.output.appendSlice(self.allocator, s);
                     } else {
-                        if (v == .array) self.emitWarning("Array to string conversion");
+                        if (v == .array) self.emitWarning("Array to string conversion") catch if (try self.resumeRaised()) continue;
                         try v.format(&self.output, self.allocator);
                     }
                     if (self.ob_stack.items.len == 0) self.headers_sent = true;
@@ -4792,7 +4825,7 @@ pub const VM = struct {
                         }
                         const ak = Value.toArrayKey(key);
                         if (!arr_val.array.contains(ak)) {
-                            self.emitUndefinedKeyWarning(ak);
+                            self.emitUndefinedKeyWarning(ak) catch if (try self.resumeRaised()) continue;
                         }
                         self.push(arr_val.array.get(ak));
                     } else if (arr_val == .object and self.hasMethod(arr_val.object.class_name, "offsetGet")) {
@@ -6000,33 +6033,7 @@ pub const VM = struct {
                             .string => |s| .{ .string = s },
                             else => .{ .int = Value.toInt(key_val) },
                         };
-                        // An element already referenced by a closure/variable
-                        // denotes that same cell; rebinding must not sever it.
-                        if (arr_ptr.getPtr(key)) |entry| {
-                            if (entry.ref) |cell| {
-                                try self.bindRefSlot(&self.currentFrame().ref_slots, name, cell);
-                                continue;
-                            }
-                        }
-                        const cell = try self.newRefCell();
-                        var elem = arr_ptr.get(key);
-                        // `$v = &$arr[$k]` makes $arr[$k] a reference, which can't
-                        // stay COW-shared: if the element is a shared array,
-                        // separate it (write a private copy back into $arr[$k])
-                        // so a later in-place mutation through the ref doesn't
-                        // corrupt another COW holder. PHP separates at each `&`
-                        // descent level (Arr::forget's `$a = &$a[$part]` chain)
-                        if (elem == .array and elem.array.refcount > 1) {
-                            const fresh = try self.shallowCloneCow(elem.array);
-                            elem = .{ .array = fresh };
-                            try self.arraySetOwned(arr_ptr, key, elem);
-                        }
-                        self.setCell(cell, elem);
-
-                        try self.bindRefSlot(&self.currentFrame().ref_slots, name, cell);
-                        try self.regRefArray(try self.ensureRefOwner(self.currentFrame()), cell, arr_ptr, key);
-                        if (arr_ptr.getPtr(key)) |ep| self.setEntryRef(ep, cell);
-                        self.array_ref_active = true;
+                        try self.bindSlotToElement(self.currentFrame(), name, arr_ptr, key);
                     }
                 },
 
@@ -6154,7 +6161,7 @@ pub const VM = struct {
                         const cls = f_dbg.called_class orelse "";
                         const fp = if (f_dbg.func) |fn_| fn_.file_path else "";
                         const ln: i64 = if (f_dbg.ip > 0)
-                            if (f_dbg.chunk.getSourceLocation(f_dbg.ip - 1, self.source)) |l| @intCast(l.line) else 0
+                            if (self.sourceLocation(f_dbg.chunk, f_dbg.ip - 1)) |l| @intCast(l.line) else 0
                         else
                             0;
                         const m = std.fmt.allocPrint(self.allocator, "[MVAER] dst={s} at {s}::{s} {s}:{d}\n", .{ dst_name, cls, fname, fp, ln }) catch return error.RuntimeError;
@@ -6182,32 +6189,7 @@ pub const VM = struct {
                             else => .{ .int = Value.toInt(key_val) },
                         };
                         if (append_ref) try self.arraySetOwned(arr_ptr, key, .null);
-                        if (arr_ptr.getPtr(key)) |entry| {
-                            if (entry.ref) |cell| {
-                                try self.bindRefSlot(&frame.ref_slots, dst_name, cell);
-                                continue;
-                            }
-                        }
-                        const cell = try self.newRefCell();
-                        var elem = arr_ptr.get(key);
-                        // `$v = &$arr[$k]` makes $arr[$k] a reference - it can't
-                        // stay COW-shared. if the element is a shared array,
-                        // separate it (write a private copy back into $arr[$k])
-                        // so a later in-place mutation through the ref doesn't
-                        // corrupt another COW holder. PHP separates at each `&`
-                        // descent level (Arr::forget's `$a = &$a[$part]` chain)
-                        if (elem == .array and elem.array.refcount > 1) {
-                            const fresh = try self.shallowCloneCow(elem.array);
-                            elem = .{ .array = fresh };
-                            try self.arraySetOwned(arr_ptr, key, elem);
-                        }
-                        // seed without cloning so cell shares the (now-exclusive) pointer
-                        self.setCell(cell, elem);
-
-                        try self.bindRefSlot(&frame.ref_slots, dst_name, cell);
-                        try self.regRefArray(try self.ensureRefOwner(frame), cell, arr_ptr, key);
-                        if (arr_ptr.getPtr(key)) |ep| self.setEntryRef(ep, cell);
-                        self.array_ref_active = true;
+                        try self.bindSlotToElement(frame, dst_name, arr_ptr, key);
                     }
                 },
 
@@ -6281,7 +6263,7 @@ pub const VM = struct {
                                     return error.RuntimeError;
                                 };
                             } else {
-                                _ = try self.callMagicGet(obj_ptr, prop_name);
+                                _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMagicGet(obj_ptr, prop_name) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                             }
                             if (self.last_return_ref) |cell| {
                                 try self.bindRefSlot(&frame.ref_slots, dst_name, cell);
@@ -6365,7 +6347,7 @@ pub const VM = struct {
                                     return error.RuntimeError;
                                 };
                             } else {
-                                _ = try self.callMagicGet(obj_ptr, prop_owned);
+                                _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMagicGet(obj_ptr, prop_owned) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                             }
                             if (self.last_return_ref) |cell| {
                                 try self.bindRefSlot(&frame.ref_slots, dst_name, cell);
@@ -6580,7 +6562,7 @@ pub const VM = struct {
                             }
                         }
                         if (self.shouldCallMagicUnset(obj, prop_name)) {
-                            _ = self.callMethod(obj, "__unset", &.{.{ .string = Value.String.borrowed(prop_name) }}) catch {};
+                            _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__unset", &.{.{ .string = Value.String.borrowed(prop_name) }}) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                         } else {
                             // mark the property as unset so subsequent reads
                             // fall through to __get (matching PHP's lazy-init
@@ -6623,7 +6605,7 @@ pub const VM = struct {
                             return error.RuntimeError;
                         }
                         if (self.shouldCallMagicUnset(obj, prop_name)) {
-                            _ = self.callMethod(obj, "__unset", &.{.{ .string = Value.String.borrowed(prop_name) }}) catch {};
+                            _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__unset", &.{.{ .string = Value.String.borrowed(prop_name) }}) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                         } else {
                             try obj.markUnset(self.allocator, prop_name);
                             // release the object the property held (Stage 1)
@@ -6679,7 +6661,7 @@ pub const VM = struct {
                     const name_idx = self.readU16();
                     const name = self.currentChunk().constants.items[name_idx].string.bytes();
                     const append_val = self.pop();
-                    if (append_val == .array) self.emitWarning("Array to string conversion");
+                    if (append_val == .array) self.emitWarning("Array to string conversion") catch if (try self.resumeRaised()) continue;
                     const is_ref = self.currentFrame().ref_slots.get(name);
 
                     const frame = self.currentFrame();
@@ -6911,7 +6893,7 @@ pub const VM = struct {
                         if (obj.properties.contains(prop_name) or (obj.slots != null and obj.getSlotIndex(prop_name) != null)) {
                             self.push(.{ .bool = obj.get(prop_name) != .null });
                         } else if (self.hasMethod(obj.class_name, "__isset")) {
-                            const result = self.callMethod(obj, "__isset", &.{.{ .string = Value.String.borrowed(prop_name) }}) catch Value{ .bool = false };
+                            const result = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__isset", &.{.{ .string = Value.String.borrowed(prop_name) }}) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                             self.push(.{ .bool = result.isTruthy() });
                         } else {
                             self.push(.{ .bool = false });
@@ -6944,7 +6926,7 @@ pub const VM = struct {
                         if (obj.properties.contains(prop_name) or (obj.slots != null and obj.getSlotIndex(prop_name) != null)) {
                             self.push(.{ .bool = obj.get(prop_name) != .null });
                         } else if (self.hasMethod(obj.class_name, "__isset")) {
-                            const result = self.callMethod(obj, "__isset", &.{.{ .string = Value.String.borrowed(prop_name) }}) catch Value{ .bool = false };
+                            const result = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__isset", &.{.{ .string = Value.String.borrowed(prop_name) }}) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                             self.push(.{ .bool = result.isTruthy() });
                         } else {
                             self.push(.{ .bool = false });
@@ -7097,22 +7079,18 @@ pub const VM = struct {
                 .cast_int => {
                     const v = self.pop();
                     if (v == .object and @import("value.zig").nativeCast(v.object, .int) == null) {
-                        const w = std.fmt.allocPrint(self.allocator, "Object of class {s} could not be converted to int", .{v.object.class_name}) catch null;
-                        if (w) |m| {
-                            self.strings.append(self.allocator, m) catch {};
-                            self.emitWarning(m);
-                        }
+                        const m = try std.fmt.allocPrint(self.allocator, "Object of class {s} could not be converted to int", .{v.object.class_name});
+                        defer self.allocator.free(m);
+                        self.emitWarning(m) catch if (try self.resumeRaised()) continue;
                     }
                     self.push(.{ .int = Value.toInt(v) });
                 },
                 .cast_float => {
                     const v = self.pop();
                     if (v == .object and @import("value.zig").nativeCast(v.object, .float) == null) {
-                        const w = std.fmt.allocPrint(self.allocator, "Object of class {s} could not be converted to float", .{v.object.class_name}) catch null;
-                        if (w) |m| {
-                            self.strings.append(self.allocator, m) catch {};
-                            self.emitWarning(m);
-                        }
+                        const m = try std.fmt.allocPrint(self.allocator, "Object of class {s} could not be converted to float", .{v.object.class_name});
+                        defer self.allocator.free(m);
+                        self.emitWarning(m) catch if (try self.resumeRaised()) continue;
                     }
                     self.push(.{ .float = Value.toFloat(v) });
                 },
@@ -7127,7 +7105,7 @@ pub const VM = struct {
                         };
                         self.pushTransfer(.{ .string = try Value.String.create(self.allocator, s) });
                     } else {
-                        if (v == .array) self.emitWarning("Array to string conversion");
+                        if (v == .array) self.emitWarning("Array to string conversion") catch if (try self.resumeRaised()) continue;
                         var buf = std.ArrayListUnmanaged(u8){};
                         defer buf.deinit(self.allocator);
                         try v.format(&buf, self.allocator);
@@ -7138,98 +7116,9 @@ pub const VM = struct {
                     const v = self.pop();
                     self.push(.{ .bool = v.isTruthy() });
                 },
-                .cast_array => {
-                    const v = self.pop();
-                    if (v == .array) {
-                        self.push(v);
-                    } else if (v == .object) {
-                        const obj = v.object.storage();
-                        const arr = try self.allocator.create(PhpArray);
-                        arr.* = .{};
-                        try self.arrays.append(self.allocator, arr);
-                        if (obj.slots) |slots| {
-                            if (obj.slot_layout) |layout| {
-                                for (layout.names, 0..) |name, i| {
-                                    if (i < slots.len) {
-                                        if (obj.isLazySlot(name, layout.declaring_classes[i])) continue;
-                                        const vr = self.findPropertyVisibility(obj.class_name, name);
-                                        // PHP omits uninitialized typed properties and
-                                        // explicitly-unset properties from (array) casts
-                                        if (slots[i] == .null and vr.type_str.len > 0 and self.typedPropForbidsNull(vr.type_str)) continue;
-                                        if (obj.isUnset(name)) continue;
-                                        const key_str: []const u8 = switch (vr.visibility) {
-                                            .public => name,
-                                            .protected => try std.fmt.allocPrint(self.allocator, "\x00*\x00{s}", .{name}),
-                                            .private => try std.fmt.allocPrint(self.allocator, "\x00{s}\x00{s}", .{ vr.defining_class, name }),
-                                        };
-                                        if (vr.visibility != .public) try self.strings.append(self.allocator, key_str);
-                                        try arr.set(self.allocator, .{ .string = Value.String.borrowed(key_str) }, slots[i]);
-                                    }
-                                }
-                            }
-                        }
-                        var it = obj.properties.iterator();
-                        while (it.next()) |entry| {
-                            const vr = self.findPropertyVisibility(obj.class_name, entry.key_ptr.*);
-                            const key_str: []const u8 = switch (vr.visibility) {
-                                .public => entry.key_ptr.*,
-                                .protected => try std.fmt.allocPrint(self.allocator, "\x00*\x00{s}", .{entry.key_ptr.*}),
-                                .private => try std.fmt.allocPrint(self.allocator, "\x00{s}\x00{s}", .{ vr.defining_class, entry.key_ptr.* }),
-                            };
-                            if (vr.visibility != .public) try self.strings.append(self.allocator, key_str);
-                            try arr.set(self.allocator, .{ .string = Value.String.borrowed(key_str) }, entry.value_ptr.*);
-                        }
-                        self.push(.{ .array = arr });
-                    } else if (v == .null) {
-                        const arr = try self.allocator.create(PhpArray);
-                        arr.* = .{};
-                        try self.arrays.append(self.allocator, arr);
-                        self.push(.{ .array = arr });
-                    } else {
-                        const arr = try self.allocator.create(PhpArray);
-                        arr.* = .{};
-                        try arr.append(self.allocator, v);
-                        try self.arrays.append(self.allocator, arr);
-                        self.push(.{ .array = arr });
-                    }
-                },
+                .cast_array => self.push(try self.castToArray(self.pop())),
 
-                .cast_object => {
-                    const v = self.pop();
-                    if (v == .object) {
-                        self.push(v);
-                    } else if (v == .array) {
-                        const obj = try self.allocator.create(PhpObject);
-                        self.next_object_id += 1;
-                        obj.* = .{ .class_name = "stdClass", .id = self.next_object_id };
-                        try self.objects.append(self.allocator, obj);
-                        for (v.array.entries.items) |entry| {
-                            const key_str: []const u8 = switch (entry.key) {
-                                .string => |s| s.bytes(),
-                                .int => |i| blk: {
-                                    const s = try std.fmt.allocPrint(self.allocator, "{d}", .{i});
-                                    try self.strings.append(self.allocator, s);
-                                    break :blk s;
-                                },
-                            };
-                            try obj.set(self.allocator, key_str, entry.value);
-                        }
-                        self.push(.{ .object = obj });
-                    } else if (v == .null) {
-                        const obj = try self.allocator.create(PhpObject);
-                        self.next_object_id += 1;
-                        obj.* = .{ .class_name = "stdClass", .id = self.next_object_id };
-                        try self.objects.append(self.allocator, obj);
-                        self.push(.{ .object = obj });
-                    } else {
-                        const obj = try self.allocator.create(PhpObject);
-                        self.next_object_id += 1;
-                        obj.* = .{ .class_name = "stdClass", .id = self.next_object_id };
-                        try self.objects.append(self.allocator, obj);
-                        try obj.set(self.allocator, "scalar", v);
-                        self.push(.{ .object = obj });
-                    }
-                },
+                .cast_object => self.push(try self.castToObject(self.pop())),
 
                 .define_const => {
                     const name_idx = self.readU16();
@@ -8557,7 +8446,7 @@ pub const VM = struct {
                             const vr = gp_vr;
                             if (!self.checkVisibility(vr.defining_class, vr.visibility)) {
                                 if (self.hasMethod(obj.class_name, "__get")) {
-                                    const result = try self.callMagicGet(obj, prop_name);
+                                    const result = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMagicGet(obj, prop_name) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                                     self.push(result);
                                     continue;
                                 }
@@ -8598,7 +8487,7 @@ pub const VM = struct {
                             }
                             self.push(val);
                         } else if (self.hasMethod(obj.class_name, "__get")) {
-                            const result = try self.callMagicGet(obj, prop_name);
+                            const result = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMagicGet(obj, prop_name) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                             self.push(result);
                         } else {
                             // a declared typed property with no value present
@@ -8668,7 +8557,7 @@ pub const VM = struct {
                                             continue;
                                         }
                                     }
-                                    self.push(try self.callMagicGet(obj, prop_name));
+                                    self.push((implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMagicGet(obj, prop_name) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; }));
                                 } else {
                                     self.push(.null);
                                 }
@@ -8686,7 +8575,7 @@ pub const VM = struct {
                                     continue;
                                 }
                             }
-                            self.push(try self.callMagicGet(obj, prop_name));
+                            self.push((implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMagicGet(obj, prop_name) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; }));
                         } else {
                             self.push(.null);
                         }
@@ -8804,13 +8693,13 @@ pub const VM = struct {
                         const has_prop = !obj.isUnset(prop_name) and (obj.properties.contains(prop_name) or (obj.slots != null and obj.getSlotIndex(prop_name) != null));
                         if (!has_prop and self.hasMethod(obj.class_name, "__set") and !obj.magic_set_active.contains(prop_name)) {
                             try obj.magic_set_active.put(self.allocator, prop_name, {});
-                            _ = self.callMethod(obj, "__set", &.{ .{ .string = Value.String.borrowed(prop_name) }, val }) catch {};
+                            _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__set", &.{ .{ .string = Value.String.borrowed(prop_name) }, val }) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                             _ = obj.magic_set_active.remove(prop_name);
                         } else {
                             if (!self.checkVisibility(vr.defining_class, vr.visibility)) {
                                 if (self.hasMethod(obj.class_name, "__set") and !obj.magic_set_active.contains(prop_name)) {
                                     try obj.magic_set_active.put(self.allocator, prop_name, {});
-                                    _ = self.callMethod(obj, "__set", &.{ .{ .string = Value.String.borrowed(prop_name) }, val }) catch {};
+                                    _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__set", &.{ .{ .string = Value.String.borrowed(prop_name) }, val }) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
                                     _ = obj.magic_set_active.remove(prop_name);
                                     self.push(val);
                                     continue;
@@ -11320,7 +11209,7 @@ pub const VM = struct {
         try self.arrays.append(self.allocator, entry);
         try entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(fn_name) });
         try entry.set(self.allocator, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(self.frameFile(frame_idx - 1)) });
-        if (requirer.chunk.getSourceLocation(requirer.ip - 2, self.source)) |loc| {
+        if (self.sourceLocation(requirer.chunk, requirer.ip - 2)) |loc| {
             try entry.set(self.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = @as(i64, @intCast(loc.line)) });
         }
         const args_arr = try self.allocator.create(PhpArray);
@@ -11339,43 +11228,82 @@ pub const VM = struct {
         const arr = try self.allocator.create(PhpArray);
         arr.* = .{};
         try self.arrays.append(self.allocator, arr);
-        if (self.frame_count >= 1) {
-            var i: usize = self.frame_count - 1;
-            while (true) : (i -= 1) {
-                const frame = self.frames[i];
-                if (frame.func) |f| {
-                    if (f.name.len > 0 and !std.mem.endsWith(u8, f.name, "::__construct")) {
-                        const entry = try self.allocator.create(PhpArray);
-                        entry.* = .{};
-                        try self.arrays.append(self.allocator, entry);
-                        const type_str: []const u8 = if (f.is_static) "::" else "->";
-                        if (std.mem.indexOf(u8, f.name, "::")) |sep| {
-                            try entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(f.name[sep + 2 ..]) });
-                            try entry.set(self.allocator, .{ .string = Value.String.borrowed("class") }, .{ .string = Value.String.borrowed(f.name[0..sep]) });
-                            try entry.set(self.allocator, .{ .string = Value.String.borrowed("type") }, .{ .string = Value.String.borrowed(type_str) });
-                        } else {
-                            try entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(try self.funcDisplayName(f)) });
-                        }
-                        if (i > 0) {
-                            const caller = self.frames[i - 1];
-                            const cip = if (caller.ip > 0) caller.ip - 1 else 0;
-                            if (caller.chunk.getSourceLocation(cip, self.source)) |loc| {
-                                try entry.set(self.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = @as(i64, @intCast(loc.line)) });
-                                try entry.set(self.allocator, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(self.frameFile(i - 1)) });
-                            }
-                        }
-                        const args_arr = try self.allocator.create(PhpArray);
-                        args_arr.* = .{};
-                        try self.arrays.append(self.allocator, args_arr);
-                        try entry.set(self.allocator, .{ .string = Value.String.borrowed("args") }, .{ .array = args_arr });
-                        try arr.append(self.allocator, .{ .array = entry });
-                    }
-                }
-                try self.tryAppendRequireFrame(arr, i);
-                if (i == 0) break;
-            }
+        if (self.frame_count == 0) return arr;
+        var i: usize = self.frame_count - 1;
+        while (true) : (i -= 1) {
+            const frame = &self.frames[i];
+            if (frame.func) |f| if (f.name.len > 0) {
+                const call_site: ?SourcePosition = if (i > 0) self.framePosition(i - 1) else null;
+                const entry = try self.newTraceEntry(f, call_site);
+                const args = try self.traceArgs(entry);
+                for (f.params) |pname| try args.append(self.allocator, frameParamValue(frame, f, pname));
+                try arr.append(self.allocator, .{ .array = entry });
+            };
+            try self.tryAppendRequireFrame(arr, i);
+            if (i == 0) break;
         }
         return arr;
+    }
+
+    // keys in php's order: file, line, function, class, type, then args
+    fn newTraceEntry(self: *VM, f: *const ObjFunction, call_site: ?SourcePosition) !*PhpArray {
+        const entry = try self.allocator.create(PhpArray);
+        entry.* = .{};
+        try self.arrays.append(self.allocator, entry);
+        if (call_site) |site| {
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(site.file) });
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = site.line });
+        }
+        if (std.mem.indexOf(u8, f.name, "::")) |sep| {
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(f.name[sep + 2 ..]) });
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("class") }, .{ .string = Value.String.borrowed(f.name[0..sep]) });
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("type") }, .{ .string = Value.String.borrowed(if (f.is_static) "::" else "->") });
+        } else {
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(try self.funcDisplayName(f)) });
+        }
+        return entry;
+    }
+
+    fn traceArgs(self: *VM, entry: *PhpArray) !*PhpArray {
+        const args = try self.allocator.create(PhpArray);
+        args.* = .{};
+        try self.arrays.append(self.allocator, args);
+        try entry.set(self.allocator, .{ .string = Value.String.borrowed("args") }, .{ .array = args });
+        return args;
+    }
+
+    // the file and line a frame is executing
+    fn framePosition(self: *VM, frame_idx: usize) ?SourcePosition {
+        const frame = &self.frames[frame_idx];
+        const ip = if (frame.ip > 0) frame.ip - 1 else 0;
+        const loc = self.sourceLocation(frame.chunk, ip) orelse return null;
+        return .{ .file = self.frameFile(frame_idx), .line = @intCast(loc.line) };
+    }
+
+    // a call rejected before its frame exists still appears first in the trace
+    fn prependCallToTrace(self: *VM, exc: *PhpObject, f: *const ObjFunction, args: []const Value) !void {
+        const scope = self.exceptionTraceScope(exc);
+        const old = exc.getForScope("trace", scope);
+        const trace = try self.allocator.create(PhpArray);
+        trace.* = .{};
+        try self.arrays.append(self.allocator, trace);
+        const entry = try self.newTraceEntry(f, if (self.frame_count > 0) self.framePosition(self.frame_count - 1) else null);
+        const entry_args = try self.traceArgs(entry);
+        for (args) |a| try entry_args.append(self.allocator, a);
+        try trace.append(self.allocator, .{ .array = entry });
+        if (old == .array) for (old.array.entries.items) |e| try trace.append(self.allocator, e.value);
+        try exc.setForScope(self.allocator, "trace", .{ .array = trace }, scope);
+    }
+
+    // a live frame's bound parameter: the vars map first, then the locals
+    // that locals-only frames keep parameters in
+    fn frameParamValue(frame: *const CallFrame, f: *const ObjFunction, param_name: []const u8) Value {
+        if (frame.vars.get(param_name)) |v| return v;
+        for (f.slot_names, 0..) |sn, si| {
+            if (!std.mem.eql(u8, sn, param_name)) continue;
+            return if (si < frame.locals.len) frame.locals[si] else .null;
+        }
+        return .null;
     }
 
     // when a native (e.g. array_map, iterator_apply) calls a user callback
@@ -11446,15 +11374,6 @@ pub const VM = struct {
         try self.initObjectProperties(obj, class_name);
         try obj.set(self.allocator, "message", .{ .string = Value.String.borrowed(message) });
         try obj.set(self.allocator, "code", .{ .int = 0 });
-        const exc_file = if (self.frame_count > 0) self.frameFile(self.frame_count - 1) else self.file_path;
-        try obj.set(self.allocator, "file", .{ .string = Value.String.borrowed(exc_file) });
-        const ip = if (self.frame_count > 0) self.currentFrame().ip else 0;
-        const line: i64 = if (self.frame_count > 0)
-            if (self.currentChunk().getSourceLocation(if (ip > 0) ip - 1 else 0, self.source)) |loc| @intCast(loc.line) else 0
-        else
-            0;
-        try obj.set(self.allocator, "line", .{ .int = line });
-        try obj.setForScope(self.allocator, "trace", .{ .array = try self.buildExceptionTrace() }, self.exceptionTraceScope(obj));
         try self.objects.append(self.allocator, obj);
         self.pending_exception = .{ .object = obj };
     }
@@ -11669,8 +11588,8 @@ pub const VM = struct {
 
     pub fn checkArithOperands(self: *VM, a: Value, b: Value, comptime op: []const u8) RuntimeError!bool {
         if (isArithOperand(a) and isArithOperand(b)) {
-            if (a == .string and isPartialNumericString(a.string.bytes())) self.emitNonNumericWarning();
-            if (b == .string and isPartialNumericString(b.string.bytes())) self.emitNonNumericWarning();
+            if (a == .string and isPartialNumericString(a.string.bytes())) self.emitNonNumericWarning() catch return self.resumeRaised();
+            if (b == .string and isPartialNumericString(b.string.bytes())) self.emitNonNumericWarning() catch return self.resumeRaised();
             return false;
         }
         const tn_a = arithTypeName(a);
@@ -11743,16 +11662,16 @@ pub const VM = struct {
         return i < s.len;
     }
 
-    fn emitNonNumericWarning(self: *VM) void {
-        self.emitWarning("A non-numeric value encountered");
+    fn emitNonNumericWarning(self: *VM) RuntimeError!void {
+        return self.emitWarning("A non-numeric value encountered");
     }
 
-    fn emitUndefinedKeyWarning(self: *VM, key: PhpArray.Key) void {
+    fn emitUndefinedKeyWarning(self: *VM, key: PhpArray.Key) RuntimeError!void {
         const msg = switch (key) {
-            .int => |n| std.fmt.allocPrint(self.allocator, "Undefined array key {d}", .{n}) catch return,
-            .string => |s| std.fmt.allocPrint(self.allocator, "Undefined array key \"{s}\"", .{s.bytes()}) catch return,
+            .int => |n| try std.fmt.allocPrint(self.allocator, "Undefined array key {d}", .{n}),
+            .string => |s| try std.fmt.allocPrint(self.allocator, "Undefined array key \"{s}\"", .{s.bytes()}),
         };
-        self.strings.append(self.allocator, msg) catch {};
+        defer self.allocator.free(msg);
         // ZPHP_DBG_UKW=1 dumps the frame stack on each warning - invaluable
         // for tracking down false-positives where zphp warns but PHP doesn't
         if (platform.getenv("ZPHP_DBG_UKW") != null) {
@@ -11767,31 +11686,113 @@ pub const VM = struct {
                 std.debug.print("  #{d} {s} ip={d} src_off={d}\n", .{ fi, name, f.ip, line_raw });
             }
         }
-        self.emitWarning(msg);
+        try self.emitWarning(msg);
     }
 
-    pub fn emitWarning(self: *VM, msg: []const u8) void {
-        const ip = if (self.frame_count > 0) self.currentFrame().ip else 0;
-        const line: i64 = if (self.frame_count > 0)
-            if (self.currentChunk().getSourceLocation(if (ip > 0) ip - 1 else 0, self.source)) |loc| @intCast(loc.line) else 0
-        else
-            0;
-        const file = if (self.frame_count > 0) self.frameFile(self.frame_count - 1) else self.file_path;
-        if (self.error_silenced_depth != 0 or (self.error_reporting_level & 2) == 0) return;
+    pub const E_WARNING: i64 = 2;
+
+    pub fn emitWarning(self: *VM, msg: []const u8) RuntimeError!void {
+        return self.raiseError(E_WARNING, msg);
+    }
+
+    // a php diagnostic. the user handler sees it first unless its mask
+    // excludes the level; otherwise, or when the handler returns false, it is
+    // recorded for error_get_last and printed if error_reporting allows. an
+    // exception thrown by the handler is left pending as error.RuntimeError
+    pub fn raiseError(self: *VM, level: i64, msg: []const u8) RuntimeError!void {
+        const at = self.currentSourcePosition();
+        if (try self.callUserErrorHandler(level, msg, at)) return;
+        self.recordLastError(level, msg, at);
+        const shown = self.error_silenced_depth == 0 and (self.error_reporting_level & level) != 0;
+        if (shown) self.printError(level, msg, at);
+        if (!isFatalLevel(level)) return;
+        self.exit_code = 255;
+        self.exit_requested = true;
+        return error.RuntimeError;
+    }
+
+    fn isFatalLevel(level: i64) bool {
+        return switch (level) {
+            1, 16, 64, 256, 4096 => true,
+            else => false,
+        };
+    }
+
+    // a raised error whose handler threw mid-opcode lands in this loop's
+    // catch the way throwBuiltinException does, or propagates
+    fn resumeRaised(self: *VM) RuntimeError!bool {
+        if (self.pending_exception != null and self.dispatchPendingException(self.run_base_frame)) return true;
+        return error.RuntimeError;
+    }
+
+    fn callUserErrorHandler(self: *VM, level: i64, msg: []const u8, at: SourcePosition) RuntimeError!bool {
+        const handler = self.user_error_handler orelse return false;
+        if ((self.user_error_handler_mask & level) == 0) return false;
+        const message = Value{ .string = try Value.String.create(self.allocator, msg) };
+        defer message.string.release();
+        // errors raised inside the handler take the default path
+        self.user_error_handler = null;
+        defer self.reinstateErrorHandler(handler);
+        var ctx = self.makeContext(null);
+        const result = ctx.invokeCallable(handler, &.{ .{ .int = level }, message, .{ .string = Value.String.borrowed(at.file) }, .{ .int = at.line } }) catch |err| {
+            if (self.pending_exception != null) return err;
+            return false;
+        };
+        return !(result == .bool and !result.bool);
+    }
+
+    // the handler that ran comes back unless it installed another one
+    fn reinstateErrorHandler(self: *VM, handler: Value) void {
+        if (self.user_error_handler == null) self.user_error_handler = handler else self.releaseValue(handler);
+    }
+
+    fn recordLastError(self: *VM, level: i64, msg: []const u8, at: SourcePosition) void {
+        const kept = self.allocator.dupe(u8, msg) catch return;
+        self.clearLastError();
+        self.last_error_type = level;
+        self.last_error_message = kept;
+        self.last_error_file = at.file;
+        self.last_error_line = at.line;
+    }
+
+    pub fn clearLastError(self: *VM) void {
+        if (self.last_error_message.len > 0) self.allocator.free(self.last_error_message);
+        self.last_error_type = 0;
+        self.last_error_message = "";
+        self.last_error_file = "";
+        self.last_error_line = 0;
+    }
+
+    fn printError(self: *VM, level: i64, msg: []const u8, at: SourcePosition) void {
+        const label = errorLabel(level);
         if (self.output.items.len > 0) {
-            const stdout_file = std.fs.File.stdout();
-            _ = stdout_file.write(self.output.items) catch {};
+            _ = std.fs.File.stdout().write(self.output.items) catch {};
             self.output.clearRetainingCapacity();
         }
-        const stderr_text = std.fmt.allocPrint(self.allocator, "PHP Warning:  {s} in {s} on line {d}\n", .{ msg, file, line }) catch return;
-        self.strings.append(self.allocator, stderr_text) catch {};
-        const stderr_file = std.fs.File.stderr();
-        _ = stderr_file.write(stderr_text) catch {};
-        if (self.displayErrorsEnabled()) {
-            const stdout_text = std.fmt.allocPrint(self.allocator, "\nWarning: {s} in {s} on line {d}\n", .{ msg, file, line }) catch return;
-            self.strings.append(self.allocator, stdout_text) catch {};
-            self.output.appendSlice(self.allocator, stdout_text) catch {};
-        }
+        const log_text = std.fmt.allocPrint(self.allocator, "PHP {s}:  {s} in {s} on line {d}\n", .{ label, msg, at.file, at.line }) catch return;
+        defer self.allocator.free(log_text);
+        _ = std.fs.File.stderr().write(log_text) catch {};
+        if (!self.displayErrorsEnabled()) return;
+        const display_text = std.fmt.allocPrint(self.allocator, "\n{s}: {s} in {s} on line {d}\n", .{ label, msg, at.file, at.line }) catch return;
+        defer self.allocator.free(display_text);
+        self.output.appendSlice(self.allocator, display_text) catch {};
+    }
+
+    pub fn errorLabel(level: i64) []const u8 {
+        return switch (level) {
+            1, 256 => "Fatal error",
+            2, 512 => "Warning",
+            4 => "Parse error",
+            8, 1024 => "Notice",
+            16 => "Core error",
+            32 => "Core warning",
+            64 => "Compile error",
+            128 => "Compile warning",
+            2048 => "Strict standards",
+            4096 => "Recoverable fatal error",
+            8192, 16384 => "Deprecated",
+            else => "Notice",
+        };
     }
 
     pub fn displayErrorsEnabled(self: *const VM) bool {
@@ -11875,10 +11876,9 @@ pub const VM = struct {
     // the file and line the executing frame is at
     pub fn currentSourcePosition(self: *VM) SourcePosition {
         if (self.frame_count == 0) return .{ .file = self.file_path, .line = 0 };
-        const file = if (self.currentFrame().func) |f| f.file_path else self.file_path;
         const ip = self.currentFrame().ip;
-        const line: i64 = if (self.currentChunk().getSourceLocation(if (ip > 0) ip - 1 else 0, self.source)) |loc| @intCast(loc.line) else 0;
-        return .{ .file = if (file.len > 0) file else self.file_path, .line = line };
+        const line: i64 = if (self.sourceLocation(self.currentChunk(), if (ip > 0) ip - 1 else 0)) |loc| @intCast(loc.line) else 0;
+        return .{ .file = self.frameFile(self.frame_count - 1), .line = line };
     }
     pub const SourcePositionMessage = struct { message: []const u8, at: SourcePosition };
 
@@ -11895,6 +11895,10 @@ pub const VM = struct {
     // `at` places the exception somewhere other than the throwing frame, the
     // way a ParseError from an included file reports that file and line
     pub fn throwBuiltinExceptionAt(self: *VM, class_name: []const u8, message: []const u8, at: ?SourcePosition) !bool {
+        return self.throwObject(try self.newBuiltinException(class_name, message, at));
+    }
+
+    fn newBuiltinException(self: *VM, class_name: []const u8, message: []const u8, at: ?SourcePosition) !*PhpObject {
         const obj = try self.allocator.create(PhpObject);
         self.next_object_id += 1;
         const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
@@ -11907,27 +11911,17 @@ pub const VM = struct {
         try self.initObjectProperties(obj, class_name);
         try obj.set(self.allocator, "message", .{ .string = Value.String.borrowed(message) });
         try obj.set(self.allocator, "code", .{ .int = 0 });
-        // file/line should reflect the throwing frame (often a function in a
-        // required file), not the top-level script. fall back to self.file_path
-        // when the current frame has no associated source
-        const frame_file: []const u8 = if (self.frame_count > 0)
-            if (self.currentFrame().func) |fn_| fn_.file_path else self.file_path
-        else
-            self.file_path;
-        try obj.set(self.allocator, "file", .{ .string = Value.String.borrowed(if (frame_file.len > 0) frame_file else self.file_path) });
-        const ip = if (self.frame_count > 0) self.currentFrame().ip else 0;
-        const line: i64 = if (self.frame_count > 0)
-            if (self.currentChunk().getSourceLocation(if (ip > 0) ip - 1 else 0, self.source)) |loc| @intCast(loc.line) else 0
-        else
-            0;
-        try obj.set(self.allocator, "line", .{ .int = line });
         if (at) |pos| {
             try obj.set(self.allocator, "file", .{ .string = Value.String.borrowed(pos.file) });
             try obj.set(self.allocator, "line", .{ .int = pos.line });
         }
-        try obj.setForScope(self.allocator, "trace", .{ .array = try self.buildExceptionTrace() }, self.exceptionTraceScope(obj));
         try self.objects.append(self.allocator, obj);
+        return obj;
+    }
 
+    // lands in this loop's nearest catch; false leaves it pending for an
+    // outer loop
+    fn throwObject(self: *VM, obj: *PhpObject) bool {
         if (self.handler_count <= self.handler_floor) {
             self.pending_exception = .{ .object = obj };
             return false;
@@ -12413,7 +12407,7 @@ pub const VM = struct {
     fn valueToString(self: *VM, v: Value) RuntimeError![]const u8 {
         if (v == .string) return v.string.bytes();
         if (v == .object) return self.objectToString(v.object);
-        if (v == .array) self.emitWarning("Array to string conversion");
+        if (v == .array) try self.emitWarning("Array to string conversion");
         var buf = std.ArrayListUnmanaged(u8){};
         try v.format(&buf, self.allocator);
         const str = try buf.toOwnedSlice(self.allocator);
@@ -13574,6 +13568,77 @@ pub const VM = struct {
         return instance;
     }
 
+    // a property keeps the name bytes it is given, so a name taken from an
+    // array key must outlive the array it came from
+    pub fn propertyNameFromKey(self: *VM, key: PhpArray.Key) ![]const u8 {
+        return switch (key) {
+            .string => |s| self.internName(s.bytes()),
+            .int => |i| {
+                var buf: [24]u8 = undefined;
+                return self.internName(std.fmt.bufPrint(&buf, "{d}", .{i}) catch unreachable);
+            },
+        };
+    }
+
+    pub fn castToObject(self: *VM, v: Value) !Value {
+        if (v == .object) return v;
+        const obj = try self.allocUserObject("stdClass");
+        switch (v) {
+            .array => |arr| for (arr.entries.items) |entry| {
+                try obj.set(self.allocator, try self.propertyNameFromKey(entry.key), entry.value);
+            },
+            .null => {},
+            else => try obj.set(self.allocator, "scalar", v),
+        }
+        return .{ .object = obj };
+    }
+
+    pub fn castToArray(self: *VM, v: Value) !Value {
+        if (v == .array) return v;
+        const arr = try self.allocator.create(PhpArray);
+        arr.* = .{};
+        try self.arrays.append(self.allocator, arr);
+        switch (v) {
+            .object => |o| try self.copyPropertiesToArray(o.storage(), arr),
+            .null => {},
+            else => try arr.append(self.allocator, v),
+        }
+        return .{ .array = arr };
+    }
+
+    fn copyPropertiesToArray(self: *VM, obj: *PhpObject, arr: *PhpArray) !void {
+        if (obj.slots) |slots| {
+            if (obj.slot_layout) |layout| {
+                for (layout.names, 0..) |name, i| {
+                    if (i >= slots.len) continue;
+                    if (obj.isLazySlot(name, layout.declaring_classes[i])) continue;
+                    const vr = self.findPropertyVisibility(obj.class_name, name);
+                    // PHP omits uninitialized typed properties and
+                    // explicitly-unset properties from (array) casts
+                    if (slots[i] == .null and vr.type_str.len > 0 and self.typedPropForbidsNull(vr.type_str)) continue;
+                    if (obj.isUnset(name)) continue;
+                    try arr.set(self.allocator, .{ .string = Value.String.borrowed(try self.mangledPropertyKey(name, vr)) }, slots[i]);
+                }
+            }
+        }
+        var it = obj.properties.iterator();
+        while (it.next()) |entry| {
+            const vr = self.findPropertyVisibility(obj.class_name, entry.key_ptr.*);
+            try arr.set(self.allocator, .{ .string = Value.String.borrowed(try self.mangledPropertyKey(entry.key_ptr.*, vr)) }, entry.value_ptr.*);
+        }
+    }
+
+    fn mangledPropertyKey(self: *VM, name: []const u8, vr: anytype) ![]const u8 {
+        const key = switch (vr.visibility) {
+            .public => return name,
+            .protected => try std.fmt.allocPrint(self.allocator, "\x00*\x00{s}", .{name}),
+            .private => try std.fmt.allocPrint(self.allocator, "\x00{s}\x00{s}", .{ vr.defining_class, name }),
+        };
+        errdefer self.allocator.free(key);
+        try self.strings.append(self.allocator, key);
+        return key;
+    }
+
     // request-lifetime bytes for a name that recurs across calls, kept once
     pub fn internName(self: *VM, name: []const u8) ![]const u8 {
         if (self.interned_names.getKey(name)) |kept| return kept;
@@ -13733,31 +13798,6 @@ pub const VM = struct {
         set: []const u8, // explicit class name
     };
 
-    fn emitStaticClosureBindWarning(self: *VM) void {
-        const msg = "Cannot bind an instance to a static closure, this will be an error in PHP 9";
-        const ip = if (self.frame_count > 0) self.currentFrame().ip else 0;
-        const line: i64 = if (self.frame_count > 0)
-            if (self.currentChunk().getSourceLocation(if (ip > 0) ip - 1 else 0, self.source)) |loc| @intCast(loc.line) else 0
-        else
-            0;
-        const file = if (self.frame_count > 0) self.frameFile(self.frame_count - 1) else self.file_path;
-        if (self.error_silenced_depth != 0 or (self.error_reporting_level & 2) == 0) return;
-        if (self.output.items.len > 0) {
-            const stdout_file = std.fs.File.stdout();
-            _ = stdout_file.write(self.output.items) catch {};
-            self.output.clearRetainingCapacity();
-        }
-        const stderr_text = std.fmt.allocPrint(self.allocator, "PHP Warning:  {s} in {s} on line {d}\n", .{ msg, file, line }) catch return;
-        self.strings.append(self.allocator, stderr_text) catch {};
-        const stderr_file = std.fs.File.stderr();
-        _ = stderr_file.write(stderr_text) catch {};
-        if (self.displayErrorsEnabled()) {
-            const stdout_text = std.fmt.allocPrint(self.allocator, "\nWarning: {s} in {s} on line {d}\n", .{ msg, file, line }) catch return;
-            self.strings.append(self.allocator, stdout_text) catch {};
-            self.output.appendSlice(self.allocator, stdout_text) catch {};
-        }
-    }
-
     pub fn cloneClosureWithThis(self: *VM, closure_name: []const u8, new_this: Value, scope_action: ClosureScope) !Value {
         const func = self.functions.get(closure_name) orelse return .null;
 
@@ -13765,7 +13805,7 @@ pub const VM = struct {
         // warning and returns null in that case; match the null return so
         // callers see the same observable behavior
         if (func.is_static and new_this != .null) {
-            self.emitStaticClosureBindWarning();
+            try self.emitWarning("Cannot bind an instance to a static closure, this will be an error in PHP 9");
             return .null;
         }
 
@@ -14578,6 +14618,12 @@ pub const VM = struct {
         if (!self.array_ref_active) return false;
         const ep = arr.getPtr(key) orelse return false;
         const cell = ep.ref orelse return false;
+        // the element is the last holder, so the reference is just its value
+        if (cellOf(cell).binders == 1) {
+            ep.ref = null;
+            self.unbindCell(cell);
+            return false;
+        }
         self.setCell(cell, val);
         try self.propagateCellWrite(cell, val);
         return true;
@@ -15454,9 +15500,21 @@ pub const VM = struct {
         if (self.classes.contains(class_name)) return;
         if (self.interfaces.contains(class_name)) return;
         if (self.traits.contains(class_name)) return;
-        if (self.autoload_depth >= 64) return;
+        // php never re-enters the autoloaders for a class it is already
+        // autoloading, so a cycle (a class file that class_exists() an alias
+        // whose file aliases back to it) ends at the class in progress instead
+        // of recursing until unrelated autoloads start failing
+        const ic = self.ic.?;
+        for (ic.autoloading.items) |pending| {
+            if (std.ascii.eqlIgnoreCase(pending, class_name)) return;
+        }
+        // a backstop against runaway chains of distinct classes, far above any
+        // real hierarchy
+        if (self.autoload_depth >= 250) return;
         self.autoload_depth += 1;
         defer self.autoload_depth -= 1;
+        try ic.autoloading.append(self.allocator, class_name);
+        defer _ = ic.autoloading.pop();
 
         for (self.autoload_callbacks.items) |callback| {
             if (callback == .string) {
@@ -16404,29 +16462,60 @@ pub const VM = struct {
         @memcpy(defaults, all_defaults.items);
         @memcpy(decl, all_decl.items);
         @memcpy(priv, all_priv.items);
-        layout.* = .{ .names = names, .defaults = defaults, .declaring_classes = decl, .is_private = priv };
+        layout.* = .{ .names = names, .defaults = defaults, .declaring_classes = decl, .is_private = priv, .throwable = self.definesThrowable(def) };
         return layout;
     }
 
     pub fn initObjectProperties(self: *VM, obj: *PhpObject, class_name: []const u8) RuntimeError!void {
-        if (self.classes.get(class_name)) |cls| {
-            if (cls.slot_layout) |layout| {
-                const slots = self.allocator.alloc(Value, layout.names.len) catch return error.RuntimeError;
-                for (layout.defaults, 0..) |def_val, i| {
-                    slots[i] = try self.copyDefault(def_val);
-                }
-                obj.slots = slots;
-                obj.slot_layout = layout;
-                return;
+        if (try self.initPropertyDefaults(obj, class_name)) try self.stampThrowable(obj);
+    }
+
+    // returns whether the class is throwable, so the caller stamps it once
+    fn initPropertyDefaults(self: *VM, obj: *PhpObject, class_name: []const u8) RuntimeError!bool {
+        const cls = self.classes.get(class_name) orelse return false;
+        if (cls.slot_layout) |layout| {
+            const slots = self.allocator.alloc(Value, layout.names.len) catch return error.RuntimeError;
+            for (layout.defaults, 0..) |def_val, i| {
+                slots[i] = try self.copyDefault(def_val);
             }
-            // fallback for classes without slot layout
-            if (cls.parent) |parent| {
-                try self.initObjectProperties(obj, parent);
-            }
-            for (cls.properties.items) |prop| {
-                try obj.set(self.allocator, prop.name, try self.copyDefault(prop.default));
-            }
+            obj.slots = slots;
+            obj.slot_layout = layout;
+            return layout.throwable;
         }
+        // fallback for classes without slot layout
+        if (cls.parent) |parent| _ = try self.initPropertyDefaults(obj, parent);
+        for (cls.properties.items) |prop| {
+            try obj.set(self.allocator, prop.name, try self.copyDefault(prop.default));
+        }
+        return self.isThrowableClass(class_name);
+    }
+
+    // a class being declared is not registered yet, so its chain starts at the parent
+    fn definesThrowable(self: *VM, def: *const ClassDef) bool {
+        if (std.mem.eql(u8, def.name, "Exception") or std.mem.eql(u8, def.name, "Error")) return true;
+        return if (def.parent) |parent| self.isThrowableClass(parent) else false;
+    }
+
+    // every throwable extends Exception or Error
+    fn isThrowableClass(self: *VM, class_name: []const u8) bool {
+        var name: ?[]const u8 = class_name;
+        var depth: usize = 0;
+        while (name) |n| : (depth += 1) {
+            if (depth > 256) return false;
+            if (std.mem.eql(u8, n, "Exception") or std.mem.eql(u8, n, "Error")) return true;
+            const cls = self.classes.get(n) orelse return false;
+            name = cls.parent;
+        }
+        return false;
+    }
+
+    // php fixes an exception's origin when the object is created, before any
+    // constructor runs
+    fn stampThrowable(self: *VM, obj: *PhpObject) RuntimeError!void {
+        const at = self.currentSourcePosition();
+        try obj.set(self.allocator, "file", .{ .string = Value.String.borrowed(at.file) });
+        try obj.set(self.allocator, "line", .{ .int = at.line });
+        try obj.setForScope(self.allocator, "trace", .{ .array = try self.buildExceptionTrace() }, self.exceptionTraceScope(obj));
     }
 
     // copy a template value (a property/static default) into a fresh owner.
@@ -16506,6 +16595,15 @@ pub const VM = struct {
         }
     }
 
+    // php copies the value of a reference only the source element holds, so
+    // the copy is a plain element (a reference to the array itself stays one)
+    fn carriedRef(ref: ?*Value, src: *PhpArray) ?*Value {
+        const cell = ref orelse return null;
+        if (cellOf(cell).binders > 1) return cell;
+        if (cell.* == .array and cell.array == src) return cell;
+        return null;
+    }
+
     fn registerCloneRefs(self: *VM, copy: *PhpArray) RuntimeError!void {
         if (!self.array_ref_active) return;
         for (copy.entries.items) |entry| {
@@ -16522,8 +16620,9 @@ pub const VM = struct {
         copy.entries.ensureTotalCapacity(self.allocator, src.entries.items.len) catch return error.RuntimeError;
         for (src.entries.items, 0..) |entry, i| {
             if (entry.key == .string) entry.key.string.retain();
-            copy.entries.appendAssumeCapacity(entry);
-            if (entry.ref) |cell| self.bindCell(cell);
+            const ref = carriedRef(entry.ref, src);
+            copy.entries.appendAssumeCapacity(.{ .key = entry.key, .value = entry.value, .ref = ref });
+            if (ref) |cell| self.bindCell(cell);
             retainValue(entry.value);
             if (entry.key == .string) {
                 copy.string_index.put(self.allocator, entry.key.string.bytes(), i) catch return error.RuntimeError;
@@ -16583,8 +16682,9 @@ pub const VM = struct {
         copy.entries.ensureTotalCapacity(self.allocator, src.entries.items.len) catch return error.RuntimeError;
         for (src.entries.items, 0..) |entry, i| {
             if (entry.key == .string) entry.key.string.retain();
-            copy.entries.appendAssumeCapacity(entry);
-            if (entry.ref) |cell| self.bindCell(cell);
+            const ref = carriedRef(entry.ref, src);
+            copy.entries.appendAssumeCapacity(.{ .key = entry.key, .value = entry.value, .ref = ref });
+            if (ref) |cell| self.bindCell(cell);
             // The clone owns every heap value copied into its entries.
             retainValue(entry.value);
             if (entry.key == .string) {
@@ -16617,8 +16717,9 @@ pub const VM = struct {
             // every copied non-array heap value is a new reference from the clone
             if (cloned_value != .array) retainValue(cloned_value);
             if (entry.key == .string) entry.key.string.retain();
-            copy.entries.appendAssumeCapacity(.{ .key = entry.key, .value = cloned_value, .ref = entry.ref });
-            if (entry.ref) |cell| self.bindCell(cell);
+            const ref = carriedRef(entry.ref, src);
+            copy.entries.appendAssumeCapacity(.{ .key = entry.key, .value = cloned_value, .ref = ref });
+            if (ref) |cell| self.bindCell(cell);
             if (entry.key == .string) {
                 copy.string_index.put(self.allocator, entry.key.string.bytes(), i) catch return error.RuntimeError;
             }
@@ -17310,7 +17411,6 @@ pub const VM = struct {
                         continue;
                     }
                 }
-                self.dropN(ac);
                 const param_name = if (func) |f| (if (i < f.params.len) f.params[i] else "") else "";
                 // PHP suffixes the message with the call site: ", called in
                 // <file> on line N". the caller frame is frame_count-2 because
@@ -17325,19 +17425,7 @@ pub const VM = struct {
                         cs_file = cf.file_path;
                     };
                     const cip: usize = if (caller.ip > 0) caller.ip - 1 else 0;
-                    // load the caller's own source if it differs from vm.source -
-                    // the chunk's lines table maps to byte offsets in the file
-                    // it was compiled from, not the entry-point script
-                    var caller_src: []const u8 = self.source;
-                    var loaded: []const u8 = "";
-                    if (!std.mem.eql(u8, cs_file, self.file_path)) {
-                        if (std.fs.cwd().readFileAlloc(self.allocator, cs_file, 8 * 1024 * 1024)) |contents| {
-                            loaded = contents;
-                            caller_src = contents;
-                        } else |_| {}
-                    }
-                    defer if (loaded.len > 0) self.allocator.free(loaded);
-                    if (caller.chunk.getSourceLocation(cip, caller_src)) |loc| cs_line = loc.line;
+                    if (self.sourceLocation(caller.chunk, cip)) |loc| cs_line = loc.line;
                 }
                 const msg = if (param_name.len > 0)
                     std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} ({s}) must be of type {s}, {s} given, called in {s} on line {d}", .{ name, i + 1, param_name, type_str, valueTypeName(val), cs_file, cs_line }) catch return error.RuntimeError
@@ -17345,7 +17433,12 @@ pub const VM = struct {
                     std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} must be of type {s}, {s} given, called in {s} on line {d}", .{ name, i + 1, type_str, valueTypeName(val), cs_file, cs_line }) catch return error.RuntimeError;
                 try self.strings.append(self.allocator, msg);
                 self.error_msg = msg;
-                if (try self.throwBuiltinException("TypeError", msg)) return true;
+                // php raises it inside the callee, at its declaration
+                const at: ?SourcePosition = if (func) |f| if (f.file_path.len > 0) SourcePosition{ .file = f.file_path, .line = f.start_line } else null else null;
+                const exc = try self.newBuiltinException("TypeError", msg, at);
+                if (func) |f| try self.prependCallToTrace(exc, f, self.stack[self.sp - ac .. self.sp]);
+                self.dropN(ac);
+                if (self.throwObject(exc)) return true;
                 return error.RuntimeError;
             }
             if (val == .object and self.typeStrAllowsString(type_str) and self.hasMethod(val.object.class_name, "__toString")) {
@@ -18026,16 +18119,7 @@ pub const VM = struct {
                 caller_file = cf.file_path;
             };
             const cip: usize = if (caller.ip > 0) caller.ip - 1 else 0;
-            var caller_src: []const u8 = self.source;
-            var loaded: []const u8 = "";
-            if (!std.mem.eql(u8, caller_file, self.file_path)) {
-                if (std.fs.cwd().readFileAlloc(self.allocator, caller_file, 8 * 1024 * 1024)) |c| {
-                    loaded = c;
-                    caller_src = c;
-                } else |_| {}
-            }
-            defer if (loaded.len > 0) self.allocator.free(loaded);
-            if (caller.chunk.getSourceLocation(cip, caller_src)) |loc| caller_line = loc.line;
+            if (self.sourceLocation(caller.chunk, cip)) |loc| caller_line = loc.line;
         }
         const modifier: []const u8 = if (func.required_params == func.arity) "exactly" else "at least";
         const msg = try std.fmt.allocPrint(self.allocator, "Too few arguments to function {s}(), {d} passed in {s} on line {d} and {s} {d} expected", .{ name, ac, caller_file, caller_line, modifier, func.required_params });

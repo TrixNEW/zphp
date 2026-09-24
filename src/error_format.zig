@@ -190,7 +190,7 @@ fn appendPhpLocationLine(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM) 
     const frame = &vm.frames[vm.frame_count - 1];
     const ip = if (frame.ip > 0) frame.ip - 1 else 0;
     const path = displayPath(vm.file_path);
-    if (frame.chunk.getSourceLocation(ip, vm.source)) |loc| {
+    if (vm.sourceLocation(frame.chunk, ip)) |loc| {
         writeFmt(buf, alloc, " in {s} on line {d}\n", .{ path, loc.line });
     } else {
         writeFmt(buf, alloc, " in {s}\n", .{path});
@@ -217,24 +217,12 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
     const frame_path: []const u8 = if (frame.func) |fn_| fn_.file_path else "";
     const path_raw: []const u8 = if (frame_path.len > 0) frame_path else vm.file_path;
     const path = displayPath(path_raw);
-    // when the frame is in a different file from vm.source, the lines table
-    // for that chunk holds byte offsets into the FILE's source, not vm.source.
-    // load the file once for accurate line resolution; fall back to vm.source
-    var loaded_source: []const u8 = "";
-    var source: []const u8 = vm.source;
-    if (frame_path.len > 0 and !std.mem.eql(u8, frame_path, vm.file_path)) {
-        if (std.fs.cwd().readFileAlloc(alloc, frame_path, 8 * 1024 * 1024)) |contents| {
-            loaded_source = contents;
-            source = contents;
-        } else |_| {}
-    }
-    defer if (loaded_source.len > 0) alloc.free(loaded_source);
 
     // uncatchable fatals (e.g. execution-time exceeded) are formatted as
     // bare fatals without the "Uncaught Class:" prefix or stack trace - this
     // matches how PHP prints `Maximum execution time of N seconds exceeded`
     if (vm.uncatchable_fatal) {
-        if (frame.chunk.getSourceLocation(ip, source)) |loc| {
+        if (vm.sourceLocation(frame.chunk, ip)) |loc| {
             writeFmt(buf, alloc, "\nFatal error: {s} in {s} on line {d}\n", .{ message, path, loc.line });
         } else {
             writeFmt(buf, alloc, "\nFatal error: {s} in {s}\n", .{ message, path });
@@ -259,7 +247,7 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
     // 'Fatal error:' display copy is emitted only when display_errors is on.
     // header uses 'in {path}:{line}' (the exception format, not the 'on line N'
     // fatal format). no source-line snippet - the stack trace names the site
-    const maybe_loc = frame.chunk.getSourceLocation(ip, source);
+    const maybe_loc = vm.sourceLocation(frame.chunk, ip);
     const display_on = vm.displayErrorsEnabled();
     var blocks: u8 = 0;
     while (blocks < 2) : (blocks += 1) {
@@ -288,10 +276,10 @@ fn appendLocationContext(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM) 
     }
     const frame = &vm.frames[vm.frame_count - 1];
     const ip = if (frame.ip > 0) frame.ip - 1 else 0;
-    const source = vm.source;
-    const path = displayPath(vm.file_path);
+    const source = vm.chunkSource(frame.chunk);
+    const path = displayPath(framePath(frame, vm));
 
-    if (frame.chunk.getSourceLocation(ip, source)) |loc| {
+    if (vm.sourceLocation(frame.chunk, ip)) |loc| {
         writeFmt(buf, alloc, " in {s} on line {d}\n\n", .{ path, loc.line });
         const token_len: u32 = estimateTokenLength(source, loc);
         writeSourceSnippet(buf, alloc, source, loc, token_len);
@@ -307,16 +295,6 @@ fn appendLocationContext(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM) 
 fn writeStackTrace(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM) void {
     if (vm.frame_count == 0) return;
 
-    // cache loaded file contents so multi-frame traces don't reload the same
-    // file repeatedly. each entry's source is the caller frame's file (not
-    // vm.source) because the caller's bytecode-to-line table only resolves
-    // correctly against the source it was compiled from
-    var source_cache: std.StringHashMapUnmanaged([]const u8) = .{};
-    defer {
-        var it = source_cache.valueIterator();
-        while (it.next()) |v| if (v.*.len > 0) alloc.free(v.*);
-        source_cache.deinit(alloc);
-    }
 
     var depth: u32 = 0;
     // synthetic depth-0 frame for the throwing native (e.g. random_bytes(-1))
@@ -326,11 +304,10 @@ fn writeStackTrace(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM) void {
         const top = &vm.frames[vm.frame_count - 1];
         const top_ip = if (top.ip > 0) top.ip - 1 else 0;
         const top_path = framePath(top, vm);
-        const top_source = resolveSource(alloc, &source_cache, top_path, vm);
         const top_display = displayPath(top_path);
         write(buf, alloc, "#");
         writeFmt(buf, alloc, "{d} ", .{depth});
-        if (top.chunk.getSourceLocation(top_ip, top_source)) |loc| {
+        if (vm.sourceLocation(top.chunk, top_ip)) |loc| {
             writeFmt(buf, alloc, "{s}({d}): ", .{ top_display, loc.line });
         } else {
             writeFmt(buf, alloc, "{s}: ", .{top_display});
@@ -364,12 +341,11 @@ fn writeStackTrace(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM) void {
         const caller_ip = if (caller.ip > 0) caller.ip - 1 else 0;
 
         const caller_path = framePath(caller, vm);
-        const caller_source = resolveSource(alloc, &source_cache, caller_path, vm);
         const display = displayPath(caller_path);
 
         write(buf, alloc, "#");
         writeFmt(buf, alloc, "{d} ", .{depth});
-        if (caller.chunk.getSourceLocation(caller_ip, caller_source)) |loc| {
+        if (vm.sourceLocation(caller.chunk, caller_ip)) |loc| {
             writeFmt(buf, alloc, "{s}({d}): ", .{ display, loc.line });
         } else {
             writeFmt(buf, alloc, "{s}: ", .{display});
@@ -385,17 +361,6 @@ fn framePath(frame: anytype, vm: *const VM) []const u8 {
     if (frame.script_path.len > 0) return frame.script_path;
     if (frame.func) |f| if (f.file_path.len > 0) return f.file_path;
     return vm.file_path;
-}
-
-fn resolveSource(alloc: std.mem.Allocator, cache: *std.StringHashMapUnmanaged([]const u8), path: []const u8, vm: *const VM) []const u8 {
-    if (std.mem.eql(u8, path, vm.file_path)) return vm.source;
-    if (cache.get(path)) |hit| return hit;
-    var loaded: []const u8 = "";
-    if (std.fs.cwd().readFileAlloc(alloc, path, 8 * 1024 * 1024)) |contents| {
-        loaded = contents;
-    } else |_| {}
-    cache.put(alloc, path, loaded) catch {};
-    return loaded;
 }
 
 fn writeFrameCallee(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM, frame: anytype, frame_idx: usize) void {

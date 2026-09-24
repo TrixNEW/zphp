@@ -42,12 +42,15 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // Reflector marker interface - all Reflection* implement it
     var reflector_iface = @import("../runtime/vm.zig").InterfaceDef{ .name = "Reflector" };
     try reflector_iface.methods.append(a, "__toString");
+    reflector_iface.parent = "Stringable";
+    try reflector_iface.parents.append(a, "Stringable");
     try vm.interfaces.put(a, "Reflector", reflector_iface);
 
     // ReflectionType abstract base class. ReflectionNamedType / Union / Intersection
     // all extend it. registering as a concrete class is fine since user code only
     // checks instanceof / get_parent_class
     var rt_def = ClassDef{ .name = "ReflectionType" };
+    try rt_def.interfaces.append(a, "Stringable");
     rt_def.is_abstract = true;
     try rt_def.methods.put(a, "allowsNull", .{ .name = "allowsNull", .arity = 0 });
     try rt_def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
@@ -91,6 +94,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "Deprecated::__construct", deprecatedConstruct);
 
     var rconst_def = ClassDef{ .name = "ReflectionConstant" };
+    try rconst_def.interfaces.append(a, "Reflector");
     try rconst_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     inline for (.{ .{ "__construct", 1 }, .{ "getName", 0 }, .{ "getValue", 0 }, .{ "getShortName", 0 }, .{ "getNamespaceName", 0 }, .{ "isDeprecated", 0 }, .{ "getAttributes", 2 }, .{ "getFileName", 0 }, .{ "__toString", 0 } }) |m| {
         try rconst_def.methods.put(a, m[0], .{ .name = m[0], .arity = m[1] });
@@ -123,6 +127,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "Reflection::getModifierNames", reflectionGetModifierNames);
 
     var rc_def = ClassDef{ .name = "ReflectionClass" };
+    try rc_def.interfaces.append(a, "Reflector");
     try rc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try rc_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -256,7 +261,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try ro_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try vm.classes.put(a, "ReflectionObject", ro_def);
 
-    const rfa_def = ClassDef{ .name = "ReflectionFunctionAbstract", .is_abstract = true };
+    var rfa_def = ClassDef{ .name = "ReflectionFunctionAbstract", .is_abstract = true };
+    try rfa_def.interfaces.append(a, "Reflector");
     try vm.classes.put(a, "ReflectionFunctionAbstract", rfa_def);
 
     var rm_def = ClassDef{ .name = "ReflectionMethod", .parent = "ReflectionFunctionAbstract" };
@@ -352,6 +358,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionMethod::isDeprecated", rmIsDeprecated);
 
     var rp_def = ClassDef{ .name = "ReflectionParameter" };
+    try rp_def.interfaces.append(a, "Reflector");
     try rp_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rp_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
     try rp_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
@@ -446,7 +453,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionEnum::getCase", reGetCase);
     try vm.native_fns.put(a, "ReflectionEnum::hasCase", reHasCase);
 
-    var reuc_def = ClassDef{ .name = "ReflectionEnumUnitCase" };
+    var reuc_def = ClassDef{ .name = "ReflectionEnumUnitCase", .parent = "ReflectionClassConstant" };
     try reuc_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try reuc_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
     try reuc_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -543,6 +550,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionFunction::isDisabled", reflectionFalse);
 
     var rprop_def = ClassDef{ .name = "ReflectionProperty" };
+    try rprop_def.interfaces.append(a, "Reflector");
     try rprop_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     try rprop_def.properties.append(a, .{ .name = "class", .default = .{ .string = Value.String.borrowed("") } });
     try rprop_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
@@ -645,6 +653,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionProperty::isVirtual", rpropIsVirtual);
 
     var ra_def = ClassDef{ .name = "ReflectionAttribute" };
+    try ra_def.interfaces.append(a, "Reflector");
     try ra_def.static_props.put(a, "IS_INSTANCEOF", .{ .int = 2 });
     try ra_def.methods.put(a, "getName", .{ .name = "getName", .arity = 0 });
     try ra_def.methods.put(a, "getArguments", .{ .name = "getArguments", .arity = 0 });
@@ -660,6 +669,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionAttribute::isRepeated", raIsRepeated);
 
     var rcc_def = ClassDef{ .name = "ReflectionClassConstant" };
+    try rcc_def.interfaces.append(a, "Reflector");
     inline for (.{ .{ "IS_PUBLIC", 1 }, .{ "IS_PROTECTED", 2 }, .{ "IS_PRIVATE", 4 }, .{ "IS_FINAL", 32 } }) |constant| {
         try rcc_def.static_props.put(a, constant[0], .{ .int = constant[1] });
         try rcc_def.constant_names.put(a, constant[0], {});
@@ -709,6 +719,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "Closure::fromCallable", closureFromCallable);
 
     var rext_def = ClassDef{ .name = "ReflectionExtension" };
+    try rext_def.interfaces.append(a, "Reflector");
     try rext_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
     for ([_][]const u8{
         "__construct",   "getName",     "getVersion",    "getFunctions",    "getConstants",
@@ -716,6 +727,15 @@ pub fn register(vm: *VM, a: Allocator) !void {
         "isPersistent",  "isTemporary", "__toString",
     }) |method| try rext_def.methods.put(a, method, .{ .name = method, .arity = if (std.mem.eql(u8, method, "__construct")) 1 else 0 });
     try vm.classes.put(a, "ReflectionExtension", rext_def);
+
+    var rzext_def = ClassDef{ .name = "ReflectionZendExtension" };
+    try rzext_def.interfaces.append(a, "Reflector");
+    try rzext_def.properties.append(a, .{ .name = "name", .default = .{ .string = Value.String.borrowed("") } });
+    for ([_][]const u8{ "__construct", "__toString", "getName", "getVersion", "getAuthor", "getURL", "getCopyright" }) |method| {
+        try rzext_def.methods.put(a, method, .{ .name = method, .arity = if (std.mem.eql(u8, method, "__construct")) 1 else 0 });
+    }
+    try vm.classes.put(a, "ReflectionZendExtension", rzext_def);
+    try vm.native_fns.put(a, "ReflectionZendExtension::__construct", rzextConstruct);
     try vm.native_fns.put(a, "ReflectionExtension::__construct", rextConstruct);
     try vm.native_fns.put(a, "ReflectionExtension::getName", rextGetName);
     try vm.native_fns.put(a, "ReflectionExtension::getVersion", rextGetVersion);
@@ -2030,13 +2050,14 @@ fn rccGetDocComment(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRe
 
 fn findConstantOwner(ctx: *NativeContext, class_name: []const u8, name: []const u8, depth: usize) ?[]const u8 {
     if (depth >= 256) return null;
-    if (ctx.vm.trait_constants.get(class_name)) |constants| {
-        for (constants) |constant| {
-            if (std.mem.eql(u8, constant.name, name)) return class_name;
+    if (ctx.vm.trait_constants.getEntry(class_name)) |entry| {
+        for (entry.value_ptr.*) |constant| {
+            if (std.mem.eql(u8, constant.name, name)) return entry.key_ptr.*;
         }
     }
-    if (ctx.vm.classes.get(class_name)) |cls| {
-        if (cls.constant_names.contains(name)) return class_name;
+    if (ctx.vm.classes.getEntry(class_name)) |entry| {
+        const cls = entry.value_ptr;
+        if (cls.constant_names.contains(name)) return entry.key_ptr.*;
         if (cls.parent) |parent| {
             if (findConstantOwner(ctx, parent, name, depth + 1)) |owner| return owner;
         }
@@ -2100,8 +2121,13 @@ fn rccGetDeclaringClass(ctx: *NativeContext, _: []const Value) RuntimeError!Nati
 }
 
 fn rccConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    _ = try bindClassConstant(ctx, args);
+    return NativeResult.scalar(.null);
+}
+
+fn bindClassConstant(ctx: *NativeContext, args: []const Value) RuntimeError![]const u8 {
     if (args.len < 2) return throwReflection(ctx, "ReflectionClassConstant::__construct expects class and constant name");
-    const this = getThis(ctx) orelse return NativeResult.scalar(.null);
+    const this = getThis(ctx) orelse return throwReflection(ctx, "ReflectionClassConstant::__construct called without an object");
     const raw_class: []const u8 = switch (args[0]) {
         .string => args[0].string.bytes(),
         .object => args[0].object.class_name,
@@ -2111,10 +2137,14 @@ fn rccConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     if (args[1] != .string) return throwReflection(ctx, "ReflectionClassConstant::__construct constant name must be a string");
     const const_name = args[1].string.bytes();
     try ctx.vm.tryAutoload(class_name);
-    const owner = findConstantOwner(ctx, class_name, const_name, 0) orelse return throwReflection(ctx, "Constant not found");
-    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(const_name) });
+    const owner = findConstantOwner(ctx, class_name, const_name, 0) orelse {
+        const msg = try std.fmt.allocPrint(ctx.allocator, "Constant {s}::{s} does not exist", .{ class_name, const_name });
+        try ctx.strings.append(ctx.allocator, msg);
+        return throwReflection(ctx, msg);
+    };
+    try this.set(ctx.allocator, "name", args[1]);
     try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(owner) });
-    return NativeResult.scalar(.null);
+    return owner;
 }
 
 fn rccGetAttributes(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -4538,17 +4568,27 @@ fn buildEnumCase(ctx: *NativeContext, class_name: []const u8, case_name: []const
 }
 
 fn reucConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    const this = getThis(ctx) orelse return NativeResult.scalar(.null);
-    if (args.len < 2) return NativeResult.scalar(.null);
-    const class_name: []const u8 = switch (args[0]) {
-        .string => |s| s.bytes(),
-        .object => |o| o.class_name,
-        else => return NativeResult.scalar(.null),
-    };
-    if (args[1] != .string) return NativeResult.scalar(.null);
-    try this.set(ctx.allocator, "class", .{ .string = Value.String.borrowed(class_name) });
-    try this.set(ctx.allocator, "name", .{ .string = args[1].string });
+    const owner = try bindClassConstant(ctx, args);
+    const cls = ctx.vm.classes.get(owner);
+    const is_case = if (cls) |c| containsName(c.case_order.items, args[1].string.bytes()) else false;
+    if (!is_case) {
+        const msg = try std.fmt.allocPrint(ctx.allocator, "Constant {s}::{s} is not a case", .{ owner, args[1].string.bytes() });
+        try ctx.strings.append(ctx.allocator, msg);
+        return throwReflection(ctx, msg);
+    }
     return NativeResult.scalar(.null);
+}
+
+fn rzextConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const name = if (args.len > 0 and args[0] == .string) args[0].string.bytes() else "";
+    const msg = try std.fmt.allocPrint(ctx.allocator, "Zend Extension \"{s}\" does not exist", .{name});
+    try ctx.strings.append(ctx.allocator, msg);
+    return throwReflection(ctx, msg);
+}
+
+fn containsName(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| if (std.mem.eql(u8, n, name)) return true;
+    return false;
 }
 
 fn reucGetName(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -4592,7 +4632,7 @@ fn rgGetExecutingLine(ctx: *NativeContext, _: []const Value) RuntimeError!Native
     const gen = getGenPtr(obj) orelse return NativeResult.scalar(.null);
     const chunk = &gen.func.chunk;
     const ip = if (gen.ip > 0) gen.ip - 1 else 0;
-    if (chunk.getSourceLocation(ip, ctx.vm.source)) |loc| {
+    if (ctx.vm.sourceLocation(chunk, ip)) |loc| {
         return NativeResult.scalar(.{ .int = @intCast(loc.line) });
     }
     return NativeResult.scalar(.{ .int = 0 });
@@ -4637,7 +4677,7 @@ fn rgGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const gen = getGenPtr(obj) orelse return NativeResult.scalar(.null);
     const arr = try ctx.createArray();
     const frame = try ctx.createArray();
-    if (gen.func.chunk.getSourceLocation(if (gen.ip > 0) gen.ip - 1 else 0, ctx.vm.source)) |loc| {
+    if (ctx.vm.sourceLocation(&gen.func.chunk, if (gen.ip > 0) gen.ip - 1 else 0)) |loc| {
         try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("line")) }, .{ .int = @intCast(loc.line) });
     }
     try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("file")) }, .{ .string = Value.String.borrowed(try ctx.createString(ctx.vm.file_path)) });
@@ -4665,7 +4705,7 @@ fn rfibGetExecutingLine(ctx: *NativeContext, _: []const Value) RuntimeError!Nati
     if (fib.saved_frames.items.len == 0) return NativeResult.scalar(.{ .int = 0 });
     const top = &fib.saved_frames.items[fib.saved_frames.items.len - 1];
     const ip = if (top.ip > 0) top.ip - 1 else 0;
-    if (top.chunk.getSourceLocation(ip, ctx.vm.source)) |loc| {
+    if (ctx.vm.sourceLocation(top.chunk, ip)) |loc| {
         return NativeResult.scalar(.{ .int = @intCast(loc.line) });
     }
     return NativeResult.scalar(.{ .int = 0 });
@@ -4699,7 +4739,7 @@ fn rfibGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult
         const sf = &fib.saved_frames.items[i];
         const frame = try ctx.createArray();
         const ip = if (sf.ip > 0) sf.ip - 1 else 0;
-        if (sf.chunk.getSourceLocation(ip, ctx.vm.source)) |loc| {
+        if (ctx.vm.sourceLocation(sf.chunk, ip)) |loc| {
             try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("line")) }, .{ .int = @intCast(loc.line) });
         }
         try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("file")) }, .{ .string = Value.String.borrowed(try ctx.createString(ctx.vm.file_path)) });

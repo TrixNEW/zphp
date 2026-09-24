@@ -63,7 +63,7 @@ const Slot = struct {
 fn warn(ctx: *NativeContext, comptime fmt: []const u8, args: anytype) RuntimeError!void {
     const msg = try std.fmt.allocPrint(ctx.allocator, "proc_open(): " ++ fmt, args);
     try ctx.vm.strings.append(ctx.allocator, msg);
-    ctx.vm.emitWarning(msg);
+    try ctx.vm.emitWarning(msg);
 }
 
 fn parseSpec(ctx: *NativeContext, item: Value) RuntimeError!?Spec {

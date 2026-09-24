@@ -519,14 +519,9 @@ fn stmtFetchObject(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     if (row != .array) return NativeResult.scalar(.{ .bool = false });
     var class_name: []const u8 = "stdClass";
     if (args.len >= 1 and args[0] == .string) class_name = args[0].string.bytes();
-    const obj = try ctx.vm.allocator.create(PhpObject);
-    obj.* = .{ .class_name = class_name };
-    try ctx.vm.objects.append(ctx.vm.allocator, obj);
-    if (ctx.vm.classes.contains(class_name)) {
-        try ctx.vm.initObjectProperties(obj, class_name);
-    }
+    const obj = try ctx.createObject(class_name);
     for (row.array.entries.items) |entry| {
-        if (entry.key == .string) try obj.set(ctx.allocator, entry.key.string.bytes(), entry.value);
+        if (entry.key == .string) try obj.set(ctx.allocator, try ctx.vm.propertyNameFromKey(entry.key), entry.value);
     }
     return NativeResult.borrowed(.{ .object = obj });
 }

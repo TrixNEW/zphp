@@ -679,7 +679,7 @@ fn readHashInput(ctx: *NativeContext, comptime fn_name: []const u8, path: []cons
     if (try filesystem.readPath(ctx, path)) |content| return content;
     const msg = try std.fmt.allocPrint(ctx.allocator, fn_name ++ "({s}): Failed to open stream: No such file or directory", .{path});
     try ctx.vm.strings.append(ctx.allocator, msg);
-    ctx.vm.emitWarning(msg);
+    try ctx.vm.emitWarning(msg);
     return null;
 }
 

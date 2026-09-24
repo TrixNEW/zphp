@@ -772,7 +772,7 @@ fn buildBacktrace(ctx: *NativeContext, ignore_args: bool, provide_object: bool, 
         try entry.set(alloc, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(vm.file_path) });
 
         const caller = &vm.frames[i - 1];
-        if (caller.chunk.getSourceLocation(caller.ip, vm.source)) |loc| {
+        if (vm.sourceLocation(caller.chunk, caller.ip)) |loc| {
             try entry.set(alloc, .{ .string = Value.String.borrowed("line") }, .{ .int = @intCast(loc.line) });
         }
 

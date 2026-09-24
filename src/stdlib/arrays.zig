@@ -1299,7 +1299,7 @@ fn array_count_values(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
     for (src.entries.items) |entry| {
         if (entry.value != .string and entry.value != .int) {
             // PHP emits a warning per non-int/string entry encountered
-            ctx.vm.emitWarning("array_count_values(): Can only count string and integer values, entry skipped");
+            try ctx.vm.emitWarning("array_count_values(): Can only count string and integer values, entry skipped");
             continue;
         }
         const key = Value.toArrayKey(entry.value);
@@ -1362,14 +1362,14 @@ fn array_sum(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
 fn arithmeticOperand(ctx: *NativeContext, v: Value, comptime what: []const u8) RuntimeError!?Value {
     switch (v) {
         .array => {
-            ctx.vm.emitWarning(what ++ " is not supported on type array");
+            try ctx.vm.emitWarning(what ++ " is not supported on type array");
             return null;
         },
         .object => |o| {
             if (@import("../runtime/value.zig").nativeCast(o, .number)) |n| return n;
             const msg = try std.fmt.allocPrint(ctx.allocator, what ++ " is not supported on type {s}", .{o.class_name});
             try ctx.strings.append(ctx.allocator, msg);
-            ctx.vm.emitWarning(msg);
+            try ctx.vm.emitWarning(msg);
             return null;
         },
         else => return v,
@@ -1563,7 +1563,7 @@ fn compactValue(ctx: *NativeContext, arg: Value, arr: *PhpArray, frame: anytype,
             } else {
                 const w = try std.fmt.allocPrint(ctx.allocator, "compact(): Undefined variable ${s}", .{name});
                 defer ctx.allocator.free(w);
-                ctx.vm.emitWarning(w);
+                try ctx.vm.emitWarning(w);
             }
         }
     } else if (arg == .array) {

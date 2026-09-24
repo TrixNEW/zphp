@@ -266,7 +266,7 @@ fn mysqliQuery(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
                 ctx.vm.pending_exception = .{ .object = exception };
                 return error.RuntimeError;
             }
-            ctx.vm.emitWarning(message);
+            try ctx.vm.emitWarning(message);
         }
     }
     const res = res_opt orelse return NativeResult.scalar(.{ .bool = true });
@@ -626,7 +626,7 @@ fn reportFailure(ctx: *NativeContext, conn: *mysql.MYSQL, operation: []const u8,
     }
     const warning = try std.fmt.allocPrint(ctx.allocator, "{s}(): ({s}/{d}): {s}", .{ operation, state, code, message });
     defer ctx.allocator.free(warning);
-    ctx.vm.emitWarning(warning);
+    try ctx.vm.emitWarning(warning);
 }
 
 // ---------- class constructor ----------

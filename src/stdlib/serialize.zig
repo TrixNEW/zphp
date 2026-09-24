@@ -612,11 +612,11 @@ fn native_unserialize(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
         if (uctx.depth_exceeded) {
             const msg = std.fmt.allocPrint(ctx.allocator, "unserialize(): Maximum depth of {d} exceeded. The depth limit can be changed using the max_depth unserialize() option or the unserialize_max_depth ini setting", .{uctx.max_depth}) catch return NativeResult.scalar(.{ .bool = false });
             ctx.vm.strings.append(ctx.allocator, msg) catch {};
-            ctx.vm.emitWarning(msg);
+            try ctx.vm.emitWarning(msg);
         }
         const msg2 = std.fmt.allocPrint(ctx.allocator, "unserialize(): Error at offset {d} of {d} bytes", .{ uctx.err_pos, s.len }) catch return NativeResult.scalar(.{ .bool = false });
         ctx.vm.strings.append(ctx.allocator, msg2) catch {};
-        ctx.vm.emitWarning(msg2);
+        try ctx.vm.emitWarning(msg2);
         return NativeResult.scalar(.{ .bool = false });
     };
     return NativeResult.transfer(result.value);

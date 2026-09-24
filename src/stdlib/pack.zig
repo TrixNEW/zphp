@@ -312,7 +312,7 @@ fn unpackShort(ctx: *NativeContext, code: u8, need: usize, have: usize) RuntimeE
     const verb: []const u8 = if (have == 1) "was" else "were";
     const msg = std.fmt.allocPrint(ctx.allocator, "unpack(): Type {c}: not enough input values, need {d} values but only {d} {s} provided", .{ code, need, have, verb }) catch return NativeResult.scalar(.{ .bool = false });
     try ctx.strings.append(ctx.allocator, msg);
-    ctx.vm.emitWarning(msg);
+    try ctx.vm.emitWarning(msg);
     return NativeResult.scalar(.{ .bool = false });
 }
 

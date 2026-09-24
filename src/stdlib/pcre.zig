@@ -309,7 +309,7 @@ test "normalizeOpenBoundQuantifier" {
 // emit a PHP-format 'preg_<fn>(): Compilation failed: <message> at offset N'
 // warning for a pattern that fails to compile. callers should already have
 // set preg_last_error to 1 before invoking this
-fn emitCompileWarning(ctx: *NativeContext, fn_name: []const u8, pattern: []const u8, flags: u32) void {
+fn emitCompileWarning(ctx: *NativeContext, fn_name: []const u8, pattern: []const u8, flags: u32) RuntimeError!void {
     var err_code: c_int = 0;
     var err_offset: usize = 0;
     const probe = pcre2.pcre2_compile_8(pattern.ptr, pattern.len, flags, &err_code, &err_offset, null);
@@ -321,9 +321,9 @@ fn emitCompileWarning(ctx: *NativeContext, fn_name: []const u8, pattern: []const
     const len = pcre2.pcre2_get_error_message_8(err_code, &msg_buf, msg_buf.len);
     if (len <= 0) return;
     const err_text = msg_buf[0..@intCast(len)];
-    const msg = std.fmt.allocPrint(ctx.allocator, "{s}(): Compilation failed: {s} at offset {d}", .{ fn_name, err_text, err_offset }) catch return;
-    ctx.vm.strings.append(ctx.allocator, msg) catch {};
-    ctx.vm.emitWarning(msg);
+    const msg = try std.fmt.allocPrint(ctx.allocator, "{s}(): Compilation failed: {s} at offset {d}", .{ fn_name, err_text, err_offset });
+    defer ctx.allocator.free(msg);
+    try ctx.vm.emitWarning(msg);
 }
 
 fn preg_match(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -339,7 +339,7 @@ fn preg_match(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
 
     const code = compilePattern(info.pattern, info.flags) orelse {
         setPregError(1);
-        emitCompileWarning(ctx, "preg_match", info.pattern, info.flags);
+        try emitCompileWarning(ctx, "preg_match", info.pattern, info.flags);
         return NativeResult.scalar(.{ .bool = false });
     };
     defer pcre2.pcre2_code_free_8(code);
@@ -540,7 +540,7 @@ fn preg_match_all(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
 
     const code = compilePattern(info.pattern, info.flags) orelse {
         setPregError(1);
-        emitCompileWarning(ctx, "preg_match_all", info.pattern, info.flags);
+        try emitCompileWarning(ctx, "preg_match_all", info.pattern, info.flags);
         return NativeResult.scalar(.{ .bool = false });
     };
     defer pcre2.pcre2_code_free_8(code);
@@ -916,7 +916,7 @@ fn preg_replace(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
 
     const code = compilePattern(info.pattern, info.flags) orelse {
         setPregError(1);
-        emitCompileWarning(ctx, "preg_replace", info.pattern, info.flags);
+        try emitCompileWarning(ctx, "preg_replace", info.pattern, info.flags);
         return NativeResult.scalar(.null);
     };
     defer pcre2.pcre2_code_free_8(code);

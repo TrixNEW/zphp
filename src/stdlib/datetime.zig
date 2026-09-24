@@ -4405,7 +4405,7 @@ fn native_timezone_open(ctx: *NativeContext, args: []const Value) RuntimeError!N
     if (!valid) {
         const msg = std.fmt.allocPrint(ctx.allocator, "timezone_open(): Unknown or bad timezone ({s})", .{name}) catch return NativeResult.scalar(.{ .bool = false });
         ctx.vm.strings.append(ctx.allocator, msg) catch {};
-        ctx.vm.emitWarning(msg);
+        try ctx.vm.emitWarning(msg);
         return NativeResult.scalar(.{ .bool = false });
     }
     const obj = try ctx.createObject("DateTimeZone");

@@ -360,7 +360,7 @@ fn implode(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
             const r = try ctx.vm.callMethod(entry.value.object, "__toString", &.{});
             if (r == .string) try buf.appendSlice(ctx.allocator, r.string.bytes()) else try r.format(&buf, ctx.allocator);
         } else {
-            if (entry.value == .array) ctx.vm.emitWarning("Array to string conversion");
+            if (entry.value == .array) try ctx.vm.emitWarning("Array to string conversion");
             try entry.value.format(&buf, ctx.allocator);
         }
     }
@@ -1423,7 +1423,7 @@ fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) !V
             defer tmp_buf.deinit(ctx.allocator);
             switch (spec) {
                 's' => {
-                    if (arg == .array) ctx.vm.emitWarning("Array to string conversion");
+                    if (arg == .array) try ctx.vm.emitWarning("Array to string conversion");
                     const s = blk: {
                         if (arg == .string) break :blk arg.string.bytes();
                         if (arg == .object) {
@@ -2436,7 +2436,7 @@ fn native_hex2bin(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     if (args.len == 0) return NativeResult.scalar(.{ .bool = false });
     const s = if (args[0] == .string) args[0].string.bytes() else return NativeResult.scalar(Value{ .bool = false });
     if (s.len % 2 != 0) {
-        ctx.vm.emitWarning("hex2bin(): Input string must be hexadecimal string");
+        try ctx.vm.emitWarning("hex2bin(): Input string must be hexadecimal string");
         return NativeResult.scalar(.{ .bool = false });
     }
     const out_len = s.len / 2;
@@ -2444,12 +2444,12 @@ fn native_hex2bin(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     for (0..out_len) |j| {
         const hi = hexVal(s[j * 2]) orelse {
             ctx.allocator.free(buf);
-            ctx.vm.emitWarning("hex2bin(): Input string must be hexadecimal string");
+            try ctx.vm.emitWarning("hex2bin(): Input string must be hexadecimal string");
             return NativeResult.scalar(.{ .bool = false });
         };
         const lo = hexVal(s[j * 2 + 1]) orelse {
             ctx.allocator.free(buf);
-            ctx.vm.emitWarning("hex2bin(): Input string must be hexadecimal string");
+            try ctx.vm.emitWarning("hex2bin(): Input string must be hexadecimal string");
             return NativeResult.scalar(.{ .bool = false });
         };
         buf[j] = (hi << 4) | lo;
@@ -6613,7 +6613,7 @@ fn native_mb_get_info(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
         if (std.mem.eql(u8, k, "strict_detection")) return NativeResult.literal("Off");
         if (std.mem.eql(u8, k, "all")) {} // fall through to full array
         else {
-            ctx.vm.emitWarning("mb_get_info(): argument #1 ($type) must be a valid type");
+            try ctx.vm.emitWarning("mb_get_info(): argument #1 ($type) must be a valid type");
             return NativeResult.scalar(.{ .bool = false });
         }
     }

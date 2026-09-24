@@ -262,7 +262,7 @@ fn count(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
         .array => |a| NativeResult.scalar(.{ .int = if (recursive) countRecursive(a) else a.length() }),
         .object => |obj| {
             if (ctx.vm.hasMethod(obj.class_name, "count")) {
-                return NativeResult.share(ctx.vm.callMethod(obj, "count", &.{}) catch .{ .int = 1 });
+                return NativeResult.share(try ctx.vm.callMethod(obj, "count", &.{}));
             }
             const msg = try std.fmt.allocPrint(ctx.allocator, "count(): Argument #1 ($value) must be of type Countable|array, {s} given", .{phpTypeName(args[0])});
             try ctx.vm.strings.append(ctx.allocator, msg);
@@ -300,7 +300,7 @@ fn warnObjectToNumber(ctx: *NativeContext, v: Value, comptime target: []const u8
     if (v != .object or @import("../runtime/value.zig").nativeCast(v.object, .number) != null) return;
     const msg = try std.fmt.allocPrint(ctx.allocator, "Object of class {s} could not be converted to " ++ target, .{v.object.class_name});
     try ctx.strings.append(ctx.allocator, msg);
-    ctx.vm.emitWarning(msg);
+    try ctx.vm.emitWarning(msg);
 }
 
 fn intval(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -933,6 +933,7 @@ fn property_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Native
 fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0) return NativeResult.scalar(.{ .bool = false });
     const val = args[0];
+    const syntax_only = args.len > 1 and args[1].isTruthy();
     // PHP's 3rd by-ref param receives the resolved callable name on success
     // (or its string form). populated regardless of return value so caller
     // code can inspect failed resolution attempts too
@@ -948,6 +949,7 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
         const raw = val.string.bytes();
         const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
         fillName(ctx, args, name);
+        if (syntax_only) return NativeResult.scalar(.{ .bool = true });
         if (ctx.vm.functionExists(name)) return NativeResult.scalar(.{ .bool = true });
         // Class::method string form
         if (std.mem.indexOf(u8, name, "::")) |sep| {
@@ -983,6 +985,7 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
             const resolved = std.fmt.bufPrint(&name_buf, "{s}::{s}", .{ class_name, method }) catch "";
             fillName(ctx, args, resolved);
         }
+        if (syntax_only) return NativeResult.scalar(.{ .bool = true });
         if (ctx.vm.classes.get(class_name)) |cdef| {
             if (cdef.methods.get(method)) |mi| {
                 if (mi.visibility != .public) return NativeResult.scalar(.{ .bool = false });
@@ -1011,7 +1014,7 @@ fn native_settype(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
         return NativeResult.scalar(.{ .float = Value.toFloat(val) });
     if (std.mem.eql(u8, type_name, "string")) {
         if (val == .string) return NativeResult.share(val);
-        if (val == .array) ctx.vm.emitWarning("Array to string conversion");
+        if (val == .array) try ctx.vm.emitWarning("Array to string conversion");
         var buf = std.ArrayListUnmanaged(u8){};
         defer buf.deinit(ctx.allocator);
         try val.format(&buf, ctx.allocator);
@@ -1024,52 +1027,11 @@ fn native_settype(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
         return NativeResult.scalar(.null);
     if (std.mem.eql(u8, type_name, "array")) {
         if (val == .array) return NativeResult.share(val);
-        if (val == .object) {
-            const obj = val.object;
-            const arr = try ctx.allocator.create(PhpArray);
-            arr.* = .{};
-            try ctx.arrays.append(ctx.allocator, arr);
-            if (obj.slot_layout) |layout| {
-                if (obj.slots) |slots| {
-                    for (layout.names, 0..) |name, i| {
-                        if (i < slots.len) try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, slots[i]);
-                    }
-                }
-            }
-            var dyn_iter = obj.properties.iterator();
-            while (dyn_iter.next()) |entry| {
-                try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, entry.value_ptr.*);
-            }
-            return NativeResult.borrowed(.{ .array = arr });
-        }
-        const arr = try ctx.allocator.create(PhpArray);
-        arr.* = .{};
-        // null becomes an empty array (matches (array) cast); any other
-        // scalar becomes a single-element array [value]
-        if (val != .null) try arr.append(ctx.allocator, val);
-        try ctx.arrays.append(ctx.allocator, arr);
-        return NativeResult.borrowed(.{ .array = arr });
+        return NativeResult.borrowed(try ctx.vm.castToArray(val));
     }
     if (std.mem.eql(u8, type_name, "object")) {
         if (val == .object) return NativeResult.share(val);
-        const obj = try ctx.allocator.create(PhpObject);
-        obj.* = .{ .class_name = "stdClass" };
-        try ctx.vm.objects.append(ctx.allocator, obj);
-        if (val == .array) {
-            for (val.array.entries.items) |entry| {
-                if (entry.key == .string) {
-                    try obj.set(ctx.allocator, entry.key.string.bytes(), entry.value);
-                } else {
-                    var key_buf: [32]u8 = undefined;
-                    const ks = std.fmt.bufPrint(&key_buf, "{d}", .{entry.key.int}) catch continue;
-                    const key_str = try ctx.createString(ks);
-                    try obj.set(ctx.allocator, key_str, entry.value);
-                }
-            }
-        } else if (val != .null) {
-            try obj.set(ctx.allocator, "scalar", val);
-        }
-        return NativeResult.borrowed(.{ .object = obj });
+        return NativeResult.borrowed(try ctx.vm.castToObject(val));
     }
     try ctx.vm.setPendingException("ValueError", "settype(): Argument #2 ($type) must be a valid type");
     return error.RuntimeError;
@@ -1785,10 +1747,7 @@ fn native_set_error_handler(ctx: *NativeContext, args: []const Value) RuntimeErr
 }
 
 fn native_error_clear_last(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    ctx.vm.last_error_type = 0;
-    ctx.vm.last_error_message = "";
-    ctx.vm.last_error_file = "";
-    ctx.vm.last_error_line = 0;
+    ctx.vm.clearLastError();
     return NativeResult.scalar(.null);
 }
 
@@ -2216,92 +2175,26 @@ fn native_error_log(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
 
 fn native_trigger_error(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const message = args[0].string.bytes();
-    const errno: i64 = if (args.len >= 2) Value.toInt(args[1]) else 1024; // E_USER_NOTICE
-
-    if (errno == 256) {
-        const dep_msg = "Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead";
-        if (ctx.vm.user_error_handler) |handler| {
-            const ip0 = if (ctx.vm.frame_count > 0) ctx.vm.currentFrame().ip else 0;
-            const line0: i64 = if (ctx.vm.frame_count > 0)
-                if (ctx.vm.currentChunk().getSourceLocation(if (ip0 > 0) ip0 - 1 else 0, ctx.vm.source)) |loc| @intCast(loc.line) else 0
-            else
-                0;
-            const args_dep = &[_]Value{ .{ .int = 8192 }, .{ .string = Value.String.borrowed(dep_msg) }, .{ .string = Value.String.borrowed(ctx.vm.file_path) }, .{ .int = line0 } };
-            _ = try ctx.invokeCallable(handler, args_dep);
-        }
+    const level: i64 = if (args.len >= 2) Value.toInt(args[1]) else 1024;
+    switch (level) {
+        256, 512, 1024, 16384 => {},
+        else => {
+            try ctx.vm.setPendingException("ValueError", "trigger_error(): Argument #2 ($error_level) must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED");
+            return error.RuntimeError;
+        },
     }
-
-    const ip = if (ctx.vm.frame_count > 0) ctx.vm.currentFrame().ip else 0;
-    const line: i64 = if (ctx.vm.frame_count > 0)
-        if (ctx.vm.currentChunk().getSourceLocation(if (ip > 0) ip - 1 else 0, ctx.vm.source)) |loc| @intCast(loc.line) else 0
-    else
-        0;
-    const file = ctx.vm.file_path;
-
-    if (ctx.vm.user_error_handler) |handler| {
-        if ((ctx.vm.user_error_handler_mask & errno) != 0) {
-            const call_args = &[_]Value{
-                .{ .int = errno },
-                .{ .string = Value.String.borrowed(message) },
-                .{ .string = Value.String.borrowed(file) },
-                .{ .int = line },
-            };
-            const result = try ctx.invokeCallable(handler, call_args);
-            // returning false (or null in PHP 8+) lets the default handler run
-            if (result != .bool or result.bool) return NativeResult.scalar(.{ .bool = true });
-        }
-    }
-
-    ctx.vm.last_error_type = errno;
-    ctx.vm.last_error_message = ctx.allocator.dupe(u8, message) catch message;
-    ctx.vm.strings.append(ctx.allocator, ctx.vm.last_error_message) catch {};
-    ctx.vm.last_error_file = file;
-    ctx.vm.last_error_line = line;
-
-    if (ctx.vm.error_silenced_depth == 0 and (ctx.vm.error_reporting_level & errno) != 0) {
-        const label = errnoLabel(errno);
-        // flush any pending stdout so the merged 2>&1 ordering matches PHP
-        if (ctx.vm.output.items.len > 0) {
-            const stdout_file = std.fs.File.stdout();
-            _ = stdout_file.write(ctx.vm.output.items) catch {};
-            ctx.vm.output.clearRetainingCapacity();
-        }
-        const stderr_text = std.fmt.allocPrint(ctx.allocator, "PHP {s}:  {s} in {s} on line {d}\n", .{ label, message, file, line }) catch return NativeResult.scalar(Value{ .bool = true });
-        defer ctx.allocator.free(stderr_text);
-        const stderr_file = std.fs.File.stderr();
-        _ = stderr_file.write(stderr_text) catch {};
-        if (ctx.vm.displayErrorsEnabled()) {
-            const stdout_text = std.fmt.allocPrint(ctx.allocator, "\n{s}: {s} in {s} on line {d}\n", .{ label, message, file, line }) catch return NativeResult.scalar(Value{ .bool = true });
-            defer ctx.allocator.free(stdout_text);
-            try ctx.vm.output.appendSlice(ctx.allocator, stdout_text);
-        }
-    }
+    if (level == 256) try ctx.vm.raiseError(8192, "Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead");
+    try ctx.vm.raiseError(level, args[0].string.bytes());
     return NativeResult.scalar(.{ .bool = true });
-}
-
-fn errnoLabel(errno: i64) []const u8 {
-    return switch (errno) {
-        1, 256 => "Fatal error",
-        2, 512 => "Warning",
-        4 => "Parse error",
-        8, 1024 => "Notice",
-        16 => "Core error",
-        32 => "Core warning",
-        64 => "Compile error",
-        128 => "Compile warning",
-        2048 => "Strict standards",
-        4096 => "Recoverable fatal error",
-        8192, 16384 => "Deprecated",
-        else => "Notice",
-    };
 }
 
 fn native_error_get_last(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     if (ctx.vm.last_error_type == 0) return NativeResult.scalar(.null);
     var arr = try ctx.createArray();
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("type") }, .{ .int = ctx.vm.last_error_type });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("message") }, .{ .string = Value.String.borrowed(ctx.vm.last_error_message) });
+    const message = try Value.String.create(ctx.allocator, ctx.vm.last_error_message);
+    defer message.release();
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("message") }, .{ .string = message });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(ctx.vm.last_error_file) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = ctx.vm.last_error_line });
     return NativeResult.borrowed(.{ .array = arr });

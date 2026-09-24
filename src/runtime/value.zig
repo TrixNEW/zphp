@@ -951,6 +951,8 @@ pub const PhpObject = struct {
         // declaring_classes[i]==scope). public/protected slots ignore scope
         declaring_classes: []const []const u8,
         is_private: []const bool,
+        // instances get their file, line and trace when created
+        throwable: bool = false,
     };
 
     pub fn deinit(self: *PhpObject, allocator: std.mem.Allocator) void {
