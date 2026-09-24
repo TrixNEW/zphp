@@ -527,6 +527,8 @@ pub fn readPath(ctx: *NativeContext, raw_path: []const u8) RuntimeError!?Value.S
     if (std.mem.eql(u8, path, "php://input")) {
         const body_val = ctx.vm.request_vars.get("__raw_body") orelse return try Value.String.create(ctx.allocator, "");
         if (body_val != .string) return try Value.String.create(ctx.allocator, "");
+        // the request body may be a borrowed slice; the caller needs a reference it owns
+        if (body_val.string.owner == null) return try Value.String.create(ctx.allocator, body_val.string.bytes());
         body_val.string.retain();
         return body_val.string;
     }

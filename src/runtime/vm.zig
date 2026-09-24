@@ -8055,63 +8055,9 @@ pub const VM = struct {
                                         }
                                     }
                                 }
-                                const ctor_name = self.resolveMethod(cn, "__construct") catch null;
-                                if (ctor_name) |ctn| {
-                                    if (self.functions.get(ctn)) |func| {
-                                        var resolved: [256]Value = .{.null} ** 256;
-                                        var resolved_sources: [256]RefSource = undefined;
-                                        @memset(resolved_sources[0..@min(resolved_sources.len, func.params.len + entries.len)], .none);
-                                        if (func.params.len > resolved.len) return error.RuntimeError;
-                                        var pos: usize = 0;
-                                        for (entries) |entry| {
-                                            if (entry.key == .string) {
-                                                for (func.params, 0..) |p, pi| {
-                                                    const pname = if (p.len > 0 and p[0] == '$') p[1..] else p;
-                                                    if (std.mem.eql(u8, pname, entry.key.string.bytes()) or std.mem.eql(u8, p, entry.key.string.bytes())) {
-                                                        resolved[pi] = entry.value;
-                                                        resolved_sources[pi] = self.argArraySource(arr_val.array, entry.key);
-                                                        if (pi >= pos) pos = pi + 1;
-                                                        break;
-                                                    }
-                                                }
-                                            } else {
-                                                resolved[pos] = entry.value;
-                                                resolved_sources[pos] = self.argArraySource(arr_val.array, entry.key);
-                                                pos += 1;
-                                            }
-                                        }
-                                        const count = @max(pos, func.required_params);
-                                        for (0..count) |i| {
-                                            if (resolved[i] == .null and i < func.defaults.len) {
-                                                resolved[i] = try self.resolveDefault(func.defaults[i]);
-                                            }
-                                        }
-                                        for (0..count) |i| {
-                                            self.push(resolved[i]);
-                                            self.setArgSource(self.sp - 1, resolved_sources[i]);
-                                        }
-                                        arg_count = @intCast(count);
-                                    } else if (native_params.get(ctn)) |signature| {
-                                        const params = signature.params;
-                                        var resolved: [256]Value = undefined;
-                                        var resolved_sources: [256]RefSource = undefined;
-                                        const placed = try self.placeNativeNamedArgs(arr_val.array, params, &resolved, &resolved_sources);
-                                        if (placed.problem) |problem| {
-                                            if (try self.throwNamedArgProblem(ctn, params, problem)) continue;
-                                            return error.RuntimeError;
-                                        }
-                                        for (0..placed.count) |i| {
-                                            self.push(resolved[i]);
-                                            self.setArgSource(self.sp - 1, resolved_sources[i]);
-                                        }
-                                        arg_count = @intCast(placed.count);
-                                    } else {
-                                        for (entries) |entry| self.pushArgEntry(arr_val.array, entry);
-                                        arg_count = @intCast(entries.len);
-                                    }
-                                } else {
-                                    for (entries) |entry| self.pushArgEntry(arr_val.array, entry);
-                                    arg_count = @intCast(entries.len);
+                                switch (try self.pushConstructorArgs(cn, arr_val.array)) {
+                                    .count => |n| arg_count = @intCast(n),
+                                    .thrown => continue,
                                 }
                             } else {
                                 for (entries) |entry| self.pushArgEntry(arr_val.array, entry);
@@ -8384,9 +8330,18 @@ pub const VM = struct {
                     if (arg_count == 0xFF) {
                         const arr_val = self.pop();
                         if (arr_val == .array) {
-                            const entries = arr_val.array.entries.items;
-                            for (entries) |entry| self.pushArgEntry(arr_val.array, entry);
-                            arg_count = @intCast(entries.len);
+                            arrayRetain(arr_val.array);
+                            defer {
+                                arrayUnpin(arr_val.array);
+                                if (arr_val.array.refcount == 0) self.queueArrayRelease(arr_val.array);
+                            }
+                            const class_val = self.stack[self.sp - 1];
+                            const raw = if (class_val == .string) class_val.string.bytes() else if (class_val == .object) class_val.object.class_name else "";
+                            const target = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
+                            switch (try self.pushConstructorArgs(target, arr_val.array)) {
+                                .count => |n| arg_count = @intCast(n),
+                                .thrown => continue,
+                            }
                         } else {
                             arg_count = 0;
                         }
@@ -11613,6 +11568,85 @@ pub const VM = struct {
     /// PHP 8 rejects non-numeric strings, arrays (except for +), and objects
     /// without __toString as arithmetic operands with TypeError. returns true
     /// when the throw was caught in-frame and the caller should `continue`
+    const PushedArgs = union(enum) { count: usize, thrown };
+
+    // a `new` whose arguments arrived as one array (named or spread): pushes
+    // them in the constructor's parameter order, with defaults for skipped
+    // user parameters; `thrown` when a misplaced name raised in this frame
+    fn pushConstructorArgs(self: *VM, class_name: []const u8, arr: *PhpArray) RuntimeError!PushedArgs {
+        const entries = arr.entries.items;
+        const has_named = for (entries) |entry| {
+            if (entry.key == .string) break true;
+        } else false;
+        if (!has_named) {
+            for (entries) |entry| self.pushArgEntry(arr, entry);
+            return .{ .count = entries.len };
+        }
+        if (!self.classes.contains(class_name)) try self.tryAutoload(class_name);
+        const ctn = (self.resolveMethod(class_name, "__construct") catch null) orelse {
+            for (entries) |entry| self.pushArgEntry(arr, entry);
+            return .{ .count = entries.len };
+        };
+        if (self.functions.get(ctn)) |func| {
+            var resolved: [256]Value = .{.null} ** 256;
+            var resolved_sources: [256]RefSource = undefined;
+            @memset(resolved_sources[0..@min(resolved_sources.len, func.params.len + entries.len)], .none);
+            if (func.params.len > resolved.len) return error.RuntimeError;
+            var pos: usize = 0;
+            for (entries) |entry| {
+                if (entry.key == .string) {
+                    const matched = for (func.params, 0..) |p, pi| {
+                        const pname = if (p.len > 0 and p[0] == '$') p[1..] else p;
+                        if (std.mem.eql(u8, pname, entry.key.string.bytes()) or std.mem.eql(u8, p, entry.key.string.bytes())) {
+                            resolved[pi] = entry.value;
+                            resolved_sources[pi] = self.argArraySource(arr, entry.key);
+                            if (pi >= pos) pos = pi + 1;
+                            break true;
+                        }
+                    } else false;
+                    if (!matched and !func.is_variadic) {
+                        const msg = try std.fmt.allocPrint(self.allocator, "Unknown named parameter ${s}", .{entry.key.string.bytes()});
+                        try self.strings.append(self.allocator, msg);
+                        if (try self.throwBuiltinException("Error", msg)) return .thrown;
+                        return error.RuntimeError;
+                    }
+                } else {
+                    resolved[pos] = entry.value;
+                    resolved_sources[pos] = self.argArraySource(arr, entry.key);
+                    pos += 1;
+                }
+            }
+            const count = @max(pos, func.required_params);
+            for (0..count) |i| {
+                if (resolved[i] == .null and i < func.defaults.len) {
+                    resolved[i] = try self.resolveDefault(func.defaults[i]);
+                }
+            }
+            for (0..count) |i| {
+                self.push(resolved[i]);
+                self.setArgSource(self.sp - 1, resolved_sources[i]);
+            }
+            return .{ .count = count };
+        }
+        if (native_params.get(ctn)) |signature| {
+            const params = signature.params;
+            var resolved: [256]Value = undefined;
+            var resolved_sources: [256]RefSource = undefined;
+            const placed = try self.placeNativeNamedArgs(arr, params, &resolved, &resolved_sources);
+            if (placed.problem) |problem| {
+                if (try self.throwNamedArgProblem(ctn, params, problem)) return .thrown;
+                return error.RuntimeError;
+            }
+            for (0..placed.count) |i| {
+                self.push(resolved[i]);
+                self.setArgSource(self.sp - 1, resolved_sources[i]);
+            }
+            return .{ .count = placed.count };
+        }
+        for (entries) |entry| self.pushArgEntry(arr, entry);
+        return .{ .count = entries.len };
+    }
+
     // an operator on an instance of a native class that overloads it
     fn objectBinop(self: *VM, op: NativeBinop, a: Value, b: Value) RuntimeError!?Value {
         if (a != .object and b != .object) return null;

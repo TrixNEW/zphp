@@ -1145,9 +1145,17 @@ const Parser = struct {
             return self.parseAnonymousClass(new_tok);
         }
 
-        // dynamic class name: new $var(...) or new $var['key'](...)
-        if (self.peek() == .dollar or self.peek() == .variable) {
-            var class_expr = try self.parsePrimaryExpr();
+        // dynamic class name: new $var(...), new $var['key'](...), or php 8's
+        // new (expression)(...)
+        if (self.peek() == .dollar or self.peek() == .variable or self.peek() == .l_paren) {
+            var class_expr: u32 = undefined;
+            if (self.peek() == .l_paren) {
+                _ = self.advance();
+                class_expr = try self.parseExpression();
+                _ = try self.expect(.r_paren);
+            } else {
+                class_expr = try self.parsePrimaryExpr();
+            }
             // Class-name expressions support the same dereference chain as
             // ordinary expressions, including `$object->classes[$name]`.
             while (true) {
