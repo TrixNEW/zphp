@@ -523,12 +523,16 @@ fn cloneGmp(_: *VM, src: *PhpObject, copy: *PhpObject) bool {
 }
 
 pub fn register(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "GMP", .native_cleanup = cleanupGmp, .native_clone = cloneGmp };
+    var def = ClassDef{ .name = "GMP", .native_cleanup = cleanupGmp, .native_clone = cloneGmp, .native_debug_info = gmpDebugInfo };
     // GMP is mostly a value-holding class; user-facing methods are
     // PHP's procedural ones. providing __toString lets `(string)$gmp` work
     try def.methods.put(a, "__toString", .{ .name = "__toString", .arity = 0 });
+    try def.methods.put(a, "__serialize", .{ .name = "__serialize", .arity = 0 });
+    try def.methods.put(a, "__unserialize", .{ .name = "__unserialize", .arity = 1 });
     try vm.classes.put(a, "GMP", def);
     try vm.native_fns.put(a, "GMP::__toString", gmpToString);
+    try vm.native_fns.put(a, "GMP::__serialize", gmpSerialize);
+    try vm.native_fns.put(a, "GMP::__unserialize", gmpUnserialize);
     try vm.php_constants.put(a, "GMP_ROUND_ZERO", .{ .int = 0 });
     try vm.php_constants.put(a, "GMP_ROUND_PLUSINF", .{ .int = 1 });
     try vm.php_constants.put(a, "GMP_ROUND_MINUSINF", .{ .int = 2 });
@@ -550,6 +554,70 @@ fn gmpToString(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult 
     const owned = try Value.String.create(ctx.allocator, slice);
     zphp_gmp_free(cstr);
     return NativeResult.takeString(owned);
+}
+
+fn thisObject(ctx: *NativeContext) ?*PhpObject {
+    if (ctx.vm.frame_count == 0) return null;
+    const v = ctx.vm.currentFrame().vars.get("$this") orelse return null;
+    return if (v == .object) v.object else null;
+}
+
+// php's wire format: the number in hex at key 0, then the object's own
+// properties at key 1 when it has any
+fn gmpSerialize(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = thisObject(ctx) orelse return NativeResult.scalar(.null);
+    const arr = try ctx.createArray();
+    const cstr = if (getMpz(obj)) |p| zphp_mpz_get_str(16, p) else null;
+    const hex = try Value.String.create(ctx.allocator, if (cstr) |c| c[0..cstrLen(c)] else "0");
+    if (cstr) |c| zphp_gmp_free(c);
+    defer hex.release();
+    try arr.append(ctx.allocator, .{ .string = hex });
+    if (obj.properties.count() > 0) {
+        const props = try ctx.createArray();
+        var it = obj.properties.iterator();
+        while (it.next()) |e| try props.set(ctx.allocator, .{ .string = Value.String.borrowed(e.key_ptr.*) }, e.value_ptr.*);
+        try arr.append(ctx.allocator, .{ .array = props });
+    }
+    return NativeResult.borrowed(.{ .array = arr });
+}
+
+fn gmpUnserialize(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const obj = thisObject(ctx) orelse return NativeResult.scalar(.null);
+    const data = if (args.len > 0 and args[0] == .array) args[0].array else return unserializeFailed(ctx);
+    const num = data.get(.{ .int = 0 });
+    if (num != .string or num.string.bytes().len == 0) return unserializeFailed(ctx);
+    const z = try ctx.allocator.dupeZ(u8, num.string.bytes());
+    defer ctx.allocator.free(z);
+    const p = zphp_mpz_create() orelse return error.OutOfMemory;
+    if (zphp_mpz_set_str(p, z.ptr, 16) != 0) {
+        zphp_mpz_destroy(p);
+        return unserializeFailed(ctx);
+    }
+    if (getMpz(obj)) |old| zphp_mpz_destroy(old);
+    setMpz(obj, p);
+    const props = data.get(.{ .int = 1 });
+    if (props == .array) for (props.array.entries.items) |e| {
+        if (e.key == .string) try obj.set(ctx.allocator, try ctx.createString(e.key.string.bytes()), e.value);
+    };
+    return NativeResult.scalar(.null);
+}
+
+// php lists a GMP's own properties and then its value in decimal as num
+fn gmpDebugInfo(ctx: *NativeContext, obj: *PhpObject) RuntimeError!*@import("../runtime/value.zig").PhpArray {
+    const arr = try ctx.createArray();
+    var it = obj.properties.iterator();
+    while (it.next()) |e| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(e.key_ptr.*) }, e.value_ptr.*);
+    const cstr = if (getMpz(obj)) |p| zphp_mpz_get_str(10, p) else null;
+    const num = try Value.String.create(ctx.allocator, if (cstr) |c| c[0..cstrLen(c)] else "0");
+    if (cstr) |c| zphp_gmp_free(c);
+    defer num.release();
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("num") }, .{ .string = num });
+    return arr;
+}
+
+fn unserializeFailed(ctx: *NativeContext) RuntimeError!NativeResult {
+    try ctx.vm.setPendingException("Exception", "Could not unserialize number");
+    return error.RuntimeError;
 }
 
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {

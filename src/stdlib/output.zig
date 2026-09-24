@@ -134,11 +134,7 @@ fn varDumpValue(ctx: *NativeContext, val: Value, depth: usize) !void {
             }
 
             // honor __debugInfo if defined
-            var debug_arr: ?*@import("../runtime/value.zig").PhpArray = null;
-            if (ctx.vm.hasMethod(obj.class_name, "__debugInfo")) {
-                const result = try ctx.vm.callMethod(obj, "__debugInfo", &.{});
-                if (result == .array) debug_arr = result.array;
-            }
+            const debug_arr = try ctx.vm.debugInfo(obj);
 
             try appendIndent(out, a, indent);
             try out.appendSlice(a, "object(");
@@ -352,29 +348,26 @@ fn printRValueImpl(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: 
 
             // honor __debugInfo if defined - it replaces the property listing
             if (vm) |v| {
-                if (v.hasMethod(obj.class_name, "__debugInfo")) {
-                    const result = v.callMethod(obj, "__debugInfo", &.{}) catch Value.null;
-                    if (result == .array) {
-                        for (result.array.entries.items) |entry| {
-                            try appendIndent(out, a, (depth + 1) * 4);
-                            try out.appendSlice(a, "[");
-                            switch (entry.key) {
-                                .string => |s| try out.appendSlice(a, s.bytes()),
-                                .int => |i| {
-                                    var tmp: [32]u8 = undefined;
-                                    const ki = std.fmt.bufPrint(&tmp, "{d}", .{i}) catch return;
-                                    try out.appendSlice(a, ki);
-                                },
-                            }
-                            try out.appendSlice(a, "] => ");
-                            const nested = entry.value == .array or entry.value == .object;
-                            try printRValueImpl(a, out, entry.value, depth + if (nested) @as(usize, 2) else 1, vm);
-                            try out.appendSlice(a, "\n");
+                if (v.debugInfo(obj) catch null) |listing| {
+                    for (listing.entries.items) |entry| {
+                        try appendIndent(out, a, (depth + 1) * 4);
+                        try out.appendSlice(a, "[");
+                        switch (entry.key) {
+                            .string => |s| try out.appendSlice(a, s.bytes()),
+                            .int => |i| {
+                                var tmp: [32]u8 = undefined;
+                                const ki = std.fmt.bufPrint(&tmp, "{d}", .{i}) catch return;
+                                try out.appendSlice(a, ki);
+                            },
                         }
-                        try appendIndent(out, a, depth * 4);
-                        try out.appendSlice(a, ")\n");
-                        return;
+                        try out.appendSlice(a, "] => ");
+                        const nested = entry.value == .array or entry.value == .object;
+                        try printRValueImpl(a, out, entry.value, depth + if (nested) @as(usize, 2) else 1, vm);
+                        try out.appendSlice(a, "\n");
                     }
+                    try appendIndent(out, a, depth * 4);
+                    try out.appendSlice(a, ")\n");
+                    return;
                 }
             }
 
@@ -508,6 +501,11 @@ fn varExportString(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), s: []
     }
 }
 
+// php exports a resource as NULL, inline like any scalar
+fn isResource(v: Value) bool {
+    return v == .object and @import("types.zig").isResourceObject(v.object.class_name);
+}
+
 fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: Value, depth: usize, ctx: *NativeContext) !void {
     switch (val) {
         .null => try out.appendSlice(a, "NULL"),
@@ -572,7 +570,7 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
                     .object => |oo| visitedContains(@intFromPtr(oo)),
                     else => false,
                 };
-                if ((entry.value == .array or entry.value == .object) and !ev_recurses) {
+                if ((entry.value == .array or entry.value == .object) and !ev_recurses and !isResource(entry.value)) {
                     try out.append(a, '\n');
                     for (0..(depth + 1) * 2) |_| try out.append(a, ' ');
                 }
@@ -583,6 +581,10 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
             try out.append(a, ')');
         },
         .object => |obj| {
+            if (isResource(val)) {
+                try out.appendSlice(a, "NULL");
+                return;
+            }
             const obj_ptr = @intFromPtr(obj);
             if (visitedContains(obj_ptr)) {
                 try out.appendSlice(a, "NULL");

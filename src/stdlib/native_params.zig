@@ -4,7 +4,7 @@ const generated = @import("native_params_generated.zig");
 // the parameter list of a native function or method, which natives do not
 // declare themselves: named arguments are placed by it and a skipped optional
 // parameter receives its default. natives php shares come from php's own
-// reflection (scripts/gen-native-params); the ones only zphp has are below
+// reflection (scripts/gen-php-metadata); the ones only zphp has are below
 
 pub const Default = union(enum) {
     required,

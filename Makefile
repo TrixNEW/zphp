@@ -47,9 +47,9 @@ fuzz: build ## Mutation-fuzz the pipeline and decoders on the Debug build (FUZZ_
 ext: build ## Run extension API tests (builds tests/extensions/demo.c with zig cc; STATIC=1 also builds a zphp with it compiled in, BENCH=1 prints call overhead)
 	./tests/extensions/run
 
-.PHONY: native-params
-native-params: build ## Regenerate src/stdlib/native_params_generated.zig from php's reflection (run with the targeted php on PATH after adding natives)
-	python3 scripts/gen-native-params
+.PHONY: php-metadata
+php-metadata: build ## Regenerate native parameter lists and serialization rules from php's reflection (run with the targeted php on PATH after adding natives or classes)
+	python3 scripts/gen-php-metadata
 
 .PHONY: ini
 ini: build ## Run php.ini loading tests (--ini, ZPHP_INI, -d, serve isolation, extension= lines)

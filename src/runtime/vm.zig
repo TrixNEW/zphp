@@ -294,6 +294,9 @@ pub const ClassDef = struct {
     // null result means the operand pair is not supported and the ordinary
     // TypeError path runs
     native_binop: ?*const fn (*NativeContext, NativeBinop, Value, Value) RuntimeError!?Value = null,
+    // what var_dump and print_r list for an instance, the way php's internal
+    // classes report state that lives outside their properties (GMP's num)
+    native_debug_info: ?*const fn (*NativeContext, *PhpObject) RuntimeError!*PhpArray = null,
     // set when any property-hook method ($hook_get/$hook_set) is registered on
     // this class. lets hasPropHook skip the per-access bufPrint + method lookup
     // for the >99% of classes that declare no hooks (PHP 8.4 feature). does not
@@ -11600,6 +11603,25 @@ pub const VM = struct {
         while (name) |n| {
             const def = self.classes.get(n) orelse return null;
             if (def.native_clone) |hook| return hook;
+            name = def.parent;
+        }
+        return null;
+    }
+
+    // the listing var_dump and print_r show in place of an object's
+    // properties: its __debugInfo, or its native class's debug info
+    pub fn debugInfo(self: *VM, obj: *PhpObject) RuntimeError!?*PhpArray {
+        if (self.hasMethod(obj.class_name, "__debugInfo")) {
+            const result = try self.callMethod(obj, "__debugInfo", &.{});
+            return if (result == .array) result.array else null;
+        }
+        var name: ?[]const u8 = obj.class_name;
+        while (name) |n| {
+            const def = self.classes.get(n) orelse return null;
+            if (def.native_debug_info) |hook| {
+                var ctx = self.makeContext(null);
+                return try hook(&ctx, obj);
+            }
             name = def.parent;
         }
         return null;

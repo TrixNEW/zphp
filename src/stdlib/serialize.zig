@@ -1,11 +1,13 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
 const types = @import("types.zig");
+const serialization_generated = @import("serialization_generated.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
 const ClassDef = @import("../runtime/vm.zig").ClassDef;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
+const VM = @import("../runtime/vm.zig").VM;
 const Allocator = std.mem.Allocator;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
@@ -168,6 +170,44 @@ fn native_serialize(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
         return error.RuntimeError;
     }
     return try serializeToString(ctx, args[0]);
+}
+
+// php refuses to serialize the internal classes whose state lives outside
+// their properties (connections, handles, reflectors, dom nodes). the list
+// php publishes is generated; zphp's own are below
+pub const NotSerializable = enum { always, unless_methods };
+
+const zphp_not_serializable = std.StaticStringMap(NotSerializable).initComptime(.{
+    .{ "Zphp\\Pool", .always },
+    .{ "Zphp\\Future", .always },
+});
+
+// the rule for this class or the nearest ancestor that has one
+fn notSerializable(vm: *VM, class_name: []const u8) ?NotSerializable {
+    var name: ?[]const u8 = class_name;
+    while (name) |n| {
+        if (serialization_generated.classes.get(n) orelse zphp_not_serializable.get(n)) |rule| return rule;
+        name = (vm.classes.get(n) orelse return null).parent;
+    }
+    return null;
+}
+
+const Direction = enum { serialize, unserialize };
+
+fn refuseNotSerializable(ctx: *NativeContext, class_name: []const u8, direction: Direction) RuntimeError!void {
+    const rule = notSerializable(ctx.vm, class_name) orelse return;
+    const verb = if (direction == .serialize) "Serialization" else "Unserialization";
+    const msg = switch (rule) {
+        .always => try std.fmt.allocPrint(ctx.allocator, "{s} of '{s}' is not allowed", .{ verb, class_name }),
+        .unless_methods => blk: {
+            if (ctx.vm.hasMethod(class_name, if (direction == .serialize) "__serialize" else "__unserialize")) return;
+            const methods = if (direction == .serialize) "serialization" else "unserialization";
+            break :blk try std.fmt.allocPrint(ctx.allocator, "{s} of '{s}' is not allowed, unless {s} methods are implemented in a subclass", .{ verb, class_name, methods });
+        },
+    };
+    try ctx.vm.strings.append(ctx.allocator, msg);
+    try ctx.vm.setPendingException("Exception", msg);
+    return error.RuntimeError;
 }
 
 pub fn serializeToString(ctx: *NativeContext, val: Value) RuntimeError!NativeResult {
@@ -350,6 +390,7 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
                 try buf.appendSlice(a, "i:0;");
                 return;
             }
+            try refuseNotSerializable(ctx, obj.class_name, .serialize);
             // emit a back-reference if we've already serialized this object
             if (sctx.objects.get(obj)) |existing_slot| {
                 // rewind the slot counter: this r: entry occupies the slot we already consumed
@@ -735,6 +776,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             if (colon1 + 2 + name_len + 1 >= s.len) return error.RuntimeError;
             const orig_class = s[colon1 + 2 .. colon1 + 2 + name_len];
             const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class) and !types.isResourceObject(orig_class);
+            if (class_allowed) try refuseNotSerializable(ctx, orig_class, .unserialize);
             const class_name = try keptClassName(ctx, class_allowed, orig_class);
             var p = colon1 + 2 + name_len + 2;
             const count_end = std.mem.indexOfPos(u8, s, p, ":") orelse return error.RuntimeError;
@@ -857,6 +899,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             if (colon1 + 2 + name_len + 1 >= s.len) return error.RuntimeError;
             const orig_class = s[colon1 + 2 .. colon1 + 2 + name_len];
             const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class) and !types.isResourceObject(orig_class);
+            if (class_allowed) try refuseNotSerializable(ctx, orig_class, .unserialize);
             const class_name = try keptClassName(ctx, class_allowed, orig_class);
             var p = colon1 + 2 + name_len + 2;
             const len_end = std.mem.indexOfPos(u8, s, p, ":") orelse return error.RuntimeError;
