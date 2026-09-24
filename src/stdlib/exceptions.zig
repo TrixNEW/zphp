@@ -11,7 +11,8 @@ const Allocator = std.mem.Allocator;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
 pub fn register(vm: *VM, a: Allocator) !void {
-    var throwable = vm_mod.InterfaceDef{ .name = "Throwable" };
+    var throwable = vm_mod.InterfaceDef{ .name = "Throwable", .parent = "Stringable" };
+    try throwable.parents.append(a, "Stringable");
     try throwable.methods.append(a, "getMessage");
     try throwable.methods.append(a, "getCode");
     try throwable.methods.append(a, "getPrevious");
@@ -109,6 +110,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
         .{ "FiberError", "Error" },
         .{ "ValueError", "Error" },
         .{ "UnhandledMatchError", "Error" },
+        .{ "CompileError", "Error" },
+        .{ "ParseError", "CompileError" },
         // PHP 8.3 date hierarchy: DateError -> Error; the three concrete
         // subclasses extend it. add the legacy DateInvalidOperationException
         // alias (PHP 8.2) at the same level

@@ -875,7 +875,7 @@ fn method_exists(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         if (ctx.vm.classes.get(cn)) |cls| {
             current = cls.parent;
         } else {
-            ctx.vm.tryAutoload(cn) catch {};
+            try ctx.vm.tryAutoload(cn);
             if (ctx.vm.classes.get(cn)) |cls| {
                 current = cls.parent;
             } else break;
@@ -1379,8 +1379,8 @@ fn native_is_subclass_of(ctx: *NativeContext, args: []const Value) RuntimeError!
     else
         return NativeResult.scalar(Value{ .bool = false });
     const target_name = args[1].string.bytes();
-    ctx.vm.tryAutoload(class_name) catch {};
-    ctx.vm.tryAutoload(target_name) catch {};
+    try ctx.vm.tryAutoload(class_name);
+    try ctx.vm.tryAutoload(target_name);
     // is_subclass_of returns false if same class, only true for actual subclasses
     if (std.mem.eql(u8, class_name, target_name)) return NativeResult.scalar(.{ .bool = false });
     return NativeResult.scalar(.{ .bool = ctx.vm.isInstanceOf(class_name, target_name) });
@@ -1591,8 +1591,15 @@ fn native_getmygid(_: *NativeContext, _: []const Value) RuntimeError!NativeResul
     return NativeResult.scalar(.{ .int = if (platform.is_windows) 0 else @intCast(getgid()) });
 }
 
-fn native_get_cfg_var(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    return NativeResult.scalar(Value{ .bool = false });
+// a value from the loaded configuration (php.ini and -d), whether or not any
+// extension registers the directive; cfg_file_path names the ini file itself
+fn native_get_cfg_var(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len == 0 or args[0] != .string) return NativeResult.scalar(Value{ .bool = false });
+    const ini_config = @import("../ini_config.zig");
+    const name = args[0].string.bytes();
+    if (std.mem.eql(u8, name, "cfg_file_path")) return NativeResult.copyString(ctx.allocator, ini_config.loadedFile() orelse return NativeResult.scalar(Value{ .bool = false }));
+    const value = ini_config.get(name) orelse return NativeResult.scalar(Value{ .bool = false });
+    return NativeResult.copyString(ctx.allocator, value);
 }
 
 extern "c" fn getlogin() ?[*:0]const u8;
@@ -2306,7 +2313,7 @@ fn native_class_alias(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
     const alias = args[1].string.bytes();
     const autoload = if (args.len >= 3) args[2].isTruthy() else true;
     if (autoload and !ctx.vm.classes.contains(original)) {
-        ctx.vm.tryAutoload(original) catch return NativeResult.scalar(.{ .bool = false });
+        try ctx.vm.tryAutoload(original);
     }
     if (ctx.vm.classes.get(original)) |cls| {
         var alias_def = ClassDef{ .name = alias, .parent = original };
@@ -2484,7 +2491,7 @@ fn native_interface_exists(ctx: *NativeContext, args: []const Value) RuntimeErro
     if (ctx.vm.interfaces.contains(name)) return NativeResult.scalar(.{ .bool = true });
     const autoload = if (args.len > 1 and args[1] == .bool) args[1].bool else true;
     if (autoload) {
-        ctx.vm.tryAutoload(name) catch {};
+        try ctx.vm.tryAutoload(name);
         return NativeResult.scalar(.{ .bool = ctx.vm.interfaces.contains(name) });
     }
     return NativeResult.scalar(.{ .bool = false });
@@ -2498,7 +2505,7 @@ fn native_enum_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
     }
     const autoload = if (args.len > 1 and args[1] == .bool) args[1].bool else true;
     if (autoload) {
-        ctx.vm.tryAutoload(name) catch {};
+        try ctx.vm.tryAutoload(name);
         if (ctx.vm.classes.get(name)) |cls| {
             return NativeResult.scalar(.{ .bool = cls.is_enum });
         }
@@ -2581,9 +2588,11 @@ fn native_class_parents(ctx: *NativeContext, args: []const Value) RuntimeError!N
         return NativeResult.scalar(Value{ .bool = false });
     const class_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
 
+    // an interface has no parent classes
+    if (ctx.vm.interfaces.contains(class_name)) return NativeResult.borrowed(.{ .array = try ctx.createArray() });
     const cls = ctx.vm.classes.get(class_name) orelse {
         try ctx.vm.tryAutoload(class_name);
-        if (ctx.vm.classes.get(class_name) == null) return NativeResult.scalar(Value{ .bool = false });
+        if (ctx.vm.classes.get(class_name) == null and !ctx.vm.interfaces.contains(class_name)) return NativeResult.scalar(Value{ .bool = false });
         const normalized = [_]Value{.{ .string = Value.String.borrowed(class_name) }};
         return native_class_parents(ctx, &normalized);
     };

@@ -1,5 +1,6 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
+const filesystem = @import("filesystem.zig");
 
 extern fn zphp_xxh3_128(data: ?[*]const u8, len: usize, out: [*]u8) void;
 const Value = @import("../runtime/value.zig").Value;
@@ -21,6 +22,7 @@ pub const entries = .{
     .{ "hash_hmac_algos", native_hash_hmac_algos },
     .{ "hash_equals", native_hash_equals },
     .{ "hash_file", native_hash_file },
+    .{ "hash_hmac_file", native_hash_hmac_file },
     .{ "md5_file", native_md5_file },
     .{ "sha1_file", native_sha1_file },
     .{ "hash_init", native_hash_init },
@@ -671,42 +673,50 @@ fn native_hash_hmac_algos(ctx: *NativeContext, _: []const Value) RuntimeError!Na
     return NativeResult.borrowed(.{ .array = arr });
 }
 
-fn native_hash_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 2 or args[0] != .string or args[1] != .string) return NativeResult.scalar(Value{ .bool = false });
-    const algo_name = args[0].string.bytes();
-    const filename = args[1].string.bytes();
-    const raw_output = args.len >= 3 and args[2].isTruthy();
-    const algo = HashAlgo.fromString(algo_name) orelse return NativeResult.scalar(Value{ .bool = false });
-    const data = std.fs.cwd().readFileAlloc(ctx.allocator, filename, 10 * 1024 * 1024) catch return NativeResult.scalar(Value{ .bool = false });
-    defer ctx.allocator.free(data);
+// the file a *_file hash function reads, through any stream wrapper, with
+// php's warning when it cannot be opened
+fn readHashInput(ctx: *NativeContext, comptime fn_name: []const u8, path: []const u8) RuntimeError!?Value.String {
+    if (try filesystem.readPath(ctx, path)) |content| return content;
+    const msg = try std.fmt.allocPrint(ctx.allocator, fn_name ++ "({s}): Failed to open stream: No such file or directory", .{path});
+    try ctx.vm.strings.append(ctx.allocator, msg);
+    ctx.vm.emitWarning(msg);
+    return null;
+}
+
+fn digestResult(ctx: *NativeContext, digest: []const u8, raw_output: bool) RuntimeError!NativeResult {
+    if (raw_output) return NativeResult.copyString(ctx.allocator, digest);
+    return NativeResult.takeString(try toHexString(ctx, digest));
+}
+
+fn hashPath(ctx: *NativeContext, comptime fn_name: []const u8, algo: HashAlgo, path: []const u8, key: ?[]const u8, raw_output: bool) RuntimeError!NativeResult {
+    const content = (try readHashInput(ctx, fn_name, path)) orelse return NativeResult.scalar(.{ .bool = false });
+    defer content.release();
     var digest: [64]u8 = undefined;
     const dlen = algo.digestLen();
-    computeHash(algo, data, digest[0..dlen]);
-    if (raw_output) return NativeResult.copyString(ctx.allocator, digest[0..dlen]);
-    return NativeResult.takeString(try toHexString(ctx, digest[0..dlen]));
+    if (key) |k| computeHmac(algo, content.bytes(), k, digest[0..dlen]) else computeHash(algo, content.bytes(), digest[0..dlen]);
+    return digestResult(ctx, digest[0..dlen], raw_output);
+}
+
+fn native_hash_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 2 or args[0] != .string or args[1] != .string) return NativeResult.scalar(Value{ .bool = false });
+    const algo = HashAlgo.fromString(args[0].string.bytes()) orelse return NativeResult.scalar(Value{ .bool = false });
+    return hashPath(ctx, "hash_file", algo, args[1].string.bytes(), null, args.len >= 3 and args[2].isTruthy());
+}
+
+fn native_hash_hmac_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 3 or args[0] != .string or args[1] != .string or args[2] != .string) return NativeResult.scalar(Value{ .bool = false });
+    const algo = HashAlgo.fromString(args[0].string.bytes()) orelse return NativeResult.scalar(Value{ .bool = false });
+    return hashPath(ctx, "hash_hmac_file", algo, args[1].string.bytes(), args[2].string.bytes(), args.len >= 4 and args[3].isTruthy());
 }
 
 fn native_md5_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    return hashFileWithWarning(ctx, args, "md5", "md5_file");
+    if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
+    return hashPath(ctx, "md5_file", HashAlgo.fromString("md5").?, args[0].string.bytes(), null, args.len >= 2 and args[1].isTruthy());
 }
 
 fn native_sha1_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    return hashFileWithWarning(ctx, args, "sha1", "sha1_file");
-}
-
-fn hashFileWithWarning(ctx: *NativeContext, args: []const Value, algo: []const u8, fn_name: []const u8) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const raw = args.len >= 2 and args[1].isTruthy();
-    // probe the file first so we can emit PHP's exact 'Failed to open stream'
-    // warning text on missing files; hash_file returns false silently
-    std.fs.cwd().access(args[0].string.bytes(), .{}) catch {
-        const msg = std.fmt.allocPrint(ctx.allocator, "{s}({s}): Failed to open stream: No such file or directory", .{ fn_name, args[0].string.bytes() }) catch return NativeResult.scalar(.{ .bool = false });
-        ctx.vm.strings.append(ctx.allocator, msg) catch {};
-        ctx.vm.emitWarning(msg);
-        return NativeResult.scalar(.{ .bool = false });
-    };
-    const hf_args = [_]Value{ .{ .string = Value.String.borrowed(algo) }, args[0], .{ .bool = raw } };
-    return native_hash_file(ctx, &hf_args);
+    return hashPath(ctx, "sha1_file", HashAlgo.fromString("sha1").?, args[0].string.bytes(), null, args.len >= 2 and args[1].isTruthy());
 }
 
 fn native_hash_equals(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -753,9 +763,9 @@ fn native_hash_update(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
 
 fn native_hash_update_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .object or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
-    const data = std.fs.cwd().readFileAlloc(ctx.allocator, args[1].string.bytes(), 64 * 1024 * 1024) catch return NativeResult.scalar(.{ .bool = false });
-    defer ctx.allocator.free(data);
-    return native_hash_update(ctx, &.{ args[0], .{ .string = Value.String.borrowed(data) } });
+    const content = (try readHashInput(ctx, "hash_update_file", args[1].string.bytes())) orelse return NativeResult.scalar(.{ .bool = false });
+    defer content.release();
+    return native_hash_update(ctx, &.{ args[0], .{ .string = content } });
 }
 
 fn native_hash_final(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {

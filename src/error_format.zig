@@ -108,6 +108,37 @@ pub fn formatParseErrors(alloc: std.mem.Allocator, ast: *const Ast, file_path: [
     return buf.items;
 }
 
+// the first syntax error in php's wording: syntax error, unexpected token
+// "}", expecting ";". the caller owns the returned bytes
+pub fn parseErrorSummary(alloc: std.mem.Allocator, ast: *const Ast) ![]u8 {
+    if (ast.errors.len == 0) return alloc.dupe(u8, "syntax error");
+    const err = ast.errors[0];
+    const tok = ast.tokens[err.token];
+    const lexeme = ast.source[tok.start..tok.end];
+    const expecting: ?[]const u8 = switch (err.tag) {
+        .expected_expression => "expression",
+        .expected_semicolon => "\";\"",
+        .expected_r_paren => "\")\"",
+        .expected_r_brace => "\"}\"",
+        .expected_r_bracket => "\"]\"",
+        .expected_identifier => "identifier",
+        .expected_variable => "variable",
+        .expected_colon => "\":\"",
+        .unexpected_token => null,
+    };
+    if (lexeme.len == 0) {
+        if (expecting) |e| return std.fmt.allocPrint(alloc, "syntax error, unexpected end of file, expecting {s}", .{e});
+        return alloc.dupe(u8, "syntax error, unexpected end of file");
+    }
+    if (expecting) |e| return std.fmt.allocPrint(alloc, "syntax error, unexpected token \"{s}\", expecting {s}", .{ lexeme, e });
+    return std.fmt.allocPrint(alloc, "syntax error, unexpected token \"{s}\"", .{lexeme});
+}
+
+pub fn parseErrorLine(ast: *const Ast) i64 {
+    if (ast.errors.len == 0) return 0;
+    return @intCast(Chunk.locationFromOffset(ast.source, ast.tokens[ast.errors[0].token].start).line);
+}
+
 fn errorTagMessage(tag: Ast.Error.Tag) []const u8 {
     return switch (tag) {
         .expected_expression => "expected expression",
@@ -208,6 +239,19 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
         } else {
             writeFmt(buf, alloc, "\nFatal error: {s} in {s}\n", .{ message, path });
         }
+        return;
+    }
+
+    // an uncaught ParseError prints the way php reports a syntax error: at
+    // the exception's own file and line, with no stack trace
+    if (exc == .object and (std.mem.eql(u8, class_name, "ParseError") or std.mem.eql(u8, class_name, "CompileError"))) {
+        const file_v = exc.object.get("file");
+        const line_v = exc.object.get("line");
+        const where = displayPath(if (file_v == .string) file_v.string.bytes() else path_raw);
+        const line: i64 = if (line_v == .int) line_v.int else 0;
+        const label: []const u8 = if (std.mem.eql(u8, class_name, "ParseError")) "Parse error" else "Fatal error";
+        writeFmt(buf, alloc, "PHP {s}:  {s} in {s} on line {d}\n", .{ label, message, where, line });
+        if (vm.displayErrorsEnabled()) writeFmt(buf, alloc, "\n{s}: {s} in {s} on line {d}\n", .{ label, message, where, line });
         return;
     }
 

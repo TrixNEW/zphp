@@ -733,7 +733,10 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // virtual ClassDefs for builtin tagged-value types so ReflectionClass(name) succeeds.
     // Generator and Fiber are runtime concepts, not stored as PhpObject, but PHP exposes
     // them via Reflection. Empty methods table is fine - dispatch handles them separately.
-    try vm.classes.put(a, "Generator", ClassDef{ .name = "Generator" });
+    var generator_def = ClassDef{ .name = "Generator", .is_final = true };
+    try generator_def.interfaces.append(a, "Iterator");
+    try generator_def.interfaces.append(a, "Traversable");
+    try vm.classes.put(a, "Generator", generator_def);
     try vm.classes.put(a, "Fiber", ClassDef{ .name = "Fiber" });
 
     var rref_def = ClassDef{ .name = "ReflectionReference" };
@@ -1594,10 +1597,10 @@ fn buildAttributeArrayWithFlags(ctx: *NativeContext, attrs: []const AttributeDef
                 // walk its parent chain. PHP-side `class_exists()` triggers
                 // autoload implicitly; here we have to drive it ourselves
                 if (!ctx.vm.classes.contains(attr.name)) {
-                    ctx.vm.tryAutoload(attr.name) catch {};
+                    try ctx.vm.tryAutoload(attr.name);
                 }
                 if (!ctx.vm.classes.contains(f)) {
-                    ctx.vm.tryAutoload(f) catch {};
+                    try ctx.vm.tryAutoload(f);
                 }
                 if (!ctx.vm.isInstanceOf(attr.name, f)) continue;
             } else {

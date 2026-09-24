@@ -243,6 +243,20 @@ pub const CaptureEntry = struct {
 // feeds may bind that position by reference. `simple` names a caller
 // variable; `cell` is the canonical reference cell of a property or array
 // element, carrying the error text if the current scope may not write it
+// PHP_BINARY: the absolute path of the running executable, resolved once
+// per process so a re-launched child (pcntl_exec, proc_open) finds it
+var executable_path: []const u8 = "zphp";
+var executable_path_once = std.once(resolveExecutablePath);
+
+fn resolveExecutablePath() void {
+    executable_path = std.fs.selfExePathAlloc(std.heap.page_allocator) catch return;
+}
+
+pub fn executablePath() []const u8 {
+    executable_path_once.call();
+    return executable_path;
+}
+
 pub const RefSource = union(enum) {
     none,
     simple: []const u8,
@@ -1198,6 +1212,9 @@ pub const VM = struct {
         fn_lower: std.StringHashMapUnmanaged([]const u8) = .{},
         native_lower: std.StringHashMapUnmanaged([]const u8) = .{},
         resolved_calls: std.StringHashMapUnmanaged([]const u8) = .{},
+        // the syntax error that made the file loader refuse an include, for
+        // the include opcode to raise as ParseError
+        include_parse_error: ?SourcePositionMessage = null,
         // per-frame sp save for inline call/ret in fastLoop
         sp_save: [2048]usize = undefined,
         // per-frame actual arg count for func_get_args
@@ -2049,7 +2066,7 @@ pub const VM = struct {
             .freebsd, .netbsd, .openbsd, .dragonfly => "BSD",
             else => "Unknown",
         }) });
-        try c.put(a, "PHP_BINARY", .{ .string = Value.String.borrowed("zphp") });
+        try c.put(a, "PHP_BINARY", .{ .string = Value.String.borrowed(executablePath()) });
         try c.put(a, "PREG_PATTERN_ORDER", .{ .int = 1 });
         try c.put(a, "PREG_SET_ORDER", .{ .int = 2 });
         try c.put(a, "PREG_OFFSET_CAPTURE", .{ .int = 256 });
@@ -3210,10 +3227,20 @@ pub const VM = struct {
             return error.OutOfMemory;
         };
         if (ast.errors.len > 0) {
+            const summary = @import("../error_format.zig").parseErrorSummary(self.allocator, &ast) catch null;
+            const error_line = @import("../error_format.zig").parseErrorLine(&ast);
             ast.deinit();
             self.allocator.free(wrapped);
-            self.setErrorMsg("eval(): syntax error in evaluated code", .{});
-            try self.setPendingException("ParseError", self.error_msg orelse "syntax error");
+            if (summary) |s| try self.strings.append(self.allocator, s);
+            try self.setPendingException("ParseError", summary orelse "syntax error");
+            // php places the error in the evaluated code: "<file>(<line>) : eval()'d code"
+            if (self.pending_exception) |exc| if (exc == .object) {
+                const caller = self.currentSourcePosition();
+                const where = try std.fmt.allocPrint(self.allocator, "{s}({d}) : eval()'d code", .{ caller.file, caller.line });
+                try self.strings.append(self.allocator, where);
+                try exc.object.set(self.allocator, "file", .{ .string = Value.String.borrowed(where) });
+                try exc.object.set(self.allocator, "line", .{ .int = error_line });
+            };
             return error.RuntimeError;
         }
         const display_path = self.allocator.dupe(u8, "eval()'d code") catch {
@@ -7633,6 +7660,10 @@ pub const VM = struct {
                                 self.global_slot_names = saved_slot_names;
                                 self.script_strict_types = saved_strict;
                                 if (self.sp <= sp_before) self.push(.{ .bool = true });
+                            } else if (self.ic.?.include_parse_error) |parse_error| {
+                                self.ic.?.include_parse_error = null;
+                                if (try self.throwBuiltinExceptionAt("ParseError", parse_error.message, parse_error.at)) continue;
+                                return error.RuntimeError;
                             } else {
                                 if (is_require) {
                                     self.setErrorMsg("Fatal error: require(): Failed opening required '{s}'", .{path});
@@ -11802,6 +11833,34 @@ pub const VM = struct {
     }
 
     pub fn throwBuiltinException(self: *VM, class_name: []const u8, message: []const u8) !bool {
+        return self.throwBuiltinExceptionAt(class_name, message, null);
+    }
+
+    pub const SourcePosition = struct { file: []const u8, line: i64 };
+
+    // the file and line the executing frame is at
+    pub fn currentSourcePosition(self: *VM) SourcePosition {
+        if (self.frame_count == 0) return .{ .file = self.file_path, .line = 0 };
+        const file = if (self.currentFrame().func) |f| f.file_path else self.file_path;
+        const ip = self.currentFrame().ip;
+        const line: i64 = if (self.currentChunk().getSourceLocation(if (ip > 0) ip - 1 else 0, self.source)) |loc| @intCast(loc.line) else 0;
+        return .{ .file = if (file.len > 0) file else self.file_path, .line = line };
+    }
+    pub const SourcePositionMessage = struct { message: []const u8, at: SourcePosition };
+
+    // the file loader could not compile an included file: remembered until the
+    // include opcode raises it
+    pub fn recordIncludeParseError(self: *VM, message: []const u8, file: []const u8, line: i64) void {
+        const msg = self.allocator.dupe(u8, message) catch return;
+        self.strings.append(self.allocator, msg) catch return self.allocator.free(msg);
+        const path = self.allocator.dupe(u8, file) catch return;
+        self.strings.append(self.allocator, path) catch return self.allocator.free(path);
+        self.ic.?.include_parse_error = .{ .message = msg, .at = .{ .file = path, .line = line } };
+    }
+
+    // `at` places the exception somewhere other than the throwing frame, the
+    // way a ParseError from an included file reports that file and line
+    pub fn throwBuiltinExceptionAt(self: *VM, class_name: []const u8, message: []const u8, at: ?SourcePosition) !bool {
         const obj = try self.allocator.create(PhpObject);
         self.next_object_id += 1;
         const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
@@ -11828,6 +11887,10 @@ pub const VM = struct {
         else
             0;
         try obj.set(self.allocator, "line", .{ .int = line });
+        if (at) |pos| {
+            try obj.set(self.allocator, "file", .{ .string = Value.String.borrowed(pos.file) });
+            try obj.set(self.allocator, "line", .{ .int = pos.line });
+        }
         try obj.setForScope(self.allocator, "trace", .{ .array = try self.buildExceptionTrace() }, self.exceptionTraceScope(obj));
         try self.objects.append(self.allocator, obj);
 

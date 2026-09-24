@@ -481,12 +481,34 @@ fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!NativeResult {
 
 fn native_file_get_contents(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    var path = args[0].string.bytes();
+    const content = (try readPath(ctx, args[0].string.bytes())) orelse return NativeResult.scalar(.{ .bool = false });
+    if (args.len < 4 or args[3] == .null) return NativeResult.takeString(content);
+
+    // optional offset (4th arg) and length (5th arg)
+    defer content.release();
+    const bytes = content.bytes();
+    const total_i: i64 = @intCast(bytes.len);
+    var offset = Value.toInt(args[3]);
+    if (offset < 0) offset = @max(0, total_i + offset);
+    if (offset > total_i) offset = total_i;
+    const ustart: usize = @intCast(offset);
+    const have_len = args.len >= 5 and args[4] != .null;
+    const length: i64 = if (have_len) Value.toInt(args[4]) else total_i - offset;
+    if (length < 0) return NativeResult.scalar(.{ .bool = false });
+    const finish = @min(bytes.len, ustart + @as(usize, @intCast(length)));
+    return try NativeResult.copyString(ctx.allocator, bytes[ustart..finish]);
+}
+
+// the whole contents behind a path, through whichever wrapper serves it (user
+// wrappers, php://, data:, phar://, compress.zlib://, http(s)://, plain files);
+// null when it cannot be opened. the caller owns the returned reference
+pub fn readPath(ctx: *NativeContext, raw_path: []const u8) RuntimeError!?Value.String {
+    var path = raw_path;
     if (std.mem.startsWith(u8, path, "file://")) path = path[7..];
     if (userWrapperFor(ctx.vm, path)) |class_name| {
-        const opened = (try dispatchUserOpen(ctx, class_name, path, "rb")) orelse return NativeResult.scalar(.{ .bool = false });
+        const opened = (try dispatchUserOpen(ctx, class_name, path, "rb")) orelse return null;
         const fh = opened.object;
-        const wrapper = fileHandleWrapper(fh) orelse return NativeResult.scalar(.{ .bool = false });
+        const wrapper = fileHandleWrapper(fh) orelse return null;
         var buf = std.ArrayListUnmanaged(u8){};
         defer buf.deinit(ctx.allocator);
         while (true) {
@@ -497,63 +519,46 @@ fn native_file_get_contents(ctx: *NativeContext, args: []const Value) RuntimeErr
         if (ctx.vm.hasMethod(fh.class_name, "stream_close") or ctx.vm.hasMethod(wrapper.class_name, "stream_close")) {
             _ = try ctx.callMethod(wrapper, "stream_close", &.{});
         }
-        const owned = try buf.toOwnedSlice(ctx.allocator);
-        return NativeResult.takeString(try Value.String.adopt(ctx.allocator, owned));
+        return try Value.String.adopt(ctx.allocator, try buf.toOwnedSlice(ctx.allocator));
     }
     if (extractScheme(path)) |s| {
-        if (isBuiltinWrapper(s) and isWrapperUnregistered(ctx.vm, s)) return NativeResult.scalar(.{ .bool = false });
+        if (isBuiltinWrapper(s) and isWrapperUnregistered(ctx.vm, s)) return null;
     }
     if (std.mem.eql(u8, path, "php://input")) {
-        const body_val = ctx.vm.request_vars.get("__raw_body") orelse return NativeResult.literal("");
-        if (body_val == .string) return NativeResult.share(body_val);
-        return NativeResult.literal("");
+        const body_val = ctx.vm.request_vars.get("__raw_body") orelse return try Value.String.create(ctx.allocator, "");
+        if (body_val != .string) return try Value.String.create(ctx.allocator, "");
+        body_val.string.retain();
+        return body_val.string;
     }
     if (std.mem.eql(u8, path, "php://stdin")) {
-        const stdin = std.fs.File.stdin();
-        const data = stdin.readToEndAlloc(ctx.allocator, 1024 * 1024 * 64) catch return NativeResult.scalar(.{ .bool = false });
-        return NativeResult.takeString(try Value.String.adopt(ctx.allocator, data));
+        const data = std.fs.File.stdin().readToEndAlloc(ctx.allocator, std.math.maxInt(usize)) catch return null;
+        return try Value.String.adopt(ctx.allocator, data);
     }
     if (std.mem.eql(u8, path, "php://stdout") or std.mem.eql(u8, path, "php://output") or std.mem.eql(u8, path, "php://stderr")) {
-        return NativeResult.literal("");
+        return try Value.String.create(ctx.allocator, "");
     }
     if (std.mem.startsWith(u8, path, "data:")) {
-        const payload = (parseDataUri(ctx.allocator, path) catch return NativeResult.scalar(.{ .bool = false })) orelse return NativeResult.scalar(.{ .bool = false });
-        return NativeResult.takeString(try Value.String.adopt(ctx.allocator, payload));
+        const payload = (parseDataUri(ctx.allocator, path) catch return null) orelse return null;
+        return try Value.String.adopt(ctx.allocator, payload);
     }
     if (std.mem.startsWith(u8, path, "phar://")) {
-        const r = resolvePharPathWithCtx(path, ctx) orelse return NativeResult.scalar(.{ .bool = false });
-        const payload = (readPharEntry(ctx.allocator, r.archive_path, r.internal_path) catch return NativeResult.scalar(.{ .bool = false })) orelse return NativeResult.scalar(.{ .bool = false });
-        return NativeResult.takeString(try Value.String.adopt(ctx.allocator, payload));
+        const r = resolvePharPathWithCtx(path, ctx) orelse return null;
+        const payload = (readPharEntry(ctx.allocator, r.archive_path, r.internal_path) catch return null) orelse return null;
+        return try Value.String.adopt(ctx.allocator, payload);
     }
     if (std.mem.startsWith(u8, path, ZLIB_PREFIX)) {
-        const decoded = readZlibFile(ctx.allocator, path) catch return NativeResult.scalar(.{ .bool = false });
-        return NativeResult.takeString(try Value.String.adopt(ctx.allocator, decoded));
+        const decoded = readZlibFile(ctx.allocator, path) catch return null;
+        return try Value.String.adopt(ctx.allocator, decoded);
     }
     if (path.len > 7 and (std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://"))) {
-        return fetchUrl(ctx, path);
+        const fetched = try fetchUrl(ctx, path);
+        return if (fetched.value == .string) fetched.value.string else null;
     }
-    const content = std.fs.cwd().readFileAlloc(ctx.allocator, path, 1024 * 1024 * 64) catch return NativeResult.scalar(.{ .bool = false });
-
-    // optional offset (4th arg) and length (5th arg)
-    if (args.len >= 4 and args[3] != .null) {
-        defer ctx.allocator.free(content);
-        const total_i: i64 = @intCast(content.len);
-        var offset = Value.toInt(args[3]);
-        if (offset < 0) offset = @max(0, total_i + offset);
-        if (offset > total_i) offset = total_i;
-        const ustart: usize = @intCast(offset);
-        const have_len = args.len >= 5 and args[4] != .null;
-        const length: i64 = if (have_len) Value.toInt(args[4]) else total_i - offset;
-        if (length < 0) return NativeResult.scalar(.{ .bool = false });
-        const finish = @min(content.len, ustart + @as(usize, @intCast(length)));
-        return try NativeResult.copyString(ctx.allocator, content[ustart..finish]);
-    }
-
-    const owned = Value.String.adopt(ctx.allocator, content) catch |err| {
+    const content = std.fs.cwd().readFileAlloc(ctx.allocator, path, std.math.maxInt(usize)) catch return null;
+    return Value.String.adopt(ctx.allocator, content) catch |err| {
         ctx.allocator.free(content);
         return err;
     };
-    return NativeResult.takeString(owned);
 }
 
 fn native_file_put_contents(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -1175,28 +1180,125 @@ fn native_is_executable(_: *NativeContext, args: []const Value) RuntimeError!Nat
     return NativeResult.scalar(.{ .bool = true });
 }
 
-fn native_filesize(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const stat = platform.statPath(args[0].string.bytes()) catch return NativeResult.scalar(Value{ .bool = false });
-    return NativeResult.scalar(.{ .int = @intCast(stat.size) });
+// what stat() reports for a path served by a stream wrapper; plain files
+// keep the full struct stat path in native_stat
+const WrapperStat = struct {
+    dev: i64 = 0,
+    ino: i64 = 0,
+    mode: i64,
+    nlink: i64 = 1,
+    uid: i64 = 0,
+    gid: i64 = 0,
+    rdev: i64 = -1,
+    size: i64,
+    atime: i64,
+    mtime: i64,
+    ctime: i64,
+    blksize: i64 = -1,
+    blocks: i64 = -1,
+};
+
+fn statField(arr: *PhpArray, comptime name: []const u8, index: i64) i64 {
+    const named = arr.get(.{ .string = Value.String.borrowed(name) });
+    if (named == .int) return named.int;
+    const positional = arr.get(.{ .int = index });
+    return if (positional == .int) positional.int else 0;
 }
 
-fn native_filemtime(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const stat = platform.statPath(args[0].string.bytes()) catch return NativeResult.scalar(Value{ .bool = false });
-    return NativeResult.scalar(.{ .int = @intCast(@divFloor(stat.mtime, 1_000_000_000)) });
+// the stat of a path behind a user wrapper, phar://, or compress.zlib://;
+// null when the path does not use one, `missing` when it does not exist
+const StatLookup = union(enum) { not_wrapped, missing, found: WrapperStat };
+
+fn statWrapped(ctx: *NativeContext, path: []const u8) RuntimeError!StatLookup {
+    if (userWrapperFor(ctx.vm, path)) |class_name| {
+        const arr = (try dispatchUserStat(ctx, class_name, path, 0)) orelse return .missing;
+        return .{ .found = .{
+            .dev = statField(arr, "dev", 0),
+            .ino = statField(arr, "ino", 1),
+            .mode = statField(arr, "mode", 2),
+            .nlink = statField(arr, "nlink", 3),
+            .uid = statField(arr, "uid", 4),
+            .gid = statField(arr, "gid", 5),
+            .rdev = statField(arr, "rdev", 6),
+            .size = statField(arr, "size", 7),
+            .atime = statField(arr, "atime", 8),
+            .mtime = statField(arr, "mtime", 9),
+            .ctime = statField(arr, "ctime", 10),
+            .blksize = statField(arr, "blksize", 11),
+            .blocks = statField(arr, "blocks", 12),
+        } };
+    }
+    if (std.mem.startsWith(u8, path, "phar://")) {
+        const r = resolvePharPathWithCtx(path, ctx) orelse return .missing;
+        const archive = platform.statPath(r.archive_path) catch return .missing;
+        const archive_mtime: i64 = @intCast(@divFloor(archive.mtime, 1_000_000_000));
+        const dir = WrapperStat{ .mode = 0o040555, .size = 0, .atime = archive_mtime, .mtime = archive_mtime, .ctime = archive_mtime };
+        if (r.internal_path.len == 0) return .{ .found = dir };
+        var loaded = loadPhar(ctx.allocator, r.archive_path) catch return .missing;
+        defer freePhar(ctx.allocator, &loaded);
+        const normalized = normalizePharInternalPath(ctx.allocator, r.internal_path) catch return .missing;
+        defer ctx.allocator.free(normalized);
+        if (loaded.parsed.lookup(normalized)) |entry| {
+            const t: i64 = entry.timestamp;
+            // php reports entries without write bits under its default phar.readonly
+            return .{ .found = .{ .mode = 0o100000 | @as(i64, entry.flags & 0o555), .size = entry.uncompressed_size, .atime = t, .mtime = t, .ctime = t } };
+        }
+        if (loaded.parsed.isDir(normalized)) return .{ .found = dir };
+        return .missing;
+    }
+    if (std.mem.startsWith(u8, path, ZLIB_PREFIX)) {
+        const st = platform.statPath(path[ZLIB_PREFIX.len..]) catch return .missing;
+        const sec = struct {
+            fn of(ns: i128) i64 {
+                return @intCast(@divFloor(ns, 1_000_000_000));
+            }
+        }.of;
+        return .{ .found = .{ .mode = 0o100644, .size = @intCast(st.size), .atime = sec(st.atime), .mtime = sec(st.mtime), .ctime = sec(st.ctime) } };
+    }
+    return .not_wrapped;
 }
 
-fn native_fileatime(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+const StatField = enum { size, atime, mtime, ctime };
+
+// filesize/fileatime/filemtime/filectime: one field of the path's stat, with
+// php's warning when the path cannot be stat'ed
+fn statOne(ctx: *NativeContext, args: []const Value, comptime field: StatField, comptime fn_name: []const u8) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const stat = platform.statPath(args[0].string.bytes()) catch return NativeResult.scalar(Value{ .bool = false });
-    return NativeResult.scalar(.{ .int = @intCast(@divFloor(stat.atime, 1_000_000_000)) });
+    const path = args[0].string.bytes();
+    const value: ?i64 = switch (try statWrapped(ctx, path)) {
+        .found => |st| @field(st, @tagName(field)),
+        .missing => null,
+        .not_wrapped => blk: {
+            const st = platform.statPath(path) catch break :blk null;
+            break :blk switch (field) {
+                .size => @intCast(st.size),
+                .atime => @intCast(@divFloor(st.atime, 1_000_000_000)),
+                .mtime => @intCast(@divFloor(st.mtime, 1_000_000_000)),
+                .ctime => @intCast(@divFloor(st.ctime, 1_000_000_000)),
+            };
+        },
+    };
+    if (value) |v| return NativeResult.scalar(.{ .int = v });
+    const msg = try std.fmt.allocPrint(ctx.allocator, fn_name ++ "(): stat failed for {s}", .{path});
+    try ctx.strings.append(ctx.allocator, msg);
+    ctx.vm.emitWarning(msg);
+    return NativeResult.scalar(.{ .bool = false });
 }
 
-fn native_filectime(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const stat = platform.statPath(args[0].string.bytes()) catch return NativeResult.scalar(Value{ .bool = false });
-    return NativeResult.scalar(.{ .int = @intCast(@divFloor(stat.ctime, 1_000_000_000)) });
+fn native_filesize(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    return statOne(ctx, args, .size, "filesize");
+}
+
+fn native_filemtime(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    return statOne(ctx, args, .mtime, "filemtime");
+}
+
+fn native_fileatime(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    return statOne(ctx, args, .atime, "fileatime");
+}
+
+fn native_filectime(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    return statOne(ctx, args, .ctime, "filectime");
 }
 
 fn native_fileinode(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -2238,7 +2340,7 @@ fn stream_wrapper_register(ctx: *NativeContext, args: []const Value) RuntimeErro
     const builtin_active = isBuiltinWrapper(protocol) and !ctx.vm.stream_wrappers_unregistered.contains(protocol);
     if (builtin_active or ctx.vm.stream_wrappers_user.contains(protocol)) return NativeResult.scalar(.{ .bool = false });
     if (!ctx.vm.classes.contains(class_name)) {
-        ctx.vm.tryAutoload(class_name) catch return NativeResult.scalar(.{ .bool = false });
+        try ctx.vm.tryAutoload(class_name);
         if (!ctx.vm.classes.contains(class_name)) return NativeResult.scalar(.{ .bool = false });
     }
     const proto_owned = try ctx.createString(protocol);
@@ -2610,6 +2712,16 @@ fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
 fn native_stat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const path = args[0].string.bytes();
+    switch (try statWrapped(ctx, path)) {
+        .found => |st| return NativeResult.borrowed(.{ .array = try wrapperStatArray(ctx, st) }),
+        .missing => {
+            const msg = try std.fmt.allocPrint(ctx.allocator, "stat(): stat failed for {s}", .{path});
+            try ctx.strings.append(ctx.allocator, msg);
+            ctx.vm.emitWarning(msg);
+            return NativeResult.scalar(.{ .bool = false });
+        },
+        .not_wrapped => {},
+    }
     var pbuf: [std.fs.max_path_bytes:0]u8 = undefined;
     if (path.len >= pbuf.len) return NativeResult.scalar(.{ .bool = false });
     @memcpy(pbuf[0..path.len], path);
@@ -2762,6 +2874,14 @@ fn native_link(_: *NativeContext, args: []const Value) RuntimeError!NativeResult
     @memcpy(l[0..linkpath.len], linkpath);
     l[linkpath.len] = 0;
     return NativeResult.scalar(.{ .bool = std.c.link(&t, &l) == 0 });
+}
+
+fn wrapperStatArray(ctx: *NativeContext, st: WrapperStat) !*PhpArray {
+    const arr = try ctx.createArray();
+    const names = [_][]const u8{ "dev", "ino", "mode", "nlink", "uid", "gid", "rdev", "size", "atime", "mtime", "ctime", "blksize", "blocks" };
+    inline for (names, 0..) |name, i| try arr.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .int = @field(st, name) });
+    inline for (names) |name| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, .{ .int = @field(st, name) });
+    return arr;
 }
 
 fn buildStatArray(ctx: *NativeContext, st: *const std.c.Stat) !*PhpArray {

@@ -64,6 +64,7 @@ fn loadStartupFlags(allocator: std.mem.Allocator, raw_args: []const []const u8) 
     var defines = std.ArrayListUnmanaged([]const u8){};
     defer defines.deinit(allocator);
     var ini_path: ?[]const u8 = null;
+    var skip_ini = false;
     try args.append(allocator, raw_args[0]);
     var i: usize = 1;
     while (i < raw_args.len) : (i += 1) {
@@ -78,6 +79,20 @@ fn loadStartupFlags(allocator: std.mem.Allocator, raw_args: []const []const u8) 
         } else if (std.mem.eql(u8, arg, "--ini")) {
             i += 1;
             ini_path = try flagValue(raw_args, i, "usage: zphp --ini=PATH <command>\n");
+        } else if (std.mem.eql(u8, arg, "-c")) {
+            // php's spelling of --ini, as tools that re-launch PHP_BINARY pass it
+            i += 1;
+            ini_path = try flagValue(raw_args, i, "usage: zphp -c PATH <command>\n");
+        } else if (std.mem.startsWith(u8, arg, "-c") and arg.len > 2) {
+            ini_path = arg[2..];
+        } else if (std.mem.eql(u8, arg, "-n")) {
+            skip_ini = true;
+        } else if (std.mem.eql(u8, arg, "-f")) {
+            i += 1;
+            try args.append(allocator, "run");
+            try args.append(allocator, try flagValue(raw_args, i, "usage: zphp -f FILE [args]\n"));
+            if (i + 1 < raw_args.len) try args.appendSlice(allocator, raw_args[i + 1 ..]);
+            break;
         } else if (std.mem.startsWith(u8, arg, "-d") and arg.len > 2) {
             try defines.append(allocator, arg[2..]);
         } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--define")) {
@@ -88,7 +103,7 @@ fn loadStartupFlags(allocator: std.mem.Allocator, raw_args: []const []const u8) 
             break;
         }
     }
-    ini_config.discover(ini_path);
+    if (!skip_ini) ini_config.discover(ini_path);
     for (defines.items) |d| ini_config.define(d);
     if (platform.getenv("ZPHP_EXTENSION_DIR")) |dir| extension.loadDirectory(dir);
     return args.toOwnedSlice(allocator);
@@ -130,12 +145,22 @@ fn dispatch(allocator: std.mem.Allocator, args: []const []const u8) !void {
         try buildFile(allocator, args[2..]);
     } else if (std.mem.eql(u8, cmd, "version") or std.mem.eql(u8, cmd, "--version")) {
         try writeStdout("zphp 0.10.0\n");
+    } else if (isScriptPath(cmd)) {
+        // `zphp script.php args`, the way php is invoked and the way tools
+        // re-launch PHP_BINARY
+        try runFile(allocator, cmd, if (args.len > 2) args[2..] else &.{});
     } else {
         try writeStderr("unknown command: ");
         try writeStderr(cmd);
         try writeStderr("\n");
         std.process.exit(1);
     }
+}
+
+fn isScriptPath(arg: []const u8) bool {
+    if (arg.len == 0 or arg[0] == '-') return false;
+    const stat = std.fs.cwd().statFile(arg) catch return false;
+    return stat.kind == .file;
 }
 
 fn serveCommand(allocator: std.mem.Allocator, args: []const []const u8) !void {
@@ -431,6 +456,10 @@ fn loadFile(path: []const u8, allocator: std.mem.Allocator, vm: *@import("runtim
     };
 
     if (ast.errors.len > 0) {
+        if (error_format.parseErrorSummary(allocator, &ast)) |summary| {
+            vm.recordIncludeParseError(summary, abs_path, error_format.parseErrorLine(&ast));
+            allocator.free(summary);
+        } else |_| {}
         ast.deinit();
         allocator.free(source);
         allocator.free(abs_path);
