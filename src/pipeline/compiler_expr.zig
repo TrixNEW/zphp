@@ -306,6 +306,11 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
     if (op_tag == .dot_equal and (target.tag == .variable or target.tag == .identifier) and !Compiler.isSuperglobal(self.ast.tokenSlice(target.main_token))) {
         try self.compileNode(node.data.rhs);
         const name = self.ast.tokenSlice(target.main_token);
+        if (self.inFunctionScope() or (name.len > 0 and name[0] == '$')) {
+            try self.emitOp(.concat_assign_local);
+            try self.emitU16(self.getOrCreateSlot(name));
+            return;
+        }
         const idx = try self.addConstant(.{ .string = Value.String.borrowed(name) });
         try self.emitOp(.concat_assign);
         try self.emitU16(idx);

@@ -516,6 +516,47 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     ip += 1;
                     continue :dispatch @as(OpCode, @enumFromInt(_next));
                 },
+                .concat_assign_local => {
+                    const ca_slot = (@as(u16, code[ip]) << 8) | code[ip + 1];
+                    ip += 2;
+                    const ca_append = self.stack[sp - 1];
+                    const ca_current = locals[ca_slot];
+                    if (!direct_slots or ca_append != .string or ca_current != .string) {
+                        frame.ip = ip - 3;
+                        self.sp = sp;
+                        return;
+                    }
+                    const ca_suffix = ca_append.string.bytes();
+                    const ca_owner = ca_current.string.owner;
+                    const ca_result: Value = if (ca_owner != null and !ca_owner.?.closure and ca_owner.?.refcount == 1 and ca_current.string.ptr == ca_owner.?.bytes.ptr) grow: {
+                        // the variable is the string's only holder: append in place
+                        const owner = ca_owner.?;
+                        const length = ca_current.string.len + ca_suffix.len;
+                        if (length > owner.bytes.len) owner.bytes = try owner.allocator.realloc(owner.bytes, @max(length, owner.bytes.len + owner.bytes.len / 2 + 16));
+                        @memcpy(owner.bytes[ca_current.string.len..length], ca_suffix);
+                        const grown: Value = .{ .string = .{ .ptr = owner.bytes.ptr, .len = length, .owner = owner } };
+                        locals[ca_slot] = grown;
+                        break :grow grown;
+                    } else fresh: {
+                        const bytes = try self.stringAllocator().alloc(u8, ca_current.string.len + ca_suffix.len);
+                        @memcpy(bytes[0..ca_current.string.len], ca_current.string.bytes());
+                        @memcpy(bytes[ca_current.string.len..], ca_suffix);
+                        const joined: Value = .{ .string = try Value.String.adopt(self.stringAllocator(), bytes) };
+                        locals[ca_slot] = joined;
+                        self.releaseValue(ca_current);
+                        break :fresh joined;
+                    };
+                    self.stackRelease(ca_append);
+                    VM.stackRetain(ca_result);
+                    self.stack[sp - 1] = ca_result;
+                    if (!names_local) {
+                        self.sp = sp;
+                        try syncLocalWrite(self, ic, frame, ca_slot, ca_result);
+                    }
+                    const _next = code[ip];
+                    ip += 1;
+                    continue :dispatch @as(OpCode, @enumFromInt(_next));
+                },
                 .get_class_const => {
                     const gc_site = ip - 1;
                     const gc_class = consts[(@as(u16, code[ip]) << 8) | code[ip + 1]].string.bytes();

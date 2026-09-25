@@ -6790,6 +6790,13 @@ pub const VM = struct {
                         }
                     }
                 },
+                .concat_assign_local => {
+                    const slot = self.readU16();
+                    const frame = self.currentFrame();
+                    const append_val = self.pop();
+                    if (append_val == .array) self.emitWarning("Array to string conversion") catch if (try self.resumeRaised()) continue;
+                    try self.concatAssignLocal(frame, slot, append_val);
+                },
                 .concat_assign => {
                     if (self.global_vars_dirty) try self.syncGlobalLocalsToVars();
                     const name_idx = self.readU16();
@@ -12629,6 +12636,51 @@ pub const VM = struct {
             try self.setLocalGlobal(slot, val, frame);
         }
         try self.syncIncludeLocal(frame, slot, val);
+    }
+
+    // `$local .= value`: grows the string in place when the variable is its
+    // only holder, otherwise builds a new one; either way the result is
+    // assigned the way set_local assigns and left on the stack
+    fn concatAssignLocal(self: *VM, frame: *CallFrame, slot: u16, append_val: Value) RuntimeError!void {
+        const current = self.fusedRead(frame, slot);
+        var suffix_allocator = std.heap.stackFallback(128, self.allocator);
+        const temporary_allocator = suffix_allocator.get();
+        var suffix: std.ArrayListUnmanaged(u8) = .{};
+        defer suffix.deinit(temporary_allocator);
+        if (append_val == .string) {
+            try suffix.appendSlice(temporary_allocator, append_val.string.bytes());
+        } else try append_val.format(&suffix, temporary_allocator);
+        if (current == .string and self.localCell(frame, slot) == null) {
+            if (current.string.owner) |owner| {
+                if (!owner.closure and owner.refcount == 1 and current.string.ptr == owner.bytes.ptr) {
+                    const length = std.math.add(usize, current.string.len, suffix.items.len) catch return error.OutOfMemory;
+                    if (length > owner.bytes.len) {
+                        const growth = std.math.add(usize, owner.bytes.len / 2, 16) catch return error.OutOfMemory;
+                        const capacity = @max(length, std.math.add(usize, owner.bytes.len, growth) catch length);
+                        owner.bytes = try owner.allocator.realloc(owner.bytes, capacity);
+                    }
+                    @memcpy(owner.bytes[current.string.len..length], suffix.items);
+                    self.push(.{ .string = .{ .ptr = owner.bytes.ptr, .len = length, .owner = owner } });
+                    return self.assignLocal(frame, slot, self.peek());
+                }
+            }
+        }
+        var buffer: std.ArrayListUnmanaged(u8) = .{};
+        errdefer buffer.deinit(self.stringAllocator());
+        if (current == .string) {
+            try buffer.appendSlice(self.stringAllocator(), current.string.bytes());
+        } else if (current != .null) try current.format(&buffer, self.stringAllocator());
+        try buffer.appendSlice(self.stringAllocator(), suffix.items);
+        self.pushTransfer(.{ .string = try Value.String.adopt(self.stringAllocator(), try buffer.toOwnedSlice(self.stringAllocator())) });
+        return self.assignLocal(frame, slot, self.peek());
+    }
+
+    // the reference cell bound to a local, if any
+    fn localCell(self: *VM, frame: *CallFrame, slot: u16) ?*Value {
+        _ = self;
+        const names = if (frame.func) |func| func.slot_names else frame.slot_names;
+        if (slot >= names.len or names[slot].len == 0 or frame.ref_slots.count() == 0) return null;
+        return frame.ref_slots.get(names[slot]);
     }
 
     // a fused local op may touch the slots directly only when the frame's

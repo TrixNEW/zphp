@@ -193,6 +193,7 @@ pub const OpCode = enum(u8) {
 
     // optimized concat-assign: $var .= expr without full copy
     concat_assign, // u16: var name constant index - pop value, append to var's string
+    concat_assign_local, // u16: slot - pop value, append to the local's string, push the result
 
     // `$dst = &$src` between two plain variables — installs a shared Value cell
     // in ref_slots for both names. seeds the cell with src's current value
@@ -356,6 +357,7 @@ pub const OpCode = enum(u8) {
             .set_local_transfer,
             .get_global,
             .concat_assign,
+            .concat_assign_local,
             .unset_var,
             .unset_prop,
             .isset_prop,

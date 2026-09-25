@@ -119,12 +119,14 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
     try writeU32(&buf, allocator, compiler.closureCounter());
 
     // main chunk
-    try serializeChunk(&buf, allocator, &strtab, &result.chunk, result.source);
+    var lines = try LineIndex.init(allocator, result.source);
+    defer lines.deinit(allocator);
+    try serializeChunk(&buf, allocator, &strtab, &result.chunk, &lines);
 
     // functions
     try writeU32(&buf, allocator, @intCast(result.functions.items.len));
     for (result.functions.items) |*func| {
-        try serializeFunction(&buf, allocator, &strtab, func, result.source);
+        try serializeFunction(&buf, allocator, &strtab, func, &lines);
     }
 
     // type hints
@@ -185,7 +187,40 @@ fn internValueStrings(allocator: Allocator, strtab: *StringTable, val: Value) !v
     }
 }
 
-fn serializeChunk(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab: *StringTable, chunk: *const Chunk, source: []const u8) !void {
+// the line each byte offset of a source falls on, from the offsets where its
+// lines start; empty for bytecode with no source, whose line entries are
+// already line numbers
+const LineIndex = struct {
+    starts: []u32,
+
+    fn init(allocator: Allocator, source: []const u8) !LineIndex {
+        if (source.len == 0) return .{ .starts = &.{} };
+        var starts: std.ArrayListUnmanaged(u32) = .{};
+        errdefer starts.deinit(allocator);
+        try starts.append(allocator, 0);
+        for (source, 0..) |c, i| {
+            if (c == '\n') try starts.append(allocator, @intCast(i + 1));
+        }
+        return .{ .starts = try starts.toOwnedSlice(allocator) };
+    }
+
+    fn deinit(self: *LineIndex, allocator: Allocator) void {
+        allocator.free(self.starts);
+    }
+
+    // Chunk.locationFromOffset's line: one plus the newlines before offset
+    fn line(self: *const LineIndex, offset: u32) u32 {
+        var lo: usize = 0;
+        var hi: usize = self.starts.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (self.starts[mid] <= offset) lo = mid + 1 else hi = mid;
+        }
+        return @intCast(lo);
+    }
+};
+
+fn serializeChunk(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab: *StringTable, chunk: *const Chunk, lines: *const LineIndex) !void {
     // code
     try writeU32(buf, allocator, @intCast(chunk.code.items.len));
     try buf.appendSlice(allocator, chunk.code.items);
@@ -199,16 +234,11 @@ fn serializeChunk(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab
     // lines (convert byte offsets to line numbers)
     try writeU32(buf, allocator, @intCast(chunk.lines.items.len));
     for (chunk.lines.items) |byte_offset| {
-        if (source.len > 0) {
-            const loc = Chunk.locationFromOffset(source, byte_offset);
-            try writeU32(buf, allocator, loc.line);
-        } else {
-            try writeU32(buf, allocator, byte_offset);
-        }
+        try writeU32(buf, allocator, if (lines.starts.len > 0) lines.line(byte_offset) else byte_offset);
     }
 }
 
-fn serializeFunction(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab: *StringTable, func: *const ObjFunction, source: []const u8) !void {
+fn serializeFunction(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab: *StringTable, func: *const ObjFunction, lines: *const LineIndex) !void {
     try writeU32(buf, allocator, try strtab.intern(allocator, func.name));
     try buf.append(allocator, func.arity);
     try buf.append(allocator, func.required_params);
@@ -252,7 +282,7 @@ fn serializeFunction(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, str
         try writeU32(buf, allocator, try strtab.intern(allocator, sn));
     }
 
-    try serializeChunk(buf, allocator, strtab, &func.chunk, source);
+    try serializeChunk(buf, allocator, strtab, &func.chunk, lines);
 }
 
 fn serializeValue(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, strtab: *StringTable, val: Value) !void {
