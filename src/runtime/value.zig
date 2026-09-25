@@ -705,7 +705,7 @@ pub const Generator = struct {
     return_value: Value = .null,
     implicit_key: i64 = 0,
     handler_count: usize = 0,
-    saved_handlers: [8]SavedHandler = undefined,
+    saved_handlers: std.ArrayListUnmanaged(SavedHandler) = .{},
     delegate: ?DelegateState = null,
     pending_throw: ?Value = null,
     pooled: bool = false,
@@ -724,6 +724,7 @@ pub const Generator = struct {
     pub const State = enum { created, suspended, running, completed };
 
     pub fn deinit(self: *Generator, allocator: std.mem.Allocator) void {
+        self.saved_handlers.deinit(allocator);
         self.vars.deinit(allocator);
         self.locals.deinit(allocator);
         self.stack.deinit(allocator);

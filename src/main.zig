@@ -777,6 +777,7 @@ test {
     _ = @import("runtime/value.zig");
     _ = @import("stdlib/tokenizer.zig");
     _ = @import("runtime/native_result.zig");
+    _ = @import("runtime/region.zig");
     _ = @import("runtime/vm.zig");
     _ = @import("stdlib/exceptions.zig");
     _ = @import("stdlib/registry.zig");

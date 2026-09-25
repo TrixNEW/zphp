@@ -2,6 +2,7 @@ const std = @import("std");
 const native_params = @import("../stdlib/native_params.zig");
 const platform = @import("../platform.zig");
 const Value = @import("value.zig").Value;
+const Region = @import("region.zig").Region;
 const PhpArray = @import("value.zig").PhpArray;
 const byref_args = @import("../stdlib/byref_args.zig");
 const PhpObject = @import("value.zig").PhpObject;
@@ -494,10 +495,14 @@ pub const InterfaceDef = struct {
 };
 
 pub const VM = struct {
-    frames: [2048]CallFrame = undefined,
+    // frames and the operand stack live in reserved regions that commit as
+    // calls go deeper (ensureCallRoom), so their addresses never move
+    frames: []CallFrame = &.{},
+    frame_room: Region(CallFrame) = .{},
     frame_count: usize = 0,
     frame_high_water: usize = 0,
-    stack: [2048]Value = undefined,
+    stack: []Value = &.{},
+    stack_room: Region(Value) = .{},
     sp: usize = 0,
     functions: std.StringHashMapUnmanaged(*const ObjFunction) = .{},
     function_attributes: std.StringHashMapUnmanaged([]const AttributeDef) = .{},
@@ -756,7 +761,8 @@ pub const VM = struct {
     // re-read + re-parse the entire archive (large phars with many internal
     // entries can pile up GBs of redundant reads otherwise)
     phar_cache: std.StringHashMapUnmanaged(*PharCacheEntry) = .{},
-    exception_handlers: [1024]ExceptionHandler = undefined,
+    exception_handlers: []ExceptionHandler = &.{},
+    handler_room: Region(ExceptionHandler) = .{},
     handler_count: usize = 0,
     handler_floor: usize = 0,
     pending_exception: ?Value = null,
@@ -1348,6 +1354,7 @@ pub const VM = struct {
         // when a different class arrives or new code is declared
         intent: []IntentIC = &.{},
         arg_stack: []RefSource = &.{},
+        arg_stack_room: Region(RefSource) = .{},
         // third-party extension state lives here, off the VM struct, so the
         // VM's field offsets stay put (see GOTCHAS on codegen perturbation):
         // one slot per loaded extension, an arena for the value handles a
@@ -1413,13 +1420,17 @@ pub const VM = struct {
         typed_func: ?*const ObjFunction = null,
         typed_params: []const []const u8 = &.{},
         // per-frame sp save for inline call/ret in fastLoop
-        sp_save: [2048]usize = undefined,
+        sp_save: []usize = &.{},
+        sp_save_room: Region(usize) = .{},
         // per-frame actual arg count for func_get_args
-        arg_counts: [2048]u8 = [_]u8{0xFF} ** 2048,
+        arg_counts: []u8 = &.{},
+        arg_counts_room: Region(u8) = .{},
         // per-frame saved arg values for func_get_args (flat buffer indexed by frame)
-        fga_buf: [2048]Value = @splat(.null),
-        fga_offsets: [2048]u16 = @splat(0),
-        fga_sp: u16 = 0,
+        fga_buf: []Value = &.{},
+        fga_room: Region(Value) = .{},
+        fga_offsets: []u32 = &.{},
+        fga_offsets_room: Region(u32) = .{},
+        fga_sp: u32 = 0,
         // set before pushing a frame, consumed by executeFunction et al
         pending_arg_count: u8 = 0xFF,
         // concat_assign string buffer - avoids O(n) realloc per append
@@ -1684,8 +1695,7 @@ pub const VM = struct {
         vm.ic = try allocator.create(InlineCache);
         vm.ic.?.* = .{};
         vm.ic.?.slow = SlowPaths.main;
-        vm.ic.?.arg_stack = try allocator.alloc(RefSource, 2048);
-        @memset(vm.ic.?.arg_stack, .none);
+        try vm.reserveCallRegions();
         vm.ic.?.active_args = try allocator.alloc(RefSource, 256);
         @memset(vm.ic.?.active_args, .none);
         vm.ic.?.intent = try allocator.alloc(InlineCache.IntentIC, 512);
@@ -2713,7 +2723,7 @@ pub const VM = struct {
     pub fn deinit(self: *VM) void {
         self.clearLastError();
         extension.vmDeinit(self);
-        if (self.ic) |ic| for (ic.arg_stack) |*source| self.releaseArgSource(source);
+        if (self.ic) |ic| for (ic.arg_stack[0..ic.arg_stack_room.committed]) |*source| self.releaseArgSource(source);
         self.clearActiveArgSources();
         self.clearArgArraySources(null);
         self.releaseBoundArgSources(null);
@@ -2736,11 +2746,18 @@ pub const VM = struct {
         self.gc_zero_sites.deinit(self.allocator);
         self.builtin_classes.deinit(self.allocator);
         self.builtin_interfaces.deinit(self.allocator);
+        self.frame_room.deinit();
+        self.stack_room.deinit();
+        self.handler_room.deinit();
         if (self.ic) |ic_ptr| {
             ic_ptr.arg_arrays.deinit(self.allocator);
             ic_ptr.bound_arg_sources.deinit(self.allocator);
             ic_ptr.saved_sources.deinit(self.allocator);
-            self.allocator.free(ic_ptr.arg_stack);
+            ic_ptr.arg_stack_room.deinit();
+            ic_ptr.sp_save_room.deinit();
+            ic_ptr.arg_counts_room.deinit();
+            ic_ptr.fga_room.deinit();
+            ic_ptr.fga_offsets_room.deinit();
             self.allocator.free(ic_ptr.active_args);
             self.allocator.free(ic_ptr.intent);
             ic_ptr.concat_buf.deinit(self.allocator);
@@ -2898,7 +2915,7 @@ pub const VM = struct {
 
     pub fn reset(self: *VM) void {
         if (self.ic) |ic| {
-            for (ic.arg_stack) |*source| self.releaseArgSource(source);
+            for (ic.arg_stack[0..ic.arg_stack_room.committed]) |*source| self.releaseArgSource(source);
             self.clearActiveArgSources();
             self.clearArgArraySources(null);
             self.releaseBoundArgSources(null);
@@ -3431,10 +3448,7 @@ pub const VM = struct {
             try g_type_info.put(self.allocator, th.name, .{ .param_types = th.param_types, .return_type = th.return_type });
         }
 
-        if (self.frame_count >= 2047) {
-            self.setErrorMsg("Fatal error: maximum call stack depth exceeded", .{});
-            return error.RuntimeError;
-        }
+        try self.ensureCallRoom();
         const return_frame = self.frame_count;
         const caller_idx = self.frame_count - 1;
         const caller = self.currentFrame();
@@ -3484,6 +3498,7 @@ pub const VM = struct {
         self.global_slot_names = heap_result.slot_names;
         const saved_strict = self.script_strict_types;
         self.script_strict_types = heap_result.strict_types;
+        try self.ensureCallRoom();
         self.frames[self.frame_count] = .{
             .chunk = &heap_result.chunk,
             .ip = 0,
@@ -7399,6 +7414,7 @@ pub const VM = struct {
 
                 .push_handler => {
                     const offset = self.readU16();
+                    try self.ensureHandlerRoom(1);
                     self.exception_handlers[self.handler_count] = .{
                         .catch_ip = self.currentFrame().ip + offset,
                         .frame_count = self.frame_count,
@@ -7552,10 +7568,7 @@ pub const VM = struct {
                                 }
 
                                 const return_frame = self.frame_count;
-                                if (self.frame_count >= 2047) {
-                                    self.error_msg = "Fatal error: maximum call stack depth exceeded";
-                                    return error.RuntimeError;
-                                }
+                                try self.ensureCallRoom();
                                 const sp_before = self.sp;
                                 var req_locals: []Value = &.{};
                                 if (r.local_count > 0) {
@@ -7605,6 +7618,7 @@ pub const VM = struct {
                                 self.global_slot_names = r.slot_names;
                                 const saved_strict = self.script_strict_types;
                                 self.script_strict_types = r.strict_types;
+                                try self.ensureCallRoom();
                                 self.frames[self.frame_count] = .{
                                     .chunk = &r.chunk,
                                     .ip = 0,
@@ -8184,6 +8198,7 @@ pub const VM = struct {
 
                             var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
                             try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
+                            try self.ensureCallRoom();
                             self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                             self.frames[self.frame_count].entry_sp = self.sp;
                             self.frame_count += 1;
@@ -8271,6 +8286,7 @@ pub const VM = struct {
                                     }
                                 }
                                 self.dropN(ac);
+                                try self.ensureCallRoom();
                                 self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = ctor_locals, .func = func, .called_class = class_name };
                                 self.frames[self.frame_count].entry_sp = self.sp;
                                 self.frame_count += 1;
@@ -8319,6 +8335,7 @@ pub const VM = struct {
                                     const default = if (i < func.defaults.len) try self.resolveDefault(func.defaults[i]) else Value.null;
                                     try new_vars.put(self.allocator, func.params[i], default);
                                 };
+                                try self.ensureCallRoom();
                                 self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = class_name, .ref_slots = ctor_refs, .ref_owner = ctor_owner };
                                 self.frames[self.frame_count].entry_sp = self.sp;
                                 self.frame_count += 1;
@@ -8408,6 +8425,7 @@ pub const VM = struct {
                             self.dropN(ac + 1);
                             var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
                             try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
+                            try self.ensureCallRoom();
                             self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                             self.frames[self.frame_count].entry_sp = self.sp;
                             self.frame_count += 1;
@@ -8464,6 +8482,7 @@ pub const VM = struct {
                                 const default = if (i < func.defaults.len) try self.resolveDefault(func.defaults[i]) else Value.null;
                                 try new_vars.put(self.allocator, func.params[i], default);
                             }
+                            try self.ensureCallRoom();
                             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = class_name, .ref_slots = ctor_refs, .ref_owner = ctor_owner };
                             self.frames[self.frame_count].entry_sp = self.sp;
                             self.frame_count += 1;
@@ -9042,7 +9061,7 @@ pub const VM = struct {
                             const sb = self.sp;
                             const hb = self.handler_count;
 
-                            self.restoreFiberState(fiber, fb, sb);
+                            try self.restoreFiberState(fiber, fb, sb);
 
                             const resume_val = if (ac > 0) args_buf[0] else Value{ .null = {} };
                             self.push(resume_val);
@@ -9083,7 +9102,7 @@ pub const VM = struct {
                             const sb = self.sp;
                             const hb = self.handler_count;
 
-                            self.restoreFiberState(fiber, fb, sb);
+                            try self.restoreFiberState(fiber, fb, sb);
                             self.push(.null);
                             const prev_fiber = self.current_fiber;
                             const prev_floor = self.handler_floor;
@@ -9203,6 +9222,7 @@ pub const VM = struct {
                                 self.dropN(ac + 1);
                                 var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
                                 try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
+                                try self.ensureCallRoom();
                                 self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                                 self.setFrameArgCount(arg_count);
                                 self.frames[self.frame_count].entry_sp = self.sp;
@@ -9320,6 +9340,7 @@ pub const VM = struct {
                         // push a temporary frame so native can read $this
                         var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
                         try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
+                        try self.ensureCallRoom();
                         self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                         self.setFrameArgCount(arg_count);
                         self.frames[self.frame_count].entry_sp = self.sp;
@@ -9448,6 +9469,7 @@ pub const VM = struct {
                             retainVarsObjects(&gen.vars);
                             self.push(.{ .generator = gen });
                         } else {
+                            try self.ensureCallRoom();
                             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = method_refs, .ref_owner = method_owner };
                             self.setFrameArgCount(arg_count);
                             self.frames[self.frame_count].entry_sp = self.sp;
@@ -9583,6 +9605,7 @@ pub const VM = struct {
                         self.dropN(1);
                         var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
                         try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
+                        try self.ensureCallRoom();
                         self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                         self.setFrameArgCount(mcs_ac_u8);
                         self.frames[self.frame_count].entry_sp = self.sp;
@@ -9668,6 +9691,7 @@ pub const VM = struct {
                         self.saveFrameArgs(mcs_ac_u8);
                         self.dropN(ac);
                         self.dropN(1);
+                        try self.ensureCallRoom();
                         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = method_refs, .ref_owner = method_owner };
                         self.setFrameArgCount(mcs_ac_u8);
                         self.frames[self.frame_count].entry_sp = self.sp;
@@ -9745,6 +9769,7 @@ pub const VM = struct {
                         self.dropN(1);
                         var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
                         try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
+                        try self.ensureCallRoom();
                         self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                         self.setFrameArgCount(arg_count);
                         self.frames[self.frame_count].entry_sp = self.sp;
@@ -9832,6 +9857,7 @@ pub const VM = struct {
                         self.saveFrameArgs(arg_count);
                         self.dropN(ac);
                         self.dropN(1);
+                        try self.ensureCallRoom();
                         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = method_refs, .ref_owner = method_owner };
                         self.setFrameArgCount(arg_count);
                         self.frames[self.frame_count].entry_sp = self.sp;
@@ -9927,6 +9953,7 @@ pub const VM = struct {
                         self.dropN(1);
                         var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
                         try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
+                        try self.ensureCallRoom();
                         self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
                         self.setFrameArgCount(mcds_ac_u8);
                         self.frames[self.frame_count].entry_sp = self.sp;
@@ -10014,6 +10041,7 @@ pub const VM = struct {
                         self.saveFrameArgs(mcds_ac_u8);
                         self.dropN(ac);
                         self.dropN(1);
+                        try self.ensureCallRoom();
                         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = method_refs, .ref_owner = method_owner };
                         self.setFrameArgCount(mcds_ac_u8);
                         self.frames[self.frame_count].entry_sp = self.sp;
@@ -10185,7 +10213,7 @@ pub const VM = struct {
                                             try new_vars.put(self.allocator, func.params[i], if (is_ref) sv else try self.bindFrameArg(sv));
                                         }
                                     }
-                                    if (self.frame_count >= 2047) {
+                                    if (!self.hasCallRoom(1) and !(try self.growCallRoom(1))) {
                                         self.dropN(ac);
                                         new_vars.deinit(self.allocator);
                                         const msg = std.fmt.allocPrint(self.allocator, "Fatal error: maximum call stack depth exceeded in {s}::{s}()", .{ class_name, method_name }) catch "Fatal error: maximum call stack depth exceeded";
@@ -10197,6 +10225,7 @@ pub const VM = struct {
                                     self.saveFrameArgs(arg_count);
                                     self.dropN(ac);
                                     try self.fillDefaults(&new_vars, func, ac);
+                                    try self.ensureCallRoom();
                                     self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = effective_called };
                                     self.setFrameArgCount(arg_count);
                                     self.frames[self.frame_count].entry_sp = self.sp;
@@ -10212,6 +10241,7 @@ pub const VM = struct {
                                 self.dropN(ac);
                                 var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
                                 try tmp_vars.put(self.allocator, "$this", tv);
+                                try self.ensureCallRoom();
                                 self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars, .called_class = effective_called };
                                 self.setFrameArgCount(arg_count);
                                 const sc_saved_fc = self.frame_count;
@@ -10422,6 +10452,7 @@ pub const VM = struct {
                                     const scs_ac: u8 = @intCast(@min(resolved_ac, 255));
                                     self.saveFrameArgs(scs_ac);
                                     self.dropN(resolved_ac);
+                                    try self.ensureCallRoom();
                                     self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = effective_called };
                                     self.setFrameArgCount(scs_ac);
                                     self.frames[self.frame_count].entry_sp = self.sp;
@@ -10853,7 +10884,7 @@ pub const VM = struct {
                     self.currentFrame().ref_slots = .{};
                     self.saveFrameLocalsToGenerator(gen);
                     try self.saveGeneratorStack(gen);
-                    self.saveGeneratorHandlers(gen);
+                    try self.saveGeneratorHandlers(gen);
                     gen.state = .suspended;
                     self.currentFrame().generator = null;
                     self.frame_count -= 1;
@@ -10876,7 +10907,7 @@ pub const VM = struct {
                     self.currentFrame().ref_slots = .{};
                     self.saveFrameLocalsToGenerator(gen);
                     try self.saveGeneratorStack(gen);
-                    self.saveGeneratorHandlers(gen);
+                    try self.saveGeneratorHandlers(gen);
                     gen.state = .suspended;
                     self.currentFrame().generator = null;
                     self.frame_count -= 1;
@@ -10968,7 +10999,7 @@ pub const VM = struct {
                             self.currentFrame().ref_slots = .{};
                             self.saveFrameLocalsToGenerator(outer_gen);
                             try self.saveGeneratorStack(outer_gen);
-                            self.saveGeneratorHandlers(outer_gen);
+                            try self.saveGeneratorHandlers(outer_gen);
                             outer_gen.state = .suspended;
                             self.currentFrame().generator = null;
                             self.frame_count -= 1;
@@ -10992,7 +11023,7 @@ pub const VM = struct {
                             self.currentFrame().ref_slots = .{};
                             self.saveFrameLocalsToGenerator(outer_gen);
                             try self.saveGeneratorStack(outer_gen);
-                            self.saveGeneratorHandlers(outer_gen);
+                            try self.saveGeneratorHandlers(outer_gen);
                             outer_gen.state = .suspended;
                             self.currentFrame().generator = null;
                             self.frame_count -= 1;
@@ -12303,6 +12334,7 @@ pub const VM = struct {
             gen_locals = try self.allocLocals(gen.func, &gen.vars);
         }
         genRetain(gen);
+        try self.ensureCallRoom();
         self.frames[self.frame_count] = .{
             .chunk = &gen.func.chunk,
             .ip = gen.ip,
@@ -12327,7 +12359,7 @@ pub const VM = struct {
             }
         }
         defer self.prop_hook_guard.shrinkRetainingCapacity(hook_guard_count);
-        self.restoreGeneratorHandlers(gen);
+        try self.restoreGeneratorHandlers(gen);
 
         if (gen.ip > 0) {
             self.push(sent_value);
@@ -12917,6 +12949,7 @@ pub const VM = struct {
         if (self.functions.get(method_name)) |func| {
             var new_vars = self.acquireFrameVars();
             try new_vars.put(self.allocator, "$this", .{ .object = obj });
+            try self.ensureCallRoom();
             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func };
             self.frames[self.frame_count].entry_sp = self.sp;
             self.frame_count += 1;
@@ -14460,23 +14493,26 @@ pub const VM = struct {
         f.ref_slots = .{};
     }
 
-    fn saveGeneratorHandlers(self: *VM, gen: *Generator) void {
+    fn saveGeneratorHandlers(self: *VM, gen: *Generator) RuntimeError!void {
         const count = self.handler_count - self.handler_floor;
+        gen.saved_handlers.clearRetainingCapacity();
+        try gen.saved_handlers.ensureTotalCapacity(self.allocator, count);
         gen.handler_count = count;
         for (0..count) |i| {
             const h = self.exception_handlers[self.handler_floor + i];
-            gen.saved_handlers[i] = .{
+            gen.saved_handlers.appendAssumeCapacity(.{
                 .catch_ip = h.catch_ip,
                 .sp_offset = h.sp -| gen.base_sp,
                 .chunk = h.chunk,
-            };
+            });
         }
         self.handler_count = self.handler_floor;
     }
 
-    fn restoreGeneratorHandlers(self: *VM, gen: *Generator) void {
+    fn restoreGeneratorHandlers(self: *VM, gen: *Generator) RuntimeError!void {
+        try self.ensureHandlerRoom(gen.handler_count);
         for (0..gen.handler_count) |i| {
-            const h = gen.saved_handlers[i];
+            const h = gen.saved_handlers.items[i];
             self.exception_handlers[self.handler_count] = .{
                 .catch_ip = h.catch_ip,
                 .frame_count = self.frame_count,
@@ -14514,6 +14550,7 @@ pub const VM = struct {
                 self.dropN(ac);
                 try self.fillDefaults(&new_vars, func, bind_count);
                 const inherit_cc = self.closureScopeByName(name) orelse self.callerCalledClass();
+                try self.ensureCallRoom();
                 self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = closure_refs, .called_class = inherit_cc, .call_name = name };
                 self.frames[self.frame_count].entry_sp = self.sp;
                 self.setFrameArgCount(arg_count);
@@ -14561,6 +14598,7 @@ pub const VM = struct {
             }
         }
 
+        try self.ensureCallRoom();
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = locals, .func = func, .called_class = self.closureScopeByName(name) orelse self.callerCalledClass(), .call_name = name };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.setFrameArgCount(arg_count);
@@ -14598,6 +14636,7 @@ pub const VM = struct {
         }
         self.saveFrameArgs(arg_count);
         self.dropN(ac + 1);
+        try self.ensureCallRoom();
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = locals, .func = func };
         self.setFrameArgCount(arg_count);
         self.frames[self.frame_count].entry_sp = self.sp;
@@ -14633,6 +14672,7 @@ pub const VM = struct {
         }
         self.saveFrameArgs(arg_count);
         self.dropN(ac);
+        try self.ensureCallRoom();
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = locals, .func = func, .called_class = self.currentFrame().called_class };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.setFrameArgCount(arg_count);
@@ -14672,10 +14712,7 @@ pub const VM = struct {
     }
 
     fn executeFunctionLocalsOnly(self: *VM, func: *const ObjFunction, args: []const Value) RuntimeError!Value {
-        if (self.frame_count >= 2047) {
-            self.error_msg = "Fatal error: maximum call stack depth exceeded";
-            return error.RuntimeError;
-        }
+        try self.ensureCallRoom();
         const base_frame = self.frame_count;
         const lc: usize = func.local_count;
         const ic = self.ic.?;
@@ -14702,6 +14739,7 @@ pub const VM = struct {
         const base_handler = self.handler_count;
         const prev_floor = self.handler_floor;
         self.handler_floor = self.handler_count;
+        try self.ensureCallRoom();
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = locals, .func = func, .call_name = self.pending_call_name };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.consumePendingArgCount();
@@ -17749,14 +17787,12 @@ pub const VM = struct {
     }
 
     fn executeFunction(self: *VM, func: *const ObjFunction, vars: std.StringHashMapUnmanaged(Value)) RuntimeError!Value {
-        if (self.frame_count >= 2047) {
-            self.error_msg = "Fatal error: maximum call stack depth exceeded";
-            return error.RuntimeError;
-        }
+        try self.ensureCallRoom();
         const base_frame = self.frame_count;
         const base_handler = self.handler_count;
         const prev_floor = self.handler_floor;
         self.handler_floor = self.handler_count;
+        try self.ensureCallRoom();
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = vars, .locals = try self.allocLocals(func, &vars), .func = func, .call_name = self.pending_call_name, .called_class = self.pending_called_class };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.consumePendingArgCount();
@@ -17777,14 +17813,12 @@ pub const VM = struct {
     }
 
     pub fn executeFunctionWithRefs(self: *VM, func: *const ObjFunction, vars: std.StringHashMapUnmanaged(Value), ref_slots: std.StringHashMapUnmanaged(*Value)) RuntimeError!Value {
-        if (self.frame_count >= 2047) {
-            self.error_msg = "Fatal error: maximum call stack depth exceeded";
-            return error.RuntimeError;
-        }
+        try self.ensureCallRoom();
         const base_frame = self.frame_count;
         const base_handler = self.handler_count;
         const prev_floor = self.handler_floor;
         self.handler_floor = self.handler_count;
+        try self.ensureCallRoom();
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = vars, .locals = try self.allocLocals(func, &vars), .func = func, .ref_slots = ref_slots, .call_name = self.pending_call_name, .called_class = self.pending_called_class };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.consumePendingArgCount();
@@ -18563,11 +18597,11 @@ pub const VM = struct {
             retainVarsObjects(&gen.vars);
             self.push(.{ .generator = gen });
         } else {
-            if (self.frame_count >= 2047) {
+            if (!self.hasCallRoom(1) and !(try self.growCallRoom(1))) {
                 new_vars.deinit(self.allocator);
                 self.deinitRefSlots(&callee_refs);
                 if (self.ref_index) |ri| ri.releaseOwner(self.allocator, callee_owner);
-                const msg = std.fmt.allocPrint(self.allocator, "Maximum function nesting level of 2048 reached, aborting in {s}()", .{name}) catch "Maximum function nesting level reached";
+                const msg = std.fmt.allocPrint(self.allocator, "Maximum function nesting level of {d} reached, aborting in {s}()", .{ max_frames, name }) catch "Maximum function nesting level reached";
                 try self.strings.append(self.allocator, msg);
                 if (try self.throwBuiltinException("Error", msg)) return;
                 self.error_msg = msg;
@@ -18577,6 +18611,7 @@ pub const VM = struct {
                 self.closureScopeByName(name) orelse self.callerCalledClass()
             else
                 null;
+            try self.ensureCallRoom();
             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .ref_slots = callee_refs, .ref_owner = callee_owner, .called_class = inherit_cc, .call_name = name };
             self.frames[self.frame_count].entry_sp = self.sp;
             self.setFrameArgCount(arg_count);
@@ -18713,10 +18748,7 @@ pub const VM = struct {
             self.ic.?.active_frame = saved_source_frame;
         }
 
-        if (self.frame_count >= 2047) {
-            self.error_msg = "Fatal error: maximum call stack depth exceeded";
-            return error.RuntimeError;
-        }
+        try self.ensureCallRoom();
         const full_name = self.resolveMethod(obj.class_name, method_name) catch {
             // Internal IteratorIterator-derived classes forward missing methods
             // to the current object exposed by their wrapped iterator.
@@ -18740,6 +18772,7 @@ pub const VM = struct {
         if (self.native_fns.get(full_name)) |native| {
             var tmp_vars: std.StringHashMapUnmanaged(Value) = .{};
             try tmp_vars.put(self.allocator, "$this", .{ .object = obj });
+            try self.ensureCallRoom();
             self.frames[self.frame_count] = .{ .chunk = self.currentChunk(), .ip = self.currentFrame().ip, .vars = tmp_vars };
             self.frame_count += 1;
             self.retainFrameObjects(self.frame_count - 1);
@@ -19048,6 +19081,7 @@ pub const VM = struct {
         const base_handler = self.handler_count;
         const prev_floor = self.handler_floor;
         self.handler_floor = self.handler_count;
+        try self.ensureCallRoom();
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = locals, .func = func, .called_class = self.closureScopeByName(name) orelse self.callerCalledClass(), .call_name = name };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.consumePendingArgCount();
@@ -19252,7 +19286,10 @@ pub const VM = struct {
         self.handler_count = base_handler;
     }
 
-    fn restoreFiberState(self: *VM, fiber: *Fiber, base_frame: usize, base_sp: usize) void {
+    fn restoreFiberState(self: *VM, fiber: *Fiber, base_frame: usize, base_sp: usize) RuntimeError!void {
+        try self.ensureCallRoomFor(fiber.saved_frames.items.len + 1);
+        try self.ensureStackSlots(fiber.saved_stack.items.len);
+        try self.ensureHandlerRoom(fiber.saved_handlers.items.len);
         // restore frames (move ownership back to VM)
         for (fiber.saved_frames.items, 0..) |*frame, i| {
             self.frames[base_frame + i] = .{
@@ -19342,16 +19379,116 @@ pub const VM = struct {
         return ac;
     }
 
+    // how deep calls may go: frames, and operand stack slots beside them
+    pub const max_frames: usize = 1 << 18;
+    const max_stack_slots: usize = 1 << 21;
+    // operand slots a single frame may use; the region past what is committed
+    // faults, so a frame that outgrows this stops instead of overwriting
+    const stack_headroom: usize = 1 << 14;
+    // func_get_args keeps at most 255 arguments per frame
+    const fga_headroom: usize = 256;
+    const max_handlers: usize = 1 << 20;
+
+    fn reserveCallRegions(self: *VM) RuntimeError!void {
+        const ic = self.ic.?;
+        self.frame_room = Region(CallFrame).reserve(max_frames) catch return error.OutOfMemory;
+        self.frames = self.frame_room.items;
+        self.stack_room = Region(Value).reserve(max_stack_slots) catch return error.OutOfMemory;
+        self.stack = self.stack_room.items;
+        ic.arg_stack_room = Region(RefSource).reserve(max_stack_slots) catch return error.OutOfMemory;
+        ic.arg_stack = ic.arg_stack_room.items;
+        ic.sp_save_room = Region(usize).reserve(max_frames) catch return error.OutOfMemory;
+        ic.sp_save = ic.sp_save_room.items;
+        ic.arg_counts_room = Region(u8).reserve(max_frames) catch return error.OutOfMemory;
+        ic.arg_counts = ic.arg_counts_room.items;
+        ic.fga_offsets_room = Region(u32).reserve(max_frames) catch return error.OutOfMemory;
+        ic.fga_offsets = ic.fga_offsets_room.items;
+        ic.fga_room = Region(Value).reserve(max_stack_slots) catch return error.OutOfMemory;
+        ic.fga_buf = ic.fga_room.items;
+        self.handler_room = Region(ExceptionHandler).reserve(max_handlers) catch return error.OutOfMemory;
+        self.exception_handlers = self.handler_room.items;
+        _ = self.handler_room.ensure(256) catch return error.OutOfMemory;
+        if (!try self.growCallRoom(64)) return error.OutOfMemory;
+    }
+
+    // room for `count` more try blocks entered
+    pub fn ensureHandlerRoom(self: *VM, count: usize) RuntimeError!void {
+        const want = self.handler_count + count;
+        if (want <= self.handler_room.committed) return;
+        const target = @min(max_handlers, @max(want, self.handler_room.committed * 2));
+        if (want <= max_handlers and (self.handler_room.ensure(target) catch return error.OutOfMemory)) return;
+        self.setErrorMsg("Fatal error: Maximum nesting of {d} try blocks reached\n", .{max_handlers});
+        return error.RuntimeError;
+    }
+
+    // room to push one more frame and run it: checked before every frame push
+    pub inline fn ensureCallRoom(self: *VM) RuntimeError!void {
+        return self.ensureCallRoomFor(1);
+    }
+
+    pub fn ensureCallRoomFor(self: *VM, frames: usize) RuntimeError!void {
+        if (self.hasCallRoom(frames)) return;
+        if (try self.growCallRoom(frames)) return;
+        const name = if (self.frame_count > 0) if (self.currentFrame().func) |f| f.name else "{main}" else "{main}";
+        self.setErrorMsg("Fatal error: Maximum function nesting level of {d} reached, aborting in {s}()\n", .{ max_frames, name });
+        return error.RuntimeError;
+    }
+
+    pub inline fn hasCallRoom(self: *VM, frames: usize) bool {
+        return self.hasCallRoomAt(self.sp, frames);
+    }
+
+    // for the fast loop, which keeps sp in a local
+    pub inline fn hasCallRoomAt(self: *VM, sp: usize, frames: usize) bool {
+        const ic = self.ic.?;
+        return self.frame_count + frames < self.frame_room.committed and
+            sp + stack_headroom <= self.stack_room.committed and
+            ic.fga_sp + fga_headroom * frames <= ic.fga_room.committed;
+    }
+
+    // room for `count` operand slots on top of the current ones, beyond the
+    // headroom every frame keeps
+    fn ensureStackSlots(self: *VM, count: usize) RuntimeError!void {
+        const want = self.sp + count + stack_headroom;
+        if (want <= self.stack_room.committed) return;
+        const target = @min(max_stack_slots, @max(want, self.stack_room.committed * 2));
+        if (want <= max_stack_slots and
+            (self.stack_room.ensure(target) catch return error.OutOfMemory) and
+            (self.ic.?.arg_stack_room.ensureFilled(target, .none) catch return error.OutOfMemory)) return;
+        self.setErrorMsg("Fatal error: Maximum function nesting level of {d} reached\n", .{max_frames});
+        return error.RuntimeError;
+    }
+
+    // commits in doubling steps; false when a limit would be crossed
+    fn growCallRoom(self: *VM, frames: usize) RuntimeError!bool {
+        const ic = self.ic.?;
+        const want_frames = self.frame_count + frames + 1;
+        const want_slots = self.sp + stack_headroom;
+        const want_fga = ic.fga_sp + fga_headroom * frames;
+        if (want_frames > max_frames or want_slots > max_stack_slots or want_fga > max_stack_slots) return false;
+        const frame_target = @min(max_frames, @max(want_frames, self.frame_room.committed * 2));
+        const slot_target = @min(max_stack_slots, @max(want_slots, self.stack_room.committed * 2));
+        const fga_target = @min(max_stack_slots, @max(want_fga, ic.fga_room.committed * 2));
+        const ok = (self.frame_room.ensure(frame_target) catch return error.OutOfMemory) and
+            (ic.sp_save_room.ensure(frame_target) catch return error.OutOfMemory) and
+            (ic.arg_counts_room.ensureFilled(frame_target, 0xFF) catch return error.OutOfMemory) and
+            (ic.fga_offsets_room.ensureFilled(frame_target, 0) catch return error.OutOfMemory) and
+            (self.stack_room.ensure(slot_target) catch return error.OutOfMemory) and
+            (ic.arg_stack_room.ensureFilled(slot_target, .none) catch return error.OutOfMemory) and
+            (ic.fga_room.ensureFilled(fga_target, .null) catch return error.OutOfMemory);
+        return ok;
+    }
+
     pub fn saveFrameArgs(self: *VM, arg_count: u8) void {
         const ic = self.ic orelse return;
-        if (self.frame_count >= 2048) return;
+        if (self.frame_count >= ic.fga_offsets_room.committed) return;
         const ac: usize = arg_count;
         if (ac == 0) {
             ic.fga_offsets[self.frame_count] = ic.fga_sp;
             return;
         }
         const sp = ic.fga_sp;
-        if (sp + ac > ic.fga_buf.len) return;
+        if (sp + ac > ic.fga_room.committed) return;
         ic.fga_offsets[self.frame_count] = sp;
         for (0..ac) |i| {
             ic.fga_buf[sp + i] = self.stack[self.sp - ac + i];
@@ -19366,14 +19503,14 @@ pub const VM = struct {
     // func_get_args returns the previous call's args
     pub fn saveFrameArgsSlice(self: *VM, args: []const Value) void {
         const ic = self.ic orelse return;
-        if (self.frame_count >= 2048) return;
+        if (self.frame_count >= ic.fga_offsets_room.committed) return;
         const ac: usize = args.len;
         if (ac == 0) {
             ic.fga_offsets[self.frame_count] = ic.fga_sp;
             return;
         }
         const sp = ic.fga_sp;
-        if (sp + ac > ic.fga_buf.len) {
+        if (sp + ac > ic.fga_room.committed) {
             // signal "no saved args" by leaving offsets stale; getFrameArgs
             // will read whatever's there but at least we shouldn't crash
             return;
@@ -19395,7 +19532,7 @@ pub const VM = struct {
         if (ac_raw == 0xFF) return null;
         const ac: usize = ac_raw;
         const offset: usize = ic.fga_offsets[fc];
-        if (offset + ac > ic.fga_buf.len) return null;
+        if (offset + ac > ic.fga_room.committed) return null;
         return ic.fga_buf[offset .. offset + ac];
     }
 

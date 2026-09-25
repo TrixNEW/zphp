@@ -866,7 +866,9 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         self.sp = sp;
                         return;
                     };
-                    if (!ci_func.locals_only) {
+                    // a frame that would outgrow the committed depth regions
+                    // goes through runLoop, which grows them
+                    if (!ci_func.locals_only or !self.hasCallRoomAt(sp, 1)) {
                         frame.ip = ip - 2;
                         self.sp = sp;
                         return;
@@ -1063,7 +1065,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     if (mc_entry.key == mc_ip and mc_entry.chunk_key == mc_chunk_key and mc_entry.class_ptr == @intFromPtr(mc_obj.class_name.ptr)) {
                         if (mc_entry.func) |mc_func| {
                             // a method is never a closure instance, so it has no captures
-                            if (mc_func.locals_only) {
+                            if (mc_func.locals_only and self.hasCallRoomAt(sp, 1)) {
                                 if (mc_func.has_param_types and !argsHoldDeclared(self, ic, mc_func, mc_func.name, self.stack[sp - mc_arg_count .. sp])) {
                                     self.sp = sp;
                                     if (try checkParamTypes(self, ic, mc_func.name, mc_arg_count)) {
@@ -1152,7 +1154,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     };
 
                     // a declared function is never a closure instance, so it has no captures
-                    if (!func.locals_only) {
+                    if (!func.locals_only or !self.hasCallRoomAt(sp, 1)) {
                         frame.ip = ip - 4;
                         self.sp = sp;
                         return;

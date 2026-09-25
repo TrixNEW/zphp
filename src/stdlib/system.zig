@@ -800,7 +800,7 @@ fn buildBacktrace(ctx: *NativeContext, ignore_args: bool, provide_object: bool, 
                 if (ac != 0xFF) {
                     const offset: usize = ic.fga_offsets[i];
                     const arg_count: usize = ac;
-                    if (offset + arg_count <= 256) {
+                    if (offset + arg_count <= ic.fga_room.committed) {
                         for (0..arg_count) |a| {
                             try args_arr.append(alloc, ic.fga_buf[offset + a]);
                         }

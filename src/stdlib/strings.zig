@@ -1346,15 +1346,10 @@ fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) !V
             var explicit_arg: ?usize = null;
             {
                 var j = i;
-                var num: usize = 0;
-                var has_digits = false;
-                while (j < fmt_str.len and fmt_str[j] >= '0' and fmt_str[j] <= '9') {
-                    num = num * 10 + (fmt_str[j] - '0');
-                    has_digits = true;
-                    j += 1;
-                }
-                if (has_digits and j < fmt_str.len and fmt_str[j] == '$') {
-                    explicit_arg = if (num > 0) num - 1 else 0;
+                const num = formatNumber(fmt_str, &j);
+                if (j > i and j < fmt_str.len and fmt_str[j] == '$') {
+                    if (num == null or num.? == 0) return formatSpecError(ctx, "Argument number specifier must be greater than zero and less than 2147483647");
+                    explicit_arg = num.? - 1;
                     i = j + 1;
                 }
             }
@@ -1388,36 +1383,46 @@ fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) !V
                 // dynamic width from next arg, matching PHP's printf-style * width
                 const w_arg = if (arg_idx < args.len) args[arg_idx] else Value.null;
                 arg_idx += 1;
-                width = @intCast(@max(0, Value.toInt(w_arg)));
+                if (w_arg != .int) return formatSpecError(ctx, "Width must be an integer");
+                if (w_arg.int < 0 or w_arg.int > format_int_max) return formatSpecError(ctx, "Width must be between 0 and 2147483647");
+                width = @intCast(w_arg.int);
                 i += 1;
             } else {
-                while (i < fmt_str.len and fmt_str[i] >= '0' and fmt_str[i] <= '9') {
-                    width = width * 10 + (fmt_str[i] - '0');
-                    i += 1;
-                }
+                width = formatNumber(fmt_str, &i) orelse return formatSpecError(ctx, "Width must be between 0 and 2147483647");
             }
 
             var precision: ?usize = null;
+            // `.*` with -1: shortest round-trip digits, for the %g family only
+            var shortest = false;
             if (i < fmt_str.len and fmt_str[i] == '.') {
                 i += 1;
                 if (i < fmt_str.len and fmt_str[i] == '*') {
                     // dynamic precision from next arg
                     const prec_arg = if (arg_idx < args.len) args[arg_idx] else Value.null;
                     arg_idx += 1;
-                    precision = @intCast(@max(0, Value.toInt(prec_arg)));
+                    if (prec_arg != .int) return formatSpecError(ctx, "Precision must be an integer");
+                    if (prec_arg.int < -1 or prec_arg.int > format_int_max) return formatSpecError(ctx, "Precision must be between -1 and 2147483647");
+                    if (prec_arg.int == -1) shortest = true else precision = @intCast(prec_arg.int);
                     i += 1;
                 } else {
-                    precision = 0;
-                    while (i < fmt_str.len and fmt_str[i] >= '0' and fmt_str[i] <= '9') {
-                        precision.? = precision.? * 10 + (fmt_str[i] - '0');
-                        i += 1;
-                    }
+                    precision = formatNumber(fmt_str, &i) orelse return formatSpecError(ctx, "Precision must be between 0 and 2147483647");
                 }
             }
 
             if (i >= fmt_str.len) break;
             const spec = fmt_str[i];
             i += 1;
+            const float_spec = switch (spec) {
+                'e', 'E', 'f', 'F', 'g', 'G', 'h', 'H' => true,
+                else => false,
+            };
+            if (shortest and spec != 'g' and spec != 'G' and spec != 'h' and spec != 'H') return formatSpecError(ctx, "Precision -1 is only supported for %g, %G, %h and %H");
+            if (float_spec) if (precision) |p| if (p > max_float_precision) {
+                var notice_buf: [192]u8 = undefined;
+                const notice = std.fmt.bufPrint(&notice_buf, "{s}(): Requested precision of {d} digits was truncated to PHP maximum of {d} digits", .{ ctx.call_name orelse "sprintf", p, max_float_precision }) catch unreachable;
+                try ctx.vm.raiseError(8, notice);
+                precision = max_float_precision;
+            };
             const arg = if (explicit_arg) |ea|
                 (if (ea < args.len) args[ea] else Value.null)
             else blk: {
@@ -1516,11 +1521,15 @@ fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) !V
                     if (show_sign and v >= 0) try tmp_buf.append(ctx.allocator, '+');
                     try formatScientific(&tmp_buf, ctx.allocator, v, prec, 'E');
                 },
-                'g', 'G' => {
+                'g', 'G', 'h', 'H' => {
                     const v = Value.toFloat(arg);
-                    const prec = if (precision) |p| @max(p, 1) else 6;
+                    const upper: u8 = if (spec == 'G' or spec == 'H') 'G' else 'g';
                     if (show_sign and v >= 0) try tmp_buf.append(ctx.allocator, '+');
-                    try formatGeneral(&tmp_buf, ctx.allocator, v, prec, spec);
+                    if (shortest) {
+                        try formatShortestGeneral(&tmp_buf, ctx.allocator, v, upper);
+                    } else {
+                        try formatGeneral(&tmp_buf, ctx.allocator, v, if (precision) |p| @max(p, 1) else 6, upper);
+                    }
                 },
                 else => {
                     var msg_buf: [64]u8 = undefined;
@@ -1758,6 +1767,67 @@ fn formatScientific(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val:
     const abs_exp: u32 = @intCast(if (exp_val < 0) -exp_val else exp_val);
     const exp_str = std.fmt.bufPrint(&exp_buf, "{d}", .{abs_exp}) catch "0";
     try buf.appendSlice(a, exp_str);
+}
+
+const format_int_max: i64 = std.math.maxInt(i32);
+const max_float_precision: usize = 53;
+
+// php_sprintf_getnumber: the digits at i, or null when they reach INT_MAX
+fn formatNumber(fmt: []const u8, i: *usize) ?usize {
+    var n: usize = 0;
+    var over = false;
+    while (i.* < fmt.len and fmt[i.*] >= '0' and fmt[i.*] <= '9') : (i.* += 1) {
+        if (over) continue;
+        n = n * 10 + (fmt[i.*] - '0');
+        if (n >= format_int_max) over = true;
+    }
+    return if (over) null else n;
+}
+
+fn formatSpecError(ctx: *NativeContext, msg: []const u8) RuntimeError!Value.String {
+    try ctx.vm.setPendingException("ValueError", msg);
+    return error.RuntimeError;
+}
+
+// %g with precision -1: the shortest digits that round-trip, laid out the
+// way %g lays out 17 significant digits
+fn formatShortestGeneral(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: f64, g_char: u8) !void {
+    if (val == 0 or std.math.isNan(val) or std.math.isInf(val)) return formatGeneral(buf, a, val, 17, g_char);
+    var render_buf: [64]u8 = undefined;
+    const sci = std.fmt.float.render(&render_buf, @abs(val), .{ .mode = .scientific }) catch return formatGeneral(buf, a, val, 17, g_char);
+    const e_at = std.mem.indexOfScalar(u8, sci, 'e') orelse return formatGeneral(buf, a, val, 17, g_char);
+    const exp = std.fmt.parseInt(i32, sci[e_at + 1 ..], 10) catch 0;
+    var digits_buf: [32]u8 = undefined;
+    var nd: usize = 0;
+    for (sci[0..e_at]) |c| if (c != '.') {
+        digits_buf[nd] = c;
+        nd += 1;
+    };
+    const digits = digits_buf[0..nd];
+    if (val < 0) try buf.append(a, '-');
+    if (exp < -4 or exp >= 17) {
+        try buf.append(a, digits[0]);
+        try buf.append(a, '.');
+        if (digits.len > 1) try buf.appendSlice(a, digits[1..]) else try buf.append(a, '0');
+        try buf.append(a, if (g_char == 'G') 'E' else 'e');
+        try buf.append(a, if (exp >= 0) '+' else '-');
+        var exp_buf: [16]u8 = undefined;
+        try buf.appendSlice(a, std.fmt.bufPrint(&exp_buf, "{d}", .{@abs(exp)}) catch unreachable);
+    } else if (exp < 0) {
+        try buf.appendSlice(a, "0.");
+        for (0..@as(usize, @intCast(-exp - 1))) |_| try buf.append(a, '0');
+        try buf.appendSlice(a, digits);
+    } else {
+        const int_len: usize = @intCast(exp + 1);
+        if (digits.len <= int_len) {
+            try buf.appendSlice(a, digits);
+            for (0..int_len - digits.len) |_| try buf.append(a, '0');
+        } else {
+            try buf.appendSlice(a, digits[0..int_len]);
+            try buf.append(a, '.');
+            try buf.appendSlice(a, digits[int_len..]);
+        }
+    }
 }
 
 fn formatGeneral(buf: *std.ArrayListUnmanaged(u8), a: std.mem.Allocator, val: f64, prec: usize, g_char: u8) !void {

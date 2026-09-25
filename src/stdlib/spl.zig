@@ -342,89 +342,41 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "SplPriorityQueue::rewind", pqRewind);
     try vm.native_fns.put(a, "SplPriorityQueue::valid", pqValid);
 
-    // SplHeap (abstract base — user must override compare)
-    var heap_def = ClassDef{ .name = "SplHeap" };
-    try heap_def.interfaces.append(a, "Countable");
-    try heap_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
-    try heap_def.methods.put(a, "insert", .{ .name = "insert", .arity = 1 });
-    try heap_def.methods.put(a, "extract", .{ .name = "extract", .arity = 0 });
-    try heap_def.methods.put(a, "top", .{ .name = "top", .arity = 0 });
-    try heap_def.methods.put(a, "count", .{ .name = "count", .arity = 0 });
-    try heap_def.methods.put(a, "isEmpty", .{ .name = "isEmpty", .arity = 0 });
-    try heap_def.methods.put(a, "current", .{ .name = "current", .arity = 0 });
-    try heap_def.methods.put(a, "key", .{ .name = "key", .arity = 0 });
-    try heap_def.methods.put(a, "next", .{ .name = "next", .arity = 0 });
-    try heap_def.methods.put(a, "rewind", .{ .name = "rewind", .arity = 0 });
-    try heap_def.methods.put(a, "valid", .{ .name = "valid", .arity = 0 });
-    try vm.classes.put(a, "SplHeap", heap_def);
-
-    try vm.native_fns.put(a, "SplHeap::__construct", heapConstruct);
-    try vm.native_fns.put(a, "SplHeap::insert", heapInsert);
-    try vm.native_fns.put(a, "SplHeap::extract", userHeapExtract);
-    try vm.native_fns.put(a, "SplHeap::top", userHeapTop);
-    try vm.native_fns.put(a, "SplHeap::count", heapCount);
-    try vm.native_fns.put(a, "SplHeap::isEmpty", heapIsEmpty);
-    try vm.native_fns.put(a, "SplHeap::current", userHeapTop);
-    try vm.native_fns.put(a, "SplHeap::key", heapKey);
-    try vm.native_fns.put(a, "SplHeap::next", userHeapExtract);
-    try vm.native_fns.put(a, "SplHeap::rewind", heapRewind);
-    try vm.native_fns.put(a, "SplHeap::valid", heapValid);
-
-    // SplMinHeap
-    var minh_def = ClassDef{ .name = "SplMinHeap", .parent = "SplHeap" };
-    try minh_def.interfaces.append(a, "Countable");
-    try minh_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
-    try minh_def.methods.put(a, "insert", .{ .name = "insert", .arity = 1 });
-    try minh_def.methods.put(a, "extract", .{ .name = "extract", .arity = 0 });
-    try minh_def.methods.put(a, "top", .{ .name = "top", .arity = 0 });
-    try minh_def.methods.put(a, "count", .{ .name = "count", .arity = 0 });
-    try minh_def.methods.put(a, "isEmpty", .{ .name = "isEmpty", .arity = 0 });
-    try minh_def.methods.put(a, "current", .{ .name = "current", .arity = 0 });
-    try minh_def.methods.put(a, "key", .{ .name = "key", .arity = 0 });
-    try minh_def.methods.put(a, "next", .{ .name = "next", .arity = 0 });
-    try minh_def.methods.put(a, "rewind", .{ .name = "rewind", .arity = 0 });
-    try minh_def.methods.put(a, "valid", .{ .name = "valid", .arity = 0 });
-    try vm.classes.put(a, "SplMinHeap", minh_def);
-
-    try vm.native_fns.put(a, "SplMinHeap::__construct", heapConstruct);
-    try vm.native_fns.put(a, "SplMinHeap::insert", heapInsert);
-    try vm.native_fns.put(a, "SplMinHeap::extract", minHeapExtract);
-    try vm.native_fns.put(a, "SplMinHeap::top", minHeapTop);
-    try vm.native_fns.put(a, "SplMinHeap::count", heapCount);
-    try vm.native_fns.put(a, "SplMinHeap::isEmpty", heapIsEmpty);
-    try vm.native_fns.put(a, "SplMinHeap::current", minHeapTop);
-    try vm.native_fns.put(a, "SplMinHeap::key", heapKey);
-    try vm.native_fns.put(a, "SplMinHeap::next", minHeapExtract);
-    try vm.native_fns.put(a, "SplMinHeap::rewind", heapRewind);
-    try vm.native_fns.put(a, "SplMinHeap::valid", heapValid);
-
-    // SplMaxHeap
-    var maxh_def = ClassDef{ .name = "SplMaxHeap", .parent = "SplHeap" };
-    try maxh_def.interfaces.append(a, "Countable");
-    try maxh_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
-    try maxh_def.methods.put(a, "insert", .{ .name = "insert", .arity = 1 });
-    try maxh_def.methods.put(a, "extract", .{ .name = "extract", .arity = 0 });
-    try maxh_def.methods.put(a, "top", .{ .name = "top", .arity = 0 });
-    try maxh_def.methods.put(a, "count", .{ .name = "count", .arity = 0 });
-    try maxh_def.methods.put(a, "isEmpty", .{ .name = "isEmpty", .arity = 0 });
-    try maxh_def.methods.put(a, "current", .{ .name = "current", .arity = 0 });
-    try maxh_def.methods.put(a, "key", .{ .name = "key", .arity = 0 });
-    try maxh_def.methods.put(a, "next", .{ .name = "next", .arity = 0 });
-    try maxh_def.methods.put(a, "rewind", .{ .name = "rewind", .arity = 0 });
-    try maxh_def.methods.put(a, "valid", .{ .name = "valid", .arity = 0 });
-    try vm.classes.put(a, "SplMaxHeap", maxh_def);
-
-    try vm.native_fns.put(a, "SplMaxHeap::__construct", heapConstruct);
-    try vm.native_fns.put(a, "SplMaxHeap::insert", heapInsert);
-    try vm.native_fns.put(a, "SplMaxHeap::extract", maxHeapExtract);
-    try vm.native_fns.put(a, "SplMaxHeap::top", maxHeapTop);
-    try vm.native_fns.put(a, "SplMaxHeap::count", heapCount);
-    try vm.native_fns.put(a, "SplMaxHeap::isEmpty", heapIsEmpty);
-    try vm.native_fns.put(a, "SplMaxHeap::current", maxHeapTop);
-    try vm.native_fns.put(a, "SplMaxHeap::key", heapKey);
-    try vm.native_fns.put(a, "SplMaxHeap::next", maxHeapExtract);
-    try vm.native_fns.put(a, "SplMaxHeap::rewind", heapRewind);
-    try vm.native_fns.put(a, "SplMaxHeap::valid", heapValid);
+    // SplHeap (abstract: subclasses define compare), SplMinHeap, SplMaxHeap
+    const heap_methods = .{
+        .{ "__construct", 0, heapConstruct },
+        .{ "insert", 1, heapInsert },
+        .{ "extract", 0, heapExtract },
+        .{ "top", 0, heapTop },
+        .{ "count", 0, heapCount },
+        .{ "isEmpty", 0, heapIsEmpty },
+        .{ "current", 0, heapCurrent },
+        .{ "key", 0, heapKey },
+        .{ "next", 0, heapNext },
+        .{ "rewind", 0, heapRewind },
+        .{ "valid", 0, heapValid },
+        .{ "isCorrupted", 0, heapIsCorrupted },
+        .{ "recoverFromCorruption", 0, heapRecoverFromCorruption },
+    };
+    const heap_classes = .{
+        .{ "SplHeap", @as(?[]const u8, null), @as(?vm_mod.NativeFn, null) },
+        .{ "SplMinHeap", @as(?[]const u8, "SplHeap"), @as(?vm_mod.NativeFn, minHeapCompare) },
+        .{ "SplMaxHeap", @as(?[]const u8, "SplHeap"), @as(?vm_mod.NativeFn, maxHeapCompare) },
+    };
+    inline for (heap_classes) |hc| {
+        var def = ClassDef{ .name = hc[0], .parent = hc[1] };
+        try def.interfaces.append(a, "Iterator");
+        try def.interfaces.append(a, "Countable");
+        inline for (heap_methods) |m| {
+            try def.methods.put(a, m[0], .{ .name = m[0], .arity = m[1] });
+            try vm.native_fns.put(a, hc[0] ++ "::" ++ m[0], m[2]);
+        }
+        if (hc[2]) |compare| {
+            try def.methods.put(a, "compare", .{ .name = "compare", .arity = 2, .visibility = .protected });
+            try vm.native_fns.put(a, hc[0] ++ "::compare", compare);
+        }
+        try vm.classes.put(a, hc[0], def);
+    }
 
     // SplFixedArray
     var fa_def = ClassDef{ .name = "SplFixedArray" };
@@ -1605,112 +1557,131 @@ fn pqValid(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     return NativeResult.scalar(.{ .bool = arr.entries.items.len > 0 });
 }
 
-// --- SplMinHeap / SplMaxHeap ---
-// stored as flat array in __data, heap-ordered
+// --- SplHeap / SplMinHeap / SplMaxHeap ---
+// php's spl_ptr_heap: a binary heap in __data, sifted up on insert and down
+// on extract with php's comparison order, so ties and compare() side effects
+// come out as they do in php. an exception from compare() finishes the
+// operation with the remaining comparisons as 0 and marks the heap corrupted
+
+const HeapOrder = enum { max, min };
+
+const HeapOp = struct {
+    ctx: *NativeContext,
+    obj: *PhpObject,
+    order: HeapOrder,
+    user_compare: bool,
+    failed: ?RuntimeError = null,
+
+    fn begin(ctx: *NativeContext, obj: *PhpObject) HeapOp {
+        const order: HeapOrder = if (ctx.vm.isInstanceOf(obj.class_name, "SplMinHeap")) .min else .max;
+        const resolved = ctx.vm.resolveMethod(obj.class_name, "compare") catch "";
+        return .{ .ctx = ctx, .obj = obj, .order = order, .user_compare = ctx.vm.functions.contains(resolved) };
+    }
+
+    // positive when a belongs above b
+    fn cmp(self: *HeapOp, a: Value, b: Value) i64 {
+        if (self.failed != null) return 0;
+        const raw: i64 = if (self.user_compare) blk: {
+            const r = self.ctx.vm.callMethod(self.obj, "compare", &.{ a, b }) catch |err| {
+                self.failed = err;
+                return 0;
+            };
+            break :blk Value.toInt(r);
+        } else switch (self.order) {
+            .max => Value.compare(a, b),
+            .min => Value.compare(b, a),
+        };
+        return std.math.sign(raw);
+    }
+
+    fn finish(self: *HeapOp) RuntimeError!void {
+        const err = self.failed orelse return;
+        try self.obj.set(self.ctx.allocator, "__corrupted", .{ .bool = true });
+        return err;
+    }
+};
+
+fn heapItems(arr: *PhpArray) []PhpArray.Entry {
+    return arr.entries.items;
+}
+
+fn heapRejectCorrupted(ctx: *NativeContext, obj: *PhpObject) RuntimeError!void {
+    if (obj.get("__corrupted") != .bool or !obj.get("__corrupted").bool) return;
+    try ctx.vm.setPendingException("RuntimeException", "Heap is corrupted, heap properties are no longer ensured.");
+    return error.RuntimeError;
+}
 
 fn heapConstruct(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     _ = try ensureData(ctx, obj);
-    try obj.set(ctx.allocator, "__cursor", .{ .int = 0 });
     return NativeResult.scalar(.null);
 }
 
 fn heapInsert(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
+    try heapRejectCorrupted(ctx, obj);
     const arr = try ensureData(ctx, obj);
     if (args.len == 0) return NativeResult.scalar(.null);
-    try arr.append(ctx.allocator, args[0]);
-    return NativeResult.scalar(.null);
-}
-
-fn findMinIdx(arr: *PhpArray) ?usize {
-    if (arr.entries.items.len == 0) return null;
-    var best: usize = 0;
-    for (arr.entries.items[1..], 1..) |entry, i| {
-        if (Value.compare(entry.value, arr.entries.items[best].value) < 0) best = i;
+    const elem = args[0];
+    var op = HeapOp.begin(ctx, obj);
+    try arr.append(ctx.allocator, elem);
+    const items = heapItems(arr);
+    var i = items.len - 1;
+    while (i > 0 and op.cmp(items[(i - 1) / 2].value, elem) < 0) : (i = (i - 1) / 2) {
+        items[i].value = items[(i - 1) / 2].value;
     }
-    return best;
+    items[i].value = elem;
+    try op.finish();
+    return NativeResult.scalar(.{ .bool = true });
 }
 
-fn findMaxIdx(arr: *PhpArray) ?usize {
-    if (arr.entries.items.len == 0) return null;
-    var best: usize = 0;
-    for (arr.entries.items[1..], 1..) |entry, i| {
-        if (Value.compare(entry.value, arr.entries.items[best].value) > 0) best = i;
+// php's spl_ptr_heap_delete_top; the removed root is returned owned
+fn heapDeleteTop(op: *HeapOp, arr: *PhpArray) ?Value {
+    const items = heapItems(arr);
+    const count = items.len;
+    if (count == 0) return null;
+    const top = items[0].value;
+    const bottom = items[count - 1].value;
+    const limit = (count - 1) / 2;
+    var i: usize = 0;
+    while (i < limit) {
+        var j = i * 2 + 1;
+        if (j != count and op.cmp(items[j + 1].value, items[j].value) > 0) j += 1;
+        if (op.cmp(bottom, items[j].value) < 0) {
+            items[i].value = items[j].value;
+        } else break;
+        i = j;
     }
-    return best;
-}
-
-fn heapRemoveAt(arr: *PhpArray, idx: usize) NativeResult {
-    const val = arr.entries.items[idx].value;
-    std.mem.copyForwards(PhpArray.Entry, arr.entries.items[idx .. arr.entries.items.len - 1], arr.entries.items[idx + 1 .. arr.entries.items.len]);
+    items[i].value = bottom;
     arr.entries.items.len -= 1;
-    return if (val == .string and val.string.owner != null) NativeResult.takeString(val.string) else NativeResult.share(val);
+    return top;
 }
 
-fn findUserBestIdx(ctx: *NativeContext, obj: *PhpObject, arr: *PhpArray) !?usize {
-    if (arr.entries.items.len == 0) return null;
-    var best: usize = 0;
-    var i: usize = 1;
-    while (i < arr.entries.items.len) : (i += 1) {
-        const ret = try ctx.vm.callMethod(obj, "compare", &.{ arr.entries.items[i].value, arr.entries.items[best].value });
-        if (Value.toInt(ret) > 0) best = i;
+fn heapExtract(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
+    try heapRejectCorrupted(ctx, obj);
+    const arr = getData(obj) orelse return NativeResult.scalar(.null);
+    var op = HeapOp.begin(ctx, obj);
+    const top = heapDeleteTop(&op, arr) orelse {
+        try ctx.vm.setPendingException("RuntimeException", "Can't extract from an empty heap");
+        return error.RuntimeError;
+    };
+    op.finish() catch |err| {
+        ctx.vm.releaseValue(top);
+        return err;
+    };
+    return if (top == .string and top.string.owner != null) NativeResult.takeString(top.string) else NativeResult.share(top);
+}
+
+fn heapTop(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
+    try heapRejectCorrupted(ctx, obj);
+    const arr = getData(obj) orelse return NativeResult.scalar(.null);
+    if (arr.entries.items.len == 0) {
+        try ctx.vm.setPendingException("RuntimeException", "Can't peek at an empty heap");
+        return error.RuntimeError;
     }
-    return best;
-}
-
-fn userHeapExtract(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const arr = getData(obj) orelse return NativeResult.scalar(.null);
-    const idx = (findUserBestIdx(ctx, obj, arr) catch return NativeResult.scalar(.null)) orelse return NativeResult.scalar(.null);
-    return heapRemoveAt(arr, idx);
-}
-
-fn userHeapTop(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const arr = getData(obj) orelse return NativeResult.scalar(.null);
-    const idx = (findUserBestIdx(ctx, obj, arr) catch return NativeResult.scalar(.null)) orelse return NativeResult.scalar(.null);
-    return NativeResult.share(arr.entries.items[idx].value);
-}
-
-fn minHeapExtract(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const arr = getData(obj) orelse return NativeResult.scalar(.null);
-    const idx = findMinIdx(arr) orelse {
-        try ctx.vm.setPendingException("RuntimeException", "Can't extract from an empty heap");
-        return error.RuntimeError;
-    };
-    return heapRemoveAt(arr, idx);
-}
-
-fn minHeapTop(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const arr = getData(obj) orelse return NativeResult.scalar(.null);
-    const idx = findMinIdx(arr) orelse {
-        try ctx.vm.setPendingException("RuntimeException", "Can't peek at an empty heap");
-        return error.RuntimeError;
-    };
-    return NativeResult.share(arr.entries.items[idx].value);
-}
-
-fn maxHeapExtract(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const arr = getData(obj) orelse return NativeResult.scalar(.null);
-    const idx = findMaxIdx(arr) orelse {
-        try ctx.vm.setPendingException("RuntimeException", "Can't extract from an empty heap");
-        return error.RuntimeError;
-    };
-    return heapRemoveAt(arr, idx);
-}
-
-fn maxHeapTop(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const arr = getData(obj) orelse return NativeResult.scalar(.null);
-    const idx = findMaxIdx(arr) orelse {
-        try ctx.vm.setPendingException("RuntimeException", "Can't peek at an empty heap");
-        return error.RuntimeError;
-    };
-    return NativeResult.share(arr.entries.items[idx].value);
+    return NativeResult.share(arr.entries.items[0].value);
 }
 
 fn heapCount(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -1727,32 +1698,27 @@ fn heapIsEmpty(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult 
 
 fn heapCurrent(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const arr = getData(obj) orelse return NativeResult.scalar(.{ .bool = false });
-    const cursor: usize = @intCast(@max(Value.toInt(obj.get("__cursor")), 0));
-    if (cursor >= arr.entries.items.len) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.share(arr.entries.items[cursor].value);
+    const arr = getData(obj) orelse return NativeResult.scalar(.null);
+    if (arr.entries.items.len == 0) return NativeResult.scalar(.null);
+    return NativeResult.share(arr.entries.items[0].value);
 }
 
 fn heapKey(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const arr = getData(obj) orelse return NativeResult.scalar(.null);
-    if (arr.entries.items.len == 0) {
-        try ctx.vm.setPendingException("RuntimeException", "Can't peek at an empty datastructure");
-        return error.RuntimeError;
-    }
-    return NativeResult.scalar(.{ .int = @intCast(arr.entries.items.len - 1) });
+    const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .int = -1 });
+    const arr = getData(obj) orelse return NativeResult.scalar(.{ .int = -1 });
+    return NativeResult.scalar(.{ .int = @as(i64, @intCast(arr.entries.items.len)) - 1 });
 }
 
 fn heapNext(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    const cursor = Value.toInt(obj.get("__cursor"));
-    try obj.set(ctx.allocator, "__cursor", .{ .int = cursor + 1 });
+    const arr = getData(obj) orelse return NativeResult.scalar(.null);
+    var op = HeapOp.begin(ctx, obj);
+    if (heapDeleteTop(&op, arr)) |top| ctx.vm.releaseValue(top);
+    try op.finish();
     return NativeResult.scalar(.null);
 }
 
-fn heapRewind(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
-    try obj.set(ctx.allocator, "__cursor", .{ .int = 0 });
+fn heapRewind(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     return NativeResult.scalar(.null);
 }
 
@@ -1760,6 +1726,28 @@ fn heapValid(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const arr = getData(obj) orelse return NativeResult.scalar(.{ .bool = false });
     return NativeResult.scalar(.{ .bool = arr.entries.items.len > 0 });
+}
+
+fn heapIsCorrupted(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
+    const flag = obj.get("__corrupted");
+    return NativeResult.scalar(.{ .bool = flag == .bool and flag.bool });
+}
+
+fn heapRecoverFromCorruption(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = true });
+    try obj.set(ctx.allocator, "__corrupted", .{ .bool = false });
+    return NativeResult.scalar(.{ .bool = true });
+}
+
+fn minHeapCompare(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 2) return NativeResult.scalar(.{ .int = 0 });
+    return NativeResult.scalar(.{ .int = std.math.sign(Value.compare(args[1], args[0])) });
+}
+
+fn maxHeapCompare(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 2) return NativeResult.scalar(.{ .int = 0 });
+    return NativeResult.scalar(.{ .int = std.math.sign(Value.compare(args[0], args[1])) });
 }
 
 // --- SplFixedArray ---
