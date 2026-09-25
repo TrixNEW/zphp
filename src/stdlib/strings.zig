@@ -2089,9 +2089,12 @@ fn native_htmlentities(ctx: *NativeContext, args: []const Value) RuntimeError!Na
         temporary = c;
         break :blk c;
     };
-    const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else 3;
+    const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else ent_quotes | ent_substitute;
     const escape_double = (flags & 2) != 0;
     const escape_single = (flags & 1) != 0;
+    const charset: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else "";
+    const utf8 = charset.len == 0 or isUtf8Encoding(charset);
+    const latin1 = !utf8 and isLatin1Encoding(charset);
 
     var buf = std.ArrayListUnmanaged(u8){};
     defer buf.deinit(ctx.allocator);
@@ -2110,21 +2113,26 @@ fn native_htmlentities(ctx: *NativeContext, args: []const Value) RuntimeError!Na
             i += 1;
             continue;
         }
-        const len = std.unicode.utf8ByteSequenceLength(b) catch {
-            try buf.append(ctx.allocator, b);
-            i += 1;
-            continue;
-        };
-        if (i + len > s.len) {
-            try buf.append(ctx.allocator, b);
+        if (!utf8) {
+            if (latin1) {
+                if (latin1NamedEntity(b)) |ent| try buf.appendSlice(ctx.allocator, ent) else try buf.append(ctx.allocator, b);
+            } else try buf.append(ctx.allocator, b);
             i += 1;
             continue;
         }
-        const cp = std.unicode.utf8Decode(s[i .. i + len]) catch {
-            try buf.appendSlice(ctx.allocator, s[i .. i + len]);
+        const step = htmlUtf8Step(s, i);
+        const len = step.len;
+        if (!step.valid) {
+            if ((flags & ent_substitute) != 0) {
+                try buf.appendSlice(ctx.allocator, "\xEF\xBF\xBD");
+            } else if ((flags & ent_ignore) == 0) {
+                // ill-formed input without ENT_SUBSTITUTE or ENT_IGNORE
+                return NativeResult.literal("");
+            }
             i += len;
             continue;
-        };
+        }
+        const cp = std.unicode.utf8Decode(s[i .. i + len]) catch unreachable;
         if (latin1NamedEntity(cp)) |ent| {
             try buf.appendSlice(ctx.allocator, ent);
         } else {
@@ -2140,7 +2148,8 @@ fn native_htmlspecialchars(ctx: *NativeContext, args: []const Value) RuntimeErro
     if (args.len == 0) return NativeResult.literal("");
     if (args[0] == .null) return NativeResult.literal("");
     const s = try coerceToString(ctx, args[0]);
-    const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else 3;
+    const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else ent_quotes | ent_substitute;
+    const utf8 = args.len < 3 or args[2] == .null or isUtf8Encoding(args[2].string.bytes()) or args[2].string.len == 0;
     const escape_double = (flags & 2) != 0;
     const escape_single = (flags & 1) != 0;
     // PHP outputs &apos; for single quotes when ENT_HTML5 (or XHTML/XML1) is set
@@ -2167,12 +2176,81 @@ fn native_htmlspecialchars(ctx: *NativeContext, args: []const Value) RuntimeErro
             } else try buf.append(ctx.allocator, '\''),
             '<' => try buf.appendSlice(ctx.allocator, "&lt;"),
             '>' => try buf.appendSlice(ctx.allocator, "&gt;"),
+            0x80...0xFF => if (utf8) {
+                const step = htmlUtf8Step(s, i);
+                if (step.valid) {
+                    try buf.appendSlice(ctx.allocator, s[i .. i + step.len]);
+                } else if ((flags & ent_substitute) != 0) {
+                    try buf.appendSlice(ctx.allocator, "\xEF\xBF\xBD");
+                } else if ((flags & ent_ignore) == 0) {
+                    // ill-formed input without ENT_SUBSTITUTE or ENT_IGNORE
+                    return NativeResult.literal("");
+                }
+                i += step.len - 1;
+            } else try buf.append(ctx.allocator, c),
             else => try buf.append(ctx.allocator, c),
         }
     }
     const result = try buf.toOwnedSlice(ctx.allocator);
     return NativeResult.takeString(try Value.String.adopt(ctx.allocator, result));
 }
+
+// one character as php's html functions decode UTF-8 (php_next_utf8_char):
+// a sequence with a malformed trailing byte skips up to the first byte that
+// could start a character, and an overlong form, a surrogate or a code point
+// past U+10FFFF is one ill-formed character
+fn htmlUtf8Step(s: []const u8, i: usize) Utf8Step {
+    const avail = s.len - i;
+    const c = s[i];
+    const trail = struct {
+        fn at(bytes: []const u8, k: usize) bool {
+            return bytes[k] >= 0x80 and bytes[k] <= 0xBF;
+        }
+    }.at;
+    const lead = struct {
+        fn at(bytes: []const u8, k: usize) bool {
+            return bytes[k] < 0x80 or (bytes[k] >= 0xC2 and bytes[k] <= 0xF4);
+        }
+    }.at;
+    const bad = struct {
+        fn len(n: usize) Utf8Step {
+            return .{ .len = n, .valid = false };
+        }
+    }.len;
+    if (c < 0x80) return .{ .len = 1, .valid = true };
+    if (c < 0xC2) return bad(1);
+    if (c < 0xE0) {
+        if (avail < 2) return bad(1);
+        if (!trail(s, i + 1)) return bad(if (lead(s, i + 1)) 1 else 2);
+        return .{ .len = 2, .valid = true };
+    }
+    if (c < 0xF0) {
+        if (avail < 3 or !trail(s, i + 1) or !trail(s, i + 2)) {
+            if (avail < 2 or lead(s, i + 1)) return bad(1);
+            if (avail < 3 or lead(s, i + 2)) return bad(2);
+            return bad(3);
+        }
+        const cp = (@as(u32, c & 0x0F) << 12) | (@as(u32, s[i + 1] & 0x3F) << 6) | (s[i + 2] & 0x3F);
+        if (cp < 0x800 or (cp >= 0xD800 and cp <= 0xDFFF)) return bad(3);
+        return .{ .len = 3, .valid = true };
+    }
+    if (c < 0xF5) {
+        if (avail < 4 or !trail(s, i + 1) or !trail(s, i + 2) or !trail(s, i + 3)) {
+            if (avail < 2 or lead(s, i + 1)) return bad(1);
+            if (avail < 3 or lead(s, i + 2)) return bad(2);
+            if (avail < 4 or lead(s, i + 3)) return bad(3);
+            return bad(4);
+        }
+        const cp = (@as(u32, c & 0x07) << 18) | (@as(u32, s[i + 1] & 0x3F) << 12) | (@as(u32, s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F);
+        if (cp < 0x10000 or cp > 0x10FFFF) return bad(4);
+        return .{ .len = 4, .valid = true };
+    }
+    return bad(1);
+}
+
+const ent_quotes: i64 = 3;
+const ent_ignore: i64 = 4;
+const ent_substitute: i64 = 8;
 
 // returns total entity length (including '&' and ';') if s[i..] starts with a
 // valid htmlspecialchars entity (&amp;, &lt;, &gt;, &quot;, &#039;/&apos;, or
@@ -2491,11 +2569,8 @@ fn native_mb_str_split(ctx: *NativeContext, args: []const Value) RuntimeError!Na
     while (i < s.len) {
         const start = i;
         var taken: usize = 0;
-        while (taken < chunk_len and i < s.len) {
-            const byte = s[i];
-            if (byte < 0x80) i += 1 else if (byte < 0xE0) i += 2 else if (byte < 0xF0) i += 3 else i += 4;
-            if (i > s.len) i = s.len;
-            taken += 1;
+        while (taken < chunk_len and i < s.len) : (taken += 1) {
+            i = @min(s.len, i + utf8LeadLength(s[i]));
         }
         const part = try Value.String.create(ctx.allocator, s[start..i]);
         defer part.release();
@@ -2513,22 +2588,7 @@ fn native_mb_strlen(_: *NativeContext, args: []const Value) RuntimeError!NativeR
             return NativeResult.scalar(.{ .int = @intCast(s.len) });
         }
     }
-    var count: i64 = 0;
-    var j: usize = 0;
-    while (j < s.len) {
-        const byte = s[j];
-        if (byte < 0x80) {
-            j += 1;
-        } else if (byte < 0xE0) {
-            j += 2;
-        } else if (byte < 0xF0) {
-            j += 3;
-        } else {
-            j += 4;
-        }
-        count += 1;
-    }
-    return NativeResult.scalar(.{ .int = count });
+    return NativeResult.scalar(.{ .int = mbCharCount(s) });
 }
 
 fn native_mb_strtolower(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -2555,55 +2615,86 @@ fn native_mb_convert_case(ctx: *NativeContext, args: []const Value) RuntimeError
     };
 }
 
+// MB_CASE_TITLE the way php's mbstring does it: a character is title-cased
+// unless the last character that is not case-ignorable was cased, in which
+// case it is lower-cased
 fn utfTitleCase(ctx: *NativeContext, s: []const u8) !Value.String {
     var buf = std.ArrayListUnmanaged(u8){};
     defer buf.deinit(ctx.allocator);
     var i: usize = 0;
-    var at_word_start = true;
+    var in_word = false;
     while (i < s.len) {
-        const byte = s[i];
-        if (byte < 0x80) {
-            const is_alpha = std.ascii.isAlphabetic(byte);
-            const is_word = is_alpha or std.ascii.isDigit(byte);
-            if (at_word_start and is_alpha) {
-                try buf.append(ctx.allocator, std.ascii.toUpper(byte));
-                at_word_start = false;
-            } else if (is_alpha) {
-                try buf.append(ctx.allocator, std.ascii.toLower(byte));
-            } else {
-                try buf.append(ctx.allocator, byte);
-                if (!is_word) at_word_start = true;
-            }
-            i += 1;
-        } else {
-            const len = std.unicode.utf8ByteSequenceLength(byte) catch {
-                try buf.append(ctx.allocator, byte);
-                i += 1;
-                continue;
-            };
-            if (i + len > s.len) {
-                try buf.append(ctx.allocator, byte);
-                i += 1;
-                continue;
-            }
-            const cp = std.unicode.utf8Decode(s[i..][0..len]) catch {
-                try buf.appendSlice(ctx.allocator, s[i .. i + len]);
-                i += len;
-                continue;
-            };
-            const mapped = if (at_word_start) unicodeToUpper(cp) else unicodeToLower(cp);
-            var enc: [4]u8 = undefined;
-            const enc_len = std.unicode.utf8Encode(mapped, &enc) catch {
-                try buf.appendSlice(ctx.allocator, s[i .. i + len]);
-                i += len;
-                continue;
-            };
-            try buf.appendSlice(ctx.allocator, enc[0..enc_len]);
-            at_word_start = false;
-            i += len;
+        const step = utf8Step(s, i);
+        defer i += step.len;
+        if (!step.valid) {
+            try buf.append(ctx.allocator, '?');
+            continue;
         }
+        const cp: u21 = if (step.len == 1) s[i] else std.unicode.utf8Decode(s[i .. i + step.len]) catch unreachable;
+        if (in_word) {
+            try appendCodepoint(&buf, ctx.allocator, caseLower(cp));
+        } else if (caseExpansionTitle(cp)) |seq| {
+            try buf.appendSlice(ctx.allocator, seq);
+        } else {
+            try appendCodepoint(&buf, ctx.allocator, unicodeToTitle(cp));
+        }
+        if (!caseIgnorable(cp)) in_word = isCased(cp);
     }
     return Value.String.adopt(ctx.allocator, try buf.toOwnedSlice(ctx.allocator));
+}
+
+// the titlecase mapping: uppercase except for the digraphs that have a
+// dedicated titlecase letter
+fn unicodeToTitle(cp: u21) u21 {
+    if (cp < 0x80) return std.ascii.toUpper(@intCast(cp));
+    return switch (cp) {
+        0x01C4...0x01C6 => 0x01C5,
+        0x01C7...0x01C9 => 0x01C8,
+        0x01CA...0x01CC => 0x01CB,
+        0x01F1...0x01F3 => 0x01F2,
+        else => unicodeToUpper(cp),
+    };
+}
+
+// titlecase mappings that expand to several characters
+fn caseExpansionTitle(cp: u21) ?[]const u8 {
+    return switch (cp) {
+        0x00DF => "Ss",
+        0xFB00 => "Ff",
+        0xFB01 => "Fi",
+        0xFB02 => "Fl",
+        0xFB03 => "Ffi",
+        0xFB04 => "Ffl",
+        0xFB05, 0xFB06 => "St",
+        0x0587 => "\xD4\xB5\xD6\x82",
+        else => caseExpansionUpper(cp),
+    };
+}
+
+fn caseLower(cp: u21) u21 {
+    return if (cp < 0x80) std.ascii.toLower(@intCast(cp)) else unicodeToLower(cp);
+}
+
+fn isCased(cp: u21) bool {
+    return unicodeToTitle(cp) != cp or caseLower(cp) != cp or caseExpansionUpper(cp) != null;
+}
+
+// Unicode's Case_Ignorable: marks, format characters, modifier letters and
+// symbols, and the word-internal punctuation (apostrophes, periods, colons)
+fn caseIgnorable(cp: u21) bool {
+    return switch (cp) {
+        '\'', '.', ':', '^', '`', 0xA8, 0xAD, 0xAF, 0xB4, 0xB7, 0xB8 => true,
+        0x02B0...0x036F, 0x0374, 0x0375, 0x037A, 0x0384, 0x0385, 0x0387 => true,
+        0x0483...0x0489, 0x0591...0x05BD, 0x05BF, 0x05C1, 0x05C2, 0x05C4, 0x05C5, 0x05C7, 0x05F4 => true,
+        0x0610...0x061A, 0x061C, 0x0640, 0x064B...0x065F, 0x0670, 0x06D6...0x06DD, 0x06DF...0x06E8, 0x06EA...0x06ED => true,
+        0x0900...0x0903, 0x093A...0x094F, 0x0951...0x0957, 0x0962, 0x0963 => true,
+        0x1AB0...0x1AFF, 0x1DC0...0x1DFF => true,
+        0x200B...0x200F, 0x2018, 0x2019, 0x2024, 0x2027, 0x202A...0x202E, 0x2060...0x2064, 0x2066...0x206F => true,
+        0x20D0...0x20FF, 0x2C7C, 0x2C7D, 0x3005, 0x3031...0x3035, 0x303B, 0x309B...0x309E, 0x30FC...0x30FE => true,
+        0xFE00...0xFE0F, 0xFE13, 0xFE20...0xFE2F, 0xFE52, 0xFE55, 0xFEFF, 0xFF07, 0xFF0E, 0xFF1A, 0xFF3E, 0xFF40, 0xFF70, 0xFF9E, 0xFF9F => true,
+        0xE0001, 0xE0020...0xE007F, 0xE0100...0xE01EF => true,
+        else => false,
+    };
 }
 
 fn native_mb_check_encoding(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -2652,16 +2743,14 @@ fn utfCaseConvert(ctx: *NativeContext, s: []const u8, to_upper: bool) !Value.Str
             try buf.append(ctx.allocator, if (to_upper) std.ascii.toUpper(byte) else std.ascii.toLower(byte));
             i += 1;
         } else {
-            const len = std.unicode.utf8ByteSequenceLength(byte) catch {
-                try buf.append(ctx.allocator, byte);
-                i += 1;
-                continue;
-            };
-            if (i + len > s.len) {
-                try buf.append(ctx.allocator, byte);
-                i += 1;
+            // an ill-formed sequence decodes to '?', as php's mbstring does
+            const step = utf8Step(s, i);
+            if (!step.valid) {
+                try buf.append(ctx.allocator, '?');
+                i += step.len;
                 continue;
             }
+            const len = step.len;
             const cp = std.unicode.utf8Decode(s[i..][0..len]) catch {
                 try buf.appendSlice(ctx.allocator, s[i .. i + len]);
                 i += len;
@@ -3117,9 +3206,13 @@ fn native_mb_convert_variables(ctx: *NativeContext, args: []const Value) Runtime
 
 fn native_mb_convert_encoding(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
-    const input = args[0].string.bytes();
     const to = args[1].string.bytes();
     const from: []const u8 = if (args.len >= 3 and args[2] == .string) args[2].string.bytes() else "UTF-8";
+    // ill-formed UTF-8 converts as '?', whatever the target
+    const sanitized = if (isUtf8Encoding(from)) try sanitizeUtf8(ctx.allocator, args[0].string.bytes()) else null;
+    defer if (sanitized) |b| ctx.allocator.free(b);
+    const input = sanitized orelse args[0].string.bytes();
+    if (sanitized != null and isUtf8Encoding(to)) return NativeResult.copyString(ctx.allocator, input);
 
     if ((isUtf8Encoding(from) and isUtf8Encoding(to)) or
         (isLatin1Encoding(from) and isLatin1Encoding(to)) or
@@ -3210,10 +3303,57 @@ fn native_iconv(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
         if (std.mem.indexOf(u8, suffix, "TRANSLIT") != null) translit = true;
     }
 
+    // ill-formed UTF-8 input fails the conversion; //IGNORE skips an illegal
+    // sequence but never one cut short by the end of the input
+    var cleaned: std.ArrayListUnmanaged(u8) = .{};
+    defer cleaned.deinit(ctx.allocator);
+    var source = args[2];
+    if (isUtf8Encoding(from) and !std.unicode.utf8ValidateSlice(args[2].string.bytes())) {
+        const raw = args[2].string.bytes();
+        var i: usize = 0;
+        while (i < raw.len) {
+            const step = utf8Step(raw, i);
+            if (!step.valid) {
+                if (step.truncated) {
+                    try ctx.vm.raiseError(8, "iconv(): Detected an incomplete multibyte character in input string");
+                    return NativeResult.scalar(.{ .bool = false });
+                }
+                if (!ignore) {
+                    try ctx.vm.raiseError(8, "iconv(): Detected an illegal character in input string");
+                    return NativeResult.scalar(.{ .bool = false });
+                }
+            } else try cleaned.appendSlice(ctx.allocator, raw[i .. i + step.len]);
+            i += step.len;
+        }
+        source = .{ .string = Value.String.borrowed(cleaned.items) };
+    }
+
+    // a character the target cannot hold fails the conversion unless
+    // //TRANSLIT approximates it or //IGNORE drops it
+    var representable: std.ArrayListUnmanaged(u8) = .{};
+    defer representable.deinit(ctx.allocator);
+    if (!translit and isUtf8Encoding(from) and (isLatin1Encoding(to) or isAsciiEncoding(to))) {
+        const limit: u21 = if (isAsciiEncoding(to)) 0x7F else 0xFF;
+        const input = source.string.bytes();
+        var i: usize = 0;
+        while (i < input.len) {
+            const len = utf8Step(input, i).len;
+            const cp: u21 = if (len == 1) input[i] else std.unicode.utf8Decode(input[i .. i + len]) catch unreachable;
+            if (cp <= limit) {
+                try representable.appendSlice(ctx.allocator, input[i .. i + len]);
+            } else if (!ignore) {
+                try ctx.vm.raiseError(8, "iconv(): Detected an illegal character in input string");
+                return NativeResult.scalar(.{ .bool = false });
+            }
+            i += len;
+        }
+        source = .{ .string = Value.String.borrowed(representable.items) };
+    }
+
     // fast path for IGNORE/TRANSLIT when going to ASCII: drop non-ASCII bytes
     // directly so callers don't get the '?' substitutions
     if ((ignore or translit) and isAsciiEncoding(to) and (isUtf8Encoding(from) or isLatin1Encoding(from))) {
-        const input = args[2].string.bytes();
+        const input = source.string.bytes();
         var out = std.ArrayListUnmanaged(u8){};
         errdefer out.deinit(ctx.allocator);
         var i: usize = 0;
@@ -3232,7 +3372,7 @@ fn native_iconv(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
         return NativeResult.takeString(try Value.String.adopt(ctx.allocator, owned));
     }
 
-    const args2 = [_]Value{ args[2], .{ .string = Value.String.borrowed(to) }, .{ .string = Value.String.borrowed(from) } };
+    const args2 = [_]Value{ source, .{ .string = Value.String.borrowed(to) }, .{ .string = Value.String.borrowed(from) } };
     return try native_mb_convert_encoding(ctx, &args2);
 }
 
@@ -4257,39 +4397,88 @@ fn native_mb_substr(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
     if (length < 0) length = @max(0, char_count - start + length);
     if (length <= 0) return NativeResult.literal("");
 
-    var byte_start: usize = 0;
-    var ci: i64 = 0;
     var bi: usize = 0;
-    while (bi < s.len and ci < start) {
-        bi += mbCharLen(s[bi]);
-        ci += 1;
-    }
-    byte_start = bi;
+    var ci: i64 = 0;
+    while (bi < s.len and ci < start) : (ci += 1) bi += utf8Step(s, bi).len;
 
-    var chars_remaining = length;
-    while (bi < s.len and chars_remaining > 0) {
-        bi += mbCharLen(s[bi]);
-        chars_remaining -= 1;
+    // php decodes the input: an ill-formed sequence comes out as '?'
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(ctx.allocator);
+    var remaining = length;
+    while (bi < s.len and remaining > 0) : (remaining -= 1) {
+        const step = utf8Step(s, bi);
+        if (step.valid) try out.appendSlice(ctx.allocator, s[bi .. bi + step.len]) else try out.append(ctx.allocator, '?');
+        bi += step.len;
     }
-
-    return NativeResult.copyString(ctx.allocator, s[byte_start..bi]);
+    return NativeResult.copyString(ctx.allocator, out.items);
 }
 
 fn mbCharCount(s: []const u8) i64 {
     var count: i64 = 0;
     var i: usize = 0;
-    while (i < s.len) {
-        i += mbCharLen(s[i]);
-        count += 1;
-    }
+    while (i < s.len) : (count += 1) i += utf8Step(s, i).len;
     return count;
 }
 
-fn mbCharLen(byte: u8) usize {
-    if (byte < 0x80) return 1;
-    if (byte < 0xE0) return 2;
-    if (byte < 0xF0) return 3;
-    return 4;
+const Utf8Step = struct {
+    len: usize,
+    valid: bool,
+    // ill-formed only because the input ended mid-sequence
+    truncated: bool = false,
+};
+
+// s with each ill-formed sequence replaced by '?', the way mbstring decodes
+// it; null when s is already well formed
+fn sanitizeUtf8(allocator: std.mem.Allocator, s: []const u8) !?[]u8 {
+    if (std.unicode.utf8ValidateSlice(s)) return null;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    errdefer out.deinit(allocator);
+    var i: usize = 0;
+    while (i < s.len) {
+        const step = utf8Step(s, i);
+        if (step.valid) try out.appendSlice(allocator, s[i .. i + step.len]) else try out.append(allocator, '?');
+        i += step.len;
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+// the byte count php's mbstring assigns a UTF-8 lead byte when it splits a
+// string without decoding it (mb_str_split); stray continuation bytes and
+// bytes that can never start a sequence stand alone
+fn utf8LeadLength(byte: u8) usize {
+    return switch (byte) {
+        0xC2...0xDF => 2,
+        0xE0...0xEF => 3,
+        0xF0...0xF4 => 4,
+        else => 1,
+    };
+}
+
+// one character of s at i, decoded the way php's mbstring does (the WHATWG
+// rules): a well-formed sequence, or the maximal ill-formed prefix of one,
+// which counts as a single character
+fn utf8Step(s: []const u8, i: usize) Utf8Step {
+    const b0 = s[i];
+    if (b0 < 0x80) return .{ .len = 1, .valid = true };
+    const need: usize, const lo: u8, const hi: u8 = switch (b0) {
+        0xC2...0xDF => .{ 1, 0x80, 0xBF },
+        0xE0 => .{ 2, 0xA0, 0xBF },
+        0xE1...0xEC, 0xEE...0xEF => .{ 2, 0x80, 0xBF },
+        0xED => .{ 2, 0x80, 0x9F },
+        0xF0 => .{ 3, 0x90, 0xBF },
+        0xF1...0xF3 => .{ 3, 0x80, 0xBF },
+        0xF4 => .{ 3, 0x80, 0x8F },
+        else => return .{ .len = 1, .valid = false },
+    };
+    var k: usize = 1;
+    while (k <= need) : (k += 1) {
+        if (i + k >= s.len) return .{ .len = k, .valid = false, .truncated = true };
+        const b = s[i + k];
+        const first_lo: u8 = if (k == 1) lo else 0x80;
+        const first_hi: u8 = if (k == 1) hi else 0xBF;
+        if (b < first_lo or b > first_hi) return .{ .len = k, .valid = false };
+    }
+    return .{ .len = need + 1, .valid = true };
 }
 
 fn native_strrev(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {

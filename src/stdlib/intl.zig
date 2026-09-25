@@ -27,6 +27,7 @@ const UTransliterator = opaque {};
 // every ICU function returns negative on success, positive on warning,
 // > U_ZERO_ERROR == > 0 on real error. U_ZERO_ERROR itself is 0
 const UErrorCode = i32;
+const U_INVALID_CHAR_FOUND: UErrorCode = 10;
 const U_ZERO_ERROR: UErrorCode = 0;
 
 extern fn zphp_u_strFromUTF8(dest: [*]UChar, cap: i32, plen: *i32, src: [*]const u8, srcLen: i32, err: *UErrorCode) [*]UChar;
@@ -221,7 +222,10 @@ fn utf8ToU16(ctx: *NativeContext, s: []const u8) ![]u16 {
     var actual: i32 = 0;
     var status: UErrorCode = U_ZERO_ERROR;
     _ = zphp_u_strFromUTF8(buf.ptr, cap, &actual, s.ptr, @intCast(s.len), &status);
-    if (intlRecord(ctx.vm, status)) return error.RuntimeError;
+    if (intlRecord(ctx.vm, status)) {
+        ctx.input_rejected = true;
+        return error.RuntimeError;
+    }
     buf = try ctx.allocator.realloc(buf, @intCast(actual));
     return buf;
 }
@@ -1378,11 +1382,30 @@ const NativeFn = *const fn (*NativeContext, []const Value) RuntimeError!NativeRe
 // surfaces "U_ZERO_ERROR" through intl_get_error_*. failures record the failing
 // UErrorCode via intlRecord. the four error-query natives (get_error_code,
 // get_error_message, is_failure, error_name) do NOT reset
+// intl functions refuse input that is not UTF-8, recording the conversion
+// error; their wrapper turns the refusal into the function's failure value
+fn rejectIllFormed(ctx: *NativeContext, s: []const u8) RuntimeError!void {
+    if (std.unicode.utf8ValidateSlice(s)) return;
+    _ = intlRecord(ctx.vm, U_INVALID_CHAR_FOUND);
+    ctx.input_rejected = true;
+    return error.RuntimeError;
+}
+
 fn intlWrap(comptime inner: NativeFn) NativeFn {
+    return intlWrapFailing(inner, .{ .bool = false });
+}
+
+// input that is not valid UTF-8 makes an intl function answer `failure`,
+// with the conversion error left for intl_get_error_code
+fn intlWrapFailing(comptime inner: NativeFn, comptime failure: Value) NativeFn {
     return struct {
         fn wrapped(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
             ctx.vm.last_intl_error_code = 0;
-            return inner(ctx, args);
+            return inner(ctx, args) catch |err| {
+                if (!ctx.input_rejected or ctx.vm.pending_exception != null) return err;
+                ctx.input_rejected = false;
+                return NativeResult.scalar(failure);
+            };
         }
     }.wrapped;
 }
@@ -1472,7 +1495,7 @@ pub const entries = .{
     .{ "transliterator_create", intlWrap(transCreateStatic) },
     .{ "msgfmt_create", intlWrap(mfCreate) },
     .{ "msgfmt_format_message", intlWrap(mfFormatMessage) },
-    .{ "grapheme_strlen", intlWrap(graphemeStrlen) },
+    .{ "grapheme_strlen", intlWrapFailing(graphemeStrlen, .null) },
     .{ "grapheme_substr", intlWrap(graphemeSubstr) },
     .{ "grapheme_strpos", intlWrap(graphemeStrpos) },
     .{ "grapheme_stripos", intlWrap(graphemeStripos) },
@@ -1489,6 +1512,7 @@ pub const entries = .{
 fn graphemeStrlen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const s = args[0].string.bytes();
+    try rejectIllFormed(ctx, s);
     const w = (try openBrk(ctx, 0, "")) orelse return NativeResult.scalar(.{ .bool = false });
     defer zphp_ubrk_close(w);
     var status: UErrorCode = U_ZERO_ERROR;
@@ -1504,6 +1528,7 @@ fn graphemeStrlen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
 fn graphemeSubstr(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const s = args[0].string.bytes();
+    try rejectIllFormed(ctx, s);
     const start: i64 = Value.toInt(args[1]);
     const length_arg: ?i64 = if (args.len >= 3 and args[2] != .null) Value.toInt(args[2]) else null;
 
@@ -1668,6 +1693,8 @@ fn graphemePositionImpl(ctx: *NativeContext, args: []const Value, comptime fname
     if (args.len < 2 or args[0] != .string or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
     const haystack = args[0].string.bytes();
     const needle = args[1].string.bytes();
+    try rejectIllFormed(ctx, haystack);
+    try rejectIllFormed(ctx, needle);
     const offset: i64 = if (args.len >= 3 and args[2] != .null) Value.toInt(args[2]) else 0;
 
     var bounds = (try collectGraphemeBounds(ctx, haystack)) orelse return NativeResult.scalar(.{ .bool = false });
@@ -1742,6 +1769,8 @@ fn graphemeStrstrImpl(ctx: *NativeContext, args: []const Value, case_insensitive
     if (args.len < 2 or args[0] != .string or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
     const haystack = args[0].string.bytes();
     const needle = args[1].string.bytes();
+    try rejectIllFormed(ctx, haystack);
+    try rejectIllFormed(ctx, needle);
     const before_needle = args.len >= 3 and args[2].isTruthy();
 
     if (needle.len == 0) {

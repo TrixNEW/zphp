@@ -98,6 +98,9 @@ pub const NativeContext = struct {
     strings: *std.ArrayListUnmanaged([]const u8),
     vm: *VM,
     call_name: ?[]const u8 = null,
+    // set by a native that turns down its input (intl's UTF-8 conversion)
+    // while returning an error, so its wrapper answers php's failure value
+    input_rejected: bool = false,
 
     pub fn createArray(self: *NativeContext) !*PhpArray {
         return self.vm.allocArray();
