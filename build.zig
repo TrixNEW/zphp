@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     fast_loop_role.addOption(bool, "fast_loop_object", true);
     const main_role = b.addOptions();
     main_role.addOption(bool, "fast_loop_object", false);
+    main_role.addOption([]const u8, "compiler_hash", compilerHash(b));
     fast_loop_mod.addOptions("build_role", fast_loop_role);
 
     const fast_loop_obj = b.addObject(.{
@@ -495,4 +496,30 @@ fn xml2ConfigIncludeDir(b: *std.Build) ?[]const u8 {
         if (std.mem.startsWith(u8, tok, "-I")) return tok[2..];
     }
     return null;
+}
+
+// the on-disk bytecode cache is keyed by this, so a build whose compiler
+// emits different bytecode never reads another build's entries
+fn compilerHash(b: *std.Build) []const u8 {
+    var hasher = std.hash.Wyhash.init(0);
+    var dir = b.build_root.handle.openDir("src/pipeline", .{ .iterate = true }) catch @panic("src/pipeline");
+    defer dir.close();
+    var names: std.ArrayListUnmanaged([]const u8) = .{};
+    var it = dir.iterate();
+    while (it.next() catch @panic("src/pipeline")) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) names.append(b.allocator, b.dupe(entry.name)) catch @panic("OOM");
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lessThan(_: void, x: []const u8, y: []const u8) bool {
+            return std.mem.lessThan(u8, x, y);
+        }
+    }.lessThan);
+    for (names.items) |name| {
+        const bytes = dir.readFileAlloc(b.allocator, name, 1 << 24) catch @panic("src/pipeline");
+        hasher.update(name);
+        hasher.update(bytes);
+    }
+    const format = b.build_root.handle.readFileAlloc(b.allocator, "src/bytecode_format.zig", 1 << 24) catch @panic("src/bytecode_format.zig");
+    hasher.update(format);
+    return b.fmt("{x:0>16}", .{hasher.final()});
 }

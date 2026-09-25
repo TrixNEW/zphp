@@ -394,14 +394,7 @@ fn preg_match(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
             }
         }
         try addNamedGroupsInterleaved(ctx, matches_arr, code, ovector, subject, count, offset_capture, unmatched_as_null);
-        if (pcre2.pcre2_get_mark_8(match_data)) |mark_ptr| {
-            const mark = std.mem.sliceTo(mark_ptr, 0);
-            if (mark.len > 0) {
-                const owned = try Value.String.create(ctx.allocator, mark);
-                defer owned.release();
-                try matches_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("MARK") }, .{ .string = owned });
-            }
-        }
+        try setMark(ctx, matches_arr, .{ .string = Value.String.borrowed("MARK") }, match_data);
         if (args[2] != .array) {
             ctx.setCallerVar(2, args.len, .{ .array = matches_arr });
         }
@@ -524,6 +517,16 @@ fn addNamedGroups(ctx: *NativeContext, arr: *PhpArray, code: *pcre2.Code, ovecto
     }
 }
 
+// the name of the last (*MARK:name) the match passed, stored under `key`
+fn setMark(ctx: *NativeContext, arr: *PhpArray, key: PhpArray.Key, match_data: anytype) RuntimeError!void {
+    const mark_ptr = pcre2.pcre2_get_mark_8(match_data) orelse return;
+    const mark = std.mem.sliceTo(mark_ptr, 0);
+    if (mark.len == 0) return;
+    const owned = try Value.String.create(ctx.allocator, mark);
+    defer owned.release();
+    try arr.set(ctx.allocator, key, .{ .string = owned });
+}
+
 fn preg_match_all(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
     setPregError(0);
@@ -567,6 +570,7 @@ fn preg_match_all(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
 
     var total_matches: i64 = 0;
     var offset: usize = 0;
+    var marks: ?*PhpArray = null;
 
     while (offset <= subject.len) {
         const rc = pcre2.pcre2_match_8(code, subject.ptr, subject.len, offset, 0, match_data, null);
@@ -598,12 +602,18 @@ fn preg_match_all(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
                 try match_arr.append(ctx.allocator, val);
             }
             try addNamedGroupsToMatch(ctx, match_arr, code, ovector, subject, count, offset_capture);
+            try setMark(ctx, match_arr, .{ .string = Value.String.borrowed("MARK") }, match_data);
             try out.append(ctx.allocator, .{ .array = match_arr });
         } else {
             for (0..group_count) |i| {
                 const val = try matchGroupValue(ctx, subject, ovector, count, i, offset_capture);
                 defer if (val == .string) val.string.release();
                 try group_arrays.?.items[i].append(ctx.allocator, val);
+            }
+            // pattern order keeps the marks in one array keyed by match number
+            if (pcre2.pcre2_get_mark_8(match_data) != null) {
+                if (marks == null) marks = try ctx.createArray();
+                try setMark(ctx, marks.?, .{ .int = total_matches }, match_data);
             }
         }
 
@@ -682,6 +692,7 @@ fn preg_match_all(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
             inserted_count += 1;
         }
         out.rebuildStringIndexAssumeCapacity();
+        if (marks) |m| try out.set(ctx.allocator, .{ .string = Value.String.borrowed("MARK") }, .{ .array = m });
     }
 
     if (args.len >= 3 and args[2] != .array) {
@@ -1213,6 +1224,7 @@ fn preg_replace_callback(ctx: *NativeContext, args: []const Value) RuntimeError!
             try matches_arr.append(ctx.allocator, .{ .string = capture });
         }
 
+        try setMark(ctx, matches_arr, .{ .string = Value.String.borrowed("MARK") }, match_data);
         const cb_result = try ctx.invokeCallable(callback, &.{.{ .array = matches_arr }});
         if (cb_result == .string) {
             try result.appendSlice(ctx.allocator, cb_result.string.bytes());

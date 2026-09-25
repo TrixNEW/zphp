@@ -1209,32 +1209,61 @@ pub const VM = struct {
     // call would run that copy against its own module globals (type table,
     // gc state, sentinels). function pointers resolve here
     pub const SlowPaths = struct {
+        // error values are numbered per compilation, so a path that can fail
+        // reports a status (see Status) and returns results through pointers
         drain_pending_destruct: *const fn (*VM) void,
-        check_param_types: *const fn (*VM, []const u8, u8) RuntimeError!bool,
-        resolve_default: *const fn (*VM, Value) RuntimeError!Value,
-        array_set_owned: *const fn (*VM, *PhpArray, PhpArray.Key, Value) RuntimeError!void,
-        copy_value: *const fn (*VM, Value) RuntimeError!Value,
+        check_param_types: *const fn (*VM, []const u8, u8, *bool) u8,
+        resolve_default: *const fn (*VM, Value, *Value) u8,
+        array_set_owned: *const fn (*VM, *PhpArray, PhpArray.Key, Value) u8,
+        copy_value: *const fn (*VM, Value, *Value) u8,
         retain_frame_objects: *const fn (*VM, usize) void,
-        expire_execution: *const fn (*VM) RuntimeError!void,
+        expire_execution: *const fn (*VM) u8,
         param_types: *const fn (*VM, []const u8) []const []const u8,
+
+        pub const Status = struct {
+            pub const ok: u8 = 0;
+            pub const runtime_error: u8 = 1;
+            pub const out_of_memory: u8 = 2;
+        };
 
         const main: SlowPaths = .{
             .drain_pending_destruct = VM.drainPendingDestruct,
-            .check_param_types = VM.checkParamTypes,
+            .check_param_types = checkParamTypesEntry,
             .resolve_default = resolveDefaultEntry,
             .array_set_owned = arraySetOwnedEntry,
-            .copy_value = VM.copyValue,
+            .copy_value = copyValueEntry,
             .retain_frame_objects = VM.retainFrameObjects,
-            .expire_execution = VM.expireExecution,
+            .expire_execution = expireExecutionEntry,
             .param_types = VM.declaredParamTypes,
         };
 
-        fn resolveDefaultEntry(vm: *VM, val: Value) RuntimeError!Value {
-            return vm.resolveDefault(val) catch |err| @errorCast(err);
+        fn statusOf(err: anyerror) u8 {
+            return if (err == error.OutOfMemory) Status.out_of_memory else Status.runtime_error;
         }
 
-        fn arraySetOwnedEntry(vm: *VM, array: *PhpArray, key: PhpArray.Key, value: Value) RuntimeError!void {
-            return vm.arraySetOwned(array, key, value) catch |err| @errorCast(err);
+        fn checkParamTypesEntry(vm: *VM, name: []const u8, arg_count: u8, dispatched: *bool) u8 {
+            dispatched.* = vm.checkParamTypes(name, arg_count) catch |err| return statusOf(err);
+            return Status.ok;
+        }
+
+        fn resolveDefaultEntry(vm: *VM, val: Value, out: *Value) u8 {
+            out.* = vm.resolveDefault(val) catch |err| return statusOf(err);
+            return Status.ok;
+        }
+
+        fn arraySetOwnedEntry(vm: *VM, array: *PhpArray, key: PhpArray.Key, value: Value) u8 {
+            vm.arraySetOwned(array, key, value) catch |err| return statusOf(err);
+            return Status.ok;
+        }
+
+        fn copyValueEntry(vm: *VM, val: Value, out: *Value) u8 {
+            out.* = vm.copyValue(val) catch |err| return statusOf(err);
+            return Status.ok;
+        }
+
+        fn expireExecutionEntry(vm: *VM) u8 {
+            vm.expireExecution() catch |err| return statusOf(err);
+            return Status.ok;
         }
     };
 
@@ -7557,7 +7586,10 @@ pub const VM = struct {
                     const class_name_val = self.pop();
                     const obj_val = self.pop();
                     if (obj_val == .object and class_name_val == .string) {
-                        self.push(.{ .bool = self.isInstanceOf(obj_val.object.class_name, class_name_val.string.bytes()) });
+                        // self/static/parent stay symbolic where the compiler
+                        // cannot know the class (inside a trait)
+                        const target = self.resolveRelativeClassName(class_name_val.string.bytes());
+                        self.push(.{ .bool = self.isInstanceOf(obj_val.object.class_name, target) });
                     } else if (obj_val == .generator and class_name_val == .string) {
                         const t = class_name_val.string.bytes();
                         const matches = std.mem.eql(u8, t, "Generator") or
@@ -10959,6 +10991,11 @@ pub const VM = struct {
                 },
             }
         }
+    }
+
+    fn resolveRelativeClassName(self: *VM, name: []const u8) []const u8 {
+        const relative = std.mem.eql(u8, name, "self") or std.mem.eql(u8, name, "static") or std.mem.eql(u8, name, "parent");
+        return if (relative) self.resolveStaticClassName(name) else name;
     }
 
     fn resolveStaticClassName(self: *VM, name: []const u8) []const u8 {
@@ -15971,8 +16008,15 @@ pub const VM = struct {
     }
 
     fn parentResolvingClass(self: *VM) ?[]const u8 {
-        // like currentDefiningClass but skips closure scope check and uses
-        // called_class as disambiguator fallback for parent:: resolution
+        // a closure's parent:: is its declaring class's parent, wherever it
+        // is called from
+        if (self.frame_count > 0) {
+            const top = &self.frames[self.frame_count - 1];
+            if (self.closureDefClassForFrame(top)) |defining| return defining;
+            if (self.closureScopeForFrame(top)) |scope| return scope;
+        }
+        // otherwise like currentDefiningClass, with called_class as the
+        // disambiguator for a trait method shared by several classes
         var fi: usize = self.frame_count;
         while (fi > 0) {
             fi -= 1;

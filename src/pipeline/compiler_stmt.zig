@@ -77,10 +77,14 @@ pub fn compileDoWhile(self: *Compiler, node: Ast.Node) Error!void {
 
     const loop_top = self.chunk.offset();
     self.loop_start = loop_top;
+    // do-while continue jumps to the condition, not the body top, so it
+    // must be a forward jump patched below
+    const prev_use_cj = self.use_continue_jumps;
+    self.use_continue_jumps = true;
+    defer self.use_continue_jumps = prev_use_cj;
 
     try self.compileNode(node.data.lhs);
 
-    // do-while continue jumps to the condition, not the body top
     try self.patchContinues(&prev_continues);
 
     try self.compileNode(node.data.rhs);
