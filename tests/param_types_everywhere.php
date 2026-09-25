@@ -67,3 +67,8 @@ report(fn () => total(1, '2', 3));
 report(fn () => total(1, 'two'));
 report(fn () => call_user_func('total', 4, []));
 report(fn () => call_user_func_array([new Sorter, 'cmp'], ['a' => 'w', 'b' => 1]));
+
+// a coerced argument that was a heap string gives its reference back
+preg_match('/(?<id>\d+)/', 'post 42', $m);
+report(fn () => (new Sorter)->cmp($m['id'], str_repeat('7', 2)));
+report(fn () => Sorter::twice(strrev('21')));

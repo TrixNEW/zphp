@@ -656,7 +656,9 @@ fn listenSocket(endpoint: Endpoint, flags: i64, backlog: u31) !std.posix.socket_
     const addr = try endpointAddress(endpoint);
     const sock = try newSocket(addr.any.family);
     errdefer platform.closeSocket(platform.socketToInt(sock));
-    if (endpoint == .tcp and !platform.is_windows) try std.posix.setsockopt(sock, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    // php sets it on every platform; on windows that lets a second server
+    // take a port that is already bound, which php allows there too
+    if (endpoint == .tcp) try std.posix.setsockopt(sock, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
     if ((flags & 4) != 0) try std.posix.bind(sock, &addr.any, addr.getOsSockLen());
     if ((flags & 8) != 0) try std.posix.listen(sock, backlog);
     return sock;

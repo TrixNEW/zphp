@@ -17718,7 +17718,7 @@ pub const VM = struct {
         if (g_type_info.count() == 0) return false;
         const ac: usize = arg_count;
         // runs before the callee frame is pushed, so the caller is the top frame
-        const exc = (try self.enforceArgTypes(name, self.stack[self.sp - ac .. self.sp], .{ .strict = self.topFrameStrict() })) orelse return false;
+        const exc = (try self.enforceArgTypes(name, self.stack[self.sp - ac .. self.sp], .{ .strict = self.topFrameStrict(), .stack_owned = true })) orelse return false;
         self.dropN(ac);
         if (self.throwObject(exc)) return true;
         return error.RuntimeError;
@@ -17750,7 +17750,15 @@ pub const VM = struct {
         // an internal function calling back into user code: never strict,
         // and php names no call site in the message
         internal: bool = false,
+        // the arguments are operand-stack slots, which own a reference a
+        // coerced replacement must give back
+        stack_owned: bool = false,
     };
+
+    fn replaceArg(self: *VM, slot: *Value, replacement: Value, caller: ArgCaller) void {
+        if (caller.stack_owned) self.stackRelease(slot.*);
+        slot.* = replacement;
+    }
 
     fn enforceArgTypes(self: *VM, name: []const u8, args: []Value, caller: ArgCaller) RuntimeError!?*PhpObject {
         const strict = caller.strict;
@@ -17766,7 +17774,7 @@ pub const VM = struct {
             if (!self.checkTypeMatch(val, type_str)) {
                 if (!strict) {
                     if (try self.tryWeakCoerce(val, type_str)) |coerced| {
-                        slot.* = coerced;
+                        self.replaceArg(slot, coerced, caller);
                         continue;
                     }
                 }
@@ -17774,11 +17782,11 @@ pub const VM = struct {
             }
             if (val == .object and self.typeStrAllowsString(type_str) and self.hasMethod(val.object.class_name, "__toString")) {
                 const text = try self.objectToString(val.object);
-                slot.* = .{ .string = Value.String.borrowed(text) };
+                self.replaceArg(slot, .{ .string = Value.String.borrowed(text) }, caller);
             } else if (!strict) {
                 // a value that passes still takes the declared scalar type in
                 // weak mode (int 5 into a float parameter is float(5))
-                if (try self.coerceToDeclaredScalar(val, type_str)) |coerced| slot.* = coerced;
+                if (try self.coerceToDeclaredScalar(val, type_str)) |coerced| self.replaceArg(slot, coerced, caller);
             }
         }
         return null;
