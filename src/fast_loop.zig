@@ -1062,7 +1062,8 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const mc_entry = &ic.method[mc_idx];
                     if (mc_entry.key == mc_ip and mc_entry.chunk_key == mc_chunk_key and mc_entry.class_ptr == @intFromPtr(mc_obj.class_name.ptr)) {
                         if (mc_entry.func) |mc_func| {
-                            if (mc_func.locals_only and self.captures.items.len == 0) {
+                            // a method is never a closure instance, so it has no captures
+                            if (mc_func.locals_only) {
                                 if (mc_func.has_param_types and !argsHoldDeclared(self, ic, mc_func, mc_func.name, self.stack[sp - mc_arg_count .. sp])) {
                                     self.sp = sp;
                                     if (try checkParamTypes(self, ic, mc_func.name, mc_arg_count)) {
@@ -1081,12 +1082,14 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                                 const mc_locals = ic.locals_buf[mc_lbase .. mc_lbase + mc_lc];
                                 @memset(mc_locals, .null);
                                 ic.locals_sp = mc_lbase + mc_lc;
-                                mc_locals[0] = .{ .object = mc_obj };
+                                // a static method reached through an instance has no $this slot
+                                const mc_first: usize = if (mc_func.is_static) 0 else 1;
+                                if (!mc_func.is_static) mc_locals[0] = .{ .object = mc_obj };
                                 for (0..@min(mc_ac, mc_func.arity)) |i| {
-                                    mc_locals[i + 1] = self.stack[sp - mc_ac + i];
+                                    mc_locals[i + mc_first] = self.stack[sp - mc_ac + i];
                                 }
                                 for (@min(mc_ac, mc_func.arity)..mc_func.arity) |i| {
-                                    if (i < mc_func.defaults.len) mc_locals[i + 1] = try resolveDefault(self, ic, mc_func.defaults[i]);
+                                    if (i < mc_func.defaults.len) mc_locals[i + mc_first] = try resolveDefault(self, ic, mc_func.defaults[i]);
                                 }
                                 self.sp = sp;
                                 self.dropN(mc_ac + 1);
@@ -1148,7 +1151,8 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         return;
                     };
 
-                    if (!func.locals_only or self.captures.items.len > 0) {
+                    // a declared function is never a closure instance, so it has no captures
+                    if (!func.locals_only) {
                         frame.ip = ip - 4;
                         self.sp = sp;
                         return;

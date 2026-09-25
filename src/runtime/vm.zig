@@ -800,6 +800,9 @@ pub const VM = struct {
     has_hook_cache_prop: []const u8 = "",
     has_hook_cache_kind: u2 = 0,
     has_hook_cache_result: bool = false,
+    // a user class with a property hook exists; until one does, no property
+    // access needs a hook lookup
+    any_prop_hooks: bool = false,
     has_hook_cache_fn_count: usize = 0,
     has_hook_cache_cls_count: usize = 0,
     ic: ?*InlineCache = null,
@@ -2659,6 +2662,7 @@ pub const VM = struct {
     }
 
     fn freeClassState(self: *VM) void {
+        self.any_prop_hooks = false;
         if (self.builtins_recorded) {
             // keep the immutable builtin classes/interfaces registered at init;
             // deinit + remove only the request-scoped (user) ones. names are chunk
@@ -6550,15 +6554,7 @@ pub const VM = struct {
                             ri.releaseOwner(self.allocator, self.last_return_ref_owner);
                             self.last_return_ref_owner = 0;
                         }
-                        if (dst_name.len == 0 or dst_name[0] != 0) try self.putFrameVar(&frame.vars, dst_name, cell.*);
-                        if (frame.func) |func| {
-                            for (func.slot_names, 0..) |sn, si| {
-                                if (std.mem.eql(u8, sn, dst_name)) {
-                                    if (si < frame.locals.len) frame.locals[si] = cell.*;
-                                    break;
-                                }
-                            }
-                        }
+                        try self.mirrorBoundName(frame, dst_name, cell.*);
                         self.setReturnRef(null);
                     } else {
                         // callee didn't return a ref - degrade to value copy
@@ -9196,35 +9192,8 @@ pub const VM = struct {
                                 if (func.has_param_types) {
                                     if (try self.checkParamTypes(func.name, arg_count)) continue;
                                 }
-                                if (func.locals_only and self.captures.items.len == 0) {
-                                    const lc: usize = func.local_count;
-                                    const lbase = ic.locals_sp;
-                                    const mc_locals = if (lbase + lc <= ic.locals_cap) blk: {
-                                        const s = ic.locals_buf[lbase .. lbase + lc];
-                                        @memset(s, .null);
-                                        ic.locals_sp = lbase + lc;
-                                        break :blk s;
-                                    } else blk: {
-                                        const s = try self.allocator.alloc(Value, lc);
-                                        @memset(s, .null);
-                                        break :blk s;
-                                    };
-                                    mc_locals[0] = .{ .object = obj };
-                                    for (0..@min(ac, func.arity)) |i| {
-                                        mc_locals[i + 1] = try self.bindFrameArg(self.stack[self.sp - ac + i]);
-                                    }
-                                    for (@min(ac, func.arity)..func.arity) |i| {
-                                        if (i < func.defaults.len) mc_locals[i + 1] = try self.resolveDefault(func.defaults[i]);
-                                    }
-                                    self.saveFrameArgs(arg_count);
-                                    self.dropN(ac + 1);
-                                    self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = mc_locals, .func = func };
-                                    self.setFrameArgCount(arg_count);
-                                    self.frames[self.frame_count].entry_sp = self.sp;
-                                    self.frame_count += 1;
-                                    self.retainFrameObjects(self.frame_count - 1);
-                                    if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
-                                    try self.fastLoop();
+                                if (func.locals_only) {
+                                    try self.enterMethodLocalsOnly(func, obj, arg_count);
                                     continue;
                                 }
                             } else if (mc_entry.native) |native| {
@@ -9420,6 +9389,10 @@ pub const VM = struct {
                             if (mvr.visibility == .public) {
                                 ic.method[mc_idx2] = .{ .key = mc_ip2, .chunk_key = mc_chunk_key2, .class_ptr = @intFromPtr(obj.class_name.ptr), .func = func, .full_name = full_name };
                             }
+                        }
+                        if (func.locals_only) {
+                            try self.enterMethodLocalsOnly(func, obj, arg_count);
+                            continue;
                         }
                         var new_vars = self.acquireFrameVars();
                         try new_vars.put(self.allocator, "$this", .{ .object = obj });
@@ -12471,6 +12444,31 @@ pub const VM = struct {
         return clone;
     }
 
+    // a name just bound to a reference cell mirrors the cell's value. the
+    // mirror owns one reference, shared by the slot and its vars entry, and
+    // drops the one it held before
+    fn mirrorBoundName(self: *VM, frame: *CallFrame, name: []const u8, bound: Value) RuntimeError!void {
+        var slot: ?usize = null;
+        if (frame.func) |func| for (func.slot_names, 0..) |sn, si| {
+            if (std.mem.eql(u8, sn, name)) {
+                if (si < frame.locals.len) slot = si;
+                break;
+            }
+        };
+        const names_in_slots = slot != null and frame.func.?.locals_only and frame.vars.count() == 0;
+        const mirror_vars = (name.len == 0 or name[0] != 0) and !names_in_slots;
+        if (!mirror_vars and slot == null) return;
+        // a var, so the slot store below cannot alias it
+        var old: Value = .null;
+        if (mirror_vars) {
+            if (frame.vars.get(name)) |held| old = held else if (slot) |si| old = frame.locals[si];
+        } else if (slot) |si| old = frame.locals[si];
+        retainValue(bound);
+        if (mirror_vars) try self.putFrameVar(&frame.vars, name, bound);
+        if (slot) |si| frame.locals[si] = bound;
+        self.releaseValue(old);
+    }
+
     fn loadLocalSlot(self: *VM, frame: *CallFrame, slot: u16, ref_cell: ?*Value) Value {
         if (ref_cell) |cell| return cell.*;
         if (frame.func == null) return self.getLocalGlobal(slot, frame);
@@ -13485,6 +13483,7 @@ pub const VM = struct {
             var old_def = old.value;
             old_def.deinit(self.allocator);
         }
+        if (def.has_prop_hooks) self.any_prop_hooks = true;
         try self.classes.put(self.allocator, class_name, def);
 
         // #[Override] enforcement - runs after class is registered so class
@@ -14565,6 +14564,43 @@ pub const VM = struct {
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = locals, .func = func, .called_class = self.closureScopeByName(name) orelse self.callerCalledClass(), .call_name = name };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.setFrameArgCount(arg_count);
+        self.frame_count += 1;
+        self.retainFrameObjects(self.frame_count - 1);
+        if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
+        try self.fastLoop();
+    }
+
+    // a locals-only method: $this in slot 0, the arguments after it, run in
+    // the fast loop. the object and arguments are on the stack under the call
+    fn enterMethodLocalsOnly(self: *VM, func: *const ObjFunction, obj: *PhpObject, arg_count: u8) RuntimeError!void {
+        const ac: usize = arg_count;
+        const lc: usize = func.local_count;
+        const ic = self.ic.?;
+        const lbase = ic.locals_sp;
+        const locals = if (lbase + lc <= ic.locals_cap) blk: {
+            const s = ic.locals_buf[lbase .. lbase + lc];
+            @memset(s, .null);
+            ic.locals_sp = lbase + lc;
+            break :blk s;
+        } else blk: {
+            const s = try self.allocator.alloc(Value, lc);
+            @memset(s, .null);
+            break :blk s;
+        };
+        // a static method reached through an instance has no $this slot
+        const first: usize = if (func.is_static) 0 else 1;
+        if (!func.is_static) locals[0] = .{ .object = obj };
+        for (0..@min(ac, func.arity)) |i| {
+            locals[i + first] = try self.bindFrameArg(self.stack[self.sp - ac + i]);
+        }
+        for (@min(ac, func.arity)..func.arity) |i| {
+            if (i < func.defaults.len) locals[i + first] = try self.resolveDefault(func.defaults[i]);
+        }
+        self.saveFrameArgs(arg_count);
+        self.dropN(ac + 1);
+        self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = locals, .func = func };
+        self.setFrameArgCount(arg_count);
+        self.frames[self.frame_count].entry_sp = self.sp;
         self.frame_count += 1;
         self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
@@ -16750,6 +16786,7 @@ pub const VM = struct {
     }
 
     pub fn hasPropHook(self: *VM, class_name: []const u8, prop_name: []const u8, kind: enum { get, set }) bool {
+        if (!self.any_prop_hooks) return false;
         // fast path: if no class in this hierarchy declares any property hook,
         // the per-access bufPrint + hasMethod lookup is pure overhead. walking
         // the (usually 1-3 deep) parent chain of bool checks is far cheaper and
