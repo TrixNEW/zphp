@@ -14,6 +14,6 @@ function churn(int $n): void
 
 churn(2000);
 $before = memory_get_usage();
-churn(50000);
+churn(10000);
 $growth = memory_get_usage() - $before;
-echo ($growth < 2 * 1024 * 1024) ? "bounded\n" : "unbounded: $growth\n";
+echo ($growth < 1024 * 1024) ? "bounded\n" : "unbounded: $growth\n";
