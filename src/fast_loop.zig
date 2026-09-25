@@ -84,10 +84,18 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         locals[slot] = val;
                     }
                     self.releaseValue(sl_old);
-                    if (frame.vars.count() > 0) {
-                        if (frame.func) |func| {
-                            if (slot < func.slot_names.len) {
-                                if (frame.vars.getPtr(func.slot_names[slot])) |mirror| mirror.* = locals[slot];
+                    // a frame that keeps named variables gets every write, as
+                    // runLoop's set_local does, so by-name reads see it; a
+                    // global-scope write also reaches $GLOBALS and global cells
+                    if (frame.func == null) {
+                        self.sp = sp;
+                        try status(ic.slow.set_local_global(self, slot, locals[slot]));
+                    } else if (frame.func) |func| {
+                        if (slot < func.slot_names.len and func.slot_names[slot].len > 0) {
+                            if (frame.vars.getPtr(func.slot_names[slot])) |mirror| {
+                                mirror.* = locals[slot];
+                            } else if (!func.locals_only) {
+                                try frame.vars.put(self.allocator, func.slot_names[slot], locals[slot]);
                             }
                         }
                     }
@@ -110,7 +118,9 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .add => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
-                    if (a == .object or b == .object or a == .resource or b == .resource) {
+                    // arrays (union, TypeError) and strings (numeric warnings) take
+                    // runLoop's arithmetic
+                    if (!isNumber(a) or !isNumber(b)) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -127,7 +137,9 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .subtract => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
-                    if (a == .object or b == .object or a == .resource or b == .resource) {
+                    // arrays (union, TypeError) and strings (numeric warnings) take
+                    // runLoop's arithmetic
+                    if (!isNumber(a) or !isNumber(b)) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -144,7 +156,9 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .multiply => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
-                    if (a == .object or b == .object or a == .resource or b == .resource) {
+                    // arrays (union, TypeError) and strings (numeric warnings) take
+                    // runLoop's arithmetic
+                    if (!isNumber(a) or !isNumber(b)) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -372,7 +386,12 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     continue :dispatch @as(OpCode, @enumFromInt(_next));
                 },
                 .not => {
-                    self.stack[sp - 1] = .{ .bool = !self.stack[sp - 1].isTruthy() };
+                    // read before writing: the result location's tag may be
+                    // set before its payload is evaluated
+                    const not_operand = self.stack[sp - 1];
+                    const not_result = !not_operand.isTruthy();
+                    self.stackRelease(not_operand);
+                    self.stack[sp - 1] = .{ .bool = not_result };
                     const _next = code[ip];
                     ip += 1;
                     continue :dispatch @as(OpCode, @enumFromInt(_next));
@@ -497,10 +516,30 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         self.sp = sp;
                         return;
                     }
-                    self.stack[sp - 1] = .{ .int = Value.toInt(v) };
+                    const as_int = Value.toInt(v);
+                    self.stackRelease(v);
+                    self.stack[sp - 1] = .{ .int = as_int };
                     const _next = code[ip];
                     ip += 1;
                     continue :dispatch @as(OpCode, @enumFromInt(_next));
+                },
+                .get_class_const => {
+                    const gc_site = ip - 1;
+                    const gc_class = consts[(@as(u16, code[ip]) << 8) | code[ip + 1]].string.bytes();
+                    ip += 4;
+                    const gc_class_ptr = classConstReceiver(frame, locals, gc_class);
+                    const gc_entry = &ic.class_const[InlineCache.propIndex(@intFromPtr(frame.chunk), gc_site)];
+                    if (gc_class_ptr != 0 and gc_entry.key == gc_site and gc_entry.chunk_key == @intFromPtr(frame.chunk) and gc_entry.class_ptr == gc_class_ptr) {
+                        VM.stackRetain(gc_entry.value);
+                        self.stack[sp] = gc_entry.value;
+                        sp += 1;
+                        const _next = code[ip];
+                        ip += 1;
+                        continue :dispatch @as(OpCode, @enumFromInt(_next));
+                    }
+                    frame.ip = gc_site;
+                    self.sp = sp;
+                    return;
                 },
                 .cast_bool => {
                     const v = self.stack[sp - 1];
@@ -536,48 +575,41 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     continue :dispatch @as(OpCode, @enumFromInt(_next));
                 },
                 .array_get => {
-                    if (self.globals_cells.count() > 0) {
+                    // missing keys (a warning), non-scalar keys (a TypeError),
+                    // $GLOBALS (global cells) and anything but arrays and
+                    // in-range string offsets take runLoop's path
+                    const ag_key = self.stack[sp - 1];
+                    const ag_arr = self.stack[sp - 2];
+                    const ag_elem: ?Value = switch (ag_arr) {
+                        .array => |arr| if (ag_key == .resource or ag_key == .array or ag_key == .object or arr == self.globals_array)
+                            null
+                        else if (arr.getPtr(Value.toArrayKey(ag_key))) |entry| entry.value else null,
+                        .string => |str| if (ag_key == .int and ag_key.int >= 0 and @as(usize, @intCast(ag_key.int)) < str.len) blk: {
+                            const at: usize = @intCast(ag_key.int);
+                            break :blk .{ .string = str.retainedSlice(at, at + 1) };
+                        } else null,
+                        else => null,
+                    };
+                    const elem = ag_elem orelse {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
-                    }
-                    const ag_key = self.stack[sp - 1];
-                    const ag_arr = self.stack[sp - 2];
+                    };
                     sp -= 2;
-                    if (ag_arr == .array and ag_key != .resource) {
-                        if (self.globals_array) |ga| {
-                            if (ag_arr.array == ga) {
-                                frame.ip = ip - 1;
-                                self.sp = sp + 2;
-                                return;
-                            }
-                        }
-                        const ag_elem = ag_arr.array.get(Value.toArrayKey(ag_key));
-                        self.stackRelease(ag_key);
-                        // an object element pushed onto the operand stack takes a
-                        // reference (Stage 1); arrays are not stack-owned
-                        VM.stackRetain(ag_elem);
-                        self.stack[sp] = ag_elem;
-                        sp += 1;
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (ag_arr == .string and ag_key == .int and ag_key.int >= 0 and @as(usize, @intCast(ag_key.int)) < ag_arr.string.len) {
-                        // an in-range string offset is a one-byte view sharing
-                        // the base's owner; the base's stack reference drops
-                        const at: usize = @intCast(ag_key.int);
-                        const char = ag_arr.string.retainedSlice(at, at + 1);
+                    self.stackRelease(ag_key);
+                    if (ag_arr == .string) {
+                        // the one-byte view already owns its reference
                         self.stackRelease(ag_arr);
-                        self.stack[sp] = .{ .string = char };
-                        sp += 1;
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
                     } else {
-                        frame.ip = ip - 1;
-                        self.sp = sp + 2;
-                        return;
+                        // an element pushed onto the operand stack takes a
+                        // reference (Stage 1); arrays are not stack-owned
+                        VM.stackRetain(elem);
                     }
+                    self.stack[sp] = elem;
+                    sp += 1;
+                    const _next = code[ip];
+                    ip += 1;
+                    continue :dispatch @as(OpCode, @enumFromInt(_next));
                 },
                 .array_get_vivify => {
                     const agv_key = self.stack[sp - 1];
@@ -827,6 +859,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         if (i < ci_func.defaults.len) ci_locals[i] = try resolveDefault(self, ic, ci_func.defaults[i]);
                     }
                     self.sp = sp;
+                    self.saveFrameArgs(ci_ac);
                     self.dropN(ci_acn);
                     sp = self.sp;
                     // the closure value slot was consumed above; the callee
@@ -853,6 +886,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         .vars = .{},
                         .locals = ci_locals,
                         .func = ci_func,
+                        .called_class = closureScope(self, ci_cap_range) orelse frame.called_class,
                         .call_name = if (ci_cap_range != null) ci_name else null,
                     };
                     ic.arg_counts[self.frame_count] = ci_ac;
@@ -1094,6 +1128,8 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         if (i < func.defaults.len) new_locals[i] = try resolveDefault(self, ic, func.defaults[i]);
                     }
                     self.sp = sp;
+                    // func_get_args reads the call's arguments from here
+                    self.saveFrameArgs(arg_count);
                     self.dropN(ac);
                     sp = self.sp;
 
@@ -1108,6 +1144,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         .vars = .{},
                         .locals = new_locals,
                         .func = func,
+                        .called_class = frame.called_class,
                     };
                     ic.arg_counts[self.frame_count] = arg_count;
                     self.frame_count += 1;
@@ -1130,7 +1167,9 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         .string => result != .string,
                         .other => true,
                     } else false;
-                    if (frame.vars.count() > 0 or frame.ref_slots.count() > 0 or ret_bail) {
+                    // an allocated map, even one emptied by unset, is runLoop's
+                    // to free when the frame tears down
+                    if (frame.vars.capacity() > 0 or frame.ref_slots.capacity() > 0 or ret_bail) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -1153,6 +1192,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         self.freeLocals(locals);
                     }
                     self.frame_count -= 1;
+                    self.restoreFrameArgsSp();
 
                     if (self.frame_count < entry_fc) {
                         self.stack[sp - 1] = result;
@@ -1171,7 +1211,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     continue :reenter;
                 },
                 .return_void => {
-                    if (frame.vars.count() > 0 or frame.ref_slots.count() > 0) {
+                    if (frame.vars.capacity() > 0 or frame.ref_slots.capacity() > 0) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -1185,6 +1225,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         self.freeLocals(locals);
                     }
                     self.frame_count -= 1;
+                    self.restoreFrameArgsSp();
 
                     if (self.frame_count < entry_fc) {
                         self.stack[sp] = .null;
@@ -1551,7 +1592,11 @@ fn inlineNativeCall(self: *VM, name: []const u8, arg_count: u8, sp: *usize) bool
         const string = s_val.string;
         const s = string.bytes();
         const slen: i64 = @intCast(s.len);
-        var start = Value.toInt(self.stack[sp.* - ac + 1]);
+        // anything but int arguments needs the native's parameter checks
+        const start_arg = self.stack[sp.* - ac + 1];
+        if (start_arg != .int) return false;
+        if (ac >= 3 and self.stack[sp.* - ac + 2] != .int and self.stack[sp.* - ac + 2] != .null) return false;
+        var start = start_arg.int;
         if (start < 0) start = @max(0, slen + start);
         if (start >= slen) {
             for (self.stack[sp.* - ac .. sp.*]) |arg| self.stackRelease(arg);
@@ -1588,8 +1633,12 @@ fn inlineNativeCall(self: *VM, name: []const u8, arg_count: u8, sp: *usize) bool
         const hay = self.stack[sp.* - ac];
         const needle = self.stack[sp.* - ac + 1];
         if (hay != .string or needle != .string) return false;
-        const offset: usize = if (ac >= 3) @intCast(@max(0, Value.toInt(self.stack[sp.* - ac + 2]))) else 0;
-        if (offset >= hay.string.len) {
+        // negative offsets count from the end and out-of-range ones throw:
+        // both are the native's business
+        const offset_arg: Value = if (ac >= 3) self.stack[sp.* - ac + 2] else .{ .int = 0 };
+        if (offset_arg != .int or offset_arg.int < 0 or offset_arg.int > hay.string.len) return false;
+        const offset: usize = @intCast(offset_arg.int);
+        if (offset >= hay.string.len and needle.string.len > 0) {
             for (self.stack[sp.* - ac .. sp.*]) |arg| self.stackRelease(arg);
             sp.* -= ac;
             self.stack[sp.*] = .{ .bool = false };
@@ -1610,7 +1659,7 @@ fn inlineNativeCall(self: *VM, name: []const u8, arg_count: u8, sp: *usize) bool
         return true;
     }
     if (name.len == 7 and std.mem.eql(u8, name, "strrpos")) {
-        if (ac < 2) return false;
+        if (ac != 2) return false;
         const hay = self.stack[sp.* - ac];
         const needle = self.stack[sp.* - ac + 1];
         if (hay != .string or needle != .string) return false;
@@ -1637,4 +1686,29 @@ fn inlineNativeCall(self: *VM, name: []const u8, arg_count: u8, sp: *usize) bool
         return true;
     }
     return false;
+}
+
+// the class a get_class_const site reads for, identified the way runLoop's
+// resolveStaticClassName would; 0 when only runLoop can resolve it
+fn classConstReceiver(frame: anytype, locals: []Value, raw: []const u8) usize {
+    if (raw.len == 0 or raw[0] == '$' or raw[0] == '\\') return 0;
+    if (!std.mem.eql(u8, raw, "static")) return @intFromPtr(raw.ptr);
+    if (frame.called_class) |cc| return @intFromPtr(cc.ptr);
+    const func = frame.func orelse return 0;
+    if (func.slot_names.len == 0 or locals.len == 0) return 0;
+    if (!std.mem.eql(u8, func.slot_names[0], "$this") or locals[0] != .object) return 0;
+    return @intFromPtr(locals[0].object.class_name.ptr);
+}
+
+// the class a bound closure runs in, as runLoop's closureScopeByName reads it
+fn closureScope(self: *VM, range: anytype) ?[]const u8 {
+    const r = range orelse return null;
+    for (self.captures.items[r.start .. r.start + r.len]) |cap| {
+        if (cap.value == .string and std.mem.eql(u8, cap.var_name, "$__closure_scope")) return cap.value.string.bytes();
+    }
+    return null;
+}
+
+fn isNumber(v: Value) bool {
+    return v == .int or v == .float;
 }

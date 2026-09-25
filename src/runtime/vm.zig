@@ -1264,6 +1264,7 @@ pub const VM = struct {
         retain_frame_objects: *const fn (*VM, usize) void,
         expire_execution: *const fn (*VM) u8,
         param_types: *const fn (*VM, []const u8) []const []const u8,
+        set_local_global: *const fn (*VM, u16, Value) u8,
 
         pub const Status = struct {
             pub const ok: u8 = 0;
@@ -1280,6 +1281,7 @@ pub const VM = struct {
             .retain_frame_objects = VM.retainFrameObjects,
             .expire_execution = expireExecutionEntry,
             .param_types = VM.declaredParamTypes,
+            .set_local_global = setLocalGlobalEntry,
         };
 
         fn statusOf(err: anyerror) u8 {
@@ -1298,6 +1300,12 @@ pub const VM = struct {
 
         fn arraySetOwnedEntry(vm: *VM, array: *PhpArray, key: PhpArray.Key, value: Value) u8 {
             vm.arraySetOwned(array, key, value) catch |err| return statusOf(err);
+            return Status.ok;
+        }
+
+        // a global-scope write already stored in the frame's locals
+        fn setLocalGlobalEntry(vm: *VM, slot: u16, val: Value) u8 {
+            vm.setLocalGlobal(slot, val, vm.currentFrame()) catch |err| return statusOf(err);
             return Status.ok;
         }
 
@@ -1339,6 +1347,13 @@ pub const VM = struct {
         prop: [128]PropIC = @splat(.{}),
         // method call: keyed by (chunk_ptr ^ ip), stores class_ptr + resolved func
         method: [128]MethodIC = @splat(.{}),
+        // class constant read: keyed by (chunk_ptr ^ ip), for the class the
+        // site resolved to. cleared whenever a registered class's constant
+        // is written, so a cached value is always the stored one
+        class_const: [128]ClassConstIC = @splat(.{}),
+        // statement ends (chunk_ptr ^ ip) where handing the frame back to
+        // the fast loop bailed without progress; runLoop stops retrying them
+        fast_stalls: [256]usize = @splat(0),
         // stack-allocated locals for callLocalsOnly - avoids heap alloc/free per call
         locals_buf: [*]Value = undefined,
         locals_sp: usize = 0,
@@ -1394,6 +1409,13 @@ pub const VM = struct {
             // then run the declared-type check/coercion before the slot write
             prop_type: []const u8 = "",
             decl_class: []const u8 = "",
+        };
+
+        const ClassConstIC = struct {
+            key: usize = 0,
+            chunk_key: usize = 0,
+            class_ptr: usize = 0,
+            value: Value = .null,
         };
 
         const MethodIC = struct {
@@ -2984,6 +3006,7 @@ pub const VM = struct {
                 ic_ptr.fn_lower.clearRetainingCapacity();
                 ic_ptr.resolved_calls.clearRetainingCapacity();
                 self.clearResolvedMethods(ic_ptr);
+                ic_ptr.class_const = @splat(.{});
             }
             // chunk_to_func_names indexes per-chunk name lists - many entries
             // are closure instance names (`__closure_N_inst_M`, `__closure_bound_N`)
@@ -3551,6 +3574,9 @@ pub const VM = struct {
                     // boundary, so run any destructors queued by this statement
                     _ = self.pop();
                     if (self.hasPendingReleases()) self.drainPendingDestruct();
+                    if (self.frame_count > base_frame and !self.arg_capture_pending and self.currentFrame().locals.len > 0) {
+                        if (try self.resumeFastLoop(base_frame)) return;
+                    }
                     self.collectCyclesIfNeeded();
                 },
                 .dup => self.push(self.stack[self.sp - 1]),
@@ -10720,6 +10746,13 @@ pub const VM = struct {
                     const const_idx = self.readU16();
                     const class_name = self.resolveStaticClassName(self.currentChunk().constants.items[class_idx].string.bytes());
                     const const_name = self.currentChunk().constants.items[const_idx].string.bytes();
+                    if (!std.mem.eql(u8, const_name, "class")) {
+                        if (self.getClassConstant(class_name, const_name)) |val| {
+                            self.rememberClassConstant(class_name, val);
+                            self.push(val);
+                            continue;
+                        }
+                    }
                     if (try self.pushClassConstant(class_name, const_name)) continue;
                 },
 
@@ -10755,6 +10788,7 @@ pub const VM = struct {
                     const const_name = self.currentChunk().constants.items[const_idx].string.bytes();
                     const val = try self.copyValue(self.peek());
                     if (self.classes.getPtr(class_name)) |cls| {
+                        self.forgetClassConstants();
                         const old = try cls.constants.fetchPut(self.allocator, const_name, val);
                         if (old) |kv| self.releaseValue(kv.value);
                     } else self.releaseValue(val);
@@ -11289,6 +11323,18 @@ pub const VM = struct {
         try self.strings.append(self.allocator, msg);
         if (try self.throwBuiltinException("Error", msg)) return true;
         return error.RuntimeError;
+    }
+
+    // the executing get_class_const site now reads `value` for `class_name`
+    fn rememberClassConstant(self: *VM, class_name: []const u8, value: Value) void {
+        const ic = self.ic orelse return;
+        const site = self.currentFrame().ip - 5;
+        const chunk_key = @intFromPtr(self.currentChunk());
+        ic.class_const[InlineCache.propIndex(chunk_key, site)] = .{ .key = site, .chunk_key = chunk_key, .class_ptr = @intFromPtr(class_name.ptr), .value = value };
+    }
+
+    fn forgetClassConstants(self: *VM) void {
+        if (self.ic) |ic| ic.class_const = @splat(.{});
     }
 
     fn classNameOf(v: Value) []const u8 {
@@ -14369,6 +14415,22 @@ pub const VM = struct {
         self.retainFrameObjects(self.frame_count - 1);
         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
         try self.fastLoop();
+    }
+
+    // hand the current frame back to the fast loop at a statement end, unless
+    // this statement end is known to bail straight back. true when the frame
+    // runLoop was driving has returned
+    fn resumeFastLoop(self: *VM, base_frame: usize) RuntimeError!bool {
+        const ic = self.ic.?;
+        const chunk = self.currentChunk();
+        const ip = self.currentFrame().ip;
+        const site = @intFromPtr(chunk) ^ ip;
+        const slot = &ic.fast_stalls[@as(u8, @truncate(site *% 0x9E3779B97F4A7C15 >> 56))];
+        if (slot.* == site) return false;
+        const fc = self.frame_count;
+        try self.fastLoop();
+        if (self.frame_count == fc and self.currentFrame().ip == ip and self.currentChunk() == chunk) slot.* = site;
+        return self.frame_count <= base_frame;
     }
 
     // compiled as a separate object (src/runtime/fast_loop.zig) so LLVM
@@ -19045,7 +19107,7 @@ pub const VM = struct {
         return ac;
     }
 
-    fn saveFrameArgs(self: *VM, arg_count: u8) void {
+    pub fn saveFrameArgs(self: *VM, arg_count: u8) void {
         const ic = self.ic orelse return;
         if (self.frame_count >= 2048) return;
         const ac: usize = arg_count;
@@ -19086,7 +19148,7 @@ pub const VM = struct {
         ic.fga_sp = @intCast(sp + ac);
     }
 
-    fn restoreFrameArgsSp(self: *VM) void {
+    pub fn restoreFrameArgsSp(self: *VM) void {
         const ic = self.ic orelse return;
         ic.fga_sp = ic.fga_offsets[self.frame_count];
     }
