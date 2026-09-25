@@ -30,6 +30,12 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
         const consts = frame.chunk.constants.items;
         var ip = frame.ip;
         var sp = self.sp;
+        // fixed while this frame runs here: every op that could bind a
+        // reference or name a variable leaves the fast loop, and a call
+        // comes back through reenter
+        const no_ref_cells = frame.ref_slots.count() == 0;
+        const direct_slots = no_ref_cells and frame.include_parent == null;
+        const names_local = namesOnlyInLocals(frame);
 
         while (true) {
             const byte: OpCode = @enumFromInt(code[ip]);
@@ -84,21 +90,8 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         locals[slot] = val;
                     }
                     self.releaseValue(sl_old);
-                    // a frame that keeps named variables gets every write, as
-                    // runLoop's set_local does, so by-name reads see it; a
-                    // global-scope write also reaches $GLOBALS and global cells
-                    if (frame.func == null) {
-                        self.sp = sp;
-                        try status(ic.slow.set_local_global(self, slot, locals[slot]));
-                    } else if (frame.func) |func| {
-                        if (slot < func.slot_names.len and func.slot_names[slot].len > 0) {
-                            if (frame.vars.getPtr(func.slot_names[slot])) |mirror| {
-                                mirror.* = locals[slot];
-                            } else if (!func.locals_only) {
-                                try frame.vars.put(self.allocator, func.slot_names[slot], locals[slot]);
-                            }
-                        }
-                    }
+                    self.sp = sp;
+                    if (!names_local) try syncLocalWrite(self, ic, frame, slot, locals[slot]);
                     if (code[ip] == @intFromEnum(OpCode.pop)) {
                         ip += 1;
                         sp -= 1;
@@ -951,6 +944,12 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         };
                         if (sp_typed_ok and sp_entry.key == sp_ip and sp_entry.chunk_key == @intFromPtr(frame.chunk) and sp_entry.class_ptr == @intFromPtr(sp_obj.class_name.ptr) and sp_entry.slot_index != 0xFFFF) {
                             if (sp_obj.slots) |s| {
+                                // every bail comes before the copy takes its reference
+                                if (self.obj_ref_active) {
+                                    frame.ip = ip - 3;
+                                    self.sp = sp;
+                                    return;
+                                }
                                 // copyValue: clone an array, retain an object for
                                 // the property slot - mirrors runLoop set_prop so a
                                 // property is a consistent durable holder (Stage 1)
@@ -958,11 +957,6 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                                 // resurrect on write - mirrors runLoop set_prop
                                 const sp_name_idx: u16 = (@as(u16, code[sp_ip]) << 8) | code[sp_ip + 1];
                                 const sp_prop_name = consts[sp_name_idx].string.bytes();
-                                if (self.obj_ref_active) {
-                                    frame.ip = ip - 3;
-                                    self.sp = sp;
-                                    return;
-                                }
                                 sp_obj.clearUnset(sp_prop_name);
                                 // overwrite-release: drop the object the slot held
                                 const sp_old_prop = s[sp_entry.slot_index];
@@ -1167,9 +1161,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         .string => result != .string,
                         .other => true,
                     } else false;
-                    // an allocated map, even one emptied by unset, is runLoop's
-                    // to free when the frame tears down
-                    if (frame.vars.capacity() > 0 or frame.ref_slots.capacity() > 0 or ret_bail) {
+                    if (!ownsTeardown(self, frame) or ret_bail) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -1211,7 +1203,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     continue :reenter;
                 },
                 .return_void => {
-                    if (frame.vars.capacity() > 0 or frame.ref_slots.capacity() > 0) {
+                    if (!ownsTeardown(self, frame)) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -1243,53 +1235,65 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const slot = (@as(u16, code[ip]) << 8) | code[ip + 1];
                     ip += 2;
                     const v = locals[slot];
-                    if (v == .int) {
-                        const r = @addWithOverflow(v.int, @as(i64, 1));
-                        if (r[1] != 0) {
-                            frame.ip = ip - 3;
-                            self.sp = sp;
-                            return;
+                    if (direct_slots) {
+                        if (v == .int) {
+                            const r = @addWithOverflow(v.int, @as(i64, 1));
+                            if (r[1] == 0) {
+                                locals[slot] = .{ .int = r[0] };
+                                if (!names_local) {
+                                    self.sp = sp;
+                                    try syncLocalWrite(self, ic, frame, slot, locals[slot]);
+                                }
+                                const _next = code[ip];
+                                ip += 1;
+                                continue :dispatch @as(OpCode, @enumFromInt(_next));
+                            }
+                        } else if (v == .float) {
+                            locals[slot] = .{ .float = v.float + 1.0 };
+                            if (!names_local) {
+                                self.sp = sp;
+                                try syncLocalWrite(self, ic, frame, slot, locals[slot]);
+                            }
+                            const _next = code[ip];
+                            ip += 1;
+                            continue :dispatch @as(OpCode, @enumFromInt(_next));
                         }
-                        locals[slot] = .{ .int = r[0] };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (v == .float) {
-                        locals[slot] = .{ .float = v.float + 1.0 };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else {
-                        frame.ip = ip - 3;
-                        self.sp = sp;
-                        return;
                     }
+                    frame.ip = ip - 3;
+                    self.sp = sp;
+                    return;
                 },
                 .dec_local => {
                     const slot = (@as(u16, code[ip]) << 8) | code[ip + 1];
                     ip += 2;
                     const v = locals[slot];
-                    if (v == .int) {
-                        const r = @subWithOverflow(v.int, @as(i64, 1));
-                        if (r[1] != 0) {
-                            frame.ip = ip - 3;
-                            self.sp = sp;
-                            return;
+                    if (direct_slots) {
+                        if (v == .int) {
+                            const r = @subWithOverflow(v.int, @as(i64, 1));
+                            if (r[1] == 0) {
+                                locals[slot] = .{ .int = r[0] };
+                                if (!names_local) {
+                                    self.sp = sp;
+                                    try syncLocalWrite(self, ic, frame, slot, locals[slot]);
+                                }
+                                const _next = code[ip];
+                                ip += 1;
+                                continue :dispatch @as(OpCode, @enumFromInt(_next));
+                            }
+                        } else if (v == .float) {
+                            locals[slot] = .{ .float = v.float - 1.0 };
+                            if (!names_local) {
+                                self.sp = sp;
+                                try syncLocalWrite(self, ic, frame, slot, locals[slot]);
+                            }
+                            const _next = code[ip];
+                            ip += 1;
+                            continue :dispatch @as(OpCode, @enumFromInt(_next));
                         }
-                        locals[slot] = .{ .int = r[0] };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (v == .float) {
-                        locals[slot] = .{ .float = v.float - 1.0 };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else {
-                        frame.ip = ip - 3;
-                        self.sp = sp;
-                        return;
                     }
+                    frame.ip = ip - 3;
+                    self.sp = sp;
+                    return;
                 },
                 .add_local_to_local => {
                     const src_slot = (@as(u16, code[ip]) << 8) | code[ip + 1];
@@ -1297,37 +1301,30 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     ip += 4;
                     const src = locals[src_slot];
                     const dst = locals[dst_slot];
-                    if (src == .int and dst == .int) {
-                        const r = @addWithOverflow(dst.int, src.int);
-                        if (r[1] != 0) {
-                            frame.ip = ip - 5;
-                            self.sp = sp;
-                            return;
+                    if (direct_slots and isNumber(src) and isNumber(dst)) {
+                        var ok = true;
+                        if (src == .int and dst == .int) {
+                            const r = @addWithOverflow(dst.int, src.int);
+                            ok = r[1] == 0;
+                            if (ok) locals[dst_slot] = .{ .int = r[0] };
+                        } else {
+                            const a = if (dst == .int) @as(f64, @floatFromInt(dst.int)) else dst.float;
+                            const b = if (src == .int) @as(f64, @floatFromInt(src.int)) else src.float;
+                            locals[dst_slot] = .{ .float = a + b };
                         }
-                        locals[dst_slot] = .{ .int = r[0] };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (src == .float and dst == .float) {
-                        locals[dst_slot] = .{ .float = dst.float + src.float };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (src == .int and dst == .float) {
-                        locals[dst_slot] = .{ .float = dst.float + @as(f64, @floatFromInt(src.int)) };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (src == .float and dst == .int) {
-                        locals[dst_slot] = .{ .float = @as(f64, @floatFromInt(dst.int)) + src.float };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else {
-                        frame.ip = ip - 5;
-                        self.sp = sp;
-                        return;
+                        if (ok) {
+                            if (!names_local) {
+                                self.sp = sp;
+                                try syncLocalWrite(self, ic, frame, dst_slot, locals[dst_slot]);
+                            }
+                            const _next = code[ip];
+                            ip += 1;
+                            continue :dispatch @as(OpCode, @enumFromInt(_next));
+                        }
                     }
+                    frame.ip = ip - 5;
+                    self.sp = sp;
+                    return;
                 },
                 .sub_local_to_local => {
                     const src_slot = (@as(u16, code[ip]) << 8) | code[ip + 1];
@@ -1335,27 +1332,30 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     ip += 4;
                     const src = locals[src_slot];
                     const dst = locals[dst_slot];
-                    if (src == .int and dst == .int) {
-                        const r = @subWithOverflow(dst.int, src.int);
-                        if (r[1] != 0) {
-                            frame.ip = ip - 5;
-                            self.sp = sp;
-                            return;
+                    if (direct_slots and isNumber(src) and isNumber(dst)) {
+                        var ok = true;
+                        if (src == .int and dst == .int) {
+                            const r = @subWithOverflow(dst.int, src.int);
+                            ok = r[1] == 0;
+                            if (ok) locals[dst_slot] = .{ .int = r[0] };
+                        } else {
+                            const a = if (dst == .int) @as(f64, @floatFromInt(dst.int)) else dst.float;
+                            const b = if (src == .int) @as(f64, @floatFromInt(src.int)) else src.float;
+                            locals[dst_slot] = .{ .float = a - b };
                         }
-                        locals[dst_slot] = .{ .int = r[0] };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (src == .float and dst == .float) {
-                        locals[dst_slot] = .{ .float = dst.float - src.float };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else {
-                        frame.ip = ip - 5;
-                        self.sp = sp;
-                        return;
+                        if (ok) {
+                            if (!names_local) {
+                                self.sp = sp;
+                                try syncLocalWrite(self, ic, frame, dst_slot, locals[dst_slot]);
+                            }
+                            const _next = code[ip];
+                            ip += 1;
+                            continue :dispatch @as(OpCode, @enumFromInt(_next));
+                        }
                     }
+                    frame.ip = ip - 5;
+                    self.sp = sp;
+                    return;
                 },
                 .mul_local_to_local => {
                     const src_slot = (@as(u16, code[ip]) << 8) | code[ip + 1];
@@ -1363,39 +1363,37 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     ip += 4;
                     const src = locals[src_slot];
                     const dst = locals[dst_slot];
-                    if (src == .int and dst == .int) {
-                        const r = @mulWithOverflow(dst.int, src.int);
-                        if (r[1] != 0) {
-                            frame.ip = ip - 5;
-                            self.sp = sp;
-                            return;
+                    if (direct_slots and isNumber(src) and isNumber(dst)) {
+                        var ok = true;
+                        if (src == .int and dst == .int) {
+                            const r = @mulWithOverflow(dst.int, src.int);
+                            ok = r[1] == 0;
+                            if (ok) locals[dst_slot] = .{ .int = r[0] };
+                        } else {
+                            const a = if (dst == .int) @as(f64, @floatFromInt(dst.int)) else dst.float;
+                            const b = if (src == .int) @as(f64, @floatFromInt(src.int)) else src.float;
+                            locals[dst_slot] = .{ .float = a * b };
                         }
-                        locals[dst_slot] = .{ .int = r[0] };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (src == .float and dst == .float) {
-                        locals[dst_slot] = .{ .float = dst.float * src.float };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (src == .float and dst == .int) {
-                        locals[dst_slot] = .{ .float = @as(f64, @floatFromInt(dst.int)) * src.float };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else if (src == .int and dst == .float) {
-                        locals[dst_slot] = .{ .float = dst.float * @as(f64, @floatFromInt(src.int)) };
-                        const _next = code[ip];
-                        ip += 1;
-                        continue :dispatch @as(OpCode, @enumFromInt(_next));
-                    } else {
-                        frame.ip = ip - 5;
+                        if (ok) {
+                            if (!names_local) {
+                                self.sp = sp;
+                                try syncLocalWrite(self, ic, frame, dst_slot, locals[dst_slot]);
+                            }
+                            const _next = code[ip];
+                            ip += 1;
+                            continue :dispatch @as(OpCode, @enumFromInt(_next));
+                        }
+                    }
+                    frame.ip = ip - 5;
+                    self.sp = sp;
+                    return;
+                },
+                .less_local_local_jif => {
+                    if (!no_ref_cells) {
+                        frame.ip = ip - 1;
                         self.sp = sp;
                         return;
                     }
-                },
-                .less_local_local_jif => {
                     const slot_a = (@as(u16, code[ip]) << 8) | code[ip + 1];
                     const slot_b = (@as(u16, code[ip + 2]) << 8) | code[ip + 3];
                     const offset = (@as(u16, code[ip + 4]) << 8) | code[ip + 5];
@@ -1711,4 +1709,43 @@ fn closureScope(self: *VM, range: anytype) ?[]const u8 {
 
 fn isNumber(v: Value) bool {
     return v == .int or v == .float;
+}
+
+// a function frame with no named mirror keeps its variables only in locals
+inline fn namesOnlyInLocals(frame: anytype) bool {
+    const func = frame.func orelse return false;
+    return func.locals_only and frame.vars.count() == 0;
+}
+
+// a direct slot write reaches the frame's other views of its variables, as
+// runLoop's assignLocal does: the named mirror, and at global scope $GLOBALS
+// and global cells (for the top script, deferred to VM.flushTopWrites)
+inline fn syncLocalWrite(self: *VM, ic: *InlineCache, frame: anytype, slot: u16, value: Value) RuntimeError!void {
+    const func = frame.func orelse {
+        // the top script's views catch up when control leaves the fast loop
+        if (frame == &self.frames[0] and slot < ic.top_dirty.bit_length) {
+            ic.top_dirty.set(slot);
+            ic.top_dirty_any = true;
+            return;
+        }
+        return status(ic.slow.set_local_global(self, slot, value));
+    };
+    if (slot >= func.slot_names.len or func.slot_names[slot].len == 0) return;
+    if (frame.vars.getPtr(func.slot_names[slot])) |mirror| {
+        mirror.* = value;
+    } else if (!func.locals_only) {
+        try frame.vars.put(self.allocator, func.slot_names[slot], value);
+    }
+}
+
+// the fast loop's return only releases locals and a closure instance: any
+// frame with more to tear down (an allocated named map or reference cells,
+// reference bindings, a generator, statics or globals to write back, its own
+// exception handlers, an including scope) returns through runLoop's popFrame
+fn ownsTeardown(self: *VM, frame: anytype) bool {
+    if (frame.func == null or frame.generator != null or frame.ref_owner != 0) return false;
+    if (frame.vars.capacity() > 0 or frame.ref_slots.capacity() > 0) return false;
+    if (self.static_vars.items.len > 0 or self.global_vars.items.len > 0 or self.require_merge_depth != 0) return false;
+    if (self.handler_count > self.handler_floor and self.exception_handlers[self.handler_count - 1].frame_count >= self.frame_count) return false;
+    return true;
 }

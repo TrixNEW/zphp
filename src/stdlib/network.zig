@@ -566,7 +566,7 @@ fn connectSocket(addr: std.net.Address, timeout_ms: ?i32, async_connect: bool) !
     if (async_connect) return sock;
     var fds = [_]std.posix.pollfd{.{ .fd = sock, .events = std.posix.POLL.OUT, .revents = 0 }};
     if (try std.posix.poll(&fds, timeout_ms.?) == 0) return error.ConnectionTimedOut;
-    try std.posix.getsockoptError(sock);
+    try platform.connectResult(sock);
     try platform.setNonBlocking(sock, false);
     return sock;
 }

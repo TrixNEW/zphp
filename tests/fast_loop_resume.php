@@ -109,3 +109,19 @@ for ($i = 0; $i < 3; $i++) {
     echo $GLOBALS['local'], ' ', $GLOBALS['counter'], "\n";
     try { echo strpos('abc', 'a', 9); } catch (ValueError $e) { echo "ValueError\n"; }
 }
+
+// fused local arithmetic keeps set_local semantics: references, named
+// variables, operand checks, and the global scope's other views
+function fusedRefs() { $s = 0; $t = &$s; for ($j = 1; $j < 4; $j++) { $s += $j; } $x = 0; $y = &$x; for ($k = 0; $k < 3; $k++) { $x++; } return "$s $t $x $y"; }
+function fusedMix() { $a = 10; $b = 0; for ($i = 0; $i < 5; $i++) { $a--; $b++; $b += $i; $a -= 1; $c = 2; $c *= $i; } return "$a $b $c"; }
+function fusedArrays() { $a = ['x' => 1]; $b = ['y' => 2]; for ($i = 0; $i < 1; $i++) { $a += $b; } return json_encode($a); }
+function fusedTypeError() { $a = [1]; $b = 2; for ($i = 0; $i < 1; $i++) { try { $a -= $b; } catch (TypeError $e) { return $e->getMessage(); } } return 'no'; }
+function fusedNamed() { $n = 0; for ($i = 0; $i < 3; $i++) { $n += $i; } $v = get_defined_vars(); return $v['n'] . compact('i')['i']; }
+echo fusedRefs(), '|', fusedMix(), '|', fusedArrays(), '|', fusedTypeError(), '|', fusedNamed(), "\n";
+for ($gi = 0; $gi < 3; $gi++) { $gs = ($gs ?? 0) + $gi; }
+$gsum = 0;
+for ($gj = 0; $gj < 4; $gj++) { $gsum += $gj; }
+$gw = 10;
+for ($gr = 0; $gr < 3; $gr++) { $gw -= 1; }
+function readGlobals() { return $GLOBALS['gi'] . $GLOBALS['gsum'] . $GLOBALS['gj'] . $GLOBALS['gw']; }
+echo $GLOBALS['gi'], ' ', $GLOBALS['gsum'], ' ', $GLOBALS['gw'], ' ', readGlobals(), "\n";

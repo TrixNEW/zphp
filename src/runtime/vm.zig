@@ -1273,7 +1273,7 @@ pub const VM = struct {
         };
 
         const main: SlowPaths = .{
-            .drain_pending_destruct = VM.drainPendingDestruct,
+            .drain_pending_destruct = drainEntry,
             .check_param_types = checkParamTypesEntry,
             .resolve_default = resolveDefaultEntry,
             .array_set_owned = arraySetOwnedEntry,
@@ -1284,21 +1284,29 @@ pub const VM = struct {
             .set_local_global = setLocalGlobalEntry,
         };
 
+        fn drainEntry(vm: *VM) void {
+            vm.flushTopWrites();
+            vm.drainPendingDestruct();
+        }
+
         fn statusOf(err: anyerror) u8 {
             return if (err == error.OutOfMemory) Status.out_of_memory else Status.runtime_error;
         }
 
         fn checkParamTypesEntry(vm: *VM, name: []const u8, arg_count: u8, dispatched: *bool) u8 {
+            vm.flushTopWrites();
             dispatched.* = vm.checkParamTypes(name, arg_count) catch |err| return statusOf(err);
             return Status.ok;
         }
 
         fn resolveDefaultEntry(vm: *VM, val: Value, out: *Value) u8 {
+            vm.flushTopWrites();
             out.* = vm.resolveDefault(val) catch |err| return statusOf(err);
             return Status.ok;
         }
 
         fn arraySetOwnedEntry(vm: *VM, array: *PhpArray, key: PhpArray.Key, value: Value) u8 {
+            vm.flushTopWrites();
             vm.arraySetOwned(array, key, value) catch |err| return statusOf(err);
             return Status.ok;
         }
@@ -1310,11 +1318,13 @@ pub const VM = struct {
         }
 
         fn copyValueEntry(vm: *VM, val: Value, out: *Value) u8 {
+            vm.flushTopWrites();
             out.* = vm.copyValue(val) catch |err| return statusOf(err);
             return Status.ok;
         }
 
         fn expireExecutionEntry(vm: *VM) u8 {
+            vm.flushTopWrites();
             vm.expireExecution() catch |err| return statusOf(err);
             return Status.ok;
         }
@@ -1351,6 +1361,10 @@ pub const VM = struct {
         // site resolved to. cleared whenever a registered class's constant
         // is written, so a cached value is always the stored one
         class_const: [128]ClassConstIC = @splat(.{}),
+        // top script slots the fast loop wrote without reaching $GLOBALS,
+        // vars and global cells; flushed whenever control leaves the fast loop
+        top_dirty: std.DynamicBitSetUnmanaged = .{},
+        top_dirty_any: bool = false,
         // statement ends (chunk_ptr ^ ip) where handing the frame back to
         // the fast loop bailed without progress; runLoop stops retrying them
         fast_stalls: [256]usize = @splat(0),
@@ -2726,6 +2740,7 @@ pub const VM = struct {
             ic_ptr.resolved_calls.deinit(self.allocator);
             self.clearResolvedMethods(ic_ptr);
             ic_ptr.resolved_methods.deinit(self.allocator);
+            ic_ptr.top_dirty.deinit(self.allocator);
             if (ic_ptr.locals_cap > 0) self.allocator.free(ic_ptr.locals_buf[0..ic_ptr.locals_cap]);
             self.allocator.destroy(ic_ptr);
         }
@@ -3121,6 +3136,11 @@ pub const VM = struct {
         }
         self.global_slot_names = result.slot_names;
         self.top_slot_names = result.slot_names;
+        if (self.ic) |ic| {
+            try ic.top_dirty.resize(self.allocator, result.slot_names.len, false);
+            ic.top_dirty.unsetAll();
+            ic.top_dirty_any = false;
+        }
         self.source = result.source;
         self.file_path = result.file_path;
         self.script_strict_types = result.strict_types;
@@ -3574,7 +3594,7 @@ pub const VM = struct {
                     // boundary, so run any destructors queued by this statement
                     _ = self.pop();
                     if (self.hasPendingReleases()) self.drainPendingDestruct();
-                    if (self.frame_count > base_frame and !self.arg_capture_pending and self.currentFrame().locals.len > 0) {
+                    if (self.frame_count > base_frame and !self.arg_capture_pending and self.currentFrame().locals.len > 0 and self.currentFrame().generator == null) {
                         if (try self.resumeFastLoop(base_frame)) return;
                     }
                     self.collectCyclesIfNeeded();
@@ -6876,88 +6896,46 @@ pub const VM = struct {
                 },
                 .set_local => {
                     const slot = self.readU16();
-                    const frame = self.currentFrame();
-                    const peeked = self.peek();
-                    // copyValue clones arrays and retains objects (Stage 1) -
-                    // the local slot is a durable holder and needs its own ref
-                    const val = try self.copyValue(peeked);
-                    if (slot < frame.locals.len) {
-                        // overwrite-release: the slot is a mirror that owns its
-                        // value even when a reference cell is bound to it. named
-                        // locals and frame.vars are two views of one owning
-                        // binding; copyValue retained once, release once here
-                        const old_lv = frame.locals[slot];
-                        self.releaseValue(old_lv);
-                        frame.locals[slot] = val;
-                    }
-                    if (frame.func) |func| {
-                        if (slot < func.slot_names.len) {
-                            const name = func.slot_names[slot];
-                            if (name.len > 0) {
-                                if (frame.ref_slots.get(name)) |cell| {
-                                    self.setCell(cell, val);
-                                    try self.propagateCellWrite(cell, val);
-                                }
-                                try frame.vars.put(self.allocator, name, val);
-                            }
-                        }
-                    } else {
-                        try self.setLocalGlobal(slot, val, frame);
-                    }
-                    try self.syncIncludeLocal(frame, slot, val);
+                    try self.assignLocal(self.currentFrame(), slot, self.peek());
                 },
-                .inc_local => {
+                .inc_local, .dec_local => {
                     const slot = self.readU16();
                     const frame_il = self.currentFrame();
-                    if (slot < frame_il.locals.len) {
-                        const v = frame_il.locals[slot];
-                        if (v == .int) {
-                            frame_il.locals[slot] = Value.intInc(v.int);
-                        } else if (v == .float) {
-                            frame_il.locals[slot] = .{ .float = v.float + 1.0 };
-                        } else {
-                            const incremented = try Value.phpInc(v, self.allocator);
-                            frame_il.locals[slot] = incremented;
-                            self.releaseValue(v);
-                        }
+                    const v = if (plainLocals(frame_il) and slot < frame_il.locals.len) frame_il.locals[slot] else Value.null;
+                    if (v == .int and plainLocals(frame_il)) {
+                        frame_il.locals[slot] = if (op == .inc_local) Value.intInc(v.int) else Value.intDec(v.int);
+                    } else if (v == .float and plainLocals(frame_il)) {
+                        frame_il.locals[slot] = .{ .float = if (op == .inc_local) v.float + 1.0 else v.float - 1.0 };
+                    } else {
+                        try self.fusedStep(frame_il, slot, op == .inc_local);
                     }
                 },
-                .dec_local => {
-                    const slot = self.readU16();
-                    const frame_dl = self.currentFrame();
-                    if (slot < frame_dl.locals.len) {
-                        const v = frame_dl.locals[slot];
-                        frame_dl.locals[slot] = if (v == .int) Value.intDec(v.int) else if (v == .float) .{ .float = v.float - 1.0 } else Value.phpDec(v);
-                    }
-                },
-                .add_local_to_local => {
+                .add_local_to_local, .sub_local_to_local, .mul_local_to_local => {
                     const src_slot = self.readU16();
                     const dst_slot = self.readU16();
                     const frame_al = self.currentFrame();
-                    if (src_slot < frame_al.locals.len and dst_slot < frame_al.locals.len) {
-                        const src = frame_al.locals[src_slot];
-                        const dst = frame_al.locals[dst_slot];
-                        frame_al.locals[dst_slot] = if (src == .int and dst == .int) Value.intAdd(dst.int, src.int) else if (src == .float and dst == .float) .{ .float = dst.float + src.float } else if (src == .array and dst == .array) .{ .array = try self.arrayUnion(dst.array, src.array) } else Value.add(dst, src);
-                    }
-                },
-                .sub_local_to_local => {
-                    const src_slot = self.readU16();
-                    const dst_slot = self.readU16();
-                    const frame_sl = self.currentFrame();
-                    if (src_slot < frame_sl.locals.len and dst_slot < frame_sl.locals.len) {
-                        const src = frame_sl.locals[src_slot];
-                        const dst = frame_sl.locals[dst_slot];
-                        frame_sl.locals[dst_slot] = if (src == .int and dst == .int) Value.intSub(dst.int, src.int) else if (src == .float and dst == .float) .{ .float = dst.float - src.float } else Value.subtract(dst, src);
-                    }
-                },
-                .mul_local_to_local => {
-                    const src_slot = self.readU16();
-                    const dst_slot = self.readU16();
-                    const frame_ml = self.currentFrame();
-                    if (src_slot < frame_ml.locals.len and dst_slot < frame_ml.locals.len) {
-                        const src = frame_ml.locals[src_slot];
-                        const dst = frame_ml.locals[dst_slot];
-                        frame_ml.locals[dst_slot] = if (src == .int and dst == .int) Value.intMul(dst.int, src.int) else if (src == .float and dst == .float) .{ .float = dst.float * src.float } else Value.multiply(dst, src);
+                    const plain = plainLocals(frame_al) and src_slot < frame_al.locals.len and dst_slot < frame_al.locals.len;
+                    const src = if (plain) frame_al.locals[src_slot] else Value.null;
+                    const dst = if (plain) frame_al.locals[dst_slot] else Value.null;
+                    if (plain and src == .int and dst == .int) {
+                        frame_al.locals[dst_slot] = switch (op) {
+                            .add_local_to_local => Value.intAdd(dst.int, src.int),
+                            .sub_local_to_local => Value.intSub(dst.int, src.int),
+                            else => Value.intMul(dst.int, src.int),
+                        };
+                    } else if (plain and src == .float and dst == .float) {
+                        frame_al.locals[dst_slot] = .{ .float = switch (op) {
+                            .add_local_to_local => dst.float + src.float,
+                            .sub_local_to_local => dst.float - src.float,
+                            else => dst.float * src.float,
+                        } };
+                    } else {
+                        const arith: NativeBinop = switch (op) {
+                            .add_local_to_local => .add,
+                            .sub_local_to_local => .sub,
+                            else => .mul,
+                        };
+                        if (try self.fusedArith(frame_al, .{ .op = arith, .src = src_slot, .dst = dst_slot, .base_frame = base_frame })) continue;
                     }
                 },
                 .less_local_local_jif => {
@@ -6965,8 +6943,8 @@ pub const VM = struct {
                     const slot_b = self.readU16();
                     const offset = self.readU16();
                     const frame_lj = self.currentFrame();
-                    const a = if (slot_a < frame_lj.locals.len) frame_lj.locals[slot_a] else Value.null;
-                    const b = if (slot_b < frame_lj.locals.len) frame_lj.locals[slot_b] else Value.null;
+                    const a = self.fusedRead(frame_lj, slot_a);
+                    const b = self.fusedRead(frame_lj, slot_b);
                     const is_less = if (a == .int and b == .int) a.int < b.int else if (a == .float and b == .float) a.float < b.float else Value.lessThan(a, b);
                     if (!is_less) frame_lj.ip += offset;
                 },
@@ -12587,42 +12565,163 @@ pub const VM = struct {
         return current.func == null;
     }
 
-    fn setLocalGlobal(self: *VM, slot: u16, val: Value, frame: *CallFrame) !void {
-        if (slot < self.global_slot_names.len) {
-            const name = self.global_slot_names[slot];
-            if (name.len > 0) {
-                if (frame.ref_slots.count() > 0) {
+    // what set_local does with the value on top of the stack: the slot, its
+    // vars mirror, a bound reference cell, the globals, an including scope
+    fn assignLocal(self: *VM, frame: *CallFrame, slot: u16, peeked: Value) RuntimeError!void {
+        // copyValue clones arrays and retains objects (Stage 1) - the local
+        // slot is a durable holder and needs its own ref
+        const val = try self.copyValue(peeked);
+        if (slot < frame.locals.len) {
+            // overwrite-release: the slot is a mirror that owns its value
+            // even when a reference cell is bound to it. named locals and
+            // frame.vars are two views of one owning binding; copyValue
+            // retained once, release once here
+            const old_lv = frame.locals[slot];
+            self.releaseValue(old_lv);
+            frame.locals[slot] = val;
+        }
+        if (frame.func) |func| {
+            if (slot < func.slot_names.len) {
+                const name = func.slot_names[slot];
+                if (name.len > 0) {
                     if (frame.ref_slots.get(name)) |cell| {
                         self.setCell(cell, val);
                         try self.propagateCellWrite(cell, val);
                     }
-                }
-                try frame.vars.put(self.allocator, name, val);
-                if (!self.frameInGlobalScope(frame)) return;
-                // $GLOBALS is a live view of top-frame variables. mirror writes
-                // back so $GLOBALS[$key] picks up the new value
-                if (self.globals_array) |ga| {
-                    if (name.len > 1 and name[0] == '$') {
-                        // $GLOBALS is a NON-OWNING live view: the same logical
-                        // variable is reachable via frame.vars AND this mirror,
-                        // so the mirror must NOT contribute to the array's COW
-                        // refcount (else every global-scope array write sees
-                        // refcount>1 and spuriously separates - which breaks
-                        // destruct timing + recursion-marker identity). set()
-                        // retains, so undo it; don't release the prior entry
-                        // (the variable-slot overwrite owns that release). the
-                        // cycle GC compensates by treating globals_array's own
-                        // entries as roots, not scanned references
-                        try ga.set(self.allocator, .{ .string = Value.String.borrowed(name[1..]) }, val);
-                    }
-                }
-                // keep the shared global-cell (used by `global $name` inside
-                // functions) in sync with the top-frame write
-                if (self.globals_cells.get(name)) |cell| {
-                    self.setCell(cell, val);
+                    try frame.vars.put(self.allocator, name, val);
                 }
             }
+        } else {
+            try self.setLocalGlobal(slot, val, frame);
         }
+        try self.syncIncludeLocal(frame, slot, val);
+    }
+
+    // a fused local op may touch the slots directly only when the frame's
+    // variables live nowhere else: no reference cells, no named mirror, not
+    // the global scope
+    fn plainLocals(frame: *const CallFrame) bool {
+        return frame.func != null and frame.ref_slots.count() == 0 and frame.vars.count() == 0;
+    }
+
+    // a local as get_local reads it
+    fn fusedRead(self: *VM, frame: *CallFrame, slot: u16) Value {
+        if (frame.func) |func| {
+            if (slot < func.slot_names.len and func.slot_names[slot].len > 0) {
+                if (frame.ref_slots.get(func.slot_names[slot])) |cell| return cell.*;
+            }
+            return if (slot < frame.locals.len) frame.locals[slot] else .null;
+        }
+        return self.getLocalGlobal(slot, frame);
+    }
+
+    // `$x++;` / `$x--;` as the unfused get_local, inc_value, set_local, pop
+    fn fusedStep(self: *VM, frame: *CallFrame, slot: u16, up: bool) RuntimeError!void {
+        const v = self.fusedRead(frame, slot);
+        VM.stackRetain(v);
+        if (up) {
+            const incremented = try Value.phpInc(v, self.allocator);
+            self.stackRelease(v);
+            self.push(incremented);
+            if (incremented == .string and incremented.string.owner != null) self.releaseValue(incremented);
+        } else {
+            self.stackRelease(v);
+            self.push(Value.phpDec(v));
+        }
+        try self.assignLocal(frame, slot, self.peek());
+        _ = self.pop();
+    }
+
+    const FusedArith = struct { op: NativeBinop, src: u16, dst: u16, base_frame: usize };
+
+    // `$dst op= $src;` as the unfused loads, arithmetic, set_local and pop.
+    // true when an exception was dispatched
+    fn fusedArith(self: *VM, frame: *CallFrame, f: FusedArith) RuntimeError!bool {
+        const a = self.fusedRead(frame, f.dst);
+        const b = self.fusedRead(frame, f.src);
+        if (f.op == .add and a == .array and b == .array) {
+            self.push(.{ .array = try self.arrayUnion(a.array, b.array) });
+        } else {
+            const handlers_before = self.handler_count;
+            const overloaded = self.objectBinop(f.op, a, b) catch {
+                if (self.resumeAfterThrow(f.base_frame, handlers_before)) return true;
+                return error.RuntimeError;
+            };
+            if (overloaded) |r| {
+                self.push(r);
+            } else {
+                const unsupported = switch (f.op) {
+                    .add => try self.checkArithOperands(a, b, "+"),
+                    .sub => try self.checkArithOperands(a, b, "-"),
+                    else => try self.checkArithOperands(a, b, "*"),
+                };
+                if (unsupported) return true;
+                self.push(switch (f.op) {
+                    .add => Value.add(a, b),
+                    .sub => Value.subtract(a, b),
+                    else => Value.multiply(a, b),
+                });
+            }
+        }
+        try self.assignLocal(frame, f.dst, self.peek());
+        _ = self.pop();
+        return false;
+    }
+
+    fn setLocalGlobal(self: *VM, slot: u16, val: Value, frame: *CallFrame) !void {
+        if (slot < self.global_slot_names.len) try self.syncGlobalName(frame, self.global_slot_names[slot], val);
+        self.global_vars_dirty = true;
+    }
+
+    // a global-scope variable's other views: a bound reference cell, the
+    // named mirror, $GLOBALS, and the cell `global $name` binds in functions
+    fn syncGlobalName(self: *VM, frame: *CallFrame, name: []const u8, val: Value) !void {
+        if (name.len == 0) return;
+        if (frame.ref_slots.count() > 0) {
+            if (frame.ref_slots.get(name)) |cell| {
+                self.setCell(cell, val);
+                try self.propagateCellWrite(cell, val);
+            }
+        }
+        try frame.vars.put(self.allocator, name, val);
+        if (!self.frameInGlobalScope(frame)) return;
+        // $GLOBALS is a live view of top-frame variables. mirror writes
+        // back so $GLOBALS[$key] picks up the new value
+        if (self.globals_array) |ga| {
+            if (name.len > 1 and name[0] == '$') {
+                // $GLOBALS is a NON-OWNING live view: the same logical
+                // variable is reachable via frame.vars AND this mirror,
+                // so the mirror must NOT contribute to the array's COW
+                // refcount (else every global-scope array write sees
+                // refcount>1 and spuriously separates - which breaks
+                // destruct timing + recursion-marker identity). set()
+                // retains, so undo it; don't release the prior entry
+                // (the variable-slot overwrite owns that release). the
+                // cycle GC compensates by treating globals_array's own
+                // entries as roots, not scanned references
+                try ga.set(self.allocator, .{ .string = Value.String.borrowed(name[1..]) }, val);
+            }
+        }
+        // keep the shared global-cell (used by `global $name` inside
+        // functions) in sync with the top-frame write
+        if (self.globals_cells.get(name)) |cell| {
+            self.setCell(cell, val);
+        }
+    }
+
+    // bring every view of the top script slots the fast loop wrote up to date
+    pub fn flushTopWrites(self: *VM) void {
+        const ic = self.ic orelse return;
+        if (!ic.top_dirty_any) return;
+        ic.top_dirty_any = false;
+        const frame = &self.frames[0];
+        var it = ic.top_dirty.iterator(.{});
+        while (it.next()) |slot| {
+            if (slot < frame.locals.len and slot < self.top_slot_names.len) {
+                self.syncGlobalName(frame, self.top_slot_names[slot], frame.locals[slot]) catch {};
+            }
+        }
+        ic.top_dirty.unsetAll();
         self.global_vars_dirty = true;
     }
 
@@ -14436,7 +14535,9 @@ pub const VM = struct {
     // compiled as a separate object (src/runtime/fast_loop.zig) so LLVM
     // optimizes it independently of runLoop
     fn fastLoop(self: *VM) RuntimeError!void {
-        return switch (zphp_fast_loop(@ptrCast(self))) {
+        const code = zphp_fast_loop(@ptrCast(self));
+        self.flushTopWrites();
+        return switch (code) {
             0 => {},
             1 => error.RuntimeError,
             2 => error.OutOfMemory,

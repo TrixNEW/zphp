@@ -322,6 +322,27 @@ pub fn socketPair() ![2]std.posix.socket_t {
     return .{ client.handle, accepted.stream.handle };
 }
 
+// the outcome of a non-blocking connect once the socket polls writable. on
+// windows SO_ERROR holds a winsock code, which std's errno mapping rejects
+pub fn connectResult(sock: std.posix.socket_t) !void {
+    if (!is_windows) return std.posix.getsockoptError(sock);
+    const ws = std.os.windows.ws2_32;
+    var code: i32 = 0;
+    var len: i32 = @sizeOf(i32);
+    if (ws.getsockopt(sock, ws.SOL.SOCKET, ws.SO.ERROR, @ptrCast(&code), &len) != 0) return error.Unexpected;
+    if (code == 0) return;
+    const E = ws.WinsockError;
+    return switch (code) {
+        @intFromEnum(E.WSAECONNREFUSED) => error.ConnectionRefused,
+        @intFromEnum(E.WSAETIMEDOUT) => error.ConnectionTimedOut,
+        @intFromEnum(E.WSAENETUNREACH), @intFromEnum(E.WSAEHOSTUNREACH) => error.NetworkUnreachable,
+        @intFromEnum(E.WSAEADDRINUSE) => error.AddressInUse,
+        @intFromEnum(E.WSAEADDRNOTAVAIL) => error.AddressNotAvailable,
+        @intFromEnum(E.WSAEACCES) => error.PermissionDenied,
+        else => error.Unexpected,
+    };
+}
+
 pub fn setNonBlocking(sock: std.posix.socket_t, enabled: bool) !void {
     if (is_windows) {
         var mode: c_ulong = if (enabled) 1 else 0;
