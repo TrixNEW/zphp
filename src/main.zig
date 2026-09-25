@@ -25,6 +25,12 @@ const max_source_size = 1024 * 1024 * 64;
 const release_allocator = @import("builtin").mode != .Debug;
 
 pub fn main() !void {
+    // like php's cli: a peer closing a socket or pipe fails the write with
+    // EPIPE instead of killing the process
+    if (!platform.is_windows) {
+        const ignore = std.posix.Sigaction{ .handler = .{ .handler = std.posix.SIG.IGN }, .mask = std.posix.sigemptyset(), .flags = 0 };
+        std.posix.sigaction(std.posix.SIG.PIPE, &ignore, null);
+    }
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer if (!release_allocator) {
         _ = gpa.deinit();
@@ -124,6 +130,9 @@ fn dispatch(allocator: std.mem.Allocator, args: []const []const u8) !void {
     if (std.mem.eql(u8, cmd, "run")) {
         try requireArg(args, 3, "usage: zphp run <file>\n");
         try runFile(allocator, args[2], if (args.len > 3) args[3..] else &.{});
+    } else if (std.mem.eql(u8, cmd, "-r")) {
+        try requireArg(args, 3, "usage: zphp -r <code> [args]\n");
+        try runCode(allocator, args[2], if (args.len > 3) args[3..] else &.{});
     } else if (std.mem.eql(u8, cmd, "serve")) {
         try serveCommand(allocator, args);
     } else if (std.mem.eql(u8, cmd, "test")) {
@@ -199,6 +208,11 @@ fn requireArg(args: []const []const u8, min: usize, usage: []const u8) !void {
 }
 
 fn compileSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !CompileResult {
+    return compileFrom(allocator, source, .{ .file_path = path });
+}
+
+fn compileFrom(allocator: std.mem.Allocator, source: []const u8, origin: compiler.Origin) !CompileResult {
+    const path = origin.file_path;
     var ast = try parser.parse(allocator, source);
     defer ast.deinit();
 
@@ -212,7 +226,7 @@ fn compileSource(allocator: std.mem.Allocator, source: []const u8, path: []const
         std.process.exit(1);
     }
 
-    return compiler.compileWithPath(&ast, allocator, path) catch {
+    return compiler.compileWithOrigin(&ast, allocator, origin) catch {
         try writeStderr("compile error\n");
         std.process.exit(1);
     };
@@ -596,6 +610,18 @@ fn runFile(allocator: std.mem.Allocator, path: []const u8, script_args: []const 
     defer result.deinit();
 
     try runWithVM(allocator, &result, path, script_args);
+}
+
+// php -r: the code has no opening tag, reports itself as "Command line
+// code" and resolves __DIR__ against the working directory
+fn runCode(allocator: std.mem.Allocator, code: []const u8, script_args: []const []const u8) !void {
+    const source = try std.mem.concat(allocator, u8, &.{ "<?php ", code });
+    defer allocator.free(source);
+    const cwd = try std.process.getCwdAlloc(allocator);
+    defer allocator.free(cwd);
+    var result = try compileFrom(allocator, source, .{ .file_path = "Command line code", .dir = cwd });
+    defer result.deinit();
+    try runWithVM(allocator, &result, "Standard input code", script_args);
 }
 
 fn runBytecode(allocator: std.mem.Allocator, bc: []const u8, path: []const u8, script_args: []const []const u8) !void {

@@ -54,6 +54,15 @@ pub fn isByRef(name: []const u8, index: usize) bool {
         .{ .name = "preg_filter", .index = 4 },
         .{ .name = "preg_replace_callback", .index = 4 },
         .{ .name = "openssl_encrypt", .index = 5 },
+        .{ .name = "stream_socket_client", .index = 1 },
+        .{ .name = "stream_socket_client", .index = 2 },
+        .{ .name = "stream_socket_server", .index = 1 },
+        .{ .name = "stream_socket_server", .index = 2 },
+        .{ .name = "stream_socket_accept", .index = 2 },
+        .{ .name = "fsockopen", .index = 2 },
+        .{ .name = "fsockopen", .index = 3 },
+        .{ .name = "pfsockopen", .index = 2 },
+        .{ .name = "pfsockopen", .index = 3 },
     };
     for (outputs) |output| {
         if (index == output.index and std.ascii.eqlIgnoreCase(base, output.name)) return true;
@@ -79,6 +88,7 @@ const by_ref_names = std.StaticStringMap(void).initComptime(.{
     .{"pcntl_sigprocmask"}, .{"ldap_get_option"}, .{"str_replace"},           .{"str_ireplace"},                .{"preg_replace_callback_array"},
     .{"preg_replace"},      .{"preg_filter"},     .{"preg_replace_callback"}, .{"openssl_encrypt"},             .{"stream_select"},
     .{"sscanf"},            .{"fscanf"},          .{"mb_convert_variables"},  .{"mb_parse_str"},
+    .{"stream_socket_client"}, .{"stream_socket_server"}, .{"stream_socket_accept"}, .{"fsockopen"}, .{"pfsockopen"},
 });
 
 pub fn hasByRefParams(name: []const u8) bool {

@@ -112,6 +112,18 @@ pub fn compile(ast: *const Ast, allocator: Allocator) Error!CompileResult {
 }
 
 pub fn compileWithPath(ast: *const Ast, allocator: Allocator, file_path: []const u8) Error!CompileResult {
+    return compileWithOrigin(ast, allocator, .{ .file_path = file_path });
+}
+
+// where compiled code says it came from. dir overrides the __DIR__ derived
+// from file_path, for code with no file of its own like `-r`
+pub const Origin = struct {
+    file_path: []const u8,
+    dir: ?[]const u8 = null,
+};
+
+pub fn compileWithOrigin(ast: *const Ast, allocator: Allocator, origin: Origin) Error!CompileResult {
+    const file_path = origin.file_path;
     var c = Compiler{
         .ast = ast,
         .chunk = .{},
@@ -123,6 +135,7 @@ pub fn compileWithPath(ast: *const Ast, allocator: Allocator, file_path: []const
         .break_jumps = .{},
         .continue_jumps = .{},
         .file_path = file_path,
+        .file_dir = origin.dir,
         // seeds the closures-so-far heuristic behind the locals-only frame
         // fast path exactly as the old process counter did; names come from
         // allocClosureId
@@ -253,6 +266,7 @@ pub const Compiler = struct {
     labels: std.StringHashMapUnmanaged(usize) = .{},
     pending_gotos: std.ArrayListUnmanaged(PendingGoto) = .{},
     file_path: []const u8 = "",
+    file_dir: ?[]const u8 = null,
     trait_properties: std.StringHashMapUnmanaged([]const u32) = .{},
     local_slots: std.StringHashMapUnmanaged(u16) = .{},
     next_slot: u16 = 0,
@@ -727,6 +741,7 @@ pub const Compiler = struct {
     }
 
     fn getFileDir(self: *Compiler) []const u8 {
+        if (self.file_dir) |dir| return dir;
         if (self.file_path.len == 0) return ".";
         var i: usize = self.file_path.len;
         while (i > 0) {

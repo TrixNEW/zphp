@@ -30,7 +30,23 @@ pub const RuntimeError = error{ RuntimeError, OutOfMemory };
 // here (not on the proc object) because std.posix.waitpid hits `unreachable` on
 // ECHILD, so the pid must be waited EXACTLY once - and reapProcChildren runs at
 // deinit where the proc objects may already be freed, so it can't read them.
-pub const ProcPipe = struct { role: i64, fd: platform.Fd };
+pub const ProcPipe = struct {
+    role: i64,
+    fd: platform.Fd,
+    // the $pipes stream over fd, owned until proc_close so it can be marked
+    // closed with the fd, as php closes a process's pipes
+    handle: ?*PhpObject = null,
+
+    // closes the fd and marks its stream closed, so a stale handle can never
+    // reach a descriptor number the OS has since reused
+    pub fn close(self: *ProcPipe) void {
+        if (self.fd != -1) platform.closeFd(self.fd);
+        self.fd = -1;
+        const handle = self.handle orelse return;
+        if (handle.properties.getPtr("__open")) |slot| slot.* = .{ .bool = false };
+        if (handle.properties.getPtr("__fd")) |slot| slot.* = .{ .int = -1 };
+    }
+};
 pub const ProcChild = struct {
     pid: platform.Pid,
     reaped: bool,
@@ -831,6 +847,29 @@ pub const VM = struct {
         return pc;
     }
 
+    // proc_close: every pipe closed and its stream released. reap only closes,
+    // since it runs where the heap is about to be freed wholesale
+    pub fn closeProcChild(self: *VM, proc: *PhpObject) void {
+        const pc = self.lookupProcChild(proc) orelse return;
+        for (pc.pipe_fds.items) |*pipe| {
+            pipe.close();
+            if (pipe.handle) |handle| self.objRelease(handle);
+            pipe.handle = null;
+        }
+        pc.pipe_fds.deinit(self.allocator);
+        self.removeProcChild(proc);
+    }
+
+    // hands the $pipes stream for a role to the child entry, which owns it
+    pub fn adoptProcPipe(self: *VM, proc: *PhpObject, role: i64, handle: *PhpObject) void {
+        const pc = self.lookupProcChild(proc) orelse return;
+        for (pc.pipe_fds.items) |*pipe| if (pipe.role == role) {
+            handle.retain();
+            pipe.handle = handle;
+            return;
+        };
+    }
+
     pub fn registerProcChild(self: *VM, proc: *PhpObject, pid: platform.Pid, pipe_fds: std.ArrayListUnmanaged(ProcPipe)) RuntimeError!void {
         try (try self.procChildren()).put(self.allocator, proc, .{ .pid = pid, .reaped = false, .pipe_fds = pipe_fds });
     }
@@ -864,9 +903,7 @@ pub const VM = struct {
                     std.posix.kill(entry.pid, std.posix.SIG.KILL) catch {};
                     _ = std.posix.waitpid(entry.pid, 0);
                 }
-                for (entry.pipe_fds.items) |pipe| {
-                    if (pipe.fd != -1) std.posix.close(pipe.fd);
-                }
+                for (entry.pipe_fds.items) |*pipe| pipe.close();
             }
             entry.pipe_fds.deinit(self.allocator);
         }
@@ -884,7 +921,7 @@ pub const VM = struct {
             std.os.windows.CloseHandle(handle);
             entry.process = 0;
         }
-        for (entry.pipe_fds.items) |pipe| platform.closeFd(pipe.fd);
+        for (entry.pipe_fds.items) |*pipe| pipe.close();
     }
 
     fn newRefCell(self: *VM) RuntimeError!*Value {
@@ -2155,6 +2192,11 @@ pub const VM = struct {
         try c.put(a, "STREAM_CLIENT_CONNECT", .{ .int = 4 });
         try c.put(a, "STREAM_CLIENT_PERSISTENT", .{ .int = 1 });
         try c.put(a, "STREAM_CLIENT_ASYNC_CONNECT", .{ .int = 2 });
+        try c.put(a, "STREAM_SERVER_BIND", .{ .int = 4 });
+        try c.put(a, "STREAM_SERVER_LISTEN", .{ .int = 8 });
+        try c.put(a, "STREAM_SHUT_RD", .{ .int = 0 });
+        try c.put(a, "STREAM_SHUT_WR", .{ .int = 1 });
+        try c.put(a, "STREAM_SHUT_RDWR", .{ .int = 2 });
         // socket address families / types (the OS values, so they pass straight
         // to socketpair()/socket()) - for stream_socket_pair etc.
         try c.put(a, "STREAM_PF_INET", .{ .int = if (platform.is_windows) 2 else @as(i64, std.posix.AF.INET) });

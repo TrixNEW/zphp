@@ -1695,6 +1695,11 @@ pub fn isOpenStream(obj: *PhpObject) bool {
 
 // one read into dest: the byte count (0 at eof or when a non-blocking stream
 // has nothing yet), or null when the stream cannot be read
+fn isRegularFd(file: std.fs.File) bool {
+    const stat = file.stat() catch return false;
+    return stat.kind == .file;
+}
+
 pub fn streamReadInto(ctx: *NativeContext, obj: *PhpObject, dest: []u8) RuntimeError!?usize {
     if (fileHandleWrapper(obj)) |wrapper| {
         const result = try ctx.callMethod(wrapper, "stream_read", &[_]Value{.{ .int = @intCast(dest.len) }});
@@ -1717,7 +1722,9 @@ pub fn streamReadInto(ctx: *NativeContext, obj: *PhpObject, dest: []u8) RuntimeE
         if (err == error.WouldBlock) return 0;
         return null;
     };
-    if (n < dest.len) try obj.set(ctx.allocator, "__eof", .{ .bool = true });
+    // a short read ends a regular file; a pipe or socket has only reached
+    // the end when the read comes back empty
+    if (n == 0 or (n < dest.len and isRegularFd(file))) try obj.set(ctx.allocator, "__eof", .{ .bool = true });
     return n;
 }
 
@@ -1773,7 +1780,18 @@ pub fn streamWrite(ctx: *NativeContext, obj: *PhpObject, data: []const u8) Runti
             ctx.vm.output.clearRetainingCapacity();
         }
     }
-    return file.write(data) catch null;
+    // a blocking stream takes all of it; a non-blocking one what fits now
+    var written: usize = 0;
+    while (written < data.len) {
+        const n = file.write(data[written..]) catch |err| {
+            if (err == error.WouldBlock) break;
+            if (written > 0) break;
+            return null;
+        };
+        if (n == 0) break;
+        written += n;
+    }
+    return written;
 }
 
 fn native_fgets(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -2033,6 +2051,14 @@ fn native_flock(_: *NativeContext, args: []const Value) RuntimeError!NativeResul
     return NativeResult.scalar(.{ .bool = true });
 }
 
+// memory streams and regular files seek; pipes and terminals do not
+fn isSeekable(obj: *PhpObject) bool {
+    if (getBufferBacking(obj) != null) return true;
+    const file = getFileHandle(obj) orelse return false;
+    const stat = file.stat() catch return false;
+    return stat.kind == .file;
+}
+
 fn stream_get_meta_data(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
     const obj = args[0].object;
@@ -2066,16 +2092,26 @@ fn stream_get_meta_data(ctx: *NativeContext, args: []const Value) RuntimeError!N
             stream_type = scheme;
         }
     }
+    // sockets have no wrapper and name their address; process pipes have
+    // neither a wrapper nor a uri
+    const is_socket = obj.get("__net") == .bool and obj.get("__net").bool;
+    const is_pipe = obj.get("__proc_ref") != .null;
+    if (is_socket) {
+        const sock_type = obj.get("__sock_type");
+        stream_type = if (sock_type == .string) sock_type.string.bytes() else "generic_socket";
+    }
+    const blocking = obj.get("__blocking");
+    const eof = obj.get("__eof");
     const result = try ctx.createArray();
     try result.set(ctx.allocator, .{ .string = Value.String.borrowed("timed_out") }, .{ .bool = false });
-    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("blocked") }, .{ .bool = true });
-    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("eof") }, .{ .bool = false });
-    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("wrapper_type") }, .{ .string = Value.String.borrowed(wrapper_type) });
+    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("blocked") }, .{ .bool = !(blocking == .bool and !blocking.bool) });
+    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("eof") }, .{ .bool = eof == .bool and eof.bool });
+    if (!is_socket and !is_pipe) try result.set(ctx.allocator, .{ .string = Value.String.borrowed("wrapper_type") }, .{ .string = Value.String.borrowed(wrapper_type) });
     try result.set(ctx.allocator, .{ .string = Value.String.borrowed("stream_type") }, .{ .string = Value.String.borrowed(stream_type) });
     try result.set(ctx.allocator, .{ .string = Value.String.borrowed("mode") }, .{ .string = Value.String.borrowed(mode) });
     try result.set(ctx.allocator, .{ .string = Value.String.borrowed("unread_bytes") }, .{ .int = 0 });
-    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("seekable") }, .{ .bool = true });
-    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("uri") }, .{ .string = Value.String.borrowed(uri) });
+    try result.set(ctx.allocator, .{ .string = Value.String.borrowed("seekable") }, .{ .bool = !is_socket and !is_pipe and isSeekable(obj) });
+    if (!is_pipe and (!is_socket or uri.len > 0)) try result.set(ctx.allocator, .{ .string = Value.String.borrowed("uri") }, .{ .string = Value.String.borrowed(uri) });
     return NativeResult.borrowed(.{ .array = result });
 }
 
@@ -2437,22 +2473,24 @@ fn stream_get_contents(ctx: *NativeContext, args: []const Value) RuntimeError!Na
     if (offset >= 0) {
         file.seekTo(@intCast(offset)) catch return NativeResult.scalar(.{ .bool = false });
     }
-    if (length >= 0) {
-        const cap: usize = @intCast(length);
-        const buf = ctx.allocator.alloc(u8, cap) catch return NativeResult.scalar(.{ .bool = false });
-        const n = file.read(buf) catch {
-            ctx.allocator.free(buf);
+    // until the length, the end, or (non-blocking) nothing more for now
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    errdefer out.deinit(ctx.allocator);
+    var chunk: [8192]u8 = undefined;
+    while (length < 0 or out.items.len < @as(usize, @intCast(length))) {
+        const want = if (length < 0) chunk.len else @min(chunk.len, @as(usize, @intCast(length)) - out.items.len);
+        const n = file.read(chunk[0..want]) catch |err| {
+            if (err == error.WouldBlock) break;
+            if (out.items.len > 0) break;
             return NativeResult.scalar(.{ .bool = false });
         };
-        if (n < cap) {
-            const result = try Value.String.create(ctx.allocator, buf[0..n]);
-            ctx.allocator.free(buf);
-            return NativeResult.takeString(result);
+        if (n == 0) {
+            try obj.set(ctx.allocator, "__eof", .{ .bool = true });
+            break;
         }
-        return NativeResult.takeString(try Value.String.adopt(ctx.allocator, buf));
+        try out.appendSlice(ctx.allocator, chunk[0..n]);
     }
-    const buf = file.readToEndAlloc(ctx.allocator, 10 * 1024 * 1024) catch return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.takeString(try Value.String.adopt(ctx.allocator, buf));
+    return NativeResult.takeString(try Value.String.adopt(ctx.allocator, try out.toOwnedSlice(ctx.allocator)));
 }
 
 fn native_fstat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -3122,6 +3160,35 @@ fn procChildDup(src: std.posix.fd_t, target: std.posix.fd_t, err_fd: std.posix.f
     std.posix.dup2(src, target) catch |e| procChildFail(err_fd, e);
 }
 
+// the child reports why exec failed as an error code; errors outside the
+// exec/chdir set collapse to ProcSpawnFailed
+const SpawnError = error{ FileNotFound, AccessDenied, NotDir, InvalidExe, IsDir, NameTooLong, ProcSpawnFailed };
+
+fn spawnFailure(code: u64) SpawnError {
+    const err = @errorFromInt(@as(std.meta.Int(.unsigned, @bitSizeOf(anyerror)), @intCast(code)));
+    return switch (err) {
+        error.FileNotFound => error.FileNotFound,
+        error.AccessDenied => error.AccessDenied,
+        error.NotDir => error.NotDir,
+        error.InvalidExe => error.InvalidExe,
+        error.IsDir => error.IsDir,
+        error.NameTooLong => error.NameTooLong,
+        else => error.ProcSpawnFailed,
+    };
+}
+
+fn spawnFailureMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.FileNotFound => "No such file or directory",
+        error.AccessDenied => "Permission denied",
+        error.NotDir => "Not a directory",
+        error.InvalidExe => "Exec format error",
+        error.IsDir => "Is a directory",
+        error.NameTooLong => "File name too long",
+        else => "Unknown error",
+    };
+}
+
 fn procChildFail(err_fd: std.posix.fd_t, err: anyerror) noreturn {
     var buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &buf, @intFromError(err), .little);
@@ -3140,7 +3207,11 @@ fn closePrepared(descs: []PreparedDesc) void {
     }
 }
 
-fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, specs: []const ProcDesc, cwd: ?[]const u8) !ProcSpawn {
+// a string runs through /bin/sh -c; an array is an argv run directly,
+// found on PATH like execvp, with no shell in between
+const ProcCommand = union(enum) { shell: []const u8, argv: []const []const u8 };
+
+fn forkExecDesc(allocator: std.mem.Allocator, command: ProcCommand, specs: []const ProcDesc, cwd: ?[]const u8, env: ?[]const []const u8) !ProcSpawn {
     const cloexec: std.posix.O = .{ .CLOEXEC = true };
     const prepared = try allocator.alloc(PreparedDesc, specs.len);
     defer allocator.free(prepared);
@@ -3184,20 +3255,41 @@ fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, specs: []const Pr
     };
 
     const xrep = try std.posix.pipe2(cloexec);
-    errdefer {
+    var xrep_open = true;
+    errdefer if (xrep_open) {
         std.posix.close(xrep[0]);
         std.posix.close(xrep[1]);
-    }
-    const cmdz = try allocator.dupeZ(u8, cmd);
-    defer allocator.free(cmdz);
-    var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", cmdz.ptr };
-    const envp: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+    };
+    // everything the child needs is built before fork: allocating after it
+    // is unsafe in a threaded process
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const argv: [:null]?[*:0]const u8 = switch (command) {
+        .shell => |cmd| blk: {
+            const list = try a.allocSentinel(?[*:0]const u8, 3, null);
+            list[0] = "/bin/sh";
+            list[1] = "-c";
+            list[2] = (try a.dupeZ(u8, cmd)).ptr;
+            break :blk list;
+        },
+        .argv => |words| blk: {
+            const list = try a.allocSentinel(?[*:0]const u8, words.len, null);
+            for (words, 0..) |word, i| list[i] = (try a.dupeZ(u8, word)).ptr;
+            break :blk list;
+        },
+    };
+    const envp: [*:null]const ?[*:0]const u8 = if (env) |vars| blk: {
+        const list = try a.allocSentinel(?[*:0]const u8, vars.len, null);
+        for (vars, 0..) |v, i| list[i] = (try a.dupeZ(u8, v)).ptr;
+        break :blk list.ptr;
+    } else @ptrCast(std.c.environ);
+    const cwdz: ?[:0]const u8 = if (cwd) |dir| try a.dupeZ(u8, dir) else null;
 
     const pid = try std.posix.fork();
     if (pid == 0) {
-        if (cwd) |dir| {
-            const dirz = allocator.dupeZ(u8, dir) catch procChildFail(xrep[1], error.OutOfMemory);
-            if (std.c.chdir(dirz.ptr) != 0) procChildFail(xrep[1], error.ProcSpawnFailed);
+        if (cwdz) |dirz| {
+            std.posix.chdirZ(dirz.ptr) catch |err| procChildFail(xrep[1], err);
         }
         for (prepared) |d| if (d.parent_fd != -1) std.posix.close(d.parent_fd);
         for (prepared) |d| {
@@ -3217,10 +3309,14 @@ fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, specs: []const Pr
             };
             if (!is_target) std.posix.close(d.child_fd);
         }
-        const e = std.posix.execveZ("/bin/sh", &argv, envp);
+        const e = switch (command) {
+            .shell => std.posix.execveZ("/bin/sh", argv.ptr, envp),
+            .argv => std.posix.execvpeZ(argv[0].?, argv.ptr, envp),
+        };
         procChildFail(xrep[1], e);
     }
 
+    xrep_open = false;
     std.posix.close(xrep[1]);
     for (prepared) |*d| {
         if (d.child_fd != -1) std.posix.close(d.child_fd);
@@ -3229,9 +3325,9 @@ fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, specs: []const Pr
     var buf: [8]u8 = undefined;
     const got = std.posix.read(xrep[0], &buf) catch 0;
     std.posix.close(xrep[0]);
-    if (got > 0) {
+    if (got == buf.len) {
         _ = std.posix.waitpid(pid, 0);
-        return error.ProcSpawnFailed;
+        return spawnFailure(std.mem.readInt(u64, &buf, .little));
     }
 
     var pipes: std.ArrayListUnmanaged(@import("../runtime/vm.zig").ProcPipe) = .{};
@@ -3243,9 +3339,41 @@ fn forkExecDesc(allocator: std.mem.Allocator, cmd: []const u8, specs: []const Pr
     return .{ .pid = pid, .pipe_fds = pipes };
 }
 
+fn ownedText(ctx: *NativeContext, v: Value) RuntimeError![]const u8 {
+    if (v == .string) return v.string.bytes();
+    var buf = std.ArrayListUnmanaged(u8){};
+    try v.format(&buf, ctx.allocator);
+    const s = try buf.toOwnedSlice(ctx.allocator);
+    try ctx.strings.append(ctx.allocator, s);
+    return s;
+}
+
 fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 3 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const cmd = args[0].string.bytes();
+    if (args.len < 3 or (args[0] != .string and args[0] != .array)) return NativeResult.scalar(.{ .bool = false });
+    var words: std.ArrayListUnmanaged([]const u8) = .{};
+    defer words.deinit(ctx.allocator);
+    if (args[0] == .array) {
+        for (args[0].array.entries.items) |entry| try words.append(ctx.allocator, try ownedText(ctx, entry.value));
+        if (words.items.len == 0) {
+            try ctx.vm.setPendingException("ValueError", "proc_open(): Argument #1 ($command) must not be empty");
+            return error.RuntimeError;
+        }
+    }
+    const cmd = if (args[0] == .string) args[0].string.bytes() else try std.mem.join(ctx.allocator, " ", words.items);
+    defer if (args[0] == .array) ctx.allocator.free(cmd);
+    var env_vars: std.ArrayListUnmanaged([]const u8) = .{};
+    defer {
+        for (env_vars.items) |v| ctx.allocator.free(v);
+        env_vars.deinit(ctx.allocator);
+    }
+    const has_env = args.len >= 5 and args[4] == .array;
+    if (has_env) for (args[4].array.entries.items) |entry| {
+        const key = switch (entry.key) {
+            .string => |k| k.bytes(),
+            .int => continue,
+        };
+        try env_vars.append(ctx.allocator, try std.fmt.allocPrint(ctx.allocator, "{s}={s}", .{ key, try ownedText(ctx, entry.value) }));
+    };
 
     const proc = try ctx.createObject("ProcessResource");
     const cmd_copy = try ctx.vm.allocator.dupe(u8, cmd);
@@ -3314,7 +3442,11 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
     // becomes __fd on a FileHandle so fread/fwrite/stream_select use real live fds;
     // each is closed EXACTLY once: by fclose (clears pipe_fds[role]) or proc_close/reap
     const child_cwd: ?[]const u8 = if (args.len >= 4 and args[3] == .string) args[3].string.bytes() else null;
-    const spawned = forkExecDesc(ctx.vm.allocator, cmd_copy, descs.items, child_cwd) catch {
+    const command: ProcCommand = if (args[0] == .array) .{ .argv = words.items } else .{ .shell = cmd_copy };
+    const spawned = forkExecDesc(ctx.vm.allocator, command, descs.items, child_cwd, if (has_env) env_vars.items else null) catch |err| {
+        const msg = try std.fmt.allocPrint(ctx.allocator, "proc_open(): posix_spawn() failed: {s}", .{spawnFailureMessage(err)});
+        defer ctx.allocator.free(msg);
+        try ctx.vm.emitWarning(msg);
         try proc.set(ctx.allocator, "__pid", .{ .int = 0 });
         try proc.set(ctx.allocator, "__reaped", .{ .bool = true });
         try proc.set(ctx.allocator, "__running", .{ .bool = false });
@@ -3353,6 +3485,7 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
             try fobj.set(ctx.allocator, "__proc_ref", .{ .object = proc });
             try fobj.set(ctx.allocator, "__proc_role", .{ .int = desc.role });
             try pipes.set(ctx.allocator, .{ .int = desc.role }, .{ .object = fobj });
+            ctx.vm.adoptProcPipe(proc, desc.role, fobj);
         }
     }
 
@@ -3388,23 +3521,14 @@ fn native_proc_close(ctx: *NativeContext, args: []const Value) RuntimeError!Nati
         return NativeResult.scalar(.{ .int = if (cached == .int) cached.int else 0 });
     };
     // close stdin first so the child sees EOF and can finish
-    for (pc.pipe_fds.items) |*pipe| if (pipe.role == 0 and pipe.fd != -1) {
-        std.posix.close(pipe.fd);
-        pipe.fd = -1;
-    };
+    for (pc.pipe_fds.items) |*pipe| if (pipe.role == 0) pipe.close();
     if (!pc.reaped) {
         // a prior proc_get_status may have already reaped via WNOHANG; if not, do a
         // blocking wait now (exactly one waitpid per pid - ECHILD is unreachable)
         const res = std.posix.waitpid(pc.pid, 0);
         cacheProcTerm(ctx, obj, res.status);
     }
-    // close any parent-side fds the script didn't fclose
-    for (pc.pipe_fds.items) |*pipe| if (pipe.fd != -1) {
-        std.posix.close(pipe.fd);
-        pipe.fd = -1;
-    };
-    pc.pipe_fds.deinit(ctx.allocator);
-    ctx.vm.removeProcChild(obj);
+    ctx.vm.closeProcChild(obj);
     const exit = obj.get("__exit");
     return NativeResult.scalar(.{ .int = if (exit == .int) exit.int else 0 });
 }
@@ -3457,12 +3581,13 @@ fn native_proc_terminate(ctx: *NativeContext, args: []const Value) RuntimeError!
     return NativeResult.scalar(.{ .bool = true });
 }
 
-fn native_stream_set_blocking(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+fn native_stream_set_blocking(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
     const fd = args[0].object.get("__fd");
     if (fd != .int) return NativeResult.scalar(.{ .bool = false });
     const descriptor = platform.socketFromInt(fd.int) orelse return NativeResult.scalar(.{ .bool = false });
     platform.setNonBlocking(descriptor, !args[1].isTruthy()) catch return NativeResult.scalar(.{ .bool = false });
+    try args[0].object.set(ctx.allocator, "__blocking", .{ .bool = args[1].isTruthy() });
     return NativeResult.scalar(.{ .bool = true });
 }
 

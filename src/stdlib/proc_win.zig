@@ -347,6 +347,7 @@ fn buildPipesArray(ctx: *NativeContext, proc: *PhpObject, descs: []const Desc, p
         const fd = pipeFd(pipes, desc.role) orelse continue;
         const handle = try makePipeHandle(ctx, proc, desc.role, fd, mode);
         try arr.set(ctx.allocator, .{ .int = desc.role }, .{ .object = handle });
+        ctx.vm.adoptProcPipe(proc, desc.role, handle);
     }
     return .{ .array = arr };
 }
@@ -429,12 +430,6 @@ fn cacheExit(ctx: *NativeContext, proc: *PhpObject, pc: *ProcChild, code: i64) v
     proc.set(ctx.allocator, "__exit", .{ .int = code }) catch {};
 }
 
-fn closePipe(pipe: *ProcPipe) void {
-    if (pipe.fd == -1) return;
-    platform.closeFd(pipe.fd);
-    pipe.fd = -1;
-}
-
 fn cachedExit(proc: *PhpObject) i64 {
     const exit = proc.get("__exit");
     return if (exit == .int) exit.int else 0;
@@ -444,15 +439,13 @@ pub fn native_proc_close(ctx: *NativeContext, args: []const Value) RuntimeError!
     if (args.len == 0 or args[0] != .object) return NativeResult.scalar(.{ .int = -1 });
     const proc = args[0].object;
     const pc = ctx.vm.lookupProcChild(proc) orelse return NativeResult.scalar(.{ .int = cachedExit(proc) });
-    for (pc.pipe_fds.items) |*pipe| if (pipe.role == 0) closePipe(pipe);
+    for (pc.pipe_fds.items) |*pipe| if (pipe.role == 0) pipe.close();
     if (processHandle(pc)) |handle| {
         if (!pc.reaped) cacheExit(ctx, proc, pc, waitExit(handle));
         windows.CloseHandle(handle);
         pc.process = 0;
     }
-    for (pc.pipe_fds.items) |*pipe| closePipe(pipe);
-    pc.pipe_fds.deinit(ctx.allocator);
-    ctx.vm.removeProcChild(proc);
+    ctx.vm.closeProcChild(proc);
     return NativeResult.scalar(.{ .int = cachedExit(proc) });
 }
 

@@ -31,6 +31,10 @@ pub const entries = .{
     .{ "dns_get_record", native_dns_get_record },
     .{ "stream_select", native_stream_select },
     .{ "stream_socket_pair", native_stream_socket_pair },
+    .{ "stream_socket_server", native_stream_socket_server },
+    .{ "stream_socket_accept", native_stream_socket_accept },
+    .{ "stream_socket_get_name", native_stream_socket_get_name },
+    .{ "stream_socket_shutdown", native_stream_socket_shutdown },
 };
 
 fn streamFd(v: Value) ?i64 {
@@ -430,45 +434,254 @@ fn native_long2ip(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     return NativeResult.copyString(ctx.allocator, out);
 }
 
-fn parseHostPort(target: []const u8) ?struct { host: []const u8, port: u16, scheme: []const u8 } {
-    var s = target;
-    var scheme: []const u8 = "tcp";
-    if (std.mem.indexOf(u8, s, "://")) |idx| {
-        scheme = s[0..idx];
-        s = s[idx + 3 ..];
-    }
-    var host = s;
-    var port: u16 = 0;
-    if (std.mem.lastIndexOfScalar(u8, s, ':')) |idx| {
-        host = s[0..idx];
-        port = std.fmt.parseUnsigned(u16, s[idx + 1 ..], 10) catch 0;
-    }
-    return .{ .host = host, .port = port, .scheme = scheme };
+// a transport address as stream_socket_client/server take it
+const Endpoint = union(enum) {
+    tcp: std.net.Address,
+    unix: []const u8,
+};
+
+const SocketError = struct { code: i64, message: []const u8 };
+
+// errno values and strerror text for the failures sockets report
+fn socketError(err: anyerror) SocketError {
+    const E = std.posix.E;
+    const mac = @import("builtin").os.tag.isDarwin();
+    return switch (err) {
+        error.AddressInUse => .{ .code = @intFromEnum(E.ADDRINUSE), .message = "Address already in use" },
+        error.ConnectionRefused => .{ .code = @intFromEnum(E.CONNREFUSED), .message = "Connection refused" },
+        error.AccessDenied, error.PermissionDenied => .{ .code = @intFromEnum(E.ACCES), .message = "Permission denied" },
+        error.NetworkUnreachable => .{ .code = @intFromEnum(E.NETUNREACH), .message = "Network is unreachable" },
+        error.AddressNotAvailable => .{ .code = @intFromEnum(E.ADDRNOTAVAIL), .message = "Can't assign requested address" },
+        error.ConnectionTimedOut, error.Timeout => .{ .code = @intFromEnum(E.TIMEDOUT), .message = if (mac) "Operation timed out" else "Connection timed out" },
+        error.FileNotFound => .{ .code = @intFromEnum(E.NOENT), .message = "No such file or directory" },
+        error.UnknownHostName, error.HostNotFound => .{ .code = 0, .message = "php_network_getaddresses: getaddrinfo failed" },
+        else => .{ .code = 0, .message = @errorName(err) },
+    };
 }
 
-fn openTcpHandle(ctx: *NativeContext, host: []const u8, port: u16) !*PhpObject {
-    const addr_list = std.net.getAddressList(ctx.allocator, host, port) catch return error.RuntimeError;
-    defer addr_list.deinit();
-    if (addr_list.addrs.len == 0) return error.RuntimeError;
-    const stream = platform.tcpConnect(addr_list.addrs[0]) catch return error.RuntimeError;
-    return socketStream(ctx, stream.handle);
+// tcp://host:port (the default transport), [v6]:port, unix:///path
+fn parseEndpoint(allocator: std.mem.Allocator, target: []const u8) !Endpoint {
+    var scheme: []const u8 = "tcp";
+    var rest = target;
+    if (std.mem.indexOf(u8, target, "://")) |idx| {
+        scheme = target[0..idx];
+        rest = target[idx + 3 ..];
+    }
+    if (std.ascii.eqlIgnoreCase(scheme, "unix")) return .{ .unix = rest };
+    if (!std.ascii.eqlIgnoreCase(scheme, "tcp")) return error.UnsupportedTransport;
+    const colon = std.mem.lastIndexOfScalar(u8, rest, ':') orelse return error.MissingPort;
+    var host = rest[0..colon];
+    const port = std.fmt.parseUnsigned(u16, rest[colon + 1 ..], 10) catch return error.MissingPort;
+    if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') host = host[1 .. host.len - 1];
+    if (std.net.Address.parseIp(host, port)) |addr| return .{ .tcp = addr } else |_| {}
+    const list = try std.net.getAddressList(allocator, host, port);
+    defer list.deinit();
+    if (list.addrs.len == 0) return error.UnknownHostName;
+    return .{ .tcp = list.addrs[0] };
+}
+
+fn endpointAddress(endpoint: Endpoint) !std.net.Address {
+    return switch (endpoint) {
+        .tcp => |addr| addr,
+        .unix => |path| std.net.Address.initUnix(path),
+    };
+}
+
+fn newSocket(family: u32) !std.posix.socket_t {
+    if (family == std.posix.AF.UNIX) return std.posix.socket(family, std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC, 0);
+    return platform.tcpSocket(family);
+}
+
+// connects, waiting at most timeout_ms (null blocks); async leaves the
+// connection in progress on a non-blocking socket, as STREAM_CLIENT_ASYNC_CONNECT does
+fn connectSocket(addr: std.net.Address, timeout_ms: ?i32, async_connect: bool) !std.posix.socket_t {
+    const sock = try newSocket(addr.any.family);
+    errdefer platform.closeSocket(platform.socketToInt(sock));
+    if (!async_connect and timeout_ms == null) {
+        try std.posix.connect(sock, &addr.any, addr.getOsSockLen());
+        return sock;
+    }
+    try platform.setNonBlocking(sock, true);
+    std.posix.connect(sock, &addr.any, addr.getOsSockLen()) catch |err| switch (err) {
+        error.WouldBlock, error.ConnectionPending => {},
+        else => return err,
+    };
+    if (async_connect) return sock;
+    var fds = [_]std.posix.pollfd{.{ .fd = sock, .events = std.posix.POLL.OUT, .revents = 0 }};
+    if (try std.posix.poll(&fds, timeout_ms.?) == 0) return error.ConnectionTimedOut;
+    try std.posix.getsockoptError(sock);
+    try platform.setNonBlocking(sock, false);
+    return sock;
+}
+
+fn timeoutMs(ctx: *NativeContext, v: ?Value) ?i32 {
+    const seconds: f64 = if (v) |t| (if (t == .null) defaultSocketTimeout(ctx) else Value.toFloat(t)) else defaultSocketTimeout(ctx);
+    if (seconds < 0) return null;
+    return @intFromFloat(@min(seconds * 1000.0, @as(f64, std.math.maxInt(i32))));
+}
+
+fn defaultSocketTimeout(ctx: *NativeContext) f64 {
+    const v = ctx.vm.ini_settings.get("default_socket_timeout") orelse return 60;
+    return std.fmt.parseFloat(f64, v) catch 60;
+}
+
+// the by-reference $error_code / $error_message outputs; unconnected they
+// read 0 and ""
+fn reportSocketError(ctx: *NativeContext, args: []const Value, code_index: usize, err: ?SocketError) !void {
+    const e = err orelse SocketError{ .code = 0, .message = "" };
+    ctx.setCallerVar(code_index, args.len, .{ .int = e.code });
+    const message = try ctx.createString(e.message);
+    ctx.setCallerVar(code_index + 1, args.len, .{ .string = Value.String.borrowed(message) });
+}
+
+fn failConnect(ctx: *NativeContext, args: []const Value, code_index: usize, comptime func: []const u8, target: []const u8, err: anyerror) RuntimeError!NativeResult {
+    const e = socketError(err);
+    try reportSocketError(ctx, args, code_index, e);
+    const msg = try std.fmt.allocPrint(ctx.allocator, func ++ "(): Unable to connect to {s} ({s})", .{ target, e.message });
+    defer ctx.allocator.free(msg);
+    try ctx.vm.emitWarning(msg);
+    return NativeResult.scalar(.{ .bool = false });
+}
+
+fn endpointStream(ctx: *NativeContext, sock: std.posix.socket_t, endpoint: Endpoint, blocking: bool, uri: ?[]const u8) !*PhpObject {
+    const obj = try socketStream(ctx, sock);
+    if (uri) |u| try obj.set(ctx.allocator, "__path", .{ .string = Value.String.borrowed(try ctx.createString(u)) });
+    try obj.set(ctx.allocator, "__sock_type", .{ .string = Value.String.borrowed(if (endpoint == .unix) "unix_socket" else "tcp_socket/ssl") });
+    if (!blocking) try obj.set(ctx.allocator, "__blocking", .{ .bool = false });
+    return obj;
 }
 
 fn native_fsockopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const host = args[0].string.bytes();
-    const port: u16 = if (args.len >= 2) @intCast(@max(0, Value.toInt(args[1]))) else 80;
-    if (port == 0) return NativeResult.scalar(.{ .bool = false });
-    const obj = openTcpHandle(ctx, host, port) catch return NativeResult.scalar(.{ .bool = false });
+    const port: i64 = if (args.len >= 2 and args[1] != .null) Value.toInt(args[1]) else -1;
+    const target = if (port >= 0)
+        try std.fmt.allocPrint(ctx.allocator, "{s}:{d}", .{ host, port })
+    else
+        try ctx.allocator.dupe(u8, host);
+    defer ctx.allocator.free(target);
+    return connectStream(ctx, args, 2, target, if (args.len > 4) args[4] else null, false, "fsockopen");
+}
+
+// stream_socket_client(string $address, &$error_code, &$error_message, ?float $timeout, int $flags, $context)
+fn native_stream_socket_client(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
+    const flags: i64 = if (args.len > 4) Value.toInt(args[4]) else 4;
+    return connectStream(ctx, args, 1, args[0].string.bytes(), if (args.len > 3) args[3] else null, (flags & 2) != 0, "stream_socket_client");
+}
+
+fn connectStream(ctx: *NativeContext, args: []const Value, code_index: usize, target: []const u8, timeout: ?Value, async_connect: bool, comptime func: []const u8) RuntimeError!NativeResult {
+    const endpoint = parseEndpoint(ctx.allocator, target) catch |err| return failConnect(ctx, args, code_index, func, target, err);
+    const addr = endpointAddress(endpoint) catch |err| return failConnect(ctx, args, code_index, func, target, err);
+    const sock = connectSocket(addr, timeoutMs(ctx, timeout), async_connect) catch |err| return failConnect(ctx, args, code_index, func, target, err);
+    try reportSocketError(ctx, args, code_index, null);
+    return NativeResult.borrowed(.{ .object = try endpointStream(ctx, sock, endpoint, !async_connect, target) });
+}
+
+// stream_socket_server(string $address, &$error_code, &$error_message, int $flags = BIND|LISTEN, $context)
+fn native_stream_socket_server(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
+    const target = args[0].string.bytes();
+    const flags: i64 = if (args.len > 3) Value.toInt(args[3]) else 12;
+    const endpoint = parseEndpoint(ctx.allocator, target) catch |err| return failConnect(ctx, args, 1, "stream_socket_server", target, err);
+    const sock = listenSocket(endpoint, flags, contextBacklog(args)) catch |err| return failConnect(ctx, args, 1, "stream_socket_server", target, err);
+    try reportSocketError(ctx, args, 1, null);
+    const obj = try endpointStream(ctx, sock, endpoint, true, target);
+    try obj.set(ctx.allocator, "__server", .{ .bool = true });
     return NativeResult.borrowed(.{ .object = obj });
 }
 
-fn native_stream_socket_client(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const target = parseHostPort(args[0].string.bytes()) orelse return NativeResult.scalar(.{ .bool = false });
-    if (target.port == 0) return NativeResult.scalar(.{ .bool = false });
-    const obj = openTcpHandle(ctx, target.host, target.port) catch return NativeResult.scalar(.{ .bool = false });
+fn listenSocket(endpoint: Endpoint, flags: i64, backlog: u31) !std.posix.socket_t {
+    const addr = try endpointAddress(endpoint);
+    const sock = try newSocket(addr.any.family);
+    errdefer platform.closeSocket(platform.socketToInt(sock));
+    if (endpoint == .tcp and !platform.is_windows) try std.posix.setsockopt(sock, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    if ((flags & 4) != 0) try std.posix.bind(sock, &addr.any, addr.getOsSockLen());
+    if ((flags & 8) != 0) try std.posix.listen(sock, backlog);
+    return sock;
+}
+
+// the context's socket.backlog option, php's default otherwise
+fn contextBacklog(args: []const Value) u31 {
+    if (args.len < 5 or args[4] != .object) return 32;
+    const options = args[4].object.get("options");
+    if (options != .array) return 32;
+    const socket_opts = options.array.get(.{ .string = Value.String.borrowed("socket") });
+    if (socket_opts != .array) return 32;
+    const backlog = socket_opts.array.get(.{ .string = Value.String.borrowed("backlog") });
+    if (backlog == .null) return 32;
+    return @intCast(std.math.clamp(Value.toInt(backlog), 1, std.math.maxInt(u31)));
+}
+
+// stream_socket_accept($socket, ?float $timeout = null, &$peer_name): a new
+// stream for the next connection, or false once the timeout passes
+fn native_stream_socket_accept(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const fd = if (args.len > 0) streamFd(args[0]) else null;
+    const server = platform.socketFromInt(fd orelse return NativeResult.scalar(.{ .bool = false })) orelse return NativeResult.scalar(.{ .bool = false });
+    var fds = [_]std.posix.pollfd{.{ .fd = server, .events = std.posix.POLL.IN, .revents = 0 }};
+    const ready = std.posix.poll(&fds, timeoutMs(ctx, if (args.len > 1) args[1] else null) orelse -1) catch 0;
+    if (ready == 0) {
+        try ctx.vm.emitWarning("stream_socket_accept(): Accept failed: " ++ comptime socketError(error.Timeout).message);
+        return NativeResult.scalar(.{ .bool = false });
+    }
+    var peer: std.net.Address = undefined;
+    var len: std.posix.socklen_t = @sizeOf(std.net.Address);
+    const sock = std.posix.accept(server, &peer.any, &len, std.posix.SOCK.CLOEXEC) catch |err| {
+        const msg = try std.fmt.allocPrint(ctx.allocator, "stream_socket_accept(): Accept failed: {s}", .{socketError(err).message});
+        defer ctx.allocator.free(msg);
+        try ctx.vm.emitWarning(msg);
+        return NativeResult.scalar(.{ .bool = false });
+    };
+    // like php, the stream copies the listener's blocking flag while the
+    // descriptor keeps whatever mode the OS gives it (BSDs inherit O_NONBLOCK
+    // from the listener, linux does not)
+    const listener_blocks = args[0].object.get("__blocking") != .bool or args[0].object.get("__blocking").bool;
+    const is_unix = peer.any.family == std.posix.AF.UNIX;
+    const obj = try endpointStream(ctx, sock, if (is_unix) .{ .unix = "" } else .{ .tcp = peer }, listener_blocks, null);
+    if (args.len > 2) {
+        const name = try addressName(ctx, peer, len);
+        ctx.setCallerVar(2, args.len, .{ .string = Value.String.borrowed(name) });
+    }
     return NativeResult.borrowed(.{ .object = obj });
+}
+
+// stream_socket_get_name($socket, bool $remote): "host:port", a unix path,
+// or false when there is no such end
+fn native_stream_socket_get_name(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const fd = if (args.len > 0) streamFd(args[0]) else null;
+    const sock = platform.socketFromInt(fd orelse return NativeResult.scalar(.{ .bool = false })) orelse return NativeResult.scalar(.{ .bool = false });
+    const remote = args.len > 1 and args[1].isTruthy();
+    var addr: std.net.Address = undefined;
+    var len: std.posix.socklen_t = @sizeOf(std.net.Address);
+    // not connected (a listener asked for its peer) is an answer, not a fault
+    const rc = if (remote) std.c.getpeername(sock, &addr.any, &len) else std.c.getsockname(sock, &addr.any, &len);
+    if (rc != 0) return NativeResult.scalar(.{ .bool = false });
+    const name = try addressName(ctx, addr, len);
+    return NativeResult.copyString(ctx.allocator, name);
+}
+
+fn addressName(ctx: *NativeContext, addr: std.net.Address, len: std.posix.socklen_t) ![]const u8 {
+    if (addr.any.family == std.posix.AF.UNIX) {
+        const path_len = @as(usize, len) -| @offsetOf(std.posix.sockaddr.un, "path");
+        const path = std.mem.sliceTo(addr.un.path[0..@min(path_len, addr.un.path.len)], 0);
+        return ctx.createString(path);
+    }
+    const text = try std.fmt.allocPrint(ctx.allocator, "{f}", .{addr});
+    try ctx.strings.append(ctx.allocator, text);
+    return text;
+}
+
+// stream_socket_shutdown($stream, int $mode): STREAM_SHUT_RD, _WR or _RDWR
+fn native_stream_socket_shutdown(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const fd = if (args.len > 0) streamFd(args[0]) else null;
+    const sock = platform.socketFromInt(fd orelse return NativeResult.scalar(.{ .bool = false })) orelse return NativeResult.scalar(.{ .bool = false });
+    const how: std.posix.ShutdownHow = switch (if (args.len > 1) Value.toInt(args[1]) else 2) {
+        0 => .recv,
+        1 => .send,
+        else => .both,
+    };
+    std.posix.shutdown(sock, how) catch return NativeResult.scalar(.{ .bool = false });
+    return NativeResult.scalar(.{ .bool = true });
 }
 
 fn native_checkdnsrr(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
