@@ -3110,10 +3110,9 @@ pub const VM = struct {
             if (!isSuperglobal(entry.key_ptr.*)) try vars.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
         }
         if (!vars.contains("$GLOBALS")) {
-            const globals_arr = try self.allocator.create(PhpArray);
+            const globals_arr = try self.allocArray();
             // $GLOBALS is a non-owning live view of the global variables
             globals_arr.* = .{ .weak = true };
-            try self.arrays.append(self.allocator, globals_arr);
             try vars.put(self.allocator, "$GLOBALS", .{ .array = globals_arr });
             self.globals_array = globals_arr;
             // self.globals_array is a durable VM-wide root - it must hold a
@@ -3602,17 +3601,32 @@ pub const VM = struct {
                 .op_null => self.push(.null),
                 .op_true => self.push(.{ .bool = true }),
                 .op_false => self.push(.{ .bool = false }),
-                .pop => {
-                    // a discarded expression-statement result - a statement
-                    // boundary, so run any destructors queued by this statement
+                .pop, .pop_boundary => {
+                    // run any destructors queued by the discarded value's
+                    // expression
                     _ = self.pop();
                     if (self.hasPendingReleases()) self.drainPendingDestruct();
-                    if (self.frame_count > base_frame and !self.arg_capture_pending and self.currentFrame().locals.len > 0 and self.currentFrame().generator == null) {
+                    // only a statement end leaves nothing of an expression in
+                    // flight, so only there does the frame go back to the
+                    // fast loop. a generator's frame shares its variables with
+                    // the generator and stays here
+                    if (op == .pop_boundary and self.frame_count > base_frame and !self.arg_capture_pending and self.currentFrame().locals.len > 0 and self.currentFrame().generator == null) {
                         if (try self.resumeFastLoop(base_frame)) return;
                     }
                     self.collectCyclesIfNeeded();
                 },
                 .dup => self.push(self.stack[self.sp - 1]),
+                .dup2 => {
+                    self.push(self.stack[self.sp - 2]);
+                    self.push(self.stack[self.sp - 2]);
+                },
+                .bury => {
+                    const n = self.readByte();
+                    const top = self.stack[self.sp - 1];
+                    const dest = self.sp - 1 - n;
+                    std.mem.copyBackwards(Value, self.stack[dest + 1 .. self.sp], self.stack[dest .. self.sp - 1]);
+                    self.stack[dest] = top;
+                },
                 .swap => {
                     const tmp = self.stack[self.sp - 1];
                     self.stack[self.sp - 1] = self.stack[self.sp - 2];
@@ -3857,15 +3871,11 @@ pub const VM = struct {
                     if (try self.checkArithOperands(a, b, "*")) continue;
                     self.push(Value.multiply(a, b));
                 },
-                .inc_value => {
+                .inc_value, .dec_value => {
                     const v = self.pop();
-                    const incremented = try Value.phpInc(v, self.allocator);
-                    self.push(incremented);
-                    if (incremented == .string and incremented.string.owner != null) self.releaseValue(incremented);
-                },
-                .dec_value => {
-                    const v = self.pop();
-                    self.push(Value.phpDec(v));
+                    const stepped = try self.stepValue(v, op == .inc_value) orelse continue;
+                    self.push(stepped);
+                    if (stepped == .string and stepped.string.owner != null) self.releaseValue(stepped);
                 },
                 .divide => {
                     const b = self.pop();
@@ -4435,9 +4445,7 @@ pub const VM = struct {
                                                 }
                                             }
                                             if (named_extras == null) {
-                                                const ne = try self.allocator.create(PhpArray);
-                                                ne.* = .{};
-                                                try self.arrays.append(self.allocator, ne);
+                                                const ne = try self.allocArray();
                                                 named_extras = ne;
                                             }
                                             try named_extras.?.set(self.allocator, entry.key, ev);
@@ -5025,6 +5033,38 @@ pub const VM = struct {
                         self.push(.null);
                     }
                 },
+                .array_append_vivify => {
+                    const container = self.pop();
+                    switch (container) {
+                        .array => |arr| {
+                            const new_arr = try self.allocArray();
+                            const before = arr.entries.items.len;
+                            try self.arrayAppendOwned(arr, .{ .array = new_arr });
+                            if (arr.entries.items.len == before) {
+                                self.emitWarning("Cannot add element to the array as the next element is already occupied") catch if (try self.resumeRaised()) continue;
+                                self.push(.null);
+                            } else self.push(.{ .array = new_arr });
+                        },
+                        .object => |obj| if (self.hasMethod(obj.class_name, "offsetGet")) {
+                            const result = self.callMethod(obj, "offsetGet", &.{.null}) catch {
+                                if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                                return error.RuntimeError;
+                            };
+                            self.pushCallResult(result);
+                        } else {
+                            if (try self.throwBuiltinException("Error", "Cannot use object as array")) continue;
+                            return error.RuntimeError;
+                        },
+                        .string => {
+                            if (try self.throwBuiltinException("Error", "[] operator not supported for strings")) continue;
+                            return error.RuntimeError;
+                        },
+                        else => {
+                            if (try self.throwBuiltinException("Error", "Cannot use a scalar value as an array")) continue;
+                            return error.RuntimeError;
+                        },
+                    }
+                },
                 .array_get_vivify => {
                     const key = self.pop();
                     const arr_val = self.pop();
@@ -5069,17 +5109,13 @@ pub const VM = struct {
                                 if (try self.throwBuiltinException("Error", "Cannot use a scalar value as an array")) continue;
                                 return error.RuntimeError;
                             } else {
-                                const new_arr = try self.allocator.create(PhpArray);
-                                new_arr.* = .{};
-                                try self.arrays.append(self.allocator, new_arr);
+                                const new_arr = try self.allocArray();
                                 const new_val = Value{ .array = new_arr };
                                 try self.arraySetOwned(arr_val.array, arr_key, new_val);
                                 self.push(new_val);
                             }
                         } else {
-                            const new_arr = try self.allocator.create(PhpArray);
-                            new_arr.* = .{};
-                            try self.arrays.append(self.allocator, new_arr);
+                            const new_arr = try self.allocArray();
                             const new_val = Value{ .array = new_arr };
                             try self.arraySetOwned(arr_val.array, arr_key, new_val);
                             self.push(new_val);
@@ -5219,9 +5255,7 @@ pub const VM = struct {
                         continue;
                     }
                     if (existing == .null or (existing == .bool and !existing.bool)) {
-                        const new_arr = try self.allocator.create(PhpArray);
-                        new_arr.* = .{};
-                        try self.arrays.append(self.allocator, new_arr);
+                        const new_arr = try self.allocArray();
                         try new_arr.set(self.allocator, ik, v);
                         if (hook_cell) |cell| {
                             self.setCell(cell, .{ .array = new_arr });
@@ -5362,9 +5396,7 @@ pub const VM = struct {
                         continue;
                     }
                     if (existing == .null or (existing == .bool and !existing.bool)) {
-                        const new_arr = try self.allocator.create(PhpArray);
-                        new_arr.* = .{};
-                        try self.arrays.append(self.allocator, new_arr);
+                        const new_arr = try self.allocArray();
                         try new_arr.set(self.allocator, ik, v);
                         if (base == .array) {
                             try self.arraySetOwned(base.array, ok, .{ .array = new_arr });
@@ -5526,9 +5558,7 @@ pub const VM = struct {
                             if (try self.throwOffsetKeyType(key, .access)) continue;
                             return error.RuntimeError;
                         }
-                        const new_arr = try self.allocator.create(PhpArray);
-                        new_arr.* = .{};
-                        try self.arrays.append(self.allocator, new_arr);
+                        const new_arr = try self.allocArray();
                         const arr_val = Value{ .array = new_arr };
                         retainValue(arr_val);
                         try self.storeLocalSlot(frame, slot, arr_val);
@@ -5619,9 +5649,7 @@ pub const VM = struct {
                         self.push(cur);
                         continue;
                     }
-                    const new_arr = try self.allocator.create(PhpArray);
-                    new_arr.* = .{};
-                    try self.arrays.append(self.allocator, new_arr);
+                    const new_arr = try self.allocArray();
                     const new_val = Value{ .array = new_arr };
                     retainValue(new_val);
                     try self.storeLocalSlot(frame, slot, new_val);
@@ -5645,9 +5673,7 @@ pub const VM = struct {
                         if (c.* == .array) {
                             _ = try self.separateReferencedArray(self.currentFrame(), name, c, c.array);
                         } else if (c.* == .null or (c.* == .bool and !c.bool)) {
-                            const arr = try self.allocator.create(PhpArray);
-                            arr.* = .{};
-                            try self.arrays.append(self.allocator, arr);
+                            const arr = try self.allocArray();
                             self.setCell(c, .{ .array = arr });
                         } else if (c.* != .string and c.* != .object) {
                             if (try self.throwBuiltinException("Error", "Cannot use a scalar value as an array")) continue;
@@ -5714,9 +5740,7 @@ pub const VM = struct {
                         self.push(cur);
                         continue;
                     }
-                    const new_arr = try self.allocator.create(PhpArray);
-                    new_arr.* = .{};
-                    try self.arrays.append(self.allocator, new_arr);
+                    const new_arr = try self.allocArray();
                     const new_val = Value{ .array = new_arr };
                     if (from_request) {
                         try self.putRequestVar(name, new_val);
@@ -5810,9 +5834,7 @@ pub const VM = struct {
                         self.push(cur);
                         continue;
                     }
-                    const new_arr = try self.allocator.create(PhpArray);
-                    new_arr.* = .{};
-                    try self.arrays.append(self.allocator, new_arr);
+                    const new_arr = try self.allocArray();
                     // obj.set retains -> refcount 1 (the property slot owns it)
                     if (hook_cell) |cell| {
                         self.setCell(cell, .{ .array = new_arr });
@@ -5860,9 +5882,7 @@ pub const VM = struct {
                             self.push(cur);
                             continue;
                         }
-                        const new_arr = try self.allocator.create(PhpArray);
-                        new_arr.* = .{};
-                        try self.arrays.append(self.allocator, new_arr);
+                        const new_arr = try self.allocArray();
                         arrayRetain(new_arr); // the static slot owns it
                         slot.* = .{ .array = new_arr };
                         self.push(.{ .array = new_arr });
@@ -5896,10 +5916,7 @@ pub const VM = struct {
                     if (aei_arr == .array) {
                         const ak = Value.toArrayKey(aei_key);
                         const old = aei_arr.array.get(ak);
-                        const new_val: Value = blk: {
-                            if (op == .array_elem_inc) break :blk try Value.phpInc(old, self.allocator);
-                            break :blk Value.phpDec(old);
-                        };
+                        const new_val = try self.stepValue(old, op == .array_elem_inc) orelse continue;
                         // the element slot takes the new value and drops the old
                         // one; an adopted increment result is consumed here
                         try self.arraySetOwned(aei_arr.array, ak, new_val);
@@ -6004,9 +6021,7 @@ pub const VM = struct {
                                 return error.RuntimeError;
                             };
                             obj = obj.storage();
-                            const arr = try self.allocator.create(PhpArray);
-                            arr.* = .{};
-                            try self.arrays.append(self.allocator, arr);
+                            const arr = try self.allocArray();
                             // when foreach runs inside a class method whose
                             // scope can see private/protected on this object,
                             // include those too (PHP's foreach($this as ...)
@@ -6927,7 +6942,7 @@ pub const VM = struct {
                     } else if (v == .float and plainLocals(frame_il)) {
                         frame_il.locals[slot] = .{ .float = if (op == .inc_local) v.float + 1.0 else v.float - 1.0 };
                     } else {
-                        try self.fusedStep(frame_il, slot, op == .inc_local);
+                        if (try self.fusedStep(frame_il, slot, op == .inc_local)) continue;
                     }
                 },
                 .add_local_to_local, .sub_local_to_local, .mul_local_to_local => {
@@ -8239,9 +8254,7 @@ pub const VM = struct {
                                     for (@min(ac, fixed)..fixed) |i| {
                                         if (i < func.defaults.len) ctor_locals[i + 1] = try self.resolveDefault(func.defaults[i]);
                                     }
-                                    const rest_arr = try self.allocator.create(PhpArray);
-                                    rest_arr.* = .{};
-                                    try self.arrays.append(self.allocator, rest_arr);
+                                    const rest_arr = try self.allocArray();
                                     if (ac > fixed) {
                                         for (fixed..ac) |i| {
                                             try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + i]));
@@ -8277,9 +8290,7 @@ pub const VM = struct {
                                     for (@min(ac, fixed)..fixed) |i| {
                                         if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
                                     }
-                                    const rest_arr = try self.allocator.create(PhpArray);
-                                    rest_arr.* = .{};
-                                    try self.arrays.append(self.allocator, rest_arr);
+                                    const rest_arr = try self.allocArray();
                                     if (ac > fixed) {
                                         for (fixed..ac) |i| {
                                             try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + i]));
@@ -9297,9 +9308,7 @@ pub const VM = struct {
                             }
                             if (!in_call and call_depth < 16) {
                                 try self.magic_call_guard.append(self.allocator, .{ .obj_ptr = obj_id, .method_name = method_name });
-                                var args_arr = try self.allocator.create(PhpArray);
-                                args_arr.* = .{};
-                                try self.arrays.append(self.allocator, args_arr);
+                                var args_arr = try self.allocArray();
                                 for (0..ac) |i| try args_arr.append(self.allocator, self.stack[self.sp - ac + i]);
                                 self.dropN(ac + 1);
                                 const result = self.callMethod(obj, "__call", &.{ .{ .string = Value.String.borrowed(method_name) }, .{ .array = args_arr } }) catch |err| {
@@ -9420,9 +9429,7 @@ pub const VM = struct {
                             for (@min(ac, fixed)..fixed) |i| {
                                 if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
                             }
-                            const rest_arr = try self.allocator.create(PhpArray);
-                            rest_arr.* = .{};
-                            try self.arrays.append(self.allocator, rest_arr);
+                            const rest_arr = try self.allocArray();
                             if (ac > fixed) for (fixed..ac) |i| try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + i]));
                             try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
                         } else {
@@ -9659,9 +9666,7 @@ pub const VM = struct {
                             for (@min(ac, fixed)..fixed) |i| {
                                 if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
                             }
-                            const rest_arr = try self.allocator.create(PhpArray);
-                            rest_arr.* = .{};
-                            try self.arrays.append(self.allocator, rest_arr);
+                            const rest_arr = try self.allocArray();
                             if (ac > fixed) for (fixed..ac) |i| try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + i]));
                             try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
                         } else {
@@ -9736,9 +9741,7 @@ pub const VM = struct {
                     // now stack is [object, arg1, ..., argN] - same layout as method_call
                     const full_name = self.resolveMethod(obj.class_name, method_name) catch {
                         if (self.hasMethod(obj.class_name, "__call")) {
-                            var args_arr = try self.allocator.create(PhpArray);
-                            args_arr.* = .{};
-                            try self.arrays.append(self.allocator, args_arr);
+                            var args_arr = try self.allocArray();
                             for (0..ac) |ai| try args_arr.append(self.allocator, self.stack[self.sp - ac + ai]);
                             self.dropN(ac);
                             self.dropN(1);
@@ -9825,9 +9828,7 @@ pub const VM = struct {
                             for (@min(ac, fixed)..fixed) |ai| {
                                 if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveDefault(func.defaults[ai]));
                             }
-                            const rest_arr = try self.allocator.create(PhpArray);
-                            rest_arr.* = .{};
-                            try self.arrays.append(self.allocator, rest_arr);
+                            const rest_arr = try self.allocArray();
                             if (ac > fixed) for (fixed..ac) |ai| try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + ai]));
                             try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
                         } else {
@@ -9918,9 +9919,7 @@ pub const VM = struct {
                             }
                             if (!in_call and call_depth < 16) {
                                 try self.magic_call_guard.append(self.allocator, .{ .obj_ptr = obj_id, .method_name = method_name });
-                                var call_args_arr = try self.allocator.create(PhpArray);
-                                call_args_arr.* = .{};
-                                try self.arrays.append(self.allocator, call_args_arr);
+                                var call_args_arr = try self.allocArray();
                                 for (0..ac) |ai| try call_args_arr.append(self.allocator, self.stack[self.sp - ac + ai]);
                                 self.dropN(ac);
                                 self.dropN(1);
@@ -10011,9 +10010,7 @@ pub const VM = struct {
                             for (@min(ac, fixed)..fixed) |ai| {
                                 if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveDefault(func.defaults[ai]));
                             }
-                            const rest_arr = try self.allocator.create(PhpArray);
-                            rest_arr.* = .{};
-                            try self.arrays.append(self.allocator, rest_arr);
+                            const rest_arr = try self.allocArray();
                             if (ac > fixed) for (fixed..ac) |ai| try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + ai]));
                             try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
                         } else {
@@ -10140,9 +10137,7 @@ pub const VM = struct {
                     const full_name = self.resolveMethod(class_name, method_name) catch {
                         if (self.hasMethod(class_name, "__callStatic")) {
                             const ac: usize = arg_count;
-                            var args_arr = try self.allocator.create(PhpArray);
-                            args_arr.* = .{};
-                            try self.arrays.append(self.allocator, args_arr);
+                            var args_arr = try self.allocArray();
                             for (0..ac) |i| try args_arr.append(self.allocator, self.stack[self.sp - ac + i]);
                             self.dropN(ac);
                             const cs_name = try self.resolveMethod(class_name, "__callStatic");
@@ -10198,14 +10193,12 @@ pub const VM = struct {
                                             const sv = self.stack[self.sp - ac + i];
                                             try new_vars.put(self.allocator, func.params[i], if (is_ref) sv else try self.bindFrameArg(sv));
                                         }
-                                        const rest_arr = try self.allocator.create(PhpArray);
-                                        rest_arr.* = .{};
+                                        const rest_arr = try self.allocArray();
                                         if (ac > fixed) {
                                             for (fixed..ac) |i| {
                                                 try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + i]));
                                             }
                                         }
-                                        try self.arrays.append(self.allocator, rest_arr);
                                         try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
                                     } else {
                                         for (0..@min(ac, func.arity)) |i| {
@@ -10437,9 +10430,7 @@ pub const VM = struct {
                                         for (0..@min(resolved_ac, fixed)) |i| {
                                             try new_vars.put(self.allocator, func.params[i], try self.bindFrameArg(self.stack[self.sp - resolved_ac + i]));
                                         }
-                                        const rest_arr = try self.allocator.create(PhpArray);
-                                        rest_arr.* = .{};
-                                        try self.arrays.append(self.allocator, rest_arr);
+                                        const rest_arr = try self.allocArray();
                                         for (fixed..resolved_ac) |i| try rest_arr.append(self.allocator, self.stack[self.sp - resolved_ac + i]);
                                         try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
                                     } else {
@@ -10503,9 +10494,7 @@ pub const VM = struct {
                     }
                     const full_name = self.resolveMethod(class_name, method_name) catch {
                         if (self.hasMethod(class_name, "__callStatic")) {
-                            var args_arr = try self.allocator.create(PhpArray);
-                            args_arr.* = .{};
-                            try self.arrays.append(self.allocator, args_arr);
+                            var args_arr = try self.allocArray();
                             for (0..ac) |i| try args_arr.append(self.allocator, self.stack[self.sp - ac + i]);
                             self.dropN(ac + 1); // +1 for class name on stack
                             const cs_name = try self.resolveMethod(class_name, "__callStatic");
@@ -10570,9 +10559,7 @@ pub const VM = struct {
                     };
                     const full_name = self.resolveMethod(class_name, method_name) catch {
                         if (self.hasMethod(class_name, "__callStatic")) {
-                            var args_arr = try self.allocator.create(PhpArray);
-                            args_arr.* = .{};
-                            try self.arrays.append(self.allocator, args_arr);
+                            var args_arr = try self.allocArray();
                             for (0..ac) |i| try args_arr.append(self.allocator, self.stack[self.sp - ac + i]);
                             self.dropN(ac + 1);
                             const cs_name = try self.resolveMethod(class_name, "__callStatic");
@@ -10640,9 +10627,7 @@ pub const VM = struct {
                     }
                     const full_name = self.resolveMethod(class_name, method_name) catch {
                         if (self.hasMethod(class_name, "__callStatic")) {
-                            var args_arr = try self.allocator.create(PhpArray);
-                            args_arr.* = .{};
-                            try self.arrays.append(self.allocator, args_arr);
+                            var args_arr = try self.allocArray();
                             for (0..ac) |i| try args_arr.append(self.allocator, self.stack[self.sp - ac + i]);
                             self.dropN(ac + 2);
                             const cs_name = try self.resolveMethod(class_name, "__callStatic");
@@ -10951,9 +10936,7 @@ pub const VM = struct {
                             if (self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
                         };
-                        const arr = try self.allocator.create(@import("value.zig").PhpArray);
-                        arr.* = .{};
-                        try self.arrays.append(self.allocator, arr);
+                        const arr = try self.allocArray();
                         const has_key = self.hasMethod(it.class_name, "key");
                         while (true) {
                             const v = self.callMethod(it, "valid", &.{}) catch {
@@ -11482,17 +11465,13 @@ pub const VM = struct {
             3 => "include_once",
             else => "require",
         };
-        const entry = try self.allocator.create(PhpArray);
-        entry.* = .{};
-        try self.arrays.append(self.allocator, entry);
+        const entry = try self.allocArray();
         try entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(fn_name) });
         try entry.set(self.allocator, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(self.frameFile(frame_idx - 1)) });
         if (self.sourceLocation(requirer.chunk, requirer.ip - 2)) |loc| {
             try entry.set(self.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = @as(i64, @intCast(loc.line)) });
         }
-        const args_arr = try self.allocator.create(PhpArray);
-        args_arr.* = .{};
-        try self.arrays.append(self.allocator, args_arr);
+        const args_arr = try self.allocArray();
         try args_arr.append(self.allocator, .{ .string = Value.String.borrowed(frame.script_path) });
         try entry.set(self.allocator, .{ .string = Value.String.borrowed("args") }, .{ .array = args_arr });
         try arr.append(self.allocator, .{ .array = entry });
@@ -11508,9 +11487,7 @@ pub const VM = struct {
 
     // the trace of the frames below `top`
     fn traceBelow(self: *VM, top: usize) !*PhpArray {
-        const arr = try self.allocator.create(PhpArray);
-        arr.* = .{};
-        try self.arrays.append(self.allocator, arr);
+        const arr = try self.allocArray();
         if (top == 0) return arr;
         var i: usize = top - 1;
         while (true) : (i -= 1) {
@@ -11530,9 +11507,7 @@ pub const VM = struct {
 
     // keys in php's order: file, line, function, class, type, then args
     fn newTraceEntry(self: *VM, f: *const ObjFunction, call_site: ?SourcePosition) !*PhpArray {
-        const entry = try self.allocator.create(PhpArray);
-        entry.* = .{};
-        try self.arrays.append(self.allocator, entry);
+        const entry = try self.allocArray();
         if (call_site) |site| {
             try entry.set(self.allocator, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(site.file) });
             try entry.set(self.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = site.line });
@@ -11548,9 +11523,7 @@ pub const VM = struct {
     }
 
     fn traceArgs(self: *VM, entry: *PhpArray) !*PhpArray {
-        const args = try self.allocator.create(PhpArray);
-        args.* = .{};
-        try self.arrays.append(self.allocator, args);
+        const args = try self.allocArray();
         try entry.set(self.allocator, .{ .string = Value.String.borrowed("args") }, .{ .array = args });
         return args;
     }
@@ -11567,9 +11540,7 @@ pub const VM = struct {
     fn prependCallToTrace(self: *VM, exc: *PhpObject, f: *const ObjFunction, args: []const Value) !void {
         const scope = self.exceptionTraceScope(exc);
         const old = exc.getForScope("trace", scope);
-        const trace = try self.allocator.create(PhpArray);
-        trace.* = .{};
-        try self.arrays.append(self.allocator, trace);
+        const trace = try self.allocArray();
         const entry = try self.newTraceEntry(f, if (self.frame_count > 0) self.framePosition(self.frame_count - 1) else null);
         const entry_args = try self.traceArgs(entry);
         for (args) |a| try entry_args.append(self.allocator, a);
@@ -11611,20 +11582,14 @@ pub const VM = struct {
         const line_v = closure_entry.get(.{ .string = Value.String.borrowed("line") });
         closure_entry.remove(.{ .string = Value.String.borrowed("file") });
         closure_entry.remove(.{ .string = Value.String.borrowed("line") });
-        const native_entry = try self.allocator.create(PhpArray);
-        native_entry.* = .{};
-        try self.arrays.append(self.allocator, native_entry);
+        const native_entry = try self.allocArray();
         try native_entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(name) });
         if (file_v != .null) try native_entry.set(self.allocator, .{ .string = Value.String.borrowed("file") }, file_v);
         if (line_v != .null) try native_entry.set(self.allocator, .{ .string = Value.String.borrowed("line") }, line_v);
-        const args_arr = try self.allocator.create(PhpArray);
-        args_arr.* = .{};
-        try self.arrays.append(self.allocator, args_arr);
+        const args_arr = try self.allocArray();
         for (native_args) |a| try args_arr.append(self.allocator, a);
         try native_entry.set(self.allocator, .{ .string = Value.String.borrowed("args") }, .{ .array = args_arr });
-        const new_trace = try self.allocator.create(PhpArray);
-        new_trace.* = .{};
-        try self.arrays.append(self.allocator, new_trace);
+        const new_trace = try self.allocArray();
         try new_trace.append(self.allocator, .{ .array = closure_entry });
         try new_trace.append(self.allocator, .{ .array = native_entry });
         for (old_trace.entries.items[1..]) |e| try new_trace.append(self.allocator, e.value);
@@ -11655,7 +11620,9 @@ pub const VM = struct {
         };
         obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
         try self.initObjectProperties(obj, class_name);
-        try obj.set(self.allocator, "message", .{ .string = Value.String.borrowed(message) });
+        const owned_message = try Value.String.create(self.allocator, message);
+        defer owned_message.release();
+        try obj.set(self.allocator, "message", .{ .string = owned_message });
         try obj.set(self.allocator, "code", .{ .int = 0 });
         try self.objects.append(self.allocator, obj);
         self.pending_exception = .{ .object = obj };
@@ -12223,7 +12190,9 @@ pub const VM = struct {
         };
         obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
         try self.initObjectProperties(obj, class_name);
-        try obj.set(self.allocator, "message", .{ .string = Value.String.borrowed(message) });
+        const owned_message = try Value.String.create(self.allocator, message);
+        defer owned_message.release();
+        try obj.set(self.allocator, "message", .{ .string = owned_message });
         try obj.set(self.allocator, "code", .{ .int = 0 });
         if (at) |pos| {
             try obj.set(self.allocator, "file", .{ .string = Value.String.borrowed(pos.file) });
@@ -12702,20 +12671,54 @@ pub const VM = struct {
     }
 
     // `$x++;` / `$x--;` as the unfused get_local, inc_value, set_local, pop
-    fn fusedStep(self: *VM, frame: *CallFrame, slot: u16, up: bool) RuntimeError!void {
+    // true when a thrown TypeError was caught
+    fn fusedStep(self: *VM, frame: *CallFrame, slot: u16, up: bool) RuntimeError!bool {
         const v = self.fusedRead(frame, slot);
         VM.stackRetain(v);
-        if (up) {
-            const incremented = try Value.phpInc(v, self.allocator);
+        const stepped = self.stepValue(v, up) catch |err| {
             self.stackRelease(v);
-            self.push(incremented);
-            if (incremented == .string and incremented.string.owner != null) self.releaseValue(incremented);
-        } else {
-            self.stackRelease(v);
-            self.push(Value.phpDec(v));
-        }
+            return err;
+        };
+        self.stackRelease(v);
+        const result = stepped orelse return true;
+        self.push(result);
+        if (result == .string and result.string.owner != null) self.releaseValue(result);
         try self.assignLocal(frame, slot, self.peek());
         _ = self.pop();
+        return false;
+    }
+
+    // php's ++ and --, with the warning for operands they leave alone and the
+    // TypeError for ones they cannot step. null when that TypeError was caught
+    pub fn stepValue(self: *VM, v: Value, up: bool) RuntimeError!?Value {
+        const verb = if (up) "increment" else "decrement";
+        switch (v) {
+            .null => if (!up) {
+                self.emitWarning("Decrement on type null has no effect, this will change in the next major version of PHP") catch return if (try self.resumeRaised()) null else unreachable;
+                return .null;
+            },
+            .bool => {
+                const msg = if (up) "Increment on type bool has no effect, this will change in the next major version of PHP" else "Decrement on type bool has no effect, this will change in the next major version of PHP";
+                self.emitWarning(msg) catch return if (try self.resumeRaised()) null else unreachable;
+                return v;
+            },
+            .string => |str| if (!up and str.len == 0) return .{ .int = -1 },
+            .array, .resource => return self.throwStepError(verb, Value.typeName(v)),
+            .object => |obj| {
+                const overloaded = self.objectBinop(if (up) .add else .sub, v, .{ .int = 1 }) catch return if (try self.resumeRaised()) null else unreachable;
+                if (overloaded) |r| return r;
+                return self.throwStepError(verb, obj.class_name);
+            },
+            else => {},
+        }
+        return if (up) try Value.phpInc(v, self.allocator) else Value.phpDec(v);
+    }
+
+    fn throwStepError(self: *VM, verb: []const u8, type_name: []const u8) RuntimeError!?Value {
+        const msg = try std.fmt.allocPrint(self.allocator, "Cannot {s} {s}", .{ verb, type_name });
+        defer self.allocator.free(msg);
+        if (try self.throwBuiltinException("TypeError", msg)) return null;
+        return error.RuntimeError;
     }
 
     const FusedArith = struct { op: NativeBinop, src: u16, dst: u16, base_frame: usize };
@@ -13678,9 +13681,7 @@ pub const VM = struct {
             },
             0x06 => blk: {
                 const len = self.readU16();
-                const arr = self.allocator.create(PhpArray) catch break :blk .null;
-                arr.* = .{};
-                self.arrays.append(self.allocator, arr) catch {};
+                const arr = self.allocArray() catch break :blk .null;
                 for (0..len) |_| {
                     const v = self.readAttrValue();
                     arr.append(self.allocator, v) catch {};
@@ -13689,9 +13690,7 @@ pub const VM = struct {
             },
             0x07 => blk: { // associative array
                 const len = self.readU16();
-                const arr = self.allocator.create(PhpArray) catch break :blk .null;
-                arr.* = .{};
-                self.arrays.append(self.allocator, arr) catch {};
+                const arr = self.allocArray() catch break :blk .null;
                 for (0..len) |_| {
                     const key_type = self.readByte();
                     const key: PhpArray.Key = if (key_type == 0x01) k: {
@@ -14079,9 +14078,7 @@ pub const VM = struct {
 
     pub fn castToArray(self: *VM, v: Value) !Value {
         if (v == .array) return v;
-        const arr = try self.allocator.create(PhpArray);
-        arr.* = .{};
-        try self.arrays.append(self.allocator, arr);
+        const arr = try self.allocArray();
         switch (v) {
             .object => |o| try self.copyPropertiesToArray(o.storage(), arr),
             .null => {},
@@ -17228,7 +17225,7 @@ pub const VM = struct {
     }
 
     fn shallowCloneCow(self: *VM, src: *PhpArray) RuntimeError!*PhpArray {
-        const copy = self.allocator.create(PhpArray) catch return error.RuntimeError;
+        const copy = self.allocArray() catch return error.RuntimeError;
         copy.* = .{ .next_int_key = src.next_int_key, .has_int_keys = src.has_int_keys, .cursor = src.cursor };
         copy.entries.ensureTotalCapacity(self.allocator, src.entries.items.len) catch return error.RuntimeError;
         for (src.entries.items, 0..) |entry, i| {
@@ -17241,7 +17238,6 @@ pub const VM = struct {
                 copy.string_index.put(self.allocator, entry.key.string.bytes(), i) catch return error.RuntimeError;
             }
         }
-        self.arrays.append(self.allocator, copy) catch return error.RuntimeError;
         try self.registerCloneRefs(copy);
         return copy;
     }
@@ -17290,7 +17286,7 @@ pub const VM = struct {
     }
 
     fn cloneArrayFlat(self: *VM, src: *PhpArray) RuntimeError!*PhpArray {
-        const copy = self.allocator.create(PhpArray) catch return error.RuntimeError;
+        const copy = self.allocArray() catch return error.RuntimeError;
         copy.* = .{ .next_int_key = src.next_int_key, .has_int_keys = src.has_int_keys, .cursor = src.cursor };
         copy.entries.ensureTotalCapacity(self.allocator, src.entries.items.len) catch return error.RuntimeError;
         for (src.entries.items, 0..) |entry, i| {
@@ -17304,7 +17300,6 @@ pub const VM = struct {
                 copy.string_index.put(self.allocator, entry.key.string.bytes(), i) catch return error.RuntimeError;
             }
         }
-        self.arrays.append(self.allocator, copy) catch return error.RuntimeError;
         try self.registerCloneRefs(copy);
         return copy;
     }
@@ -17315,7 +17310,7 @@ pub const VM = struct {
         visited: *std.AutoHashMapUnmanaged(*PhpArray, *PhpArray),
     ) RuntimeError!*PhpArray {
         if (visited.get(src)) |existing| return existing;
-        const copy = self.allocator.create(PhpArray) catch return error.RuntimeError;
+        const copy = self.allocArray() catch return error.RuntimeError;
         copy.* = .{ .next_int_key = src.next_int_key, .has_int_keys = src.has_int_keys, .cursor = src.cursor };
         visited.put(self.allocator, src, copy) catch return error.RuntimeError;
         copy.entries.ensureTotalCapacity(self.allocator, src.entries.items.len) catch return error.RuntimeError;
@@ -17337,7 +17332,6 @@ pub const VM = struct {
                 copy.string_index.put(self.allocator, entry.key.string.bytes(), i) catch return error.RuntimeError;
             }
         }
-        self.arrays.append(self.allocator, copy) catch return error.RuntimeError;
         try self.registerCloneRefs(copy);
         return copy;
     }
@@ -17531,12 +17525,10 @@ pub const VM = struct {
             for (0..bind_fixed) |i| {
                 try vars.put(self.allocator, func.params[i], try self.bindFrameArg(args[i]));
             }
-            const rest = try self.allocator.create(PhpArray);
-            rest.* = .{};
+            const rest = try self.allocArray();
             for (fixed..args.len) |i| {
                 try rest.append(self.allocator, try self.bindFrameArg(args[i]));
             }
-            try self.arrays.append(self.allocator, rest);
             try vars.put(self.allocator, func.params[fixed], .{ .array = rest });
             return;
         }
@@ -17548,15 +17540,11 @@ pub const VM = struct {
 
     pub fn resolveDefault(self: *VM, val: Value) !Value {
         if (val.isEmptyArrayDefault()) {
-            const arr = try self.allocator.create(PhpArray);
-            arr.* = .{};
-            try self.arrays.append(self.allocator, arr);
+            const arr = try self.allocArray();
             return .{ .array = arr };
         }
         if (val == .array) {
-            const arr = try self.allocator.create(PhpArray);
-            arr.* = .{};
-            try self.arrays.append(self.allocator, arr);
+            const arr = try self.allocArray();
             for (val.array.entries.items) |entry| {
                 // entries may themselves be deferred sentinels (constant refs,
                 // class constants, nested arrays) - resolve key and value
@@ -17788,12 +17776,18 @@ pub const VM = struct {
         return try self.tryWeakCoerceSingle(val, t);
     }
 
+    fn numericStringFitsInt(s: []const u8) bool {
+        const trimmed = std.mem.trim(u8, s, " \t\n\r\x0b\x0c");
+        if (std.fmt.parseInt(i64, trimmed, 10)) |_| return true else |_| {}
+        return Value.floatFitsInt(std.fmt.parseFloat(f64, trimmed) catch return false);
+    }
+
     fn tryWeakCoerceSingle(self: *VM, val: Value, t: []const u8) RuntimeError!?Value {
         if (std.mem.eql(u8, t, "int") or std.mem.eql(u8, t, "integer")) {
             return switch (val) {
                 .bool => |b| Value{ .int = if (b) @as(i64, 1) else 0 },
-                .float => |f| if (std.math.isFinite(f)) Value{ .int = @as(i64, @intFromFloat(f)) } else null,
-                .string => |s| if (Value.isNumericString(s.bytes())) Value{ .int = Value.toInt(val) } else null,
+                .float => |f| if (Value.floatFitsInt(f)) Value{ .int = @as(i64, @intFromFloat(f)) } else null,
+                .string => |s| if (Value.isNumericString(s.bytes()) and numericStringFitsInt(s.bytes())) Value{ .int = Value.toInt(val) } else null,
                 else => null,
             };
         }
@@ -18462,8 +18456,7 @@ pub const VM = struct {
             for (@min(ac, fixed)..fixed) |i| {
                 if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
             }
-            const rest_arr = try self.allocator.create(PhpArray);
-            rest_arr.* = .{};
+            const rest_arr = try self.allocArray();
             if (ac > fixed) {
                 for (fixed..ac) |i| {
                     try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + i]));
@@ -18476,7 +18469,6 @@ pub const VM = struct {
                     try rest_arr.set(self.allocator, entry.key, try self.bindFrameArg(entry.value));
                 }
             }
-            try self.arrays.append(self.allocator, rest_arr);
             try new_vars.put(self.allocator, func.params[fixed], .{ .array = rest_arr });
         } else {
             const bind_count = @min(ac, func.arity);
@@ -18618,9 +18610,7 @@ pub const VM = struct {
             .float => |f| .{ .float = f },
             .string => |bytes| .{ .string = Value.String.borrowed(bytes) },
             .empty_array => blk: {
-                const arr = try self.allocator.create(PhpArray);
-                arr.* = .{};
-                try self.arrays.append(self.allocator, arr);
+                const arr = try self.allocArray();
                 break :blk .{ .array = arr };
             },
             .class_constant => |c| blk: {

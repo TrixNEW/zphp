@@ -728,8 +728,11 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
     const name = if (std.mem.startsWith(u8, raw_name, "__closure_")) raw_name else self.resolveClassName(raw_name);
     const param_nodes = self.ast.extraSlice(node.data.lhs);
 
+    var handed_over = false;
     const param_names = try self.allocator.alloc([]const u8, param_nodes.len);
+    errdefer if (!handed_over) self.allocator.free(param_names);
     const ref_flags = try self.allocator.alloc(bool, param_nodes.len);
+    errdefer if (!handed_over) self.allocator.free(ref_flags);
     var defaults = std.ArrayListUnmanaged(Value){};
     defer defaults.deinit(self.allocator);
     var required: u8 = 0;
@@ -756,6 +759,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
 
     const defaults_owned = try self.allocator.alloc(Value, defaults.items.len);
     @memcpy(defaults_owned, defaults.items);
+    errdefer if (!handed_over) compiler.freeDefaults(self.allocator, defaults_owned);
 
     const gen = (node.data.rhs & (1 << 31)) != 0;
     const returns_ref = (node.data.rhs & (1 << 30)) != 0;
@@ -784,16 +788,8 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         .use_const_aliases = self.use_const_aliases,
         .current_function = name,
     };
-    errdefer {
-        sub.chunk.deinit(self.allocator);
-        sub.break_jumps.deinit(self.allocator);
-        sub.continue_jumps.deinit(self.allocator);
-        sub.string_allocs.deinit(self.allocator);
-        sub.local_slots.deinit(self.allocator);
-        sub.type_hints.deinit(self.allocator);
-        sub.pending_gotos.deinit(self.allocator);
-        sub.labels.deinit(self.allocator);
-    }
+    defer sub.deinitScratch();
+    errdefer sub.discardOutput();
 
     for (param_nodes, 0..) |_, i| {
         if (i < ref_flags.len and ref_flags[i]) continue;
@@ -802,23 +798,15 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
 
     const body_idx = node.data.rhs & 0x3FFFFFFF;
     try sub.compileNode(body_idx);
-    for (sub.pending_gotos.items) |pg| {
-        if (sub.labels.get(pg.label)) |target| {
-            sub.patchJumpTo(pg.offset, target);
-        }
-    }
-    sub.pending_gotos.deinit(self.allocator);
-    sub.labels.deinit(self.allocator);
+    sub.patchGotos();
     try sub.emitOp(.op_null);
     try sub.emitOp(if (gen) .generator_return else .return_val);
-    sub.break_jumps.deinit(self.allocator);
-    sub.continue_jumps.deinit(self.allocator);
 
     self.closure_count = sub.closure_count;
     self.cond_fn_count = sub.cond_fn_count;
+    try self.functions.ensureUnusedCapacity(self.allocator, 1);
     const slot_names = try sub.buildSlotNames();
     const local_count = sub.next_slot;
-    sub.local_slots.deinit(self.allocator);
 
     const is_closure = std.mem.startsWith(u8, name, "__closure_");
     const lo = !is_closure and !gen and !is_variadic and !hasRefParams(ref_flags) and !needsVarSync(&sub.chunk) and sub.closure_count == 0;
@@ -832,7 +820,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         cond_id = self.cond_fn_count;
     }
 
-    try self.functions.append(self.allocator, .{
+    self.functions.appendAssumeCapacity(.{
         .name = name,
         .cond_id = cond_id,
         .arity = @intCast(param_nodes.len),
@@ -844,7 +832,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         .params = param_names[0..param_nodes.len],
         .defaults = defaults_owned,
         .ref_params = ref_flags,
-        .chunk = sub.chunk,
+        .chunk = sub.takeChunk(),
         .local_count = local_count,
         .slot_names = slot_names,
         .file_path = self.file_path,
@@ -852,6 +840,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         .end_line = endLineForBlockStartingAt(self, node.main_token),
         .doc_comment = docCommentForToken(self, node.main_token),
     });
+    handed_over = true;
 
     const param_types = try extractParamTypes(self, param_nodes);
     const return_type = try extractReturnType(self, node.data.lhs, @intCast(param_nodes.len));
@@ -876,16 +865,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
-    for (sub.functions.items) |f| try self.functions.append(self.allocator, f);
-    sub.functions.deinit(self.allocator);
-    for (sub.string_allocs.items) |s| try self.string_allocs.append(self.allocator, s);
-    sub.string_allocs.deinit(self.allocator);
-    for (sub.type_hints.items) |th| try self.type_hints.append(self.allocator, th);
-    sub.type_hints.deinit(self.allocator);
-    for (sub.function_attrs.items) |fa| try self.function_attrs.append(self.allocator, fa);
-    sub.function_attrs.deinit(self.allocator);
-    for (sub.new_defaults.items) |nd| try self.new_defaults.append(self.allocator, nd);
-    sub.new_defaults.deinit(self.allocator);
+    try self.adopt(&sub);
 
     if (cond_id != 0) {
         try self.emitOp(.declare_fn);
@@ -903,7 +883,9 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
     try self.string_allocs.append(self.allocator, owned_name);
 
     const param_nodes = self.ast.extraSlice(node.data.lhs);
+    var handed_over = false;
     const param_names = try self.allocator.alloc([]const u8, param_nodes.len);
+    errdefer if (!handed_over) self.allocator.free(param_names);
     var ref_flags_buf: [16]bool = .{false} ** 16;
     var has_any_ref = false;
     var defaults = std.ArrayListUnmanaged(Value){};
@@ -937,6 +919,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         @memcpy(d, defaults.items);
         break :blk d;
     } else &[_]Value{};
+    errdefer if (!handed_over) compiler.freeDefaults(self.allocator, defaults_owned);
 
     // rhs = extra -> {body (bit 31 = generator, bit 30 = static), use_count, use_vars...}
     // use_count 0xFFFFFFFF = arrow fn (implicit capture)
@@ -977,16 +960,8 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         .current_function = display_name,
         .in_trait = self.in_trait,
     };
-    errdefer {
-        sub.chunk.deinit(self.allocator);
-        sub.break_jumps.deinit(self.allocator);
-        sub.continue_jumps.deinit(self.allocator);
-        sub.string_allocs.deinit(self.allocator);
-        sub.local_slots.deinit(self.allocator);
-        sub.type_hints.deinit(self.allocator);
-        sub.pending_gotos.deinit(self.allocator);
-        sub.labels.deinit(self.allocator);
-    }
+    defer sub.deinitScratch();
+    errdefer sub.discardOutput();
 
     for (param_nodes, 0..) |_, i| {
         if (i < 16 and ref_flags_buf[i]) continue;
@@ -1011,16 +986,9 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
     if (is_arrow) sub.arrow_parent = self;
 
     try sub.compileNode(body_node);
-    for (sub.pending_gotos.items) |pg| {
-        if (sub.labels.get(pg.label)) |target| {
-            sub.patchJumpTo(pg.offset, target);
-        }
-    }
-    sub.pending_gotos.deinit(self.allocator);
-    sub.labels.deinit(self.allocator);
+    sub.patchGotos();
     try sub.emitOp(.op_null);
     try sub.emitOp(if (gen) .generator_return else .return_val);
-    sub.break_jumps.deinit(self.allocator);
 
     self.closure_count = sub.closure_count;
     self.cond_fn_count = sub.cond_fn_count;
@@ -1030,6 +998,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         for (0..param_nodes.len) |i| rp[i] = if (i < 16) ref_flags_buf[i] else false;
         break :blk rp;
     } else &[_]bool{};
+    errdefer if (!handed_over and ref_params.len > 0) self.allocator.free(ref_params);
 
     // check for ref captures
     var has_ref_capture = false;
@@ -1040,9 +1009,9 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         }
     }
 
+    try self.functions.ensureUnusedCapacity(self.allocator, 1);
     const slot_names = try sub.buildSlotNames();
     const local_count = sub.next_slot;
-    sub.local_slots.deinit(self.allocator);
 
     const closure_lo = !gen and !is_variadic and !has_any_ref and !has_ref_capture and !needsVarSync(&sub.chunk);
 
@@ -1052,7 +1021,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         .required_params = required,
         .params = param_names[0..param_nodes.len],
         .defaults = defaults_owned,
-        .chunk = sub.chunk,
+        .chunk = sub.takeChunk(),
         .is_arrow = is_arrow,
         .is_generator = gen,
         .returns_ref = false,
@@ -1069,7 +1038,8 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         .display_name = display_name,
     };
 
-    try self.functions.append(self.allocator, func);
+    self.functions.appendAssumeCapacity(func);
+    handed_over = true;
 
     const param_types = try extractParamTypes(self, param_nodes);
     const return_type = try extractReturnType(self, node.data.lhs, @intCast(param_nodes.len));
@@ -1089,16 +1059,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         self.allocator.free(closure_attrs);
     }
 
-    for (sub.functions.items) |f| try self.functions.append(self.allocator, f);
-    sub.functions.deinit(self.allocator);
-    for (sub.string_allocs.items) |s| try self.string_allocs.append(self.allocator, s);
-    sub.string_allocs.deinit(self.allocator);
-    for (sub.type_hints.items) |th| try self.type_hints.append(self.allocator, th);
-    sub.type_hints.deinit(self.allocator);
-    for (sub.function_attrs.items) |fa| try self.function_attrs.append(self.allocator, fa);
-    sub.function_attrs.deinit(self.allocator);
-    for (sub.new_defaults.items) |nd| try self.new_defaults.append(self.allocator, nd);
-    sub.new_defaults.deinit(self.allocator);
+    try self.adopt(&sub);
 
     const idx = try self.addConstant(.{ .string = Value.String.borrowed(owned_name) });
     try self.emitConstant(idx);
@@ -2760,8 +2721,11 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
     try self.string_allocs.append(self.allocator, full_name);
 
     const param_nodes = self.ast.extraSlice(member.data.lhs);
+    var handed_over = false;
     const param_names = try self.allocator.alloc([]const u8, param_nodes.len);
+    errdefer if (!handed_over) self.allocator.free(param_names);
     const ref_flags = try self.allocator.alloc(bool, param_nodes.len);
+    errdefer if (!handed_over) self.allocator.free(ref_flags);
     for (param_nodes, 0..) |p, i| {
         const pnode = self.ast.nodes[p];
         param_names[i] = self.ast.tokenSlice(pnode.main_token);
@@ -2789,6 +2753,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
     if (!seen_default and !is_variadic) required = @intCast(param_nodes.len);
     const defaults_owned = try self.allocator.alloc(Value, defaults.items.len);
     @memcpy(defaults_owned, defaults.items);
+    errdefer if (!handed_over) compiler.freeDefaults(self.allocator, defaults_owned);
 
     // bit 29 = generator, bit 28 = is_final, bit 27 = returns_ref
     const method_gen = (member.data.rhs & (1 << 29)) != 0;
@@ -2820,16 +2785,8 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         .current_function = method_name,
         .in_trait = self.in_trait,
     };
-    errdefer {
-        sub.chunk.deinit(self.allocator);
-        sub.break_jumps.deinit(self.allocator);
-        sub.continue_jumps.deinit(self.allocator);
-        sub.string_allocs.deinit(self.allocator);
-        sub.local_slots.deinit(self.allocator);
-        sub.type_hints.deinit(self.allocator);
-        sub.pending_gotos.deinit(self.allocator);
-        sub.labels.deinit(self.allocator);
-    }
+    defer sub.deinitScratch();
+    errdefer sub.discardOutput();
 
     // slot 0 = $this for instance methods
     if (member.tag != .static_class_method) {
@@ -2862,26 +2819,19 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
     // returns_ref (bit 27)
     const body_idx = member.data.rhs & 0x07FFFFFF;
     try sub.compileNode(body_idx);
-    for (sub.pending_gotos.items) |pg| {
-        if (sub.labels.get(pg.label)) |target| {
-            sub.patchJumpTo(pg.offset, target);
-        }
-    }
-    sub.pending_gotos.deinit(self.allocator);
-    sub.labels.deinit(self.allocator);
+    sub.patchGotos();
     try sub.emitOp(.op_null);
     try sub.emitOp(if (method_gen) .generator_return else .return_val);
-    sub.break_jumps.deinit(self.allocator);
 
     self.closure_count = sub.closure_count;
     self.cond_fn_count = sub.cond_fn_count;
+    try self.functions.ensureUnusedCapacity(self.allocator, 1);
     const slot_names = try sub.buildSlotNames();
     const local_count = sub.next_slot;
-    sub.local_slots.deinit(self.allocator);
 
     const method_lo = !method_gen and !is_variadic and !hasRefParams(ref_flags) and !needsVarSync(&sub.chunk) and sub.closure_count == 0;
 
-    try self.functions.append(self.allocator, .{
+    self.functions.appendAssumeCapacity(.{
         .name = full_name,
         .arity = @intCast(param_nodes.len),
         .required_params = required,
@@ -2895,7 +2845,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         .params = param_names[0..param_nodes.len],
         .defaults = defaults_owned,
         .ref_params = ref_flags,
-        .chunk = sub.chunk,
+        .chunk = sub.takeChunk(),
         .local_count = local_count,
         .slot_names = slot_names,
         .file_path = self.file_path,
@@ -2903,6 +2853,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         .end_line = endLineForBlockStartingAt(self, member.main_token),
         .doc_comment = docCommentForToken(self, member.main_token),
     });
+    handed_over = true;
 
     const param_types = try extractParamTypes(self, param_nodes);
     const return_type = try extractReturnType(self, member.data.lhs, @intCast(param_nodes.len));
@@ -2914,14 +2865,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         if (return_type.len > 0) self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
     }
 
-    for (sub.functions.items) |f| try self.functions.append(self.allocator, f);
-    sub.functions.deinit(self.allocator);
-    for (sub.string_allocs.items) |s| try self.string_allocs.append(self.allocator, s);
-    sub.string_allocs.deinit(self.allocator);
-    for (sub.type_hints.items) |th| try self.type_hints.append(self.allocator, th);
-    sub.type_hints.deinit(self.allocator);
-    for (sub.new_defaults.items) |nd| try self.new_defaults.append(self.allocator, nd);
-    sub.new_defaults.deinit(self.allocator);
+    try self.adopt(&sub);
 }
 
 // compiles the non-literal instance defaults into the class's hidden
@@ -2962,16 +2906,8 @@ fn compileDeferredPropDefaults(self: *Compiler, class_name: []const u8, members:
         .current_function = name,
         .in_trait = self.in_trait,
     };
-    errdefer {
-        sub.chunk.deinit(self.allocator);
-        sub.break_jumps.deinit(self.allocator);
-        sub.continue_jumps.deinit(self.allocator);
-        sub.string_allocs.deinit(self.allocator);
-        sub.local_slots.deinit(self.allocator);
-        sub.type_hints.deinit(self.allocator);
-        sub.pending_gotos.deinit(self.allocator);
-        sub.labels.deinit(self.allocator);
-    }
+    defer sub.deinitScratch();
+    errdefer sub.discardOutput();
 
     const cname_idx = try sub.addConstant(.{ .string = Value.String.borrowed(class_name) });
     var first_tok: u32 = 0;
@@ -2990,17 +2926,14 @@ fn compileDeferredPropDefaults(self: *Compiler, class_name: []const u8, members:
     }
     try sub.emitOp(.op_null);
     try sub.emitOp(.return_val);
-    sub.break_jumps.deinit(self.allocator);
-    sub.pending_gotos.deinit(self.allocator);
-    sub.labels.deinit(self.allocator);
 
     self.closure_count = sub.closure_count;
     self.cond_fn_count = sub.cond_fn_count;
+    try self.functions.ensureUnusedCapacity(self.allocator, 1);
     const slot_names = try sub.buildSlotNames();
     const local_count = sub.next_slot;
-    sub.local_slots.deinit(self.allocator);
 
-    try self.functions.append(self.allocator, .{
+    self.functions.appendAssumeCapacity(.{
         .name = name,
         .arity = 0,
         .required_params = 0,
@@ -3008,7 +2941,7 @@ fn compileDeferredPropDefaults(self: *Compiler, class_name: []const u8, members:
         .params = &.{},
         .defaults = &.{},
         .ref_params = &.{},
-        .chunk = sub.chunk,
+        .chunk = sub.takeChunk(),
         .local_count = local_count,
         .slot_names = slot_names,
         .file_path = self.file_path,
@@ -3016,14 +2949,7 @@ fn compileDeferredPropDefaults(self: *Compiler, class_name: []const u8, members:
         .end_line = lineForToken(self, first_tok),
     });
 
-    for (sub.functions.items) |f| try self.functions.append(self.allocator, f);
-    sub.functions.deinit(self.allocator);
-    for (sub.string_allocs.items) |str| try self.string_allocs.append(self.allocator, str);
-    sub.string_allocs.deinit(self.allocator);
-    for (sub.type_hints.items) |th| try self.type_hints.append(self.allocator, th);
-    sub.type_hints.deinit(self.allocator);
-    for (sub.new_defaults.items) |nd| try self.new_defaults.append(self.allocator, nd);
-    sub.new_defaults.deinit(self.allocator);
+    try self.adopt(&sub);
     return true;
 }
 
@@ -3060,12 +2986,16 @@ fn compilePropertyHook(self: *Compiler, class_name: []const u8, prop_name: []con
         const pname = if (set_param_tok != 0) self.ast.tokenSlice(set_param_tok) else "$value";
         try param_names_list.append(self.allocator, pname);
     }
+    var handed_over = false;
     const param_names = try self.allocator.alloc([]const u8, param_names_list.items.len);
+    errdefer if (!handed_over) self.allocator.free(param_names);
     @memcpy(param_names, param_names_list.items);
     const ref_flags = try self.allocator.alloc(bool, param_names.len);
+    errdefer if (!handed_over and ref_flags.len > 0) self.allocator.free(ref_flags);
     @memset(ref_flags, false);
 
     const defaults = try self.allocator.alloc(Value, param_names.len);
+    errdefer if (!handed_over) compiler.freeDefaults(self.allocator, defaults);
     @memset(defaults, .null);
 
     var sub = Compiler{
@@ -3093,16 +3023,8 @@ fn compilePropertyHook(self: *Compiler, class_name: []const u8, prop_name: []con
         .current_class = class_name,
         .current_function = full_name,
     };
-    errdefer {
-        sub.chunk.deinit(self.allocator);
-        sub.break_jumps.deinit(self.allocator);
-        sub.continue_jumps.deinit(self.allocator);
-        sub.string_allocs.deinit(self.allocator);
-        sub.local_slots.deinit(self.allocator);
-        sub.type_hints.deinit(self.allocator);
-        sub.pending_gotos.deinit(self.allocator);
-        sub.labels.deinit(self.allocator);
-    }
+    defer sub.deinitScratch();
+    errdefer sub.discardOutput();
 
     _ = sub.getOrCreateSlot("$this");
     for (param_names) |pn| _ = sub.getOrCreateSlot(pn);
@@ -3127,32 +3049,26 @@ fn compilePropertyHook(self: *Compiler, class_name: []const u8, prop_name: []con
     } else if (body_idx != 0) {
         try sub.compileNode(body_idx);
     }
-    for (sub.pending_gotos.items) |pg| {
-        if (sub.labels.get(pg.label)) |target| sub.patchJumpTo(pg.offset, target);
-    }
-    sub.pending_gotos.deinit(self.allocator);
-    sub.labels.deinit(self.allocator);
+    sub.patchGotos();
     try sub.emitOp(.op_null);
     try sub.emitOp(if (is_generator) .generator_return else .return_val);
-    sub.break_jumps.deinit(self.allocator);
-    sub.continue_jumps.deinit(self.allocator);
 
     self.closure_count = sub.closure_count;
     self.cond_fn_count = sub.cond_fn_count;
+    try self.functions.ensureUnusedCapacity(self.allocator, 1);
     const slot_names = try sub.buildSlotNames();
     const local_count = sub.next_slot;
-    sub.local_slots.deinit(self.allocator);
 
     const method_lo = !is_generator and !needsVarSync(&sub.chunk) and sub.closure_count == 0;
 
-    try self.functions.append(self.allocator, .{
+    self.functions.appendAssumeCapacity(.{
         .name = full_name,
         .arity = @intCast(param_names.len),
         .required_params = @intCast(param_names.len),
         .params = param_names,
         .defaults = defaults,
         .ref_params = ref_flags,
-        .chunk = sub.chunk,
+        .chunk = sub.takeChunk(),
         .is_generator = is_generator,
         .locals_only = method_lo,
         .local_count = local_count,
@@ -3162,17 +3078,9 @@ fn compilePropertyHook(self: *Compiler, class_name: []const u8, prop_name: []con
         .returns_ref = (hook_flags & 4) != 0,
         .has_param_types = param_types.len > 0 and param_types[0].len > 0,
     });
+    handed_over = true;
 
-    for (sub.functions.items) |f| try self.functions.append(self.allocator, f);
-    sub.functions.deinit(self.allocator);
-    for (sub.string_allocs.items) |s| try self.string_allocs.append(self.allocator, s);
-    sub.string_allocs.deinit(self.allocator);
-    for (sub.type_hints.items) |th| try self.type_hints.append(self.allocator, th);
-    sub.type_hints.deinit(self.allocator);
-    for (sub.function_attrs.items) |fa| try self.function_attrs.append(self.allocator, fa);
-    sub.function_attrs.deinit(self.allocator);
-    for (sub.new_defaults.items) |nd| try self.new_defaults.append(self.allocator, nd);
-    sub.new_defaults.deinit(self.allocator);
+    try self.adopt(&sub);
 }
 
 fn compileInterfaceMethodStub(self: *Compiler, owner_name: []const u8, member: Ast.Node) Error!void {

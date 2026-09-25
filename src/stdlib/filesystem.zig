@@ -1026,9 +1026,7 @@ fn native_opendir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     try useContext(ctx, args, 1);
     var dir = std.fs.cwd().openDir(args[0].string.bytes(), .{ .iterate = true }) catch return NativeResult.scalar(.{ .bool = false });
     defer dir.close();
-    const names_arr = try ctx.allocator.create(PhpArray);
-    names_arr.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, names_arr);
+    const names_arr = try ctx.vm.allocArray();
     try names_arr.append(ctx.allocator, .{ .string = Value.String.borrowed(".") });
     try names_arr.append(ctx.allocator, .{ .string = Value.String.borrowed("..") });
     var iter = dir.iterate();
@@ -3149,9 +3147,9 @@ fn makeReadBufferHandle(ctx: *NativeContext, data: []const u8) !*PhpObject {
 
 fn makePopenWriteHandle(ctx: *NativeContext, command: []const u8) !*PhpObject {
     const obj = try ctx.createResource("FileHandle");
-    const cmd_copy = try ctx.allocator.dupe(u8, command);
-    try ctx.vm.strings.append(ctx.allocator, cmd_copy);
-    try obj.set(ctx.allocator, "__popen_cmd", .{ .string = Value.String.borrowed(cmd_copy) });
+    const cmd_str = try Value.String.create(ctx.allocator, command);
+    defer cmd_str.release();
+    try obj.set(ctx.allocator, "__popen_cmd", .{ .string = cmd_str });
     try obj.set(ctx.allocator, "__buffer", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
     try obj.set(ctx.allocator, "__open", .{ .bool = true });
@@ -3453,9 +3451,10 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
 
     // php numbers the process after its pipes
     const proc = try ctx.vm.allocResource("ProcessResource");
-    const cmd_copy = try ctx.vm.allocator.dupe(u8, cmd);
-    try ctx.vm.strings.append(ctx.allocator, cmd_copy);
-    try proc.set(ctx.allocator, "__cmd", .{ .string = Value.String.borrowed(cmd_copy) });
+    const cmd_str = try Value.String.create(ctx.allocator, cmd);
+    defer cmd_str.release();
+    try proc.set(ctx.allocator, "__cmd", .{ .string = cmd_str });
+    const cmd_copy = cmd_str.bytes();
     try proc.set(ctx.allocator, "__exit", .{ .int = 0 });
     try proc.set(ctx.allocator, "__running", .{ .bool = true });
 
@@ -3536,9 +3535,7 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
 
     // build $pipes: one FileHandle per pipe fd, in fd order. a pipe_r fd is a write
     // handle for the caller (we write the child's stdin); pipe_w is a read handle
-    const pipes = try ctx.allocator.create(PhpArray);
-    pipes.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, pipes);
+    const pipes = try ctx.vm.allocArray();
     for (descs.items) |desc| {
         const pmode: ?[]const u8 = switch (desc.action) {
             .pipe_r => "w",
@@ -3627,9 +3624,7 @@ fn native_proc_get_status(ctx: *NativeContext, args: []const Value) RuntimeError
             }
         }
     }
-    const result = try ctx.allocator.create(PhpArray);
-    result.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, result);
+    const result = try ctx.vm.allocArray();
     const cmd = obj.get("__cmd");
     const exit = obj.get("__exit");
     const pid = obj.get("__pid");

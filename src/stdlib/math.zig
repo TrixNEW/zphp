@@ -155,12 +155,10 @@ fn roundWithMode(v: f64, mode: i64) f64 {
             1 => out = floor + 1.0, // HALF_UP (away from zero)
             2 => out = floor, // HALF_DOWN (toward zero)
             3 => { // HALF_EVEN
-                const fi: i64 = @intFromFloat(floor);
-                out = if (@mod(fi, 2) == 0) floor else floor + 1.0;
+                out = if (@mod(floor, 2.0) == 0) floor else floor + 1.0;
             },
             4 => { // HALF_ODD
-                const fi: i64 = @intFromFloat(floor);
-                out = if (@mod(fi, 2) == 0) floor + 1.0 else floor;
+                out = if (@mod(floor, 2.0) == 0) floor + 1.0 else floor;
             },
             else => out = floor + 1.0,
         }

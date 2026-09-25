@@ -733,9 +733,7 @@ fn getData(obj: *PhpObject) ?*PhpArray {
 
 fn ensureData(ctx: *NativeContext, obj: *PhpObject) !*PhpArray {
     if (getData(obj)) |arr| return arr;
-    const arr = try ctx.allocator.create(PhpArray);
-    arr.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, arr);
+    const arr = try ctx.vm.allocArray();
     try obj.set(ctx.allocator, "__data", .{ .array = arr });
     return arr;
 }
@@ -876,9 +874,7 @@ fn stackToArray(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult
         return NativeResult.borrowed(.{ .array = empty });
     };
     // return a copy in LIFO order
-    const copy = try ctx.allocator.create(PhpArray);
-    copy.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, copy);
+    const copy = try ctx.vm.allocArray();
     var i: usize = arr.entries.items.len;
     var key: i64 = 0;
     while (i > 0) {
@@ -1505,9 +1501,7 @@ fn pqInsert(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     const arr = try ensureData(ctx, obj);
     if (args.len < 2) return NativeResult.scalar(.null);
-    const pair = try ctx.allocator.create(PhpArray);
-    pair.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, pair);
+    const pair = try ctx.vm.allocArray();
     try pair.set(ctx.allocator, .{ .int = 0 }, args[0]);
     try pair.set(ctx.allocator, .{ .int = 1 }, args[1]);
 

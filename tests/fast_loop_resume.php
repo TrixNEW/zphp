@@ -125,3 +125,19 @@ $gw = 10;
 for ($gr = 0; $gr < 3; $gr++) { $gw -= 1; }
 function readGlobals() { return $GLOBALS['gi'] . $GLOBALS['gsum'] . $GLOBALS['gj'] . $GLOBALS['gw']; }
 echo $GLOBALS['gi'], ' ', $GLOBALS['gsum'], ' ', $GLOBALS['gw'], ' ', readGlobals(), "\n";
+// short-circuit and ternary operands are resume points, including inside call
+// arguments, by-reference out parameters and write chains
+function shortCircuitArgs($subjects)
+{
+    $out = [];
+    $n = 0;
+    foreach ($subjects as $i => $s) {
+        $ok = preg_match($s !== '' && strlen($s) > 1 ? '/(\d+)/' : '/x/', $s, $m) && isset($m[1]);
+        $out[$ok ? 'hit' : 'miss'][] = $ok ? (int) $m[1] : ($s ?: '-');
+        $out[$i % 2 === 0 || $n > 2 ? 'even' : 'odd'][$s ?: 'empty'] = ++$n > 1 && $n < 4;
+        $t = strlen($s) > 2 ?: str_pad($s, 3, $n % 2 ? 'a' : 'b');
+        $out['pad'][] = $t;
+    }
+    return json_encode($out);
+}
+echo shortCircuitArgs(['a12', '', 'zz', '7', 'q99q']), "\n";

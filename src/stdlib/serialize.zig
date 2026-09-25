@@ -817,18 +817,14 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             const has_unserialize = ctx.vm.hasMethod(class_name, "__unserialize");
             var collected: ?*PhpArray = null;
             if (has_unserialize) {
-                const arr = try ctx.allocator.create(PhpArray);
-                arr.* = .{};
-                try ctx.vm.arrays.append(ctx.allocator, arr);
+                const arr = try ctx.vm.allocArray();
                 collected = arr;
             }
 
             const is_fixed_array = std.mem.eql(u8, class_name, "SplFixedArray");
             var fixed_data: ?*PhpArray = null;
             if (is_fixed_array) {
-                const arr = try ctx.allocator.create(PhpArray);
-                arr.* = .{};
-                try ctx.vm.arrays.append(ctx.allocator, arr);
+                const arr = try ctx.vm.allocArray();
                 fixed_data = arr;
             }
             for (0..prop_count) |_| {

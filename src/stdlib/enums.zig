@@ -45,8 +45,14 @@ fn coerceForLookup(ctx: *NativeContext, def_backed: anytype, arg: Value) !Value 
                 break :blk .{ .string = Value.String.borrowed(s) };
             },
             .float => |f| blk: {
-                const truncated: i64 = @intFromFloat(f);
-                const s = try std.fmt.allocPrint(ctx.allocator, "{d}", .{truncated});
+                // the int|string parameter takes an integral-range float as
+                // an int (truncating), anything else as its string form
+                var buf: std.ArrayListUnmanaged(u8) = .{};
+                defer buf.deinit(ctx.allocator);
+                if (Value.floatFitsInt(f)) {
+                    try buf.print(ctx.allocator, "{d}", .{@as(i64, @intFromFloat(f))});
+                } else try arg.format(&buf, ctx.allocator);
+                const s = try ctx.allocator.dupe(u8, buf.items);
                 try ctx.vm.strings.append(ctx.allocator, s);
                 break :blk .{ .string = Value.String.borrowed(s) };
             },
@@ -101,7 +107,7 @@ fn checkEnumArgType(ctx: *NativeContext, backed: anytype, enum_name: []const u8,
     };
     const ok: bool = switch (backed) {
         // PHP coerces scalars+null; only array/object/resource are rejected
-        .int_type => arg == .int or arg == .float or arg == .bool or arg == .null or (arg == .string and isNumericIntStr(arg.string.bytes())),
+        .int_type => arg == .int or (arg == .float and Value.floatFitsInt(arg.float)) or arg == .bool or arg == .null or (arg == .string and isNumericIntStr(arg.string.bytes())),
         .string_type => arg == .string or arg == .int or arg == .float or arg == .bool or arg == .null,
         else => true,
     };

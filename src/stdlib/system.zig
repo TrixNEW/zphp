@@ -512,7 +512,8 @@ fn native_time_sleep_until(_: *NativeContext, args: []const Value) RuntimeError!
     const target = Value.toFloat(args[0]);
     const now: f64 = @floatFromInt(std.time.timestamp());
     if (target <= now) return NativeResult.scalar(.{ .bool = true });
-    const delta_ns: u64 = @intFromFloat(@max(0, (target - now) * 1e9));
+    const delta: f64 = (target - now) * 1e9;
+    const delta_ns: u64 = if (!(delta < 18446744073709549568.0)) std.math.maxInt(u64) else @intFromFloat(delta);
     std.Thread.sleep(delta_ns);
     return NativeResult.scalar(.{ .bool = true });
 }
@@ -1020,9 +1021,7 @@ fn native_exec(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     // optional output array (param 2, by-ref)
     if (args.len >= 2) {
         const arr = if (args[1] == .array) args[1].array else blk: {
-            const a = try ctx.allocator.create(@import("../runtime/value.zig").PhpArray);
-            a.* = .{};
-            try ctx.vm.arrays.append(ctx.allocator, a);
+            const a = try ctx.vm.allocArray();
             break :blk a;
         };
         for (lines.items) |line| {

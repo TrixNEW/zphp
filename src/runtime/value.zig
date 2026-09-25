@@ -1626,6 +1626,12 @@ pub const Value = union(enum) {
     // in-range finite floats truncate toward zero, and out-of-range floats wrap
     // modulo 2^64 rather than saturating. matches PHP for huge casts like
     // (int)9.5e18 == -8946744073709551616
+    // whether a float names an int exactly enough to stand for one: finite
+    // and within i64 (an int parameter accepts nothing else)
+    pub fn floatFitsInt(f: f64) bool {
+        return std.math.isFinite(f) and f >= -9223372036854775808.0 and f < 9223372036854775808.0;
+    }
+
     pub fn dvalToLval(d: f64) i64 {
         if (std.math.isNan(d) or std.math.isInf(d)) return 0;
         // 2^63 as a double; any |d| below this fits an i64 directly

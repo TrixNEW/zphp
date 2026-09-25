@@ -127,9 +127,7 @@ fn getThis(ctx: *NativeContext) ?*PhpObject {
 fn ensureEntries(ctx: *NativeContext, obj: *PhpObject) !*PhpArray {
     const v = obj.get("__entries");
     if (v == .array) return v.array;
-    const arr = try ctx.allocator.create(PhpArray);
-    arr.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, arr);
+    const arr = try ctx.vm.allocArray();
     try obj.set(ctx.allocator, "__entries", .{ .array = arr });
     return arr;
 }

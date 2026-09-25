@@ -393,9 +393,7 @@ fn rollN(ctx: *NativeContext, n: usize) usize {
 fn rzShuffleArray(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .array) return NativeResult.scalar(.{ .bool = false });
     const src = args[0].array;
-    const dst = try ctx.allocator.create(PhpArray);
-    dst.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, dst);
+    const dst = try ctx.vm.allocArray();
     for (src.entries.items) |e| try dst.append(ctx.allocator, e.value);
     var i: usize = dst.entries.items.len;
     while (i > 1) {
@@ -439,9 +437,7 @@ fn rzPickArrayKeys(ctx: *NativeContext, args: []const Value) RuntimeError!Native
         keys[i] = keys[j];
         keys[j] = tmp;
     }
-    const out = try ctx.allocator.create(PhpArray);
-    out.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, out);
+    const out = try ctx.vm.allocArray();
     for (keys[0..want]) |k| {
         const v: Value = switch (k) {
             .string => |s| .{ .string = s },

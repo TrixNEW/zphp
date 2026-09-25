@@ -20,9 +20,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try throwable.methods.append(a, "getTraceAsString");
     try vm.interfaces.put(a, "Throwable", throwable);
 
-    const trace_default = try a.create(@import("../runtime/value.zig").PhpArray);
-    trace_default.* = .{};
-    try vm.arrays.append(a, trace_default);
+    const trace_default = try vm.allocArray();
 
     var exc_def = ClassDef{ .name = "Exception" };
     try exc_def.properties.append(a, .{ .name = "message", .default = .{ .string = Value.String.borrowed("") } });
@@ -223,20 +221,15 @@ fn exceptionGetLine(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRe
 }
 
 fn exceptionGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const PhpArray = @import("../runtime/value.zig").PhpArray;
     const this_val = ctx.vm.currentFrame().vars.get("$this") orelse {
-        const arr = try ctx.vm.allocator.create(PhpArray);
-        arr.* = .{};
-        try ctx.vm.arrays.append(ctx.vm.allocator, arr);
+        const arr = try ctx.vm.allocArray();
         return NativeResult.borrowed(.{ .array = arr });
     };
     if (this_val == .object) {
         const t = this_val.object.getForScope("trace", ctx.vm.exceptionTraceScope(this_val.object));
         if (t == .array) return NativeResult.borrowed(t);
     }
-    const arr = try ctx.vm.allocator.create(PhpArray);
-    arr.* = .{};
-    try ctx.vm.arrays.append(ctx.vm.allocator, arr);
+    const arr = try ctx.vm.allocArray();
     return NativeResult.borrowed(.{ .array = arr });
 }
 

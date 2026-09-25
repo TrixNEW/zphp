@@ -1046,7 +1046,11 @@ fn taskOf(obj: *PhpObject) ?*Task {
 pub fn optionalSeconds(v: Value) ?u64 {
     return switch (v) {
         .int => |i| if (i < 0) null else @as(u64, @intCast(i)) * std.time.ns_per_s,
-        .float => |f| if (f < 0) null else @as(u64, @intFromFloat(f * @as(f64, @floatFromInt(std.time.ns_per_s)))),
+        .float => |f| blk: {
+            if (!(f >= 0)) break :blk null;
+            const ns = f * @as(f64, @floatFromInt(std.time.ns_per_s));
+            break :blk if (ns < 18446744073709549568.0) @as(u64, @intFromFloat(ns)) else std.math.maxInt(u64);
+        },
         else => null,
     };
 }

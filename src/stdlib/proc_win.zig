@@ -409,14 +409,15 @@ pub fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!N
             return error.RuntimeError;
         }
     }
-    const cmd_copy = if (args[0] == .string)
+    const cmd_str = try Value.String.adopt(ctx.vm.allocator, if (args[0] == .string)
         try ctx.vm.allocator.dupe(u8, args[0].string.bytes())
     else
-        try argvLine(ctx.vm.allocator, words.items);
-    try ctx.vm.strings.append(ctx.allocator, cmd_copy);
+        try argvLine(ctx.vm.allocator, words.items));
+    defer cmd_str.release();
+    const cmd_copy = cmd_str.bytes();
 
     const proc = try ctx.vm.allocResource("ProcessResource");
-    try proc.set(ctx.allocator, "__cmd", .{ .string = Value.String.borrowed(cmd_copy) });
+    try proc.set(ctx.allocator, "__cmd", .{ .string = cmd_str });
     try proc.set(ctx.allocator, "__exit", .{ .int = 0 });
     try proc.set(ctx.allocator, "__running", .{ .bool = true });
 

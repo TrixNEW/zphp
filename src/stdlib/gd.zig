@@ -50,7 +50,7 @@ fn argInt(args: []const Value, idx: usize) ?i64 {
     if (args.len <= idx) return null;
     return switch (args[idx]) {
         .int => |i| i,
-        .float => |f| @intFromFloat(f),
+        .float => |f| Value.dvalToLval(f),
         .bool => |b| if (b) @as(i64, 1) else @as(i64, 0),
         else => null,
     };

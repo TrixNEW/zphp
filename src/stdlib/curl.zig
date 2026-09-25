@@ -901,7 +901,7 @@ fn curlMultiSelect(_: *NativeContext, args: []const Value) RuntimeError!NativeRe
             .int => |i| @floatFromInt(i),
             else => 1.0,
         };
-        break :blk @intFromFloat(secs * 1000.0);
+        break :blk @intCast(std.math.clamp(Value.dvalToLval(secs * 1000.0), std.math.minInt(c_int), std.math.maxInt(c_int)));
     } else 1000;
     var numfds: c_int = 0;
     const code = c.curl_multi_poll(mh, null, 0, timeout_ms, &numfds);

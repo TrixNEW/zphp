@@ -66,16 +66,7 @@ pub const CompileResult = struct {
 
     pub fn deinit(self: *CompileResult) void {
         self.chunk.deinit(self.allocator);
-        for (self.functions.items) |*f| {
-            f.chunk.deinit(self.allocator);
-            self.allocator.free(f.params);
-            if (f.defaults.len > 0) {
-                for (f.defaults) |d| freeDefaultValue(self.allocator, d);
-                self.allocator.free(f.defaults);
-            }
-            if (f.ref_params.len > 0) self.allocator.free(f.ref_params);
-            if (f.slot_names.len > 0) self.allocator.free(f.slot_names);
-        }
+        for (self.functions.items) |*f| freeFunction(self.allocator, f);
         self.functions.deinit(self.allocator);
         for (self.string_allocs.items) |s| self.allocator.free(s);
         self.string_allocs.deinit(self.allocator);
@@ -97,6 +88,20 @@ pub const CompileResult = struct {
         if (self.slot_names.len > 0) self.allocator.free(self.slot_names);
     }
 };
+
+pub fn freeFunction(allocator: Allocator, f: *ObjFunction) void {
+    f.chunk.deinit(allocator);
+    allocator.free(f.params);
+    freeDefaults(allocator, f.defaults);
+    if (f.ref_params.len > 0) allocator.free(f.ref_params);
+    if (f.slot_names.len > 0) allocator.free(f.slot_names);
+}
+
+pub fn freeDefaults(allocator: Allocator, defaults: []const Value) void {
+    if (defaults.len == 0) return;
+    for (defaults) |d| freeDefaultValue(allocator, d);
+    allocator.free(defaults);
+}
 
 fn freeDefaultValue(allocator: Allocator, v: Value) void {
     if (v == .array and !Value.isEmptyArrayDefault(v)) {
@@ -150,22 +155,13 @@ pub fn compileWithOrigin(ast: *const Ast, allocator: Allocator, origin: Origin) 
         // allocClosureId
         .closure_count = closureCounter(),
     };
-    errdefer {
-        c.chunk.deinit(allocator);
-        for (c.functions.items) |*f| f.chunk.deinit(allocator);
-        c.functions.deinit(allocator);
-        for (c.string_allocs.items) |s| allocator.free(s);
-        c.string_allocs.deinit(allocator);
-        c.break_jumps.deinit(allocator);
-        c.continue_jumps.deinit(allocator);
+    defer c.deinitScratch();
+    defer {
         c.use_aliases.deinit(allocator);
         c.use_fn_aliases.deinit(allocator);
         c.use_const_aliases.deinit(allocator);
-        c.pending_gotos.deinit(allocator);
-        c.labels.deinit(allocator);
-        c.hoisted_nodes.deinit(allocator);
-        c.hoisted_names.deinit(allocator);
     }
+    errdefer c.discardOutput();
 
     const root = ast.nodes[0];
     // PHP early-binds (relocates to before main execution) top-level class and
@@ -180,31 +176,19 @@ pub fn compileWithOrigin(ast: *const Ast, allocator: Allocator, origin: Origin) 
     for (ast.extraSlice(root.data.lhs)) |stmt| {
         try c.compileNode(stmt);
     }
-    for (c.pending_gotos.items) |pg| {
-        if (c.labels.get(pg.label)) |target| {
-            c.patchJumpTo(pg.offset, target);
-        }
-    }
-    c.pending_gotos.deinit(allocator);
-    c.labels.deinit(allocator);
+    c.patchGotos();
     try c.emitOp(.halt);
 
-    c.break_jumps.deinit(allocator);
-    c.continue_jumps.deinit(allocator);
-    var tp_iter = c.trait_properties.valueIterator();
-    while (tp_iter.next()) |v| allocator.free(v.*);
-    c.trait_properties.deinit(allocator);
-    c.use_aliases.deinit(allocator);
-    c.use_fn_aliases.deinit(allocator);
-    c.use_const_aliases.deinit(allocator);
-    c.hoisted_nodes.deinit(allocator);
-    c.hoisted_names.deinit(allocator);
     const slot_names = try c.buildSlotNames();
-    const local_count = c.next_slot;
-    c.local_slots.deinit(allocator);
     const strict = detectStrictTypes(ast.source);
     for (c.functions.items) |*f| f.strict_types = strict;
-    return .{ .chunk = c.chunk, .functions = c.functions, .string_allocs = c.string_allocs, .allocator = allocator, .local_count = local_count, .slot_names = slot_names, .type_hints = c.type_hints, .function_attrs = c.function_attrs, .new_defaults = c.new_defaults, .deferred_exprs = c.deferred_exprs, .source = ast.source, .file_path = file_path, .strict_types = strict };
+    var result = c.takeOutput();
+    result.local_count = c.next_slot;
+    result.slot_names = slot_names;
+    result.source = ast.source;
+    result.file_path = file_path;
+    result.strict_types = strict;
+    return result;
 }
 
 fn detectStrictTypes(src: []const u8) bool {
@@ -342,11 +326,11 @@ pub const Compiler = struct {
                 if (self.tryCompileLocalAssignSuper(node.data.lhs)) |emitted| {
                     if (!emitted) {
                         try self.compileNode(node.data.lhs);
-                        try self.emitOp(.pop);
+                        try self.emitOp(.pop_boundary);
                     }
                 } else |_| {
                     try self.compileNode(node.data.lhs);
-                    try self.emitOp(.pop);
+                    try self.emitOp(.pop_boundary);
                 }
             },
             .echo_stmt => {
@@ -539,7 +523,8 @@ pub const Compiler = struct {
             .call => try compiler_expr.compileCall(self, node),
             .callable_ref => try compiler_expr.compileCallableRef(self, node),
             .array_access => try compiler_expr.compileArrayAccess(self, node),
-            .array_push_target => {},
+            // `$a[]` only means something as a write target
+            .array_push_target => return self.fail(node.main_token, "Cannot use [] for reading"),
             .list_destructure => {},
             .ref_target => try self.compileNode(node.data.lhs),
             .named_arg => try self.compileNode(node.data.lhs),
@@ -777,6 +762,9 @@ pub const Compiler = struct {
     // ==================================================================
 
     pub fn compileDestructure(self: *Compiler, target: Ast.Node) Error!void {
+        for (self.ast.extraSlice(target.data.lhs)) |slot| {
+            if (slot != 0) break;
+        } else return self.fail(target.main_token, "Cannot use empty list");
         if (target.tag == .list_destructure) {
             const slots = self.ast.extraSlice(target.data.lhs);
             for (slots, 0..) |slot, i| {
@@ -793,24 +781,7 @@ pub const Compiler = struct {
                     try self.emitOp(.dup);
                     try self.compileNode(slot_node.data.rhs);
                     try self.emitOp(.array_get);
-                    if (inner_target.tag == .list_destructure or inner_target.tag == .array_literal) {
-                        try self.compileDestructure(inner_target);
-                        try self.emitOp(.pop);
-                    } else if (inner_target.tag == .property_access) {
-                        try self.compileNode(inner_target.data.lhs);
-                        try self.emitOp(.swap);
-                        const prop_name = self.propName(inner_target);
-                        const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
-                        try self.emitOp(.set_prop);
-                        try self.emitU16(prop_idx);
-                        try self.emitOp(.pop);
-                    } else if (inner_target.tag == .array_access or inner_target.tag == .array_push_target) {
-                        try self.compileDestructureArraySlot(inner_target);
-                    } else {
-                        const name = self.ast.tokenSlice(inner_target.main_token);
-                        try self.emitSetVar(name);
-                        try self.emitOp(.pop);
-                    }
+                    try self.compileStoreTop(inner_target);
                     continue;
                 }
                 if (slot_node.tag == .ref_target) {
@@ -822,24 +793,7 @@ pub const Compiler = struct {
                 try self.emitOp(.constant);
                 try self.emitU16(key_idx);
                 try self.emitOp(.array_get);
-                if (slot_node.tag == .list_destructure) {
-                    try self.compileDestructure(slot_node);
-                    try self.emitOp(.pop);
-                } else if (slot_node.tag == .property_access) {
-                    try self.compileNode(slot_node.data.lhs);
-                    try self.emitOp(.swap);
-                    const prop_name = self.propName(slot_node);
-                    const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
-                    try self.emitOp(.set_prop);
-                    try self.emitU16(prop_idx);
-                    try self.emitOp(.pop);
-                } else if (slot_node.tag == .array_access or slot_node.tag == .array_push_target) {
-                    try self.compileDestructureArraySlot(slot_node);
-                } else {
-                    const name = self.ast.tokenSlice(slot_node.main_token);
-                    try self.emitSetVar(name);
-                    try self.emitOp(.pop);
-                }
+                try self.compileStoreTop(slot_node);
             }
         } else if (target.tag == .array_literal) {
             const elements = self.ast.extraSlice(target.data.lhs);
@@ -865,25 +819,33 @@ pub const Compiler = struct {
                     try self.emitU16(key_idx);
                 }
                 try self.emitOp(.array_get);
-                if (val_node.tag == .list_destructure or val_node.tag == .array_literal) {
-                    try self.compileDestructure(val_node);
-                    try self.emitOp(.pop);
-                } else if (val_node.tag == .property_access) {
-                    try self.compileNode(val_node.data.lhs);
-                    try self.emitOp(.swap);
-                    const prop_name = self.propName(val_node);
-                    const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
-                    try self.emitOp(.set_prop);
-                    try self.emitU16(prop_idx);
-                    try self.emitOp(.pop);
-                } else if (val_node.tag == .array_access or val_node.tag == .array_push_target) {
-                    try self.compileDestructureArraySlot(val_node);
-                } else {
-                    const name = self.ast.tokenSlice(val_node.main_token);
-                    try self.emitSetVar(name);
-                    try self.emitOp(.pop);
-                }
+                try self.compileStoreTop(val_node);
             }
+        }
+    }
+
+    // stores the value on top of the stack into a write target (a variable,
+    // property, array element or append, or a nested destructuring list) and
+    // pops it: [.., value] -> [..]
+    pub fn compileStoreTop(self: *Compiler, target: Ast.Node) Error!void {
+        switch (target.tag) {
+            .list_destructure, .array_literal => {
+                try self.compileDestructure(target);
+                try self.emitOp(.pop);
+            },
+            .property_access => {
+                try self.compileNode(target.data.lhs);
+                try self.emitOp(.swap);
+                const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(self.propName(target)) });
+                try self.emitOp(.set_prop);
+                try self.emitU16(prop_idx);
+                try self.emitOp(.pop);
+            },
+            .array_access, .array_push_target => try self.compileDestructureArraySlot(target),
+            else => {
+                try self.emitSetVar(self.ast.tokenSlice(target.main_token));
+                try self.emitOp(.pop);
+            },
         }
     }
 
@@ -1345,6 +1307,88 @@ pub const Compiler = struct {
 
     pub fn inFunctionScope(self: *Compiler) bool {
         return self.scope_depth > 0;
+    }
+
+    // compile-time bookkeeping this compiler owns. the use_* alias maps are
+    // shared by value with sub-compilers, so only the root releases them
+    pub fn deinitScratch(self: *Compiler) void {
+        const a = self.allocator;
+        self.break_jumps.deinit(a);
+        self.continue_jumps.deinit(a);
+        self.pending_gotos.deinit(a);
+        self.labels.deinit(a);
+        self.local_slots.deinit(a);
+        self.hoisted_nodes.deinit(a);
+        self.hoisted_names.deinit(a);
+        var it = self.trait_properties.valueIterator();
+        while (it.next()) |v| a.free(v.*);
+        self.trait_properties.deinit(a);
+    }
+
+    // hands everything a CompileResult owns to the caller and leaves this
+    // compiler owning nothing of it
+    pub fn takeOutput(self: *Compiler) CompileResult {
+        const out = CompileResult{
+            .chunk = self.chunk,
+            .functions = self.functions,
+            .string_allocs = self.string_allocs,
+            .allocator = self.allocator,
+            .type_hints = self.type_hints,
+            .function_attrs = self.function_attrs,
+            .new_defaults = self.new_defaults,
+            .deferred_exprs = self.deferred_exprs,
+        };
+        self.chunk = .{};
+        self.functions = .{};
+        self.string_allocs = .{};
+        self.type_hints = .{};
+        self.function_attrs = .{};
+        self.new_defaults = .{};
+        self.deferred_exprs = .{};
+        return out;
+    }
+
+    pub fn takeChunk(self: *Compiler) Chunk {
+        const chunk = self.chunk;
+        self.chunk = .{};
+        return chunk;
+    }
+
+    pub fn discardOutput(self: *Compiler) void {
+        var out = self.takeOutput();
+        out.deinit();
+    }
+
+    // moves a finished sub-compiler's output into this one. capacity is
+    // reserved up front so the move either happens whole or not at all
+    pub fn adopt(self: *Compiler, sub: *Compiler) Error!void {
+        const a = self.allocator;
+        try self.functions.ensureUnusedCapacity(a, sub.functions.items.len);
+        try self.string_allocs.ensureUnusedCapacity(a, sub.string_allocs.items.len);
+        try self.type_hints.ensureUnusedCapacity(a, sub.type_hints.items.len);
+        try self.function_attrs.ensureUnusedCapacity(a, sub.function_attrs.items.len);
+        try self.new_defaults.ensureUnusedCapacity(a, sub.new_defaults.items.len);
+        try self.deferred_exprs.ensureUnusedCapacity(a, sub.deferred_exprs.items.len);
+        var out = sub.takeOutput();
+        self.functions.appendSliceAssumeCapacity(out.functions.items);
+        self.string_allocs.appendSliceAssumeCapacity(out.string_allocs.items);
+        self.type_hints.appendSliceAssumeCapacity(out.type_hints.items);
+        self.function_attrs.appendSliceAssumeCapacity(out.function_attrs.items);
+        self.new_defaults.appendSliceAssumeCapacity(out.new_defaults.items);
+        self.deferred_exprs.appendSliceAssumeCapacity(out.deferred_exprs.items);
+        out.chunk.deinit(a);
+        out.functions.deinit(a);
+        out.string_allocs.deinit(a);
+        out.type_hints.deinit(a);
+        out.function_attrs.deinit(a);
+        out.new_defaults.deinit(a);
+        out.deferred_exprs.deinit(a);
+    }
+
+    pub fn patchGotos(self: *Compiler) void {
+        for (self.pending_gotos.items) |pg| {
+            if (self.labels.get(pg.label)) |target| self.patchJumpTo(pg.offset, target);
+        }
     }
 
     pub fn buildSlotNames(self: *Compiler) Error![]const []const u8 {

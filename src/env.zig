@@ -137,9 +137,7 @@ pub fn populateEnvSuperglobal(vm: *VM, a: std.mem.Allocator, snapshot: ?*const E
         return;
     }
 
-    const env_arr = try a.create(PhpArray);
-    env_arr.* = .{};
-    try vm.arrays.append(a, env_arr);
+    const env_arr = try vm.allocArray();
 
     const env_map = std.process.getEnvMap(a) catch {
         try vm.putRequestVar("$_ENV", .{ .array = env_arr });

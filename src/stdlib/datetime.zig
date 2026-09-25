@@ -1258,8 +1258,8 @@ fn dtiSetTimestamp(ctx: *NativeContext, args: []const Value) RuntimeError!Native
 fn setTimestampWithFraction(ctx: *NativeContext, obj: *PhpObject, ts: Value) !void {
     if (ts == .float) {
         const whole = @floor(ts.float);
-        try obj.set(ctx.allocator, "timestamp", .{ .int = @intFromFloat(whole) });
-        const micros: i64 = @intFromFloat(@round((ts.float - whole) * 1_000_000.0));
+        try obj.set(ctx.allocator, "timestamp", .{ .int = Value.dvalToLval(whole) });
+        const micros: i64 = Value.dvalToLval(@round((ts.float - whole) * 1_000_000.0));
         if (micros != 0) try obj.set(ctx.allocator, "__microseconds", .{ .int = micros });
         return;
     }
@@ -2592,7 +2592,6 @@ fn native_cal_days_in_month(ctx: *NativeContext, args: []const Value) RuntimeErr
 }
 
 fn buildDateParseResult(ctx: *NativeContext, year: ?i64, month: ?i64, day: ?i64, hour: ?i64, minute: ?i64, second: ?i64, fraction: f64, errors: []const []const u8) RuntimeError!NativeResult {
-    const PhpArray = @import("../runtime/value.zig").PhpArray;
     var arr = try ctx.createArray();
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("year") }, if (year) |y| .{ .int = y } else .{ .bool = false });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("month") }, if (month) |m| .{ .int = m } else .{ .bool = false });
@@ -2602,14 +2601,10 @@ fn buildDateParseResult(ctx: *NativeContext, year: ?i64, month: ?i64, day: ?i64,
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("second") }, if (second) |s| .{ .int = s } else .{ .bool = false });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("fraction") }, .{ .float = fraction });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("warning_count") }, .{ .int = 0 });
-    const warns = try ctx.allocator.create(PhpArray);
-    warns.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, warns);
+    const warns = try ctx.vm.allocArray();
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("warnings") }, .{ .array = warns });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("error_count") }, .{ .int = @intCast(errors.len) });
-    const errs = try ctx.allocator.create(PhpArray);
-    errs.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, errs);
+    const errs = try ctx.vm.allocArray();
     for (errors, 0..) |e, i| try errs.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = Value.String.borrowed(e) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("errors") }, .{ .array = errs });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("is_localtime") }, .{ .bool = false });
@@ -2871,7 +2866,6 @@ fn native_date_parse_from_format(ctx: *NativeContext, args: []const Value) Runti
 }
 
 fn buildDateParseResultOpt(ctx: *NativeContext, year: ?i64, month: ?i64, day: ?i64, hour: ?i64, minute: ?i64, second: ?i64, fraction: ?f64, errors: []const []const u8) RuntimeError!NativeResult {
-    const PhpArray = @import("../runtime/value.zig").PhpArray;
     var arr = try ctx.createArray();
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("year") }, if (year) |y| .{ .int = y } else .{ .bool = false });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("month") }, if (month) |m| .{ .int = m } else .{ .bool = false });
@@ -2881,14 +2875,10 @@ fn buildDateParseResultOpt(ctx: *NativeContext, year: ?i64, month: ?i64, day: ?i
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("second") }, if (second) |s| .{ .int = s } else .{ .bool = false });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("fraction") }, if (fraction) |f| .{ .float = f } else .{ .bool = false });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("warning_count") }, .{ .int = 0 });
-    const warns = try ctx.allocator.create(PhpArray);
-    warns.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, warns);
+    const warns = try ctx.vm.allocArray();
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("warnings") }, .{ .array = warns });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("error_count") }, .{ .int = @intCast(errors.len) });
-    const errs = try ctx.allocator.create(PhpArray);
-    errs.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, errs);
+    const errs = try ctx.vm.allocArray();
     for (errors, 0..) |e, i| try errs.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = Value.String.borrowed(e) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("errors") }, .{ .array = errs });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("is_localtime") }, .{ .bool = false });
@@ -4536,7 +4526,7 @@ fn parseIsoDuration(spec: []const u8) IsoDuration {
             if (std.mem.indexOf(u8, num_str, ".")) |_| {
                 const val = std.fmt.parseFloat(f64, num_str) catch 0.0;
                 if (in_time and c == 'S') {
-                    result.s = @intFromFloat(val);
+                    result.s = Value.dvalToLval(val);
                     result.f = val - @as(f64, @floatFromInt(result.s));
                 }
             } else {
@@ -4674,7 +4664,7 @@ fn diFormat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     const f_us: u64 = blk: {
         const fv = obj.get("f");
         if (fv == .float) {
-            const us: i64 = @intFromFloat(fv.float * 1_000_000.0);
+            const us: i64 = Value.dvalToLval(fv.float * 1_000_000.0);
             break :blk @intCast(@abs(us));
         }
         break :blk 0;

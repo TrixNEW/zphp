@@ -1035,8 +1035,12 @@ fn native_number_format(ctx: *NativeContext, args: []const Value) RuntimeError!N
         return native_number_format(ctx, combined[0..n]);
     }
 
-    var int_part_buf: [64]u8 = undefined;
-    var frac_part_buf: [64]u8 = undefined;
+    // a double has at most 309 integer digits; the fraction is as long as asked
+    const digits_cap = 330 + decimals;
+    const int_part_buf = try ctx.allocator.alloc(u8, digits_cap);
+    defer ctx.allocator.free(int_part_buf);
+    const frac_part_buf = try ctx.allocator.alloc(u8, digits_cap);
+    defer ctx.allocator.free(frac_part_buf);
     var formatted: RoundedFloat = undefined;
 
     // for int inputs, format the int directly to preserve full PHP_INT_MAX precision
@@ -1049,7 +1053,7 @@ fn native_number_format(ctx: *NativeContext, args: []const Value) RuntimeError!N
         } else {
             abs_u = @intCast(if (i < 0) -i else i);
         }
-        const ip_str = std.fmt.bufPrint(&int_part_buf, "{d}", .{abs_u}) catch return NativeResult.literal("0");
+        const ip_str = std.fmt.bufPrint(int_part_buf, "{d}", .{abs_u}) catch return NativeResult.literal("0");
         var fp_len: usize = 0;
         while (fp_len < decimals and fp_len < frac_part_buf.len) : (fp_len += 1) frac_part_buf[fp_len] = '0';
         formatted = .{
@@ -1059,7 +1063,7 @@ fn native_number_format(ctx: *NativeContext, args: []const Value) RuntimeError!N
         };
     } else {
         const num = Value.toFloat(args[0]);
-        formatted = try roundFloatToDecimals(num, decimals, &int_part_buf, &frac_part_buf);
+        formatted = try roundFloatToDecimals(ctx.allocator, num, decimals, int_part_buf, frac_part_buf);
     }
 
     var buf = std.ArrayListUnmanaged(u8){};
@@ -1093,12 +1097,13 @@ const RoundedFloat = struct { is_negative: bool, int_part: []const u8, frac_part
 
 // Round a float to `decimals` places using string-based half-away-from-zero rounding
 // against the shortest round-trip representation (avoids 1.005 → 1.00 binary noise).
-fn roundFloatToDecimals(num: f64, decimals: usize, int_buf: []u8, frac_buf: []u8) !RoundedFloat {
+fn roundFloatToDecimals(allocator: std.mem.Allocator, num: f64, decimals: usize, int_buf: []u8, frac_buf: []u8) !RoundedFloat {
     const is_negative = num < 0 or (num == 0 and std.math.signbit(num));
     var abs_val = @abs(num);
     if (std.math.isNan(abs_val) or std.math.isInf(abs_val)) abs_val = 0;
 
-    var src_buf: [256]u8 = undefined;
+    const src_buf = try allocator.alloc(u8, int_buf.len + 16);
+    defer allocator.free(src_buf);
     var src: []const u8 = undefined;
     // prefer the shortest round-trip representation - PHP rounds against
     // dtoa's shortest form so cases like number_format(123456789.12345, 4)
@@ -1106,23 +1111,24 @@ fn roundFloatToDecimals(num: f64, decimals: usize, int_buf: []u8, frac_buf: []u8
     // when the shortest form doesn't expose enough fractional digits (because
     // the integer part dominates the 15-17 sig-digit budget), fall back to
     // snprintf %.f with extra precision so we don't truncate to .6700 etc.
-    const short_src = std.fmt.bufPrint(&src_buf, "{d}", .{abs_val}) catch "0";
+    const short_src = std.fmt.bufPrint(src_buf, "{d}", .{abs_val}) catch "0";
     const short_dot = std.mem.indexOfScalar(u8, short_src, '.');
     const short_frac_len: usize = if (short_dot) |d| short_src.len - d - 1 else 0;
     const short_has_exp = std.mem.indexOfAny(u8, short_src, "eE") != null;
     if (short_has_exp or short_frac_len < decimals + 1) {
         var fmt_buf: [16]u8 = undefined;
         const fmt_str = std.fmt.bufPrintZ(&fmt_buf, "%.{d}f", .{decimals + 5}) catch unreachable;
-        const n = snprintf(&src_buf, src_buf.len, fmt_str.ptr, abs_val);
+        const n = snprintf(src_buf.ptr, src_buf.len, fmt_str.ptr, abs_val);
         src = if (n > 0 and @as(usize, @intCast(n)) < src_buf.len) src_buf[0..@intCast(n)] else short_src;
     } else {
         src = short_src;
     }
 
     // expand scientific form (e.g. "1e-5", "1.5e10") to plain decimal
-    var expanded_buf: [256]u8 = undefined;
+    const expanded_buf = try allocator.alloc(u8, int_buf.len + 16);
+    defer allocator.free(expanded_buf);
     if (std.mem.indexOfAny(u8, src, "eE")) |_| {
-        src = expandScientific(src, &expanded_buf) catch src;
+        src = expandScientific(src, expanded_buf) catch src;
     }
 
     const dot = std.mem.indexOfScalar(u8, src, '.');
@@ -1130,7 +1136,8 @@ fn roundFloatToDecimals(num: f64, decimals: usize, int_buf: []u8, frac_buf: []u8
     const frac_in: []const u8 = if (dot) |d| src[d + 1 ..] else "";
 
     // build a digit buffer combining int + frac with `decimals + 1` frac digits to inspect rounding digit
-    var combined: [128]u8 = undefined;
+    const combined = try allocator.alloc(u8, int_buf.len + 16);
+    defer allocator.free(combined);
     var c_len: usize = 0;
     for (int_in) |b| {
         if (c_len >= combined.len) break;
@@ -1812,8 +1819,7 @@ fn roundHalfToEven(x: f64) f64 {
     if (diff < 0.5) return fl;
     if (diff > 0.5) return fl + 1;
     // exact half: round to even
-    const fl_i: i64 = @intFromFloat(fl);
-    if (@mod(fl_i, 2) == 0) return fl;
+    if (@mod(fl, 2.0) == 0) return fl;
     return fl + 1;
 }
 

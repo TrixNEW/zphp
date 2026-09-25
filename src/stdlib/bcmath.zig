@@ -1184,7 +1184,7 @@ fn operandString(ctx: *NativeContext, v: Value, comptime method: []const u8, com
             return try ctx.allocator.dupe(u8, if (val == .string) val.string.bytes() else "0");
         },
         .int => |i| return try std.fmt.allocPrint(ctx.allocator, "{d}", .{i}),
-        .float => |f| return try std.fmt.allocPrint(ctx.allocator, "{d}", .{@as(i64, @intFromFloat(f))}),
+        .float => |f| return try std.fmt.allocPrint(ctx.allocator, "{d}", .{Value.dvalToLval(f)}),
         .bool => |b| return try ctx.allocator.dupe(u8, if (b) "1" else "0"),
         .string => |str| {
             if (str.len == 0) return try ctx.allocator.dupe(u8, "0");

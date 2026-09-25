@@ -573,7 +573,7 @@ fn connectSocket(addr: std.net.Address, timeout_ms: ?i32, async_connect: bool) !
 
 fn timeoutMs(ctx: *NativeContext, v: ?Value) ?i32 {
     const seconds: f64 = if (v) |t| (if (t == .null) defaultSocketTimeout(ctx) else Value.toFloat(t)) else defaultSocketTimeout(ctx);
-    if (seconds < 0) return null;
+    if (!(seconds >= 0)) return null;
     return @intFromFloat(@min(seconds * 1000.0, @as(f64, std.math.maxInt(i32))));
 }
 

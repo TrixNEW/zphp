@@ -531,9 +531,7 @@ const PhpArray = @import("runtime/value.zig").PhpArray;
 const env = @import("env.zig");
 
 fn initCliServerVars(vm: *VM, a: std.mem.Allocator) !void {
-    const arr = try a.create(PhpArray);
-    arr.* = .{};
-    try vm.arrays.append(a, arr);
+    const arr = try vm.allocArray();
 
     const entries = .{
         .{ "REQUEST_URI", "/" },
@@ -560,18 +558,14 @@ fn initCliServerVars(vm: *VM, a: std.mem.Allocator) !void {
 
     const superglobal_names = [_][]const u8{ "$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_FILES" };
     inline for (superglobal_names) |sg_name| {
-        const sg_arr = try a.create(PhpArray);
-        sg_arr.* = .{};
-        try vm.arrays.append(a, sg_arr);
+        const sg_arr = try vm.allocArray();
         try vm.putRequestVar(sg_name, .{ .array = sg_arr });
     }
     try env.populateEnvSuperglobal(vm, a, null);
 }
 
 fn initArgv(vm: *VM, a: std.mem.Allocator, script_path: []const u8, script_args: []const []const u8) !void {
-    const argv_arr = try a.create(PhpArray);
-    argv_arr.* = .{};
-    try vm.arrays.append(a, argv_arr);
+    const argv_arr = try vm.allocArray();
 
     try argv_arr.append(a, .{ .string = Value.String.borrowed(script_path) });
     for (script_args) |arg| {

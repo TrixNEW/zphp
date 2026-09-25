@@ -31,6 +31,17 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
     }
 
     if (target.tag == .array_push_target) {
+        // ??= must read the element being appended; the other compound
+        // operators apply to null and append the result
+        if (op_tag == .question_question_equal) return self.fail(target.main_token, "Cannot use [] for reading");
+        if (op_tag != .equal) {
+            try compileVivifyChain(self, target.data.lhs);
+            try self.emitOp(.op_null);
+            try self.compileNode(node.data.rhs);
+            try emitCompoundOp(self, op_tag);
+            try self.emitOp(.array_push_assign);
+            return;
+        }
         // `$arr[] = &$var` (plain-variable ref source): append a true reference
         if (op_tag == .equal and self.ast.nodes[node.data.rhs].tag == .ref_target) {
             const ref_inner = self.ast.nodes[self.ast.nodes[node.data.rhs].data.lhs];
@@ -47,6 +58,16 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
         try self.compileNode(node.data.rhs);
         try self.emitOp(.array_push_assign);
         return;
+    }
+
+    if (op_tag != .equal and op_tag != .question_question_equal) {
+        if (try emitPlaceOperands(self, node.data.lhs)) |place| {
+            try emitPlaceRead(self, place);
+            try self.compileNode(node.data.rhs);
+            try emitCompoundOp(self, op_tag);
+            try emitPlaceWrite(self, place);
+            return;
+        }
     }
 
     if (target.tag == .array_access) {
@@ -67,21 +88,7 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
             self.patchJump(skip_jump);
             return;
         }
-        if (op_tag != .equal) {
-            // base1 (array_set target) vivify-loads + separates and rebinds the
-            // slot. base2 feeds the read-only array_get, so it must be a PLAIN
-            // load of the now-separated slot - a second separating load would
-            // (under COW, when the global $GLOBALS mirror inflates refcount)
-            // spuriously separate again and write through a different array
-            try compileVivifyChain(self, target.data.lhs);
-            try self.compileNode(target.data.rhs);
-            try self.compileNode(target.data.lhs);
-            try self.compileNode(target.data.rhs);
-            try self.emitOp(.array_get);
-            try self.compileNode(node.data.rhs);
-            try emitCompoundOp(self, op_tag);
-            try self.emitOp(.array_set);
-        } else {
+        {
             const rhs_is_ref = self.ast.nodes[node.data.rhs].tag == .ref_target;
             // `$arr[$key] = &$var` where the ref source is a plain variable:
             // bind the element to $var's storage (a true reference) instead of
@@ -430,39 +437,176 @@ pub fn compileBinaryOp(self: *Compiler, node: Ast.Node) Error!void {
     });
 }
 
+// a writable location whose operands (object, name, class) are evaluated once
+// and kept on the stack, so a read-modify-write touches each side effect once
+const Place = union(enum) {
+    var_var, // [name]
+    array_elem, // [container, key], the container vivified and separated
+    prop: u16, // [object]
+    prop_dyn, // [object, name]
+    static_prop: struct { class: u16, prop: u16 }, // []
+    static_prop_dyn_name: u16, // [name], class constant
+    static_prop_dyn_both, // [class, name]
+
+    fn operandCount(self: Place) u8 {
+        return switch (self) {
+            .static_prop => 0,
+            .var_var, .prop, .static_prop_dyn_name => 1,
+            .array_elem, .prop_dyn, .static_prop_dyn_both => 2,
+        };
+    }
+};
+
+// pushes the place's operands; null when the target is not a place
+fn emitPlaceOperands(self: *Compiler, target_idx: u32) Error!?Place {
+    const target = self.ast.nodes[target_idx];
+    switch (target.tag) {
+        .variable_variable => {
+            try self.compileNode(target.data.lhs);
+            return .var_var;
+        },
+        .array_access => {
+            if (target.data.rhs == 0) return null;
+            try compileVivifyChain(self, target.data.lhs);
+            try self.compileNode(target.data.rhs);
+            return .array_elem;
+        },
+        .property_access => {
+            try self.compileNode(target.data.lhs);
+            if (!self.isDynamicProp(target)) return .{ .prop = try self.addConstant(.{ .string = Value.String.borrowed(self.propName(target)) }) };
+            if (target.main_token == 0) {
+                try self.compileNode(target.data.rhs);
+            } else {
+                try self.emitGetVar(self.ast.tokenSlice(self.ast.nodes[target.data.rhs].main_token));
+            }
+            return .prop_dyn;
+        },
+        .static_prop_access => {
+            const class_node = self.ast.nodes[target.data.lhs];
+            const static_class = class_node.tag == .identifier or class_node.tag == .qualified_name;
+            const class_idx: u16 = if (static_class) try self.addConstant(.{ .string = Value.String.borrowed(try resolveNodeClassName(self, class_node)) }) else 0;
+            if (target.main_token == 0) {
+                if (static_class) {
+                    try self.compileNode(target.data.rhs);
+                    return .{ .static_prop_dyn_name = class_idx };
+                }
+                try self.compileNode(target.data.lhs);
+                try self.compileNode(target.data.rhs);
+                return .static_prop_dyn_both;
+            }
+            var prop_name = self.ast.tokenSlice(target.main_token);
+            if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
+            const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
+            if (static_class) return .{ .static_prop = .{ .class = class_idx, .prop = prop_idx } };
+            try self.compileNode(target.data.lhs);
+            try self.emitOp(.constant);
+            try self.emitU16(prop_idx);
+            return .static_prop_dyn_both;
+        },
+        else => return null,
+    }
+}
+
+// [operands] -> [operands, value]
+fn emitPlaceRead(self: *Compiler, place: Place) Error!void {
+    switch (place.operandCount()) {
+        1 => try self.emitOp(.dup),
+        2 => try self.emitOp(.dup2),
+        else => {},
+    }
+    switch (place) {
+        .var_var => try self.emitOp(.get_var_var),
+        .array_elem => try self.emitOp(.array_get),
+        .prop => |name| {
+            try self.emitOp(.get_prop);
+            try self.emitU16(name);
+        },
+        .prop_dyn => try self.emitOp(.get_prop_dynamic),
+        .static_prop => |sp| {
+            try self.emitOp(.get_static_prop);
+            try self.emitU16(sp.class);
+            try self.emitU16(sp.prop);
+        },
+        .static_prop_dyn_name => |class| {
+            try self.emitOp(.get_static_prop_dyn_name);
+            try self.emitU16(class);
+        },
+        .static_prop_dyn_both => try self.emitOp(.get_static_prop_dyn_both),
+    }
+}
+
+// [operands, value] -> [value]
+fn emitPlaceWrite(self: *Compiler, place: Place) Error!void {
+    switch (place) {
+        .var_var => {
+            try self.emitOp(.swap);
+            try self.emitOp(.set_var_var);
+        },
+        .array_elem => try self.emitOp(.array_set),
+        .prop => |name| {
+            try self.emitOp(.set_prop);
+            try self.emitU16(name);
+        },
+        .prop_dyn => {
+            try self.emitOp(.swap);
+            try self.emitOp(.set_prop_dynamic);
+        },
+        .static_prop => |sp| {
+            try self.emitOp(.set_static_prop);
+            try self.emitU16(sp.class);
+            try self.emitU16(sp.prop);
+        },
+        .static_prop_dyn_name => |class| {
+            // set_static_prop_dyn takes [class, name, value]
+            try self.emitOp(.constant);
+            try self.emitU16(class);
+            try self.emitOp(.bury);
+            try self.emitByte(2);
+            try self.emitOp(.set_static_prop_dyn);
+        },
+        .static_prop_dyn_both => try self.emitOp(.set_static_prop_dyn),
+    }
+}
+
+// ++/-- on a place: leaves the new value, or the old one for postfix
+fn compilePlaceIncDec(self: *Compiler, place: Place, op_tag: Token.Tag, postfix: bool) Error!void {
+    try emitPlaceRead(self, place);
+    if (postfix) {
+        try self.emitOp(.dup);
+        try self.emitOp(.bury);
+        try self.emitByte(place.operandCount() + 1);
+    }
+    try self.emitOp(if (op_tag == .plus_plus) .inc_value else .dec_value);
+    try emitPlaceWrite(self, place);
+    if (postfix) try self.emitOp(.pop);
+}
+
+// the write-context fatals php raises at compile time for an increment or
+// decrement whose operand is not a variable
+fn checkIncDecTarget(self: *Compiler, target_idx: u32, op_token: u32) Error!void {
+    switch (self.ast.nodes[target_idx].tag) {
+        .call => return self.fail(op_token, "Can't use function return value in write context"),
+        .method_call, .static_call, .dynamic_static_call => return self.fail(op_token, "Can't use method return value in write context"),
+        else => {},
+    }
+    var idx = target_idx;
+    while (idx != 0) {
+        const n = self.ast.nodes[idx];
+        switch (n.tag) {
+            .nullsafe_property_access, .nullsafe_method_call => return self.fail(op_token, "Can't use nullsafe operator in write context"),
+            .property_access, .array_access, .method_call => idx = n.data.lhs,
+            else => return,
+        }
+    }
+}
+
 pub fn compilePrefixOp(self: *Compiler, node: Ast.Node) Error!void {
     const op_tag = self.ast.tokens[node.main_token].tag;
 
     if (op_tag == .plus_plus or op_tag == .minus_minus) {
+        try checkIncDecTarget(self, node.data.lhs, node.main_token);
         const target = self.ast.nodes[node.data.lhs];
-        if (target.tag == .property_access) {
-            // stack: [obj] -> dup -> [obj, obj] -> get_prop -> [obj, val] -> +1 -> [obj, new_val] -> set_prop
-            try self.compileNode(target.data.lhs);
-            try self.emitOp(.dup);
-            const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(self.propName(target)) });
-            try self.emitOp(.get_prop);
-            try self.emitU16(prop_idx);
-            try self.emitOp(if (op_tag == .plus_plus) .inc_value else .dec_value);
-            try self.emitOp(.set_prop);
-            try self.emitU16(prop_idx);
-            return;
-        }
-        if (target.tag == .static_prop_access) {
-            const class_node = self.ast.nodes[target.data.lhs];
-            const class_name = self.ast.tokenSlice(class_node.main_token);
-            var prop_name = self.ast.tokenSlice(target.main_token);
-            if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
-            const class_idx = try self.addConstant(.{ .string = Value.String.borrowed(class_name) });
-            const sprop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
-            try self.emitOp(.get_static_prop);
-            try self.emitU16(class_idx);
-            try self.emitU16(sprop_idx);
-            try self.emitOp(if (op_tag == .plus_plus) .inc_value else .dec_value);
-            try self.emitOp(.set_static_prop);
-            try self.emitU16(class_idx);
-            try self.emitU16(sprop_idx);
-            return;
-        }
+        if (try emitPlaceOperands(self, node.data.lhs)) |place| return compilePlaceIncDec(self, place, op_tag, false);
         if (target.tag == .array_access) {
             // COW: the base consumed by array_set (this first load) must be
             // separated; the second load feeds the read-only array_get
@@ -514,51 +658,9 @@ pub fn compilePrefixOp(self: *Compiler, node: Ast.Node) Error!void {
 }
 
 pub fn compilePostfixOp(self: *Compiler, node: Ast.Node) Error!void {
+    try checkIncDecTarget(self, node.data.lhs, node.main_token);
     const target = self.ast.nodes[node.data.lhs];
     const op_tag = self.ast.tokens[node.main_token].tag;
-
-    if (target.tag == .property_access) {
-        const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(self.propName(target)) });
-        // get old value (the postfix return value)
-        try self.compileNode(target.data.lhs);
-        try self.emitOp(.get_prop);
-        try self.emitU16(prop_idx);
-        // stack: [old_val]
-        // now set obj.prop = old_val +/- 1
-        try self.compileNode(target.data.lhs);
-        try self.compileNode(target.data.lhs);
-        try self.emitOp(.get_prop);
-        try self.emitU16(prop_idx);
-        try self.emitOp(if (op_tag == .plus_plus) .inc_value else .dec_value);
-        try self.emitOp(.set_prop);
-        try self.emitU16(prop_idx);
-        try self.emitOp(.pop);
-        return;
-    }
-
-    if (target.tag == .static_prop_access) {
-        const class_node = self.ast.nodes[target.data.lhs];
-        var class_name = self.ast.tokenSlice(class_node.main_token);
-        if (std.mem.eql(u8, class_name, "self") or std.mem.eql(u8, class_name, "static") or std.mem.eql(u8, class_name, "parent")) {} else {
-            class_name = self.ast.tokenSlice(class_node.main_token);
-        }
-        var prop_name = self.ast.tokenSlice(target.main_token);
-        if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
-        const class_idx = try self.addConstant(.{ .string = Value.String.borrowed(class_name) });
-        const sprop_idx = try self.addConstant(.{ .string = Value.String.borrowed(prop_name) });
-        try self.emitOp(.get_static_prop);
-        try self.emitU16(class_idx);
-        try self.emitU16(sprop_idx);
-        try self.emitOp(.get_static_prop);
-        try self.emitU16(class_idx);
-        try self.emitU16(sprop_idx);
-        try self.emitOp(if (op_tag == .plus_plus) .inc_value else .dec_value);
-        try self.emitOp(.set_static_prop);
-        try self.emitU16(class_idx);
-        try self.emitU16(sprop_idx);
-        try self.emitOp(.pop);
-        return;
-    }
 
     if (target.tag == .array_access) {
         // COW: vivify-load the base so a shared array is separated (and written
@@ -568,6 +670,7 @@ pub fn compilePostfixOp(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitOp(if (op_tag == .plus_plus) .array_elem_inc else .array_elem_dec);
         return;
     }
+    if (try emitPlaceOperands(self, node.data.lhs)) |place| return compilePlaceIncDec(self, place, op_tag, true);
 
     try self.compileNode(node.data.lhs);
     try self.compileNode(node.data.lhs);
@@ -583,7 +686,7 @@ pub fn compilePostfixOp(self: *Compiler, node: Ast.Node) Error!void {
 pub fn compileLogicalAnd(self: *Compiler, node: Ast.Node) Error!void {
     try self.compileNode(node.data.lhs);
     const end_jump = try self.emitJump(.jump_if_false);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
     try self.compileNode(node.data.rhs);
     self.patchJump(end_jump);
     try self.emitOp(.cast_bool);
@@ -592,7 +695,7 @@ pub fn compileLogicalAnd(self: *Compiler, node: Ast.Node) Error!void {
 pub fn compileLogicalOr(self: *Compiler, node: Ast.Node) Error!void {
     try self.compileNode(node.data.lhs);
     const end_jump = try self.emitJump(.jump_if_true);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
     try self.compileNode(node.data.rhs);
     self.patchJump(end_jump);
     try self.emitOp(.cast_bool);
@@ -668,17 +771,17 @@ pub fn compileTernary(self: *Compiler, node: Ast.Node) Error!void {
 
     if (then_node != 0) {
         const else_jump = try self.emitJump(.jump_if_false);
-        try self.emitOp(.pop);
+        try self.emitOp(.pop_boundary);
         try self.compileNode(then_node);
         const end_jump = try self.emitJump(.jump);
         self.patchJump(else_jump);
-        try self.emitOp(.pop);
+        try self.emitOp(.pop_boundary);
         try self.compileNode(else_node);
         self.patchJump(end_jump);
     } else {
         // short ternary: $a ?: $b - reuse the condition value if truthy
         const end_jump = try self.emitJump(.jump_if_true);
-        try self.emitOp(.pop);
+        try self.emitOp(.pop_boundary);
         try self.compileNode(else_node);
         self.patchJump(end_jump);
     }
@@ -1119,6 +1222,9 @@ pub fn compileVivifyChain(self: *Compiler, node_idx: u32) Error!void {
         try compileVivifyChain(self, node.data.lhs);
         try self.compileNode(node.data.rhs);
         try self.emitOp(.array_get_vivify);
+    } else if (node.tag == .array_push_target) {
+        try compileVivifyChain(self, node.data.lhs);
+        try self.emitOp(.array_append_vivify);
     } else if (node.tag == .variable or node.tag == .identifier) {
         const name = self.ast.tokenSlice(node.main_token);
         try emitEnsureArray(self, name);

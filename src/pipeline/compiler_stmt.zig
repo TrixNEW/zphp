@@ -11,11 +11,11 @@ const Error = Allocator.Error || error{CompileError};
 pub fn compileIfSimple(self: *Compiler, node: Ast.Node) Error!void {
     try self.compileNode(node.data.lhs);
     const then_jump = try self.emitJump(.jump_if_false);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
     try self.compileNode(node.data.rhs);
     const end_jump = try self.emitJump(.jump);
     self.patchJump(then_jump);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
     self.patchJump(end_jump);
 }
 
@@ -25,11 +25,11 @@ pub fn compileIfElse(self: *Compiler, node: Ast.Node) Error!void {
 
     try self.compileNode(node.data.lhs);
     const then_jump = try self.emitJump(.jump_if_false);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
     try self.compileNode(then_node);
     const else_jump = try self.emitJump(.jump);
     self.patchJump(then_jump);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
     try self.compileNode(else_node);
     self.patchJump(else_jump);
 }
@@ -47,7 +47,7 @@ pub fn compileWhile(self: *Compiler, node: Ast.Node) Error!void {
 
     try self.compileNode(node.data.lhs);
     const exit_jump = try self.emitJump(.jump_if_false);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
     try self.compileNode(node.data.rhs);
 
     // patch continue jumps BEFORE the loop-back jump so they fall through
@@ -58,7 +58,7 @@ pub fn compileWhile(self: *Compiler, node: Ast.Node) Error!void {
 
     try self.emitLoop(loop_top);
     self.patchJump(exit_jump);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
 
     try self.patchBreaks(&prev_breaks);
     self.break_jumps = prev_breaks;
@@ -89,10 +89,10 @@ pub fn compileDoWhile(self: *Compiler, node: Ast.Node) Error!void {
 
     try self.compileNode(node.data.rhs);
     const exit_jump = try self.emitJump(.jump_if_false);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
     try self.emitLoop(loop_top);
     self.patchJump(exit_jump);
-    try self.emitOp(.pop);
+    try self.emitOp(.pop_boundary);
 
     try self.patchBreaks(&prev_breaks);
     self.break_jumps = prev_breaks;
@@ -151,7 +151,7 @@ pub fn compileFor(self: *Compiler, node: Ast.Node) Error!void {
 
     if (init_n != 0) {
         try self.compileNode(init_n);
-        try self.emitOp(.pop);
+        try self.emitOp(.pop_boundary);
     }
 
     const loop_top = self.chunk.offset();
@@ -171,7 +171,7 @@ pub fn compileFor(self: *Compiler, node: Ast.Node) Error!void {
         } else {
             try self.compileNode(cond_n);
             exit_jump = try self.emitJump(.jump_if_false);
-            try self.emitOp(.pop);
+            try self.emitOp(.pop_boundary);
         }
     }
 
@@ -186,7 +186,7 @@ pub fn compileFor(self: *Compiler, node: Ast.Node) Error!void {
             try self.emitU16(us.slot);
         } else {
             try self.compileNode(update_n);
-            try self.emitOp(.pop);
+            try self.emitOp(.pop_boundary);
         }
     }
 
@@ -195,7 +195,7 @@ pub fn compileFor(self: *Compiler, node: Ast.Node) Error!void {
     if (exit_jump) |ej| {
         self.patchJump(ej);
         if (cond_super == null) {
-            try self.emitOp(.pop);
+            try self.emitOp(.pop_boundary);
         }
     }
 
@@ -260,8 +260,7 @@ pub fn compileForeach(self: *Compiler, node: Ast.Node) Error!void {
         try self.compileDestructure(val_node);
         try self.emitOp(.pop);
         if (key_n != 0) {
-            try self.emitSetVar(self.ast.tokenSlice(self.ast.nodes[key_n].main_token));
-            try self.emitOp(.pop);
+            try self.compileStoreTop(self.ast.nodes[key_n]);
         } else {
             try self.emitOp(.pop);
         }
@@ -291,11 +290,9 @@ pub fn compileForeach(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitOp(.foreach_ref_bind); // $v = &iterable[key] (reverts prior elem if uncaptured)
         try self.emitU16(vidx);
     } else {
-        try self.emitSetVar(self.ast.tokenSlice(val_node.main_token));
-        try self.emitOp(.pop);
+        try self.compileStoreTop(val_node);
         if (key_n != 0) {
-            try self.emitSetVar(self.ast.tokenSlice(self.ast.nodes[key_n].main_token));
-            try self.emitOp(.pop);
+            try self.compileStoreTop(self.ast.nodes[key_n]);
         } else {
             try self.emitOp(.pop);
         }

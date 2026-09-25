@@ -2643,7 +2643,7 @@ const Parser = struct {
                     continue;
                 },
                 .plus_plus, .minus_minus => {
-                    if (21 > min_prec) {
+                    if (21 > min_prec and isIncDecOperand(self.nodes.items[left].tag)) {
                         const tok = self.advance();
                         left = try self.addNode(.{ .tag = .postfix_op, .main_token = tok, .data = .{ .lhs = left } });
                         continue;
@@ -2708,7 +2708,9 @@ const Parser = struct {
             },
             .plus_plus, .minus_minus => {
                 const tok = self.advance();
-                const operand = try self.parseExprPrec(18);
+                const operand_token = self.pos;
+                const operand = try self.parseExprPrec(21);
+                if (!isIncDecOperand(self.nodes.items[operand].tag)) try self.addErrorAt(operand_token, .unexpected_token);
                 return self.addNode(.{ .tag = .prefix_op, .main_token = tok, .data = .{ .lhs = operand } });
             },
             .kw_clone => {
@@ -3293,6 +3295,15 @@ const Parser = struct {
         };
     }
 
+    // php's grammar takes only a variable here; calls parse so the compiler
+    // can report them as return values in write context
+    fn isIncDecOperand(tag: NodeTag) bool {
+        return isAssignTarget(tag) or switch (tag) {
+            .call, .method_call, .static_call, .dynamic_static_call, .nullsafe_method_call => true,
+            else => false,
+        };
+    }
+
     fn isRightAssoc(tag: Tag) bool {
         return switch (tag) {
             .equal, .plus_equal, .minus_equal, .star_equal, .slash_equal, .percent_equal, .star_star_equal, .dot_equal, .amp_equal, .pipe_equal, .caret_equal, .lt_lt_equal, .gt_gt_equal, .question_question_equal => true,
@@ -3405,7 +3416,11 @@ const Parser = struct {
     }
 
     fn addError(self: *Parser, tag: Ast.Error.Tag) Error!void {
-        try self.errors.append(self.allocator, .{ .token = self.pos, .tag = tag });
+        try self.addErrorAt(self.pos, tag);
+    }
+
+    fn addErrorAt(self: *Parser, token: u32, tag: Ast.Error.Tag) Error!void {
+        try self.errors.append(self.allocator, .{ .token = token, .tag = tag });
     }
 
     fn synchronize(self: *Parser) void {

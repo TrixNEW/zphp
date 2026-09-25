@@ -229,17 +229,12 @@ fn native_password_verify(ctx: *NativeContext, args: []const Value) RuntimeError
 }
 
 fn native_password_get_info(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    const PhpArray = @import("../runtime/value.zig").PhpArray;
-    const info = try ctx.allocator.create(PhpArray);
-    info.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, info);
+    const info = try ctx.vm.allocArray();
 
     if (args.len == 0 or args[0] != .string) {
         try info.set(ctx.allocator, .{ .string = Value.String.borrowed("algo") }, .null);
         try info.set(ctx.allocator, .{ .string = Value.String.borrowed("algoName") }, .{ .string = Value.String.borrowed("unknown") });
-        const empty = try ctx.allocator.create(PhpArray);
-        empty.* = .{};
-        try ctx.vm.arrays.append(ctx.allocator, empty);
+        const empty = try ctx.vm.allocArray();
         try info.set(ctx.allocator, .{ .string = Value.String.borrowed("options") }, .{ .array = empty });
         return NativeResult.borrowed(.{ .array = info });
     }
@@ -247,12 +242,10 @@ fn native_password_get_info(ctx: *NativeContext, args: []const Value) RuntimeErr
     const hash = args[0].string.bytes();
     var algo: Value = .null;
     var algo_name: []const u8 = "unknown";
-    const options = try ctx.allocator.create(PhpArray);
-    options.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, options);
+    const options = try ctx.vm.allocArray();
 
     if (hash.len >= 7 and hash[0] == '$' and hash[1] == '2' and (hash[2] == 'y' or hash[2] == 'b' or hash[2] == 'a')) {
-        algo = .{ .string = Value.String.borrowed(try ctx.createString("2y")) };
+        algo = .{ .string = Value.String.borrowed("2y") };
         algo_name = "bcrypt";
         // parse cost: $2y$XX$
         const cost_start: usize = 4;
@@ -265,16 +258,13 @@ fn native_password_get_info(ctx: *NativeContext, args: []const Value) RuntimeErr
     }
 
     try info.set(ctx.allocator, .{ .string = Value.String.borrowed("algo") }, algo);
-    try info.set(ctx.allocator, .{ .string = Value.String.borrowed("algoName") }, .{ .string = Value.String.borrowed(try ctx.createString(algo_name)) });
+    try info.set(ctx.allocator, .{ .string = Value.String.borrowed("algoName") }, .{ .string = Value.String.borrowed(algo_name) });
     try info.set(ctx.allocator, .{ .string = Value.String.borrowed("options") }, .{ .array = options });
     return NativeResult.borrowed(.{ .array = info });
 }
 
 fn native_password_algos(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const PhpArray = @import("../runtime/value.zig").PhpArray;
-    const arr = try ctx.allocator.create(PhpArray);
-    arr.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, arr);
+    const arr = try ctx.vm.allocArray();
     try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("2y") });
     return NativeResult.borrowed(.{ .array = arr });
 }

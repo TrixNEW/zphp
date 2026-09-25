@@ -2173,9 +2173,7 @@ fn giConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     if (result == .array) {
         try obj.set(ctx.allocator, "__gi_results", result);
     } else {
-        const empty = try ctx.allocator.create(PhpArray);
-        empty.* = .{};
-        try ctx.vm.arrays.append(ctx.allocator, empty);
+        const empty = try ctx.vm.allocArray();
         try obj.set(ctx.allocator, "__gi_results", .{ .array = empty });
     }
     try obj.set(ctx.allocator, "__gi_pos", .{ .int = 0 });

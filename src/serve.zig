@@ -1331,9 +1331,7 @@ fn parseRequest(raw: []const u8) Request {
 
 fn populateSuperglobals(vm: *VM, req: *const Request, conn: std.net.Server.Connection, port: u16, env_snapshot: ?*const env.EnvSnapshot, doc_root: []const u8, script_filename: []const u8, front_controller: bool) !void {
     const a = vm.allocator;
-    const server_arr = try a.create(PhpArray);
-    server_arr.* = .{};
-    try vm.arrays.append(a, server_arr);
+    const server_arr = try vm.allocArray();
 
     try server_arr.set(a, .{ .string = Value.String.borrowed("REQUEST_METHOD") }, .{ .string = Value.String.borrowed(req.method) });
     try server_arr.set(a, .{ .string = Value.String.borrowed("REQUEST_URI") }, .{ .string = Value.String.borrowed(req.uri) });
@@ -1404,19 +1402,13 @@ fn populateSuperglobals(vm: *VM, req: *const Request, conn: std.net.Server.Conne
 
     try vm.putRequestVar("$_SERVER", .{ .array = server_arr });
 
-    const get_arr = try a.create(PhpArray);
-    get_arr.* = .{};
-    try vm.arrays.append(a, get_arr);
+    const get_arr = try vm.allocArray();
     parseQueryString(a, vm, get_arr, req.query_string) catch {};
     try vm.putRequestVar("$_GET", .{ .array = get_arr });
 
-    const post_arr = try a.create(PhpArray);
-    post_arr.* = .{};
-    try vm.arrays.append(a, post_arr);
+    const post_arr = try vm.allocArray();
 
-    const files_arr = try a.create(PhpArray);
-    files_arr.* = .{};
-    try vm.arrays.append(a, files_arr);
+    const files_arr = try vm.allocArray();
 
     if (req.getHeader("Content-Type")) |ct| {
         if (std.mem.startsWith(u8, ct, "application/x-www-form-urlencoded")) {
@@ -1430,16 +1422,12 @@ fn populateSuperglobals(vm: *VM, req: *const Request, conn: std.net.Server.Conne
     try vm.putRequestVar("$_POST", .{ .array = post_arr });
     try vm.putRequestVar("$_FILES", .{ .array = files_arr });
 
-    const request_arr = try a.create(PhpArray);
-    request_arr.* = .{};
-    try vm.arrays.append(a, request_arr);
+    const request_arr = try vm.allocArray();
     for (get_arr.entries.items) |entry| try request_arr.set(a, entry.key, entry.value);
     for (post_arr.entries.items) |entry| try request_arr.set(a, entry.key, entry.value);
     try vm.putRequestVar("$_REQUEST", .{ .array = request_arr });
 
-    const cookie_arr = try a.create(PhpArray);
-    cookie_arr.* = .{};
-    try vm.arrays.append(a, cookie_arr);
+    const cookie_arr = try vm.allocArray();
     if (req.getHeader("Cookie")) |cookies| parseCookies(a, vm, cookie_arr, cookies) catch {};
     try vm.putRequestVar("$_COOKIE", .{ .array = cookie_arr });
 
@@ -1538,9 +1526,7 @@ fn parseMultipart(a: Allocator, vm: *VM, body: []const u8, boundary: []const u8,
         if (extractParam(disposition, "filename")) |filename| {
             const part_ct = findPartHeader(headers, "Content-Type") orelse "application/octet-stream";
 
-            const file_entry = try a.create(PhpArray);
-            file_entry.* = .{};
-            try vm.arrays.append(a, file_entry);
+            const file_entry = try vm.allocArray();
 
             const fname = try a.dupe(u8, filename);
             try vm.strings.append(a, fname);

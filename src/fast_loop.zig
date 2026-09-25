@@ -92,7 +92,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     self.releaseValue(sl_old);
                     self.sp = sp;
                     if (!names_local) try syncLocalWrite(self, ic, frame, slot, locals[slot]);
-                    if (code[ip] == @intFromEnum(OpCode.pop)) {
+                    if (code[ip] == @intFromEnum(OpCode.pop) or code[ip] == @intFromEnum(OpCode.pop_boundary)) {
                         ip += 1;
                         sp -= 1;
                         self.stackRelease(val);
@@ -415,7 +415,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     ip += 2;
                     if (!self.stack[sp - 1].isTruthy()) {
                         ip += offset;
-                    } else if (code[ip] == @intFromEnum(OpCode.pop)) {
+                    } else if (code[ip] == @intFromEnum(OpCode.pop) or code[ip] == @intFromEnum(OpCode.pop_boundary)) {
                         ip += 1;
                         sp -= 1;
                         self.stackRelease(self.stack[sp]);
@@ -434,7 +434,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     ip += 2;
                     if (self.stack[sp - 1].isTruthy()) {
                         ip += offset;
-                    } else if (code[ip] == @intFromEnum(OpCode.pop)) {
+                    } else if (code[ip] == @intFromEnum(OpCode.pop) or code[ip] == @intFromEnum(OpCode.pop_boundary)) {
                         ip += 1;
                         sp -= 1;
                         self.stackRelease(self.stack[sp]);
@@ -456,7 +456,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     ip += 1;
                     continue :dispatch @as(OpCode, @enumFromInt(_next));
                 },
-                .pop => {
+                .pop, .pop_boundary => {
                     sp -= 1;
                     // a discarded operand-stack object releases its reference
                     // (Stage 1; arrays are not stack-owned - refcounting Stage 2)
@@ -477,6 +477,27 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     VM.stackRetain(self.stack[sp - 1]);
                     self.stack[sp] = self.stack[sp - 1];
                     sp += 1;
+                    const _next = code[ip];
+                    ip += 1;
+                    continue :dispatch @as(OpCode, @enumFromInt(_next));
+                },
+                .dup2 => {
+                    VM.stackRetain(self.stack[sp - 2]);
+                    VM.stackRetain(self.stack[sp - 1]);
+                    self.stack[sp] = self.stack[sp - 2];
+                    self.stack[sp + 1] = self.stack[sp - 1];
+                    sp += 2;
+                    const _next = code[ip];
+                    ip += 1;
+                    continue :dispatch @as(OpCode, @enumFromInt(_next));
+                },
+                .bury => {
+                    const n = code[ip];
+                    ip += 1;
+                    const top = self.stack[sp - 1];
+                    const dest = sp - 1 - n;
+                    std.mem.copyBackwards(Value, self.stack[dest + 1 .. sp], self.stack[dest .. sp - 1]);
+                    self.stack[dest] = top;
                     const _next = code[ip];
                     ip += 1;
                     continue :dispatch @as(OpCode, @enumFromInt(_next));

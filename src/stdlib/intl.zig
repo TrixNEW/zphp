@@ -725,7 +725,7 @@ fn dfParse(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     var status: UErrorCode = U_ZERO_ERROR;
     const millis = zphp_udat_parse(f, u16src.ptr, @intCast(u16src.len), &pos, &status);
     if (intlRecord(ctx.vm, status)) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.scalar(.{ .int = @intFromFloat(millis / 1000.0) });
+    return NativeResult.scalar(.{ .int = Value.dvalToLval(millis / 1000.0) });
 }
 
 fn dfGetPattern(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {

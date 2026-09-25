@@ -245,14 +245,10 @@ fn nodeToJsonValue(ctx: *NativeContext, node: *c.xmlNode) RuntimeError!Value {
         return .{ .object = obj };
     }
 
-    const result = try ctx.allocator.create(PhpArray);
-    result.* = .{};
-    try ctx.vm.arrays.append(ctx.allocator, result);
+    const result = try ctx.vm.allocArray();
 
     if (has_attr) {
-        const attrs = try ctx.allocator.create(PhpArray);
-        attrs.* = .{};
-        try ctx.vm.arrays.append(ctx.allocator, attrs);
+        const attrs = try ctx.vm.allocArray();
         attr_iter = @ptrCast(node.properties);
         while (attr_iter) |a| : (attr_iter = @ptrCast(a.next)) {
             if (a.name == null) continue;
@@ -286,9 +282,7 @@ fn nodeToJsonValue(ctx: *NativeContext, node: *c.xmlNode) RuntimeError!Value {
             try existing.array.append(ctx.allocator, child_val);
         } else {
             // promote single value into a 2-element list
-            const list = try ctx.allocator.create(PhpArray);
-            list.* = .{};
-            try ctx.vm.arrays.append(ctx.allocator, list);
+            const list = try ctx.vm.allocArray();
             try list.append(ctx.allocator, existing);
             try list.append(ctx.allocator, child_val);
             try result.set(ctx.allocator, .{ .string = Value.String.borrowed(cname) }, .{ .array = list });

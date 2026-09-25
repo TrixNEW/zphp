@@ -845,9 +845,7 @@ fn preg_filter(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     if (args.len < 3) return NativeResult.scalar(.null);
     if (args[2] == .array) {
         const subj_arr = args[2].array;
-        const out = try ctx.allocator.create(@import("../runtime/value.zig").PhpArray);
-        out.* = .{};
-        try ctx.vm.arrays.append(ctx.allocator, out);
+        const out = try ctx.vm.allocArray();
         for (subj_arr.entries.items) |se| {
             var sub_args: [3]Value = .{ args[0], args[1], se.value };
             const replaced = (try preg_replace(ctx, sub_args[0..3])).value;
@@ -888,9 +886,7 @@ fn preg_replace(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     // subject can be an array - apply replacements element-wise and return array
     if (args[2] == .array) {
         const subj_arr = args[2].array;
-        const result_arr = try ctx.allocator.create(@import("../runtime/value.zig").PhpArray);
-        result_arr.* = .{};
-        try ctx.vm.arrays.append(ctx.allocator, result_arr);
+        const result_arr = try ctx.vm.allocArray();
         for (subj_arr.entries.items) |se| {
             var sub_args: [4]Value = undefined;
             sub_args[0] = args[0];

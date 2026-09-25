@@ -1217,9 +1217,7 @@ fn stmtFetchAll(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
                 if (existing == .array) {
                     try existing.array.append(ctx.allocator, row_value);
                 } else {
-                    const group = try ctx.allocator.create(PhpArray);
-                    group.* = .{};
-                    try ctx.vm.arrays.append(ctx.allocator, group);
+                    const group = try ctx.vm.allocArray();
                     try group.append(ctx.allocator, row_value);
                     try result.set(ctx.allocator, ak, .{ .array = group });
                 }

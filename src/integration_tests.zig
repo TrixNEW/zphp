@@ -2058,3 +2058,63 @@ test "empty array elements are a compile fatal outside destructuring" {
     try expectCompileFatal("<?php function f() { return [[1,,2]]; }", "Cannot use empty array elements in arrays");
     try expectOutput("<?php [, $b] = [1, 2]; [$c, , $d] = [3, 4, 5]; list(, $e) = [6, 7]; foreach ([[8, 9]] as [, $f]) {} echo \"$b$c$d$e$f\";", "23579");
 }
+
+test "destructuring into nothing is a compile fatal" {
+    try expectCompileFatal("<?php [] = [1];", "Cannot use empty list");
+    try expectCompileFatal("<?php list() = [1];", "Cannot use empty list");
+    try expectCompileFatal("<?php [,] = [1];", "Cannot use empty list");
+    try expectCompileFatal("<?php [[], $a] = [[1], 2];", "Cannot use empty list");
+    try expectCompileFatal("<?php foreach ([[1]] as []) {}", "Cannot use empty list");
+}
+
+test "reading an append target is a compile fatal" {
+    try expectCompileFatal("<?php $a = []; echo $a[];", "Cannot use [] for reading");
+    try expectCompileFatal("<?php $a = []; isset($a[]);", "Cannot use [] for reading");
+    try expectCompileFatal("<?php $a = []; $a[] ??= 1;", "Cannot use [] for reading");
+    try expectOutput("<?php $a = [5]; $a[] .= \"x\"; $a[] -= 2; echo json_encode($a);", "[5,\"x\",-2]");
+}
+
+test "a compile fatal inside nested functions frees what was already compiled" {
+    try expectCompileFatal(
+        \\<?php
+        \\$x = 1;
+        \\function f($a = [1, [2]], &$b = null) { $g = fn($z = X | Y) => $z; return [$a, $b]; }
+        \\class K { public $p = [1]; public function m(int $q = 2) { $c = function () { return 1; }; } public int $h { get => 1; } }
+        \\function bad() { $u = 1; if (1) { $w = function () { [] = [1]; }; } }
+    , "Cannot use empty list");
+    try expectCompileFatal("<?php class A { public function m() { $f = function ($a = [1]) { echo $x[]; }; } }", "Cannot use [] for reading");
+    try expectCompileFatal("<?php class A { public int $p { get { [] = [1]; return 1; } } }", "Cannot use empty list");
+}
+
+test "attributes on a closure inside a method reach reflection" {
+    try expectOutput(
+        \\<?php
+        \\#[Attribute] class Tag { public function __construct(public string $v) {} }
+        \\class K { public function m() { return #[Tag("x")] function () {}; } }
+        \\$r = new ReflectionFunction((new K)->m());
+        \\echo count($r->getAttributes()), $r->getAttributes()[0]->newInstance()->v;
+    , "1x");
+}
+
+fn expectParseErrorAt(source: []const u8, lexeme: []const u8) !void {
+    var ast = try parser.parse(std.testing.allocator, source);
+    defer ast.deinit();
+    try std.testing.expect(ast.errors.len > 0);
+    const tok = ast.tokens[ast.errors[0].token];
+    try std.testing.expectEqualStrings(lexeme, source[tok.start..tok.end]);
+}
+
+test "increment and decrement take only variables" {
+    try expectParseErrorAt("<?php $c++ ++;", "++");
+    try expectParseErrorAt("<?php ++$c++;", "++");
+    try expectParseErrorAt("<?php -- $c--;", "--");
+    try expectParseErrorAt("<?php 1++;", "++");
+    try expectParseErrorAt("<?php ++1;", "1");
+    try expectParseErrorAt("<?php (++$c)++;", "++");
+    try expectParseErrorAt("<?php $c--------->x;", "--");
+    try expectCompileFatal("<?php f()++;", "Can't use function return value in write context");
+    try expectCompileFatal("<?php ++$o->m();", "Can't use method return value in write context");
+    try expectCompileFatal("<?php A::m()--;", "Can't use method return value in write context");
+    try expectCompileFatal("<?php $a?->b->c++;", "Can't use nullsafe operator in write context");
+    try expectOutput("<?php class K { public $p = 1; } function g() { static $o; return $o ??= new K; } g()->p++; ++g()->p; echo g()->p;", "3");
+}

@@ -7,6 +7,10 @@ pub const OpCode = enum(u8) {
     op_true,
     op_false,
     pop,
+    // a discard with no write chain or call protocol in flight (statement
+    // ends, control-flow conditions, short-circuit operands), where runLoop may
+    // hand the frame back to the fast loop
+    pop_boundary,
     dup,
     swap,
 
@@ -194,6 +198,9 @@ pub const OpCode = enum(u8) {
     // optimized concat-assign: $var .= expr without full copy
     concat_assign, // u16: var name constant index - pop value, append to var's string
     concat_assign_local, // u16: slot - pop value, append to the local's string, push the result
+    array_append_vivify, // pop the container, append a new empty array, push it for the write chain ($a[][k] = v)
+    dup2, // duplicate the top two values, keeping their order
+    bury, // u8 n: move the top value beneath the n values under it
 
     // `$dst = &$src` between two plain variables — installs a shared Value cell
     // in ref_slots for both names. seeds the cell with src's current value
@@ -406,7 +413,7 @@ pub const OpCode = enum(u8) {
             .make_var_static_prop_ref => 7,
             .static_call => 6,
             .less_local_local_jif => 7,
-            .require, .call_indirect, .call_indirect_spread, .method_call_dynamic, .static_call_dyn_both => 2,
+            .require, .call_indirect, .call_indirect_spread, .method_call_dynamic, .static_call_dyn_both, .bury => 2,
             .class_decl, .interface_decl, .enum_decl, .trait_decl => 1,
             else => 1,
         };
