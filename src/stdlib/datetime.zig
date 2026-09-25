@@ -1384,8 +1384,8 @@ fn native_date_interval_create_from_date_string(ctx: *NativeContext, args: []con
 fn native_date_interval_format(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .object or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
     const saved = ctx.vm.currentFrame().vars.get("$this");
-    try ctx.vm.currentFrame().vars.put(ctx.allocator, "$this", args[0]);
-    defer if (saved) |s| (ctx.vm.currentFrame().vars.put(ctx.allocator, "$this", s) catch {});
+    try ctx.vm.putFrameVar(&ctx.vm.currentFrame().vars, "$this", args[0]);
+    defer if (saved) |s| (ctx.vm.putFrameVar(&ctx.vm.currentFrame().vars, "$this", s) catch {});
     return diFormat(ctx, args[1..]);
 }
 
@@ -1432,10 +1432,10 @@ fn native_date_diff(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
     if (args.len < 2 or args[0] != .object or args[1] != .object) return NativeResult.scalar(.{ .bool = false });
     const synth = [_]Value{args[1]};
     const saved_this = ctx.vm.currentFrame().vars.get("$this");
-    try ctx.vm.currentFrame().vars.put(ctx.allocator, "$this", args[0]);
+    try ctx.vm.putFrameVar(&ctx.vm.currentFrame().vars, "$this", args[0]);
     defer {
         if (saved_this) |v| {
-            ctx.vm.currentFrame().vars.put(ctx.allocator, "$this", v) catch {};
+            ctx.vm.putFrameVar(&ctx.vm.currentFrame().vars, "$this", v) catch {};
         } else {
             _ = ctx.vm.currentFrame().vars.remove("$this");
         }

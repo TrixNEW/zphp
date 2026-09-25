@@ -156,17 +156,22 @@ pub const NativeContext = struct {
                 const old_var = caller.vars.get(var_name);
                 var old_local: ?Value = null;
                 VM.retainValue(value);
-                caller.vars.put(vm.allocator, var_name, value) catch return;
                 const sn = if (caller.func) |func| func.slot_names else vm.global_slot_names;
+                var slotted = false;
                 for (sn, 0..) |sn_name, si| {
                     if (std.mem.eql(u8, sn_name, var_name)) {
                         if (si < caller.locals.len) {
                             old_local = caller.locals[si];
                             caller.locals[si] = value;
+                            slotted = true;
                         }
                         break;
                     }
                 }
+                // a locals-only frame without a named mirror keeps the value
+                // in its slot alone, as its own writes do
+                const names_in_slots = if (caller.func) |func| func.locals_only and caller.vars.count() == 0 else false;
+                if (!slotted or !names_in_slots) vm.putFrameVar(&caller.vars, var_name, value) catch return;
                 // if the caller's param itself is a reference (e.g. function
                 // wrap(&$r) { parse_str(..., $r); }) propagate the write
                 // through the ref binding so the outer scope's variable
@@ -3725,7 +3730,7 @@ pub const VM = struct {
                         // before this store (Stage 1) - this destructs the old
                         // object on reassignment
                         if (svf.vars.get(name)) |old| self.releaseValue(old);
-                        try svf.vars.put(self.allocator, name, val);
+                        try self.putFrameVar(&svf.vars, name, val);
                     }
                     const sv_sn = if (self.currentFrame().func) |func| func.slot_names else self.global_slot_names;
                     for (sv_sn, 0..) |sn, si| {
@@ -3816,7 +3821,7 @@ pub const VM = struct {
                                 if (self.currentFrame().vars.get(stable_key)) |old| {
                                     self.releaseValue(old);
                                 }
-                                try self.currentFrame().vars.put(self.allocator, stable_key, val);
+                                try self.putFrameVar(&self.currentFrame().vars, stable_key, val);
                             }
                         }
                     }
@@ -6545,7 +6550,7 @@ pub const VM = struct {
                             ri.releaseOwner(self.allocator, self.last_return_ref_owner);
                             self.last_return_ref_owner = 0;
                         }
-                        if (dst_name.len == 0 or dst_name[0] != 0) try frame.vars.put(self.allocator, dst_name, cell.*);
+                        if (dst_name.len == 0 or dst_name[0] != 0) try self.putFrameVar(&frame.vars, dst_name, cell.*);
                         if (frame.func) |func| {
                             for (func.slot_names, 0..) |sn, si| {
                                 if (std.mem.eql(u8, sn, dst_name)) {
@@ -6562,7 +6567,7 @@ pub const VM = struct {
                             const cell = try self.newRefCell();
                             self.setCell(cell, val);
                             try self.bindRefSlot(&frame.ref_slots, dst_name, cell);
-                        } else try frame.vars.put(self.allocator, dst_name, val);
+                        } else try self.putFrameVar(&frame.vars, dst_name, val);
                     }
                     // statement-level trailing .pop expects exactly one
                     // value on the stack from the assignment expression
@@ -6921,7 +6926,7 @@ pub const VM = struct {
                                     self.setCell(cell, val);
                                     try self.propagateCellWrite(cell, val);
                                 }
-                                try frame.vars.put(self.allocator, name, val);
+                                try self.putFrameVar(&frame.vars, name, val);
                             }
                         }
                     } else {
@@ -12598,7 +12603,9 @@ pub const VM = struct {
                         self.setCell(cell, val);
                         try self.propagateCellWrite(cell, val);
                     }
-                    try frame.vars.put(self.allocator, name, val);
+                    // a locals-only frame keeps names only in its slots until
+                    // something by-name (extract, $$name) starts a mirror
+                    if (!func.locals_only or frame.vars.count() > 0) try self.putFrameVar(&frame.vars, name, val);
                 }
             }
         } else {
@@ -12772,7 +12779,7 @@ pub const VM = struct {
                 try self.propagateCellWrite(cell, val);
             }
         }
-        try frame.vars.put(self.allocator, name, val);
+        try self.putFrameVar(&frame.vars, name, val);
         if (!self.frameInGlobalScope(frame)) return;
         // $GLOBALS is a live view of top-frame variables. mirror writes
         // back so $GLOBALS[$key] picks up the new value
@@ -12862,7 +12869,7 @@ pub const VM = struct {
         const frame = &self.frames[0];
         for (self.top_slot_names, 0..) |name, i| {
             if (name.len > 0 and i < frame.locals.len) {
-                try frame.vars.put(self.allocator, name, frame.locals[i]);
+                try self.putFrameVar(&frame.vars, name, frame.locals[i]);
             }
         }
     }
@@ -12928,10 +12935,10 @@ pub const VM = struct {
         }
         if (self.native_fns.get(method_name)) |native| {
             const prev_this = self.currentFrame().vars.get("$this");
-            self.currentFrame().vars.put(self.allocator, "$this", .{ .object = obj }) catch return "Object";
+            self.putFrameVar(&self.currentFrame().vars, "$this", .{ .object = obj }) catch return "Object";
             defer {
                 if (prev_this) |pt| {
-                    self.currentFrame().vars.put(self.allocator, "$this", pt) catch {};
+                    self.putFrameVar(&self.currentFrame().vars, "$this", pt) catch {};
                 } else {
                     _ = self.currentFrame().vars.remove("$this");
                 }
@@ -14777,7 +14784,17 @@ pub const VM = struct {
         }
     }
 
+    // a frame's named view starts empty; the first by-name write takes a map
+    // from the pool so frames that release theirs there keep it balanced
+    pub fn putFrameVar(self: *VM, vars: *std.StringHashMapUnmanaged(Value), name: []const u8, val: Value) !void {
+        if (vars.capacity() == 0) {
+            if (self.vars_pool.pop()) |pooled| vars.* = pooled;
+        }
+        try vars.put(self.allocator, name, val);
+    }
+
     pub fn releaseFrameVars(self: *VM, hm: *std.StringHashMapUnmanaged(Value)) void {
+        if (hm.capacity() == 0) return;
         // cap the pool: hashmaps that grew very large should be freed rather
         // than held forever. typical frame.vars has 1-5 entries; anything
         // beyond a moderate cap is likely a `extract()` or `compact()` user
@@ -18325,8 +18342,10 @@ pub const VM = struct {
         self.currentFrame().called_class = class_name;
         defer self.frames[fc_before - 1].called_class = prev_cc;
         try self.callNamedFunction(name, arg_count);
+        // the callee's frame, not the top one: a callee that already ran in
+        // the fast loop may have pushed frames of its own above it
         if (self.frame_count > fc_before)
-            self.frames[self.frame_count - 1].called_class = class_name;
+            self.frames[fc_before].called_class = class_name;
     }
 
     fn callStaticUserFunction(self: *VM, func: *const ObjFunction, name: []const u8, arg_count: u8, class_name: []const u8) RuntimeError!void {
@@ -18336,8 +18355,10 @@ pub const VM = struct {
         defer self.frames[fc_before - 1].called_class = prev_cc;
         self.captureArgSources(arg_count);
         try self.enterUserFunction(func, name, arg_count, null);
+        // the callee's frame, not the top one: a callee that already ran in
+        // the fast loop may have pushed frames of its own above it
         if (self.frame_count > fc_before)
-            self.frames[self.frame_count - 1].called_class = class_name;
+            self.frames[fc_before].called_class = class_name;
     }
 
     fn callNamedFunction(self: *VM, raw_name: []const u8, arg_count: u8) RuntimeError!void {

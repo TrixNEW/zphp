@@ -594,10 +594,10 @@ fn getDriver(obj: *PhpObject) []const u8 {
 fn pdoConnect(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = try ctx.createObject("PDO");
     const prev_this = ctx.vm.currentFrame().vars.get("$this");
-    try ctx.vm.currentFrame().vars.put(ctx.vm.allocator, "$this", .{ .object = obj });
+    try ctx.vm.putFrameVar(&ctx.vm.currentFrame().vars, "$this", .{ .object = obj });
     defer {
         if (prev_this) |pt| {
-            ctx.vm.currentFrame().vars.put(ctx.vm.allocator, "$this", pt) catch {};
+            ctx.vm.putFrameVar(&ctx.vm.currentFrame().vars, "$this", pt) catch {};
         } else {
             _ = ctx.vm.currentFrame().vars.remove("$this");
         }

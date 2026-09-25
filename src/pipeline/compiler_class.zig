@@ -764,6 +764,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
     const gen = (node.data.rhs & (1 << 31)) != 0;
     const returns_ref = (node.data.rhs & (1 << 30)) != 0;
 
+    const closures_before = self.closure_count;
     var sub = Compiler{
         .ast = self.ast,
         .diagnostic = self.diagnostic,
@@ -809,7 +810,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
     const local_count = sub.next_slot;
 
     const is_closure = std.mem.startsWith(u8, name, "__closure_");
-    const lo = !is_closure and !gen and !is_variadic and !hasRefParams(ref_flags) and !needsVarSync(&sub.chunk) and sub.closure_count == 0;
+    const lo = !is_closure and !gen and !is_variadic and !hasRefParams(ref_flags) and !needsVarSync(&sub.chunk) and sub.closure_count == closures_before;
 
     // closures stay eagerly registered (instantiation opcodes look them up by
     // internal name); a non-hoistable named function binds at runtime via
@@ -2759,6 +2760,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
     const method_gen = (member.data.rhs & (1 << 29)) != 0;
     const method_returns_ref = (member.data.rhs & (1 << 27)) != 0;
 
+    const closures_before = self.closure_count;
     var sub = Compiler{
         .ast = self.ast,
         .diagnostic = self.diagnostic,
@@ -2829,7 +2831,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
     const slot_names = try sub.buildSlotNames();
     const local_count = sub.next_slot;
 
-    const method_lo = !method_gen and !is_variadic and !hasRefParams(ref_flags) and !needsVarSync(&sub.chunk) and sub.closure_count == 0;
+    const method_lo = !method_gen and !is_variadic and !hasRefParams(ref_flags) and !needsVarSync(&sub.chunk) and sub.closure_count == closures_before;
 
     self.functions.appendAssumeCapacity(.{
         .name = full_name,
@@ -2998,6 +3000,7 @@ fn compilePropertyHook(self: *Compiler, class_name: []const u8, prop_name: []con
     errdefer if (!handed_over) compiler.freeDefaults(self.allocator, defaults);
     @memset(defaults, .null);
 
+    const closures_before = self.closure_count;
     var sub = Compiler{
         .ast = self.ast,
         .diagnostic = self.diagnostic,
@@ -3059,7 +3062,7 @@ fn compilePropertyHook(self: *Compiler, class_name: []const u8, prop_name: []con
     const slot_names = try sub.buildSlotNames();
     const local_count = sub.next_slot;
 
-    const method_lo = !is_generator and !needsVarSync(&sub.chunk) and sub.closure_count == 0;
+    const method_lo = !is_generator and !needsVarSync(&sub.chunk) and sub.closure_count == closures_before;
 
     self.functions.appendAssumeCapacity(.{
         .name = full_name,
