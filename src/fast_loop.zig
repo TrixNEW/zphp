@@ -502,6 +502,39 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     ip += 1;
                     continue :dispatch @as(OpCode, @enumFromInt(_next));
                 },
+                .cast_bool => {
+                    const v = self.stack[sp - 1];
+                    const truthy = v.isTruthy();
+                    self.stackRelease(v);
+                    self.stack[sp - 1] = .{ .bool = truthy };
+                    const _next = code[ip];
+                    ip += 1;
+                    continue :dispatch @as(OpCode, @enumFromInt(_next));
+                },
+                .inc_value, .dec_value => |step_op| {
+                    // ints and floats step in place; anything else (strings,
+                    // null, overflow) takes runLoop's phpInc/phpDec
+                    const v = self.stack[sp - 1];
+                    const delta: i64 = if (step_op == .inc_value) 1 else -1;
+                    if (v == .int) {
+                        const r = @addWithOverflow(v.int, delta);
+                        if (r[1] != 0) {
+                            frame.ip = ip - 1;
+                            self.sp = sp;
+                            return;
+                        }
+                        self.stack[sp - 1] = .{ .int = r[0] };
+                    } else if (v == .float) {
+                        self.stack[sp - 1] = .{ .float = v.float + @as(f64, @floatFromInt(delta)) };
+                    } else {
+                        frame.ip = ip - 1;
+                        self.sp = sp;
+                        return;
+                    }
+                    const _next = code[ip];
+                    ip += 1;
+                    continue :dispatch @as(OpCode, @enumFromInt(_next));
+                },
                 .array_get => {
                     if (self.globals_cells.count() > 0) {
                         frame.ip = ip - 1;
@@ -525,6 +558,17 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                         // reference (Stage 1); arrays are not stack-owned
                         VM.stackRetain(ag_elem);
                         self.stack[sp] = ag_elem;
+                        sp += 1;
+                        const _next = code[ip];
+                        ip += 1;
+                        continue :dispatch @as(OpCode, @enumFromInt(_next));
+                    } else if (ag_arr == .string and ag_key == .int and ag_key.int >= 0 and @as(usize, @intCast(ag_key.int)) < ag_arr.string.len) {
+                        // an in-range string offset is a one-byte view sharing
+                        // the base's owner; the base's stack reference drops
+                        const at: usize = @intCast(ag_key.int);
+                        const char = ag_arr.string.retainedSlice(at, at + 1);
+                        self.stackRelease(ag_arr);
+                        self.stack[sp] = .{ .string = char };
                         sp += 1;
                         const _next = code[ip];
                         ip += 1;
