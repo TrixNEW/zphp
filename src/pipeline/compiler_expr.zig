@@ -1236,6 +1236,8 @@ fn compileReferenceSource(self: *Compiler, source: u32) Error!void {
 pub fn compileArrayLiteral(self: *Compiler, node: Ast.Node) Error!void {
     try self.emitOp(.array_new);
     for (self.ast.extraSlice(node.data.lhs)) |elem_idx| {
+        // an omitted element only means something in a destructuring target
+        if (elem_idx == 0) return self.fail(node.main_token, "Cannot use empty array elements in arrays");
         const elem = self.ast.nodes[elem_idx];
         if (elem.tag == .array_spread) {
             try self.compileNode(elem.data.lhs);

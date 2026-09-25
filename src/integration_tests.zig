@@ -2037,3 +2037,24 @@ test "conditional function declared with a different case" {
 test "calls match function names in any case" {
     try expectOutput("<?php function MyHelper() { return 'h'; } echo myhelper(), STRLEN('ab'), \\StrToUpper('x');", "h2X");
 }
+
+fn expectCompileFatal(source: []const u8, expected: []const u8) !void {
+    const compiler = @import("pipeline/compiler.zig");
+    const alloc = std.testing.allocator;
+    var ast = try parser.parse(alloc, source);
+    defer ast.deinit();
+    var diag: ?compiler.Diagnostic = null;
+    if (compiler.compileWithOrigin(&ast, alloc, .{ .file_path = "t.php", .diagnostic = &diag })) |compiled| {
+        var result = compiled;
+        result.deinit();
+        return error.TestExpectedCompileFatal;
+    } else |err| try std.testing.expectEqual(error.CompileError, err);
+    try std.testing.expectEqualStrings(expected, diag.?.message);
+}
+
+test "empty array elements are a compile fatal outside destructuring" {
+    try expectCompileFatal("<?php print_r([1,,5]);", "Cannot use empty array elements in arrays");
+    try expectCompileFatal("<?php $a = [,0];", "Cannot use empty array elements in arrays");
+    try expectCompileFatal("<?php function f() { return [[1,,2]]; }", "Cannot use empty array elements in arrays");
+    try expectOutput("<?php [, $b] = [1, 2]; [$c, , $d] = [3, 4, 5]; list(, $e) = [6, 7]; foreach ([[8, 9]] as [, $f]) {} echo \"$b$c$d$e$f\";", "23579");
+}

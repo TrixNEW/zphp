@@ -762,6 +762,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
 
     var sub = Compiler{
         .ast = self.ast,
+        .diagnostic = self.diagnostic,
         .chunk = .{},
         .functions = .{},
         .string_allocs = .{},
@@ -951,6 +952,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
 
     var sub = Compiler{
         .ast = self.ast,
+        .diagnostic = self.diagnostic,
         .chunk = .{},
         .functions = .{},
         .string_allocs = .{},
@@ -2794,6 +2796,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
 
     var sub = Compiler{
         .ast = self.ast,
+        .diagnostic = self.diagnostic,
         .chunk = .{},
         .functions = .{},
         .string_allocs = .{},
@@ -2936,6 +2939,7 @@ fn compileDeferredPropDefaults(self: *Compiler, class_name: []const u8, members:
 
     var sub = Compiler{
         .ast = self.ast,
+        .diagnostic = self.diagnostic,
         .chunk = .{},
         .functions = .{},
         .string_allocs = .{},
@@ -3066,6 +3070,7 @@ fn compilePropertyHook(self: *Compiler, class_name: []const u8, prop_name: []con
 
     var sub = Compiler{
         .ast = self.ast,
+        .diagnostic = self.diagnostic,
         .chunk = .{},
         .functions = .{},
         .string_allocs = .{},

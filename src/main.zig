@@ -226,7 +226,14 @@ fn compileFrom(allocator: std.mem.Allocator, source: []const u8, origin: compile
         std.process.exit(1);
     }
 
-    return compiler.compileWithOrigin(&ast, allocator, origin) catch {
+    var diag: ?compiler.Diagnostic = null;
+    var diagnosed = origin;
+    diagnosed.diagnostic = &diag;
+    return compiler.compileWithOrigin(&ast, allocator, diagnosed) catch {
+        if (diag) |d| {
+            try writeStderr(error_format.formatCompileError(allocator, &ast, path, d));
+            std.process.exit(255);
+        }
         try writeStderr("compile error\n");
         std.process.exit(1);
     };
@@ -481,7 +488,9 @@ fn loadFile(path: []const u8, allocator: std.mem.Allocator, vm: *@import("runtim
         return null;
     }
 
-    var result = compiler.compileWithPath(&ast, allocator, abs_path) catch {
+    var diag: ?compiler.Diagnostic = null;
+    var result = compiler.compileWithOrigin(&ast, allocator, .{ .file_path = abs_path, .diagnostic = &diag }) catch {
+        if (diag) |d| vm.recordIncludeCompileError(d.message, abs_path, error_format.compileErrorLine(&ast, d));
         ast.deinit();
         allocator.free(source);
         allocator.free(abs_path);

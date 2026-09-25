@@ -1389,6 +1389,8 @@ pub const VM = struct {
         // the syntax error that made the file loader refuse an include, for
         // the include opcode to raise as ParseError
         include_parse_error: ?SourcePositionMessage = null,
+        // the compile-time fatal that made the file loader refuse an include
+        include_compile_error: ?SourcePositionMessage = null,
         // class names whose autoload is in progress, innermost last
         autoloading: std.ArrayListUnmanaged([]const u8) = .{},
         // set by initVm, never defaulted: a default would compile these paths
@@ -3384,10 +3386,18 @@ pub const VM = struct {
             self.allocator.free(wrapped);
             return error.OutOfMemory;
         };
-        var result = compiler_mod.compileWithPath(&ast, self.allocator, display_path) catch {
+        var diag: ?compiler_mod.Diagnostic = null;
+        var result = compiler_mod.compileWithOrigin(&ast, self.allocator, .{ .file_path = display_path, .diagnostic = &diag }) catch {
+            const line = if (diag) |d| @import("../error_format.zig").compileErrorLine(&ast, d) else 0;
             ast.deinit();
             self.allocator.free(wrapped);
             self.allocator.free(display_path);
+            if (diag) |d| {
+                const caller = self.currentSourcePosition();
+                const where = try std.fmt.allocPrint(self.allocator, "{s}({d}) : eval()'d code", .{ caller.file, caller.line });
+                try self.strings.append(self.allocator, where);
+                return self.raiseCompileFatal(d.message, .{ .file = where, .line = line });
+            }
             self.setErrorMsg("eval(): compile error", .{});
             return error.RuntimeError;
         };
@@ -7596,7 +7606,7 @@ pub const VM = struct {
                                     self.script_strict_types = saved_strict;
 
                                     if (self.pending_exception) |exc| {
-                                        if (self.handler_count > self.handler_floor) {
+                                        if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                             const handler = self.exception_handlers[self.handler_count - 1];
                                             if (handler.frame_count > base_frame or base_frame == 0) {
                                                 self.pending_exception = null;
@@ -7639,6 +7649,9 @@ pub const VM = struct {
                                 self.ic.?.include_parse_error = null;
                                 if (try self.throwBuiltinExceptionAt("ParseError", parse_error.message, parse_error.at)) continue;
                                 return error.RuntimeError;
+                            } else if (self.ic.?.include_compile_error) |compile_error| {
+                                self.ic.?.include_compile_error = null;
+                                return self.raiseCompileFatal(compile_error.message, compile_error.at);
                             } else {
                                 if (is_require) {
                                     self.setErrorMsg("Fatal error: require(): Failed opening required '{s}'", .{path});
@@ -8161,7 +8174,7 @@ pub const VM = struct {
                                 }
                                 if (self.pending_exception) |exc| {
                                     self.pending_exception = null;
-                                    if (self.handler_count > self.handler_floor) {
+                                    if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                         const handler = self.exception_handlers[self.handler_count - 1];
                                         self.handler_count -= 1;
                                         while (self.frame_count > handler.frame_count) {
@@ -8385,7 +8398,7 @@ pub const VM = struct {
                                 if (self.pending_exception) |exc| {
                                     if (!isFrameOutNative(cn)) self.prependNativeFrameToTrace(exc, cn, args_buf[0..ac]) catch {};
                                     self.pending_exception = null;
-                                    if (self.handler_count > self.handler_floor) {
+                                    if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                         const handler = self.exception_handlers[self.handler_count - 1];
                                         self.handler_count -= 1;
                                         while (self.frame_count > handler.frame_count) {
@@ -9331,7 +9344,7 @@ pub const VM = struct {
                             if (self.pending_exception) |exc| {
                                 if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                 self.pending_exception = null;
-                                if (self.handler_count > self.handler_floor) {
+                                if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                     // exception caught - clear native-trace state
                                     self.pending_native_name = null;
                                     const handler = self.exception_handlers[self.handler_count - 1];
@@ -9591,7 +9604,7 @@ pub const VM = struct {
                             if (self.pending_exception) |exc| {
                                 if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                 self.pending_exception = null;
-                                if (self.handler_count > self.handler_floor) {
+                                if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                     // exception caught - clear native-trace state
                                     self.pending_native_name = null;
                                     const handler = self.exception_handlers[self.handler_count - 1];
@@ -9757,7 +9770,7 @@ pub const VM = struct {
                             if (self.pending_exception) |exc| {
                                 if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                 self.pending_exception = null;
-                                if (self.handler_count > self.handler_floor) {
+                                if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                     // exception caught - clear native-trace state
                                     self.pending_native_name = null;
                                     const handler = self.exception_handlers[self.handler_count - 1];
@@ -9943,7 +9956,7 @@ pub const VM = struct {
                             if (self.pending_exception) |exc| {
                                 if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                 self.pending_exception = null;
-                                if (self.handler_count > self.handler_floor) {
+                                if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                     // exception caught - clear native-trace state
                                     self.pending_native_name = null;
                                     const handler = self.exception_handlers[self.handler_count - 1];
@@ -10234,7 +10247,7 @@ pub const VM = struct {
                                     if (self.pending_exception) |exc| {
                                         if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                         self.pending_exception = null;
-                                        if (self.handler_count > self.handler_floor) {
+                                        if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                             const handler = self.exception_handlers[self.handler_count - 1];
                                             self.handler_count -= 1;
                                             while (self.frame_count > handler.frame_count) {
@@ -12163,6 +12176,24 @@ pub const VM = struct {
         const path = self.allocator.dupe(u8, file) catch return;
         self.strings.append(self.allocator, path) catch return self.allocator.free(path);
         self.ic.?.include_parse_error = .{ .message = msg, .at = .{ .file = path, .line = line } };
+    }
+
+    pub fn recordIncludeCompileError(self: *VM, message: []const u8, file: []const u8, line: i64) void {
+        const path = self.allocator.dupe(u8, file) catch return;
+        self.strings.append(self.allocator, path) catch return self.allocator.free(path);
+        self.ic.?.include_compile_error = .{ .message = message, .at = .{ .file = path, .line = line } };
+    }
+
+    // a compile-time fatal ends the script where php reports it: in the file
+    // being compiled, past any try/catch
+    pub fn raiseCompileFatal(self: *VM, message: []const u8, at: SourcePosition) RuntimeError {
+        try self.setPendingException("CompileError", message);
+        if (self.pending_exception) |exc| if (exc == .object) {
+            try exc.object.set(self.allocator, "file", .{ .string = Value.String.borrowed(at.file) });
+            try exc.object.set(self.allocator, "line", .{ .int = at.line });
+        };
+        self.uncatchable_fatal = true;
+        return error.RuntimeError;
     }
 
     // `at` places the exception somewhere other than the throwing frame, the
@@ -18307,7 +18338,7 @@ pub const VM = struct {
                         try self.prependNativeFrameToTrace(exc, name, args[0..ac]);
                     }
                     self.pending_exception = null;
-                    if (self.handler_count > self.handler_floor) {
+                    if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                         // exception caught: clear the native-trace state so
                         // the next throw doesn't pick up stale info
                         self.pending_native_name = null;

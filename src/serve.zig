@@ -1,4 +1,5 @@
 const std = @import("std");
+const error_format = @import("error_format.zig");
 const parser = @import("pipeline/parser.zig");
 const compiler = @import("pipeline/compiler.zig");
 const CompileResult = compiler.CompileResult;
@@ -252,7 +253,7 @@ const Dispatch = struct {
     front_controller: bool, // true: SCRIPT_NAME = /<entry basename> (rewritten); false: SCRIPT_NAME = the request path
 };
 
-fn loadFile(path: []const u8, allocator: Allocator, _: *@import("runtime/vm.zig").VM) ?*CompileResult {
+fn loadFile(path: []const u8, allocator: Allocator, vm: *@import("runtime/vm.zig").VM) ?*CompileResult {
     const abs_path = std.fs.cwd().realpathAlloc(allocator, path) catch allocator.dupe(u8, path) catch return null;
     const source = std.fs.cwd().readFileAlloc(allocator, abs_path, 1024 * 1024 * 10) catch {
         allocator.free(abs_path);
@@ -272,7 +273,9 @@ fn loadFile(path: []const u8, allocator: Allocator, _: *@import("runtime/vm.zig"
         return null;
     }
 
-    var result = compiler.compileWithPath(&ast, allocator, abs_path) catch {
+    var diag: ?compiler.Diagnostic = null;
+    var result = compiler.compileWithOrigin(&ast, allocator, .{ .file_path = abs_path, .diagnostic = &diag }) catch {
+        if (diag) |d| vm.recordIncludeCompileError(d.message, abs_path, error_format.compileErrorLine(&ast, d));
         ast.deinit();
         allocator.free(source);
         allocator.free(abs_path);
@@ -560,7 +563,9 @@ pub fn serve(allocator: Allocator, config: ServeConfig) !void {
             std.process.exit(1);
         }
 
-        var result = compiler.compileWithPath(&ast, allocator, abs_path) catch {
+        var diag: ?compiler.Diagnostic = null;
+        var result = compiler.compileWithOrigin(&ast, allocator, .{ .file_path = abs_path, .diagnostic = &diag }) catch {
+            if (diag) |d| try writeStderr(error_format.formatCompileError(allocator, &ast, abs_path, d));
             ast.deinit();
             allocator.free(source);
             if (config.watch) {

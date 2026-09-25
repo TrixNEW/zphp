@@ -120,6 +120,14 @@ pub fn compileWithPath(ast: *const Ast, allocator: Allocator, file_path: []const
 pub const Origin = struct {
     file_path: []const u8,
     dir: ?[]const u8 = null,
+    // receives the reason when compilation stops at a php compile-time error
+    diagnostic: ?*?Diagnostic = null,
+};
+
+// a php compile-time fatal: the message and the token it is reported at
+pub const Diagnostic = struct {
+    message: []const u8,
+    token: u32,
 };
 
 pub fn compileWithOrigin(ast: *const Ast, allocator: Allocator, origin: Origin) Error!CompileResult {
@@ -136,6 +144,7 @@ pub fn compileWithOrigin(ast: *const Ast, allocator: Allocator, origin: Origin) 
         .continue_jumps = .{},
         .file_path = file_path,
         .file_dir = origin.dir,
+        .diagnostic = origin.diagnostic,
         // seeds the closures-so-far heuristic behind the locals-only frame
         // fast path exactly as the old process counter did; names come from
         // allocClosureId
@@ -222,6 +231,7 @@ fn detectStrictTypes(src: []const u8) bool {
 
 pub const Compiler = struct {
     ast: *const Ast,
+    diagnostic: ?*?Diagnostic = null,
     chunk: Chunk,
     functions: std.ArrayListUnmanaged(ObjFunction),
     string_allocs: std.ArrayListUnmanaged([]const u8),
@@ -302,6 +312,14 @@ pub const Compiler = struct {
     // ==================================================================
     // node dispatch
     // ==================================================================
+
+    // stop compiling at a php compile-time fatal, recording the first one
+    pub fn fail(self: *Compiler, token: u32, message: []const u8) error{CompileError} {
+        if (self.diagnostic) |slot| {
+            if (slot.* == null) slot.* = .{ .message = message, .token = token };
+        }
+        return error.CompileError;
+    }
 
     pub fn compileNode(self: *Compiler, idx: u32) Error!void {
         // early-bound class/interface declarations are relocated to a prelude

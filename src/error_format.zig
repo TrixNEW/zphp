@@ -5,6 +5,7 @@ const Ast = @import("pipeline/ast.zig").Ast;
 const Token = @import("pipeline/token.zig").Token;
 const Value = @import("runtime/value.zig").Value;
 const VM = @import("runtime/vm.zig").VM;
+const Diagnostic = @import("pipeline/compiler.zig").Diagnostic;
 
 const Writer = std.ArrayListUnmanaged(u8);
 
@@ -134,6 +135,20 @@ pub fn parseErrorSummary(alloc: std.mem.Allocator, ast: *const Ast) ![]u8 {
     return std.fmt.allocPrint(alloc, "syntax error, unexpected token \"{s}\"", .{lexeme});
 }
 
+// a compile-time fatal in the script being run, reported like a parse error
+pub fn formatCompileError(alloc: std.mem.Allocator, ast: *const Ast, file_path: []const u8, diag: Diagnostic) []const u8 {
+    var buf: Writer = .{};
+    const tok = ast.tokens[diag.token];
+    const loc = Chunk.locationFromOffset(ast.source, tok.start);
+    writeFmt(&buf, alloc, "\nFatal error: {s} in {s} on line {d}\n\n", .{ diag.message, displayPath(file_path), loc.line });
+    writeSourceSnippet(&buf, alloc, ast.source, loc, tok.end - tok.start);
+    return buf.items;
+}
+
+pub fn compileErrorLine(ast: *const Ast, diag: Diagnostic) i64 {
+    return @intCast(Chunk.locationFromOffset(ast.source, ast.tokens[diag.token].start).line);
+}
+
 pub fn parseErrorLine(ast: *const Ast) i64 {
     if (ast.errors.len == 0) return 0;
     return @intCast(Chunk.locationFromOffset(ast.source, ast.tokens[ast.errors[0].token].start).line);
@@ -218,18 +233,6 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
     const path_raw: []const u8 = if (frame_path.len > 0) frame_path else vm.file_path;
     const path = displayPath(path_raw);
 
-    // uncatchable fatals (e.g. execution-time exceeded) are formatted as
-    // bare fatals without the "Uncaught Class:" prefix or stack trace - this
-    // matches how PHP prints `Maximum execution time of N seconds exceeded`
-    if (vm.uncatchable_fatal) {
-        if (vm.sourceLocation(frame.chunk, ip)) |loc| {
-            writeFmt(buf, alloc, "\nFatal error: {s} in {s} on line {d}\n", .{ message, path, loc.line });
-        } else {
-            writeFmt(buf, alloc, "\nFatal error: {s} in {s}\n", .{ message, path });
-        }
-        return;
-    }
-
     // an uncaught ParseError prints the way php reports a syntax error: at
     // the exception's own file and line, with no stack trace
     if (exc == .object and (std.mem.eql(u8, class_name, "ParseError") or std.mem.eql(u8, class_name, "CompileError"))) {
@@ -240,6 +243,18 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
         const label: []const u8 = if (std.mem.eql(u8, class_name, "ParseError")) "Parse error" else "Fatal error";
         writeFmt(buf, alloc, "PHP {s}:  {s} in {s} on line {d}\n", .{ label, message, where, line });
         if (vm.displayErrorsEnabled()) writeFmt(buf, alloc, "\n{s}: {s} in {s} on line {d}\n", .{ label, message, where, line });
+        return;
+    }
+
+    // uncatchable fatals (e.g. execution-time exceeded) are formatted as
+    // bare fatals without the "Uncaught Class:" prefix or stack trace - this
+    // matches how PHP prints `Maximum execution time of N seconds exceeded`
+    if (vm.uncatchable_fatal) {
+        if (vm.sourceLocation(frame.chunk, ip)) |loc| {
+            writeFmt(buf, alloc, "\nFatal error: {s} in {s} on line {d}\n", .{ message, path, loc.line });
+        } else {
+            writeFmt(buf, alloc, "\nFatal error: {s} in {s}\n", .{ message, path });
+        }
         return;
     }
 
