@@ -98,7 +98,7 @@ fn objGetInt(obj: *PhpObject, key: []const u8) i64 {
 
 fn getHandle(obj: *PhpObject) ?Value {
     const fh = obj.get("__sfo_fh");
-    if (fh == .object) return fh;
+    if (fh == .resource) return fh;
     return null;
 }
 
@@ -115,7 +115,7 @@ fn sfoConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.null);
     const mode: Value = if (args.len >= 2 and args[1] == .string) args[1] else .{ .string = Value.String.borrowed("r") };
     const fh = try ctx.vm.callByName("fopen", &.{ args[0], mode });
-    if (fh != .object) {
+    if (fh != .resource) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "SplFileObject::__construct(): Failed to open stream: {s}", .{args[0].string.bytes()});
         try ctx.vm.strings.append(ctx.allocator, msg);
         if (try ctx.vm.throwBuiltinException("RuntimeException", msg)) return NativeResult.scalar(.null);

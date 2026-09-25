@@ -675,7 +675,7 @@ fn execute(ctx: *NativeContext, w: *Worker, task: *Task) void {
 fn hold(v: Value) Value {
     switch (v) {
         .array => |arr| VM.arrayRetain(arr),
-        .object => |obj| VM.objRetain(obj),
+        .object, .resource => |obj| VM.objRetain(obj),
         else => {},
     }
     return v;
@@ -806,7 +806,6 @@ const TransferCheck = struct {
             },
             .object => |obj| {
                 if (obj.native.get(channel.Channel, .channel)) |ch| return self.channels.append(self.ctx.allocator, ch);
-                if (types.isResourceObject(obj.class_name)) return self.refuse("a resource");
                 if (obj.native.kind == .buffer) return if (buffer.isDetached(obj)) self.refuse("a Buffer that was already transferred") else {};
                 if (obj.native.kind != .none) return self.refuse("an object backed by a native handle");
                 if (std.mem.eql(u8, obj.class_name, pool_class) or std.mem.eql(u8, obj.class_name, future_class)) return self.refuse("a pool or future");
@@ -823,6 +822,7 @@ const TransferCheck = struct {
             },
             .generator => return self.refuse("a Generator"),
             .fiber => return self.refuse("a Fiber"),
+            .resource => return self.refuse("a resource"),
         }
     }
 };
@@ -1170,11 +1170,11 @@ fn poolCollect(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 fn poolReadiness(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     const pool = try poolOf(ctx, obj);
-    if (pool.readiness) |stream| return NativeResult.borrowed(.{ .object = stream });
+    if (pool.readiness) |stream| return NativeResult.borrowed(.{ .resource = stream });
     const stream = network.socketStream(ctx, pool.wake[0]) catch return error.OutOfMemory;
     try stream.set(ctx.allocator, "__shared", .{ .bool = true });
     pool.readiness = stream;
-    return NativeResult.borrowed(.{ .object = stream });
+    return NativeResult.borrowed(.{ .resource = stream });
 }
 
 fn poolShutdown(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {

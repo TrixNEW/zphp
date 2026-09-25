@@ -109,6 +109,10 @@ pub const NativeContext = struct {
         return owned;
     }
 
+    pub fn createResource(self: *NativeContext, class_name: []const u8) !*PhpObject {
+        return self.vm.newResource(class_name);
+    }
+
     pub fn createObject(self: *NativeContext, class_name: []const u8) !*PhpObject {
         const obj = try self.vm.allocUserObject(class_name);
         try self.vm.initObjectProperties(obj, class_name);
@@ -505,6 +509,17 @@ pub const VM = struct {
     free_objects: std.ArrayListUnmanaged(*PhpObject) = .{},
     released_objects: std.ArrayListUnmanaged(*PhpObject) = .{},
     next_object_id: u32 = 0,
+    // the frame depth the innermost running native started at; a user call
+    // made at exactly that depth comes from the native itself
+    native_frame_depth: usize = std.math.maxInt(usize),
+    // php resource ids: STDIN, STDOUT and STDERR take 1-3 at init
+    next_resource_id: u32 = 0,
+    // php's default stream context, made on first use; it takes the next
+    // resource id at that moment, which shifts the ids of later resources
+    default_stream_context: ?*PhpObject = null,
+    // what readdir() and friends act on when called with no handle; holds a
+    // reference, as php's default directory does
+    last_directory: ?*PhpObject = null,
     // serve-mode builtin persistence: stdlib classes / native methods / their
     // objects are immutable, registered once at init. reset() frees only the
     // request-scoped heap (items beyond these high-water marks) and keeps the
@@ -1476,6 +1491,50 @@ pub const VM = struct {
         };
         gen.* = initial;
         return gen;
+    }
+
+    // the state behind a php resource. ids come from their own counter, as
+    // php's resource list does, so resources never shift object ids.
+    // class_name must outlive the vm (a literal)
+    pub fn newResource(self: *VM, class_name: []const u8) RuntimeError!*PhpObject {
+        const obj = try self.allocResource(class_name);
+        self.numberResource(obj);
+        return obj;
+    }
+
+    // a resource shell without an id yet, for a resource php numbers after
+    // others it creates alongside it (a process after its pipes)
+    pub fn allocResource(self: *VM, class_name: []const u8) RuntimeError!*PhpObject {
+        const obj = (if (self.classIsPoolSafe(class_name)) self.free_objects.pop() else null) orelse blk: {
+            const created = try self.allocator.create(PhpObject);
+            errdefer self.allocator.destroy(created);
+            try self.objects.append(self.allocator, created);
+            break :blk created;
+        };
+        obj.* = .{ .class_name = class_name };
+        return obj;
+    }
+
+    // a resource php makes and frees inside one call still takes an id
+    pub fn skipResourceId(self: *VM) void {
+        self.next_resource_id += 1;
+    }
+
+    pub fn numberResource(self: *VM, obj: *PhpObject) void {
+        self.next_resource_id += 1;
+        obj.id = self.next_resource_id;
+    }
+
+    pub fn rememberLastDirectory(self: *VM, dir: *PhpObject) void {
+        self.forgetLastDirectory();
+        objRetain(dir);
+        self.last_directory = dir;
+    }
+
+    pub fn forgetLastDirectory(self: *VM) void {
+        const dir = self.last_directory orelse return;
+        self.last_directory = null;
+        self.objRelease(dir);
     }
 
     fn allocUserObject(self: *VM, class_name: []const u8) RuntimeError!*PhpObject {
@@ -2802,6 +2861,11 @@ pub const VM = struct {
         // reap before freeHeapItems frees the proc objects (the map keys)
         self.reapProcChildren();
         extension.endRequest(self);
+        // a request's resources are freed with its heap; ids restart after
+        // the three std streams, which live with the builtins
+        self.default_stream_context = null;
+        self.last_directory = null;
+        self.next_resource_id = 3;
         self.frame_high_water = 0;
         self.obj_ref_active = false;
         self.array_ref_active = false;
@@ -3810,7 +3874,7 @@ pub const VM = struct {
                         continue;
                     }
                     if (!isArithOperand(v)) {
-                        const tn = arithTypeName(v);
+                        const tn = Value.typeName(v);
                         const msg = try std.fmt.allocPrint(self.allocator, "Cannot negate {s}", .{tn});
                         try self.strings.append(self.allocator, msg);
                         if (try self.throwBuiltinException("TypeError", msg)) continue;
@@ -3946,7 +4010,7 @@ pub const VM = struct {
                             const what = switch (v) {
                                 .bool => |bv| if (bv) "true" else "false",
                                 .object => |o| o.class_name,
-                                else => arithTypeName(v),
+                                else => Value.typeName(v),
                             };
                             const msg = try std.fmt.allocPrint(self.allocator, "Cannot perform bitwise not on {s}", .{what});
                             try self.strings.append(self.allocator, msg);
@@ -4286,7 +4350,7 @@ pub const VM = struct {
                                             // variadic element type
                                             var ev = entry.value;
                                             const vtype: []const u8 = blk: {
-                                                const ti = g_type_info.get(name) orelse break :blk "";
+                                                const ti = self.typeInfoFor(name) orelse break :blk "";
                                                 const vi = func.arity - 1;
                                                 if (vi < ti.param_types.len) break :blk ti.param_types[vi];
                                                 break :blk "";
@@ -4715,6 +4779,7 @@ pub const VM = struct {
                         if (try self.throwOffsetKeyType(key, .access)) continue;
                         return error.RuntimeError;
                     }
+                    if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                     const ak = if (op == .array_push_ref)
                         PhpArray.Key{ .int = if (array.has_int_keys) array.next_int_key else 0 }
                     else
@@ -4763,6 +4828,7 @@ pub const VM = struct {
                             if (try self.throwOffsetKeyType(key, .access)) continue;
                             return error.RuntimeError;
                         }
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         const norm_key = Value.toArrayKey(key);
                         if (op == .arg_array_set) try self.recordArgArraySource(arr_val.array, norm_key, source);
                         // A duplicate literal key replaces storage, not the value
@@ -4818,6 +4884,7 @@ pub const VM = struct {
                             if (try self.throwOffsetKeyType(key, .access)) continue;
                             return error.RuntimeError;
                         }
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         const ak = Value.toArrayKey(key);
                         if (!arr_val.array.contains(ak)) {
                             self.emitUndefinedKeyWarning(ak) catch if (try self.resumeRaised()) continue;
@@ -4861,6 +4928,7 @@ pub const VM = struct {
                             self.push(.null);
                             continue;
                         }
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         self.push(arr_val.array.get(Value.toArrayKey(key)));
                     } else if (arr_val == .object and self.hasMethod(arr_val.object.class_name, "offsetGet")) {
                         if (self.hasMethod(arr_val.object.class_name, "offsetExists")) {
@@ -4905,6 +4973,7 @@ pub const VM = struct {
                             if (try self.throwOffsetKeyType(key, .access)) continue;
                             return error.RuntimeError;
                         }
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         const arr_key = Value.toArrayKey(key);
                         const existing = arr_val.array.get(arr_key);
                         if (existing != .null) {
@@ -5000,6 +5069,7 @@ pub const VM = struct {
                         return error.RuntimeError;
                     };
                     obj = obj.storage();
+                    if (inner_key == .resource) self.warnResourceOffset(inner_key) catch if (try self.resumeRaised()) continue;
                     const ik = Value.toArrayKey(inner_key);
                     // Hook reads must precede vivification/COW. A by-value hook
                     // may expose an object for offsetSet, but not writable array storage.
@@ -5123,10 +5193,12 @@ pub const VM = struct {
                     const inner_key = self.pop();
                     const outer_key = self.pop();
                     const base = self.pop();
+                    if (inner_key == .resource) self.warnResourceOffset(inner_key) catch if (try self.resumeRaised()) continue;
                     const ik = Value.toArrayKey(inner_key);
                     var existing: Value = .null;
                     var base_is_array_access_obj = false;
                     if (base == .array) {
+                        if (outer_key == .resource) self.warnResourceOffset(outer_key) catch if (try self.resumeRaised()) continue;
                         existing = base.array.get(Value.toArrayKey(outer_key));
                     } else if (base == .object and self.hasMethod(base.object.class_name, "offsetGet")) {
                         // ArrayObject / WeakMap / custom ArrayAccess: fetch the
@@ -5280,6 +5352,7 @@ pub const VM = struct {
                             if (try self.throwOffsetKeyType(key, .access)) continue;
                             return error.RuntimeError;
                         }
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         const norm_key = Value.toArrayKey(key);
                         // Stage 2 element-overwrite release: if this set replaces
                         // an existing entry, the array loses its retain on the
@@ -5317,6 +5390,7 @@ pub const VM = struct {
                     const key = self.pop();
                     const arr_val = self.pop();
                     if (arr_val == .array) {
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         const ak = Value.toArrayKey(key);
                         if (arr_val.array.contains(ak)) {
                             // set/writeArrayElemRef retain once; copyValue would
@@ -5398,6 +5472,7 @@ pub const VM = struct {
                         const arr_val = Value{ .array = new_arr };
                         retainValue(arr_val);
                         try self.storeLocalSlot(frame, slot, arr_val);
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         try new_arr.set(self.allocator, Value.toArrayKey(key), val);
                         self.push(val);
                         continue;
@@ -5419,6 +5494,7 @@ pub const VM = struct {
                             if (ref_cell == null) try self.storeLocalSlot(frame, slot, .{ .array = dst });
                             cur = .{ .array = dst };
                         }
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         const norm_key = Value.toArrayKey(key);
                         // Stage 2 element-overwrite release - see array_set above.
                         // a plain write to a referenced element routes through the
@@ -6086,6 +6162,7 @@ pub const VM = struct {
                     const arr_val = self.pop();
                     const frame = self.currentFrame();
                     const cell = try self.getOrCreateVarCell(frame, var_name);
+                    if (key_val == .resource) self.warnResourceOffset(key_val) catch if (try self.resumeRaised()) continue;
                     if (arr_val == .array) {
                         const arr_ptr = arr_val.array;
                         const key = PhpArray.normalizeKey(Value.toArrayKey(key_val));
@@ -6174,6 +6251,7 @@ pub const VM = struct {
                             break :blk c;
                         });
                     } else {
+                        if (key_val == .resource) self.warnResourceOffset(key_val) catch if (try self.resumeRaised()) continue;
                         const arr_ptr = arr_val.array;
                         const append_ref = key_val == .null;
                         const key: PhpArray.Key = if (append_ref)
@@ -6637,6 +6715,7 @@ pub const VM = struct {
                             if (try self.throwOffsetKeyType(key, .unset)) continue;
                             return error.RuntimeError;
                         }
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         const u_ak = Value.toArrayKey(key);
                         // breaking a referenced element unbinds it first
                         self.unbindArrayElemRef(arr_val.array, u_ak);
@@ -6941,6 +7020,7 @@ pub const VM = struct {
                         // SPL ArrayObject/ArrayIterator: isset() is null-aware (PHP's spl_array_has_dimension semantics)
                         const data = arr_val.object.get("__data");
                         if (data == .array) {
+                            if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                             const v = data.array.get(Value.toArrayKey(key));
                             self.push(.{ .bool = v != .null });
                         } else {
@@ -6953,6 +7033,7 @@ pub const VM = struct {
                         };
                         self.push(.{ .bool = result.isTruthy() });
                     } else if (arr_val == .array) {
+                        if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
                         const v = arr_val.array.get(Value.toArrayKey(key));
                         self.push(.{ .bool = v != .null });
                     } else if (arr_val == .string) {
@@ -7041,8 +7122,13 @@ pub const VM = struct {
                             try self.objects.append(self.allocator, proxy);
                             self.push(.{ .object = proxy });
                         } else self.push(.{ .object = copy });
-                    } else {
+                    } else if (val == .string and std.mem.startsWith(u8, val.string.bytes(), "__closure_")) {
                         self.push(val);
+                    } else {
+                        const msg = try std.fmt.allocPrint(self.allocator, "clone(): Argument #1 ($object) must be of type object, {s} given", .{val.valueName()});
+                        try self.strings.append(self.allocator, msg);
+                        if (try self.throwBuiltinException("TypeError", msg)) continue;
+                        return error.RuntimeError;
                     }
                 },
 
@@ -9063,6 +9149,9 @@ pub const VM = struct {
                         const mc_entry = &ic.method[mc_idx];
                         if (mc_entry.key == mc_ip and mc_entry.chunk_key == mc_chunk_key and mc_entry.class_ptr == @intFromPtr(obj.class_name.ptr)) {
                             if (mc_entry.func) |func| {
+                                if (func.has_param_types) {
+                                    if (try self.checkParamTypes(func.name, arg_count)) continue;
+                                }
                                 if (func.locals_only and self.captures.items.len == 0) {
                                     const lc: usize = func.local_count;
                                     const lbase = ic.locals_sp;
@@ -9278,6 +9367,9 @@ pub const VM = struct {
                             if (try self.throwBuiltinException("ArgumentCountError", msg)) continue;
                             self.setErrorMsg("Fatal error: Uncaught ArgumentCountError: {s}\n", .{msg});
                             return error.RuntimeError;
+                        }
+                        if (func.has_param_types) {
+                            if (try self.checkParamTypes(full_name, arg_count)) continue;
                         }
                         if (self.ic) |ic| {
                             const mc_ip2 = self.currentFrame().ip - 4;
@@ -9525,6 +9617,9 @@ pub const VM = struct {
                             self.pushNativeResult(result);
                         } else continue;
                     } else if (self.functions.get(full_name)) |func| {
+                        if (func.has_param_types) {
+                            if (try self.checkParamTypes(full_name, @intCast(@min(ac, 255)))) continue;
+                        }
                         var new_vars = self.acquireFrameVars();
                         try new_vars.put(self.allocator, "$this", .{ .object = obj });
                         try self.bindClosures(&new_vars, null, full_name);
@@ -9688,6 +9783,9 @@ pub const VM = struct {
                             self.pushNativeResult(result);
                         } else continue;
                     } else if (self.functions.get(full_name)) |func| {
+                        if (func.has_param_types) {
+                            if (try self.checkParamTypes(full_name, arg_count)) continue;
+                        }
                         var new_vars = self.acquireFrameVars();
                         try new_vars.put(self.allocator, "$this", .{ .object = obj });
                         try self.bindClosures(&new_vars, null, full_name);
@@ -9871,6 +9969,9 @@ pub const VM = struct {
                             self.pushNativeResult(result);
                         } else continue;
                     } else if (self.functions.get(full_name)) |func| {
+                        if (func.has_param_types) {
+                            if (try self.checkParamTypes(full_name, @intCast(@min(ac, 255)))) continue;
+                        }
                         var new_vars = self.acquireFrameVars();
                         try new_vars.put(self.allocator, "$this", .{ .object = obj });
                         try self.bindClosures(&new_vars, null, full_name);
@@ -11263,8 +11364,20 @@ pub const VM = struct {
     // `{closure:file:line}` form so user code that reads $trace[N]['function']
     // sees the same shape as native PHP. allocates if substitution happens
     pub fn funcDisplayName(self: *VM, f: *const ObjFunction) ![]const u8 {
+        if (f.display_name.len > 0) return f.display_name;
         if (!std.mem.startsWith(u8, f.name, "__closure_")) return f.name;
         const s = try std.fmt.allocPrint(self.allocator, "{{closure:{s}:{d}}}", .{ f.file_path, f.start_line });
+        try self.strings.append(self.allocator, s);
+        return s;
+    }
+
+    // how a TypeError names the called function: a closure by its php name,
+    // prefixed with the class it is scoped to (`K::{closure:K::s():3}`)
+    fn callableDisplayName(self: *VM, name: []const u8, func: ?*const ObjFunction) ![]const u8 {
+        const f = func orelse return name;
+        if (f.display_name.len == 0) return name;
+        const class = self.closureDefClassByName(name) orelse return f.display_name;
+        const s = try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ class, f.display_name });
         try self.strings.append(self.allocator, s);
         return s;
     }
@@ -11476,6 +11589,13 @@ pub const VM = struct {
         try obj.set(self.allocator, "code", .{ .int = 0 });
         try self.objects.append(self.allocator, obj);
         self.pending_exception = .{ .object = obj };
+    }
+
+    // php keys an array by a resource's id, with a warning
+    pub fn warnResourceOffset(self: *VM, key: Value) RuntimeError!void {
+        const msg = std.fmt.allocPrint(self.allocator, "Resource ID#{d} used as offset, casting to integer ({d})", .{ key.resource.id, key.resource.id }) catch return error.OutOfMemory;
+        defer self.allocator.free(msg);
+        try self.emitWarning(msg);
     }
 
     pub const OffsetOp = enum { access, isset_or_empty, unset };
@@ -11692,8 +11812,8 @@ pub const VM = struct {
             if (b == .string and isPartialNumericString(b.string.bytes())) self.emitNonNumericWarning() catch return self.resumeRaised();
             return false;
         }
-        const tn_a = arithTypeName(a);
-        const tn_b = arithTypeName(b);
+        const tn_a = Value.typeName(a);
+        const tn_b = Value.typeName(b);
         const msg = try std.fmt.allocPrint(self.allocator, "Unsupported operand types: {s} " ++ op ++ " {s}", .{ tn_a, tn_b });
         try self.strings.append(self.allocator, msg);
         if (try self.throwBuiltinException("TypeError", msg)) return true;
@@ -11915,20 +12035,6 @@ pub const VM = struct {
         if (s[i] == '+' or s[i] == '-') i += 1;
         if (i >= s.len) return false;
         return s[i] >= '0' and s[i] <= '9' or s[i] == '.';
-    }
-
-    fn arithTypeName(v: Value) []const u8 {
-        return switch (v) {
-            .int => "int",
-            .float => "float",
-            .bool => "bool",
-            .string => "string",
-            .array => "array",
-            .object => |obj| obj.class_name,
-            .null => "null",
-            .generator => "Generator",
-            .fiber => "Fiber",
-        };
     }
 
     // the hook sits on the builtin class; a user subclass inherits it
@@ -16933,8 +17039,8 @@ pub const VM = struct {
             val.string.retain();
             return val;
         }
-        if (val == .object) {
-            objRetain(val.object);
+        if (val == .object or val == .resource) {
+            objRetain(if (val == .object) val.object else val.resource);
             return val;
         }
         if (val == .generator) {
@@ -17010,6 +17116,12 @@ pub const VM = struct {
     // cannot be freed mid-native - retaining arrays here would instead
     // QUEUE them (releaseValue queues at 0) and free live data (Stage 2)
     fn invokeNative(self: *VM, native: NativeFn, ctx: *NativeContext, input_args: []const Value, name: ?[]const u8) RuntimeError!Value {
+        // user code a native calls back is called by an internal function,
+        // except through call_user_func(_array), which php compiles to a
+        // plain call from the calling code
+        const saved_native_depth = self.native_frame_depth;
+        defer self.native_frame_depth = saved_native_depth;
+        if (!isUserCallForwarder(name)) self.native_frame_depth = self.frame_count;
         var args_buf: [256]Value = undefined;
         if (input_args.len > args_buf.len) return error.RuntimeError;
         var native_args = input_args;
@@ -17341,19 +17453,7 @@ pub const VM = struct {
     }
 
     noinline fn valueTypeName(val: Value) []const u8 {
-        return switch (val) {
-            .int => "int",
-            .float => "float",
-            // PHP's error messages spell out 'true'/'false' for bool values,
-            // not 'bool'. matters for "Call to a member function X() on false"
-            .bool => |b| if (b) "true" else "false",
-            .string => "string",
-            .array => "array",
-            .object => |obj| obj.class_name,
-            .null => "null",
-            .generator => "Generator",
-            .fiber => "Fiber",
-        };
+        return val.valueName();
     }
 
     fn tryWeakCoerce(self: *VM, val: Value, type_str: []const u8) RuntimeError!?Value {
@@ -17448,46 +17548,61 @@ pub const VM = struct {
     // object, etc.). used by the 'callable' parameter-type check to
     // surface TypeError at the call site instead of an undefined-function
     // fatal inside the callee
-    fn isValueCallable(self: *VM, val: Value) bool {
-        if (val == .string) {
-            const raw = val.string.bytes();
-            const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
-            if (self.native_fns.contains(name)) return true;
-            if (self.functions.contains(name)) return true;
-            if (std.mem.indexOf(u8, name, "::")) |sep| {
-                if (self.hasMethod(name[0..sep], name[sep + 2 ..])) return true;
-            }
-            return false;
+    // php's is_callable, judged from the current scope: a class may use its
+    // own private and protected methods, a method it cannot reach is still
+    // callable through __call/__callStatic, and a non-static method named
+    // through its class is callable only with a compatible $this in scope
+    pub fn isValueCallable(self: *VM, val: Value) bool {
+        switch (val) {
+            .string => |str| {
+                const raw = str.bytes();
+                const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
+                if (std.mem.indexOf(u8, name, "::")) |sep| return self.isMethodCallable(.null, name[0..sep], name[sep + 2 ..]);
+                return self.functionExists(name);
+            },
+            .object => |obj| return std.mem.eql(u8, obj.class_name, "Closure") or self.hasMethod(obj.class_name, "__invoke"),
+            .array => |arr| {
+                if (arr.entries.items.len != 2) return false;
+                const target = arr.entries.items[0].value;
+                const method_val = arr.entries.items[1].value;
+                if (method_val != .string) return false;
+                const class_name = switch (target) {
+                    .object => |obj| obj.class_name,
+                    .string => |cs| if (cs.len > 0 and cs.bytes()[0] == '\\') cs.bytes()[1..] else cs.bytes(),
+                    else => return false,
+                };
+                return self.isMethodCallable(target, class_name, method_val.string.bytes());
+            },
+            else => return false,
         }
-        if (val == .object) {
-            if (std.mem.eql(u8, val.object.class_name, "Closure")) return true;
-            return self.hasMethod(val.object.class_name, "__invoke");
+    }
+
+    // target is the object in [$obj, 'm'], or null for a class-named callable
+    fn isMethodCallable(self: *VM, target: Value, class_name: []const u8, method: []const u8) bool {
+        const this = if (target == .object) target.object else self.scopeThis();
+        const has_instance = if (this) |t| self.isInstanceOf(t.class_name, class_name) else false;
+        const magic: []const u8 = if (has_instance) "__call" else "__callStatic";
+        if (!self.hasMethod(class_name, method)) return self.hasMethod(class_name, magic);
+        const vis = self.findMethodVisibility(class_name, method);
+        if (!self.checkVisibility(vis.defining_class, vis.visibility)) return self.hasMethod(class_name, magic);
+        if (has_instance) return true;
+        const cdef = self.classes.get(vis.defining_class) orelse return true;
+        const info = cdef.methods.get(method) orelse return true;
+        return info.is_static;
+    }
+
+    // $this of the running frame, whether it lives in the vars map or a slot
+    fn scopeThis(self: *VM) ?*PhpObject {
+        if (self.frame_count == 0) return null;
+        const frame = self.currentFrame();
+        if (frame.vars.get("$this")) |v| return if (v == .object) v.object else null;
+        const func = frame.func orelse return null;
+        for (func.slot_names, 0..) |name, i| {
+            if (!std.mem.eql(u8, name, "$this")) continue;
+            if (i < frame.locals.len and frame.locals[i] == .object) return frame.locals[i].object;
+            return null;
         }
-        if (val == .array) {
-            const arr = val.array;
-            if (arr.entries.items.len != 2) return false;
-            const target = arr.entries.items[0].value;
-            const method_val = arr.entries.items[1].value;
-            if (method_val != .string) return false;
-            const method = method_val.string.bytes();
-            const raw_class = if (target == .object)
-                target.object.class_name
-            else if (target == .string)
-                target.string.bytes()
-            else
-                return false;
-            const class_name = if (raw_class.len > 0 and raw_class[0] == '\\') raw_class[1..] else raw_class;
-            if (self.classes.get(class_name)) |cdef| {
-                if (cdef.methods.get(method)) |mi| {
-                    if (mi.visibility != .public) return false;
-                    if (target == .string and !mi.is_static) return false;
-                }
-            }
-            var buf: [256]u8 = undefined;
-            const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ class_name, method }) catch return false;
-            return self.native_fns.contains(full) or self.functions.contains(full);
-        }
-        return false;
+        return null;
     }
 
     noinline fn checkSingleType(self: *VM, val: Value, type_name: []const u8) bool {
@@ -17570,8 +17685,18 @@ pub const VM = struct {
         return self.checkSingleType(val, s[start..]);
     }
 
-    fn declaredParamTypes(_: *VM, name: []const u8) []const []const u8 {
-        return (g_type_info.get(name) orelse return &.{}).param_types;
+    fn declaredParamTypes(self: *VM, name: []const u8) []const []const u8 {
+        return (self.typeInfoFor(name) orelse return &.{}).param_types;
+    }
+
+    // a closure instance (__closure_N_M) carries the types its compiled
+    // function (__closure_N) declared
+    fn typeInfoFor(self: *VM, name: []const u8) ?TypeInfo {
+        if (g_type_info.get(name)) |ti| return ti;
+        if (!std.mem.startsWith(u8, name, "__closure_")) return null;
+        const func = self.functions.get(name) orelse return null;
+        if (func.name.ptr == name.ptr and func.name.len == name.len) return null;
+        return g_type_info.get(func.name);
     }
 
     // an argument that already has its declared scalar type passes without
@@ -17591,87 +17716,113 @@ pub const VM = struct {
 
     pub noinline fn checkParamTypes(self: *VM, name: []const u8, arg_count: u8) RuntimeError!bool {
         if (g_type_info.count() == 0) return false;
-        const ti = g_type_info.get(name) orelse return false;
-        if (ti.param_types.len == 0) return false;
-        const func = self.functions.get(name);
         const ac: usize = arg_count;
-        for (0..@min(ac, ti.param_types.len)) |i| {
-            const type_str = ti.param_types[i];
+        // runs before the callee frame is pushed, so the caller is the top frame
+        const exc = (try self.enforceArgTypes(name, self.stack[self.sp - ac .. self.sp], .{ .strict = self.topFrameStrict() })) orelse return false;
+        self.dropN(ac);
+        if (self.throwObject(exc)) return true;
+        return error.RuntimeError;
+    }
+
+    fn isUserCallForwarder(name: ?[]const u8) bool {
+        const n = name orelse return false;
+        return std.ascii.eqlIgnoreCase(n, "call_user_func") or std.ascii.eqlIgnoreCase(n, "call_user_func_array");
+    }
+
+    // true while a native runs with no user frame pushed since it started
+    fn calledFromNative(self: *const VM) bool {
+        return self.native_frame_depth == self.frame_count;
+    }
+
+    fn topFrameStrict(self: *VM) bool {
+        if (self.frame_count >= 1) {
+            if (self.frames[self.frame_count - 1].func) |cf| return cf.strict_types;
+        }
+        return self.script_strict_types;
+    }
+
+    // a call's arguments against the callee's declared parameter types, with
+    // php's weak-mode coercion applied in place unless the caller is strict.
+    // returns the TypeError to raise when an argument does not fit; variadic
+    // arguments take the variadic parameter's type
+    const ArgCaller = struct {
+        strict: bool,
+        // an internal function calling back into user code: never strict,
+        // and php names no call site in the message
+        internal: bool = false,
+    };
+
+    fn enforceArgTypes(self: *VM, name: []const u8, args: []Value, caller: ArgCaller) RuntimeError!?*PhpObject {
+        const strict = caller.strict;
+        const ti = self.typeInfoFor(name) orelse return null;
+        if (ti.param_types.len == 0) return null;
+        const func = self.functions.get(name);
+        const variadic = if (func) |f| f.is_variadic else false;
+        for (args, 0..) |*slot, i| {
+            const type_index = if (i < ti.param_types.len) i else if (variadic) ti.param_types.len - 1 else break;
+            const type_str = ti.param_types[type_index];
             if (type_str.len == 0) continue;
-            const val = self.stack[self.sp - ac + i];
+            const val = slot.*;
             if (!self.checkTypeMatch(val, type_str)) {
-                // weak-mode coercion: PHP's default is non-strict, so a numeric
-                // string passes int/float, scalars convert into each other,
-                // etc. only fall through to the TypeError path if coercion
-                // cannot produce a matching value. caller's file determines the
-                // mode - a strict_types=1 file calling a non-strict function
-                // still gets strict argument checking
-                const caller_strict = blk: {
-                    if (self.frame_count >= 1) {
-                        const caller = &self.frames[self.frame_count - 1];
-                        if (caller.func) |cf| break :blk cf.strict_types;
-                    }
-                    break :blk self.script_strict_types;
-                };
-                if (!caller_strict) {
+                if (!strict) {
                     if (try self.tryWeakCoerce(val, type_str)) |coerced| {
-                        self.stack[self.sp - ac + i] = coerced;
+                        slot.* = coerced;
                         continue;
                     }
                 }
-                const param_name = if (func) |f| (if (i < f.params.len) f.params[i] else "") else "";
-                // PHP suffixes the message with the call site: ", called in
-                // <file> on line N". the caller frame is frame_count-2 because
-                // the callee was already pushed before bindArgs runs
-                var cs_file: []const u8 = self.file_path;
-                var cs_line: u32 = 0;
-                // checkParamTypes runs before the callee frame is pushed, so
-                // the caller is the current top frame
-                if (self.frame_count >= 1) {
-                    const caller = &self.frames[self.frame_count - 1];
-                    if (caller.script_path.len > 0) cs_file = caller.script_path else if (caller.func) |cf| if (cf.file_path.len > 0) {
-                        cs_file = cf.file_path;
-                    };
-                    const cip: usize = if (caller.ip > 0) caller.ip - 1 else 0;
-                    if (self.sourceLocation(caller.chunk, cip)) |loc| cs_line = loc.line;
-                }
-                const msg = if (param_name.len > 0)
-                    std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} ({s}) must be of type {s}, {s} given, called in {s} on line {d}", .{ name, i + 1, param_name, type_str, valueTypeName(val), cs_file, cs_line }) catch return error.RuntimeError
-                else
-                    std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} must be of type {s}, {s} given, called in {s} on line {d}", .{ name, i + 1, type_str, valueTypeName(val), cs_file, cs_line }) catch return error.RuntimeError;
-                try self.strings.append(self.allocator, msg);
-                self.error_msg = msg;
-                // php raises it inside the callee, at its declaration
-                const at: ?SourcePosition = if (func) |f| if (f.file_path.len > 0) SourcePosition{ .file = f.file_path, .line = f.start_line } else null else null;
-                const exc = try self.newBuiltinException("TypeError", msg, at);
-                if (func) |f| try self.prependCallToTrace(exc, f, self.stack[self.sp - ac .. self.sp]);
-                self.dropN(ac);
-                if (self.throwObject(exc)) return true;
-                return error.RuntimeError;
+                return try self.argTypeError(name, func, .{ .args = args, .index = i, .type_str = type_str, .variadic = variadic and type_index == ti.param_types.len - 1, .internal_caller = caller.internal });
             }
             if (val == .object and self.typeStrAllowsString(type_str) and self.hasMethod(val.object.class_name, "__toString")) {
-                const s = try self.objectToString(val.object);
-                self.stack[self.sp - ac + i] = .{ .string = Value.String.borrowed(s) };
-            } else {
-                // the value passed the type check but PHP's non-strict mode
-                // also COERCES it to the declared scalar type (int 5 -> a
-                // float param becomes float(5), int -> bool param becomes
-                // bool, etc). only for a single scalar declared type
-                const caller_strict = blk: {
-                    if (self.frame_count >= 2) {
-                        const caller = &self.frames[self.frame_count - 2];
-                        if (caller.func) |cf| break :blk cf.strict_types;
-                    }
-                    break :blk self.script_strict_types;
-                };
-                if (!caller_strict) {
-                    if (try self.coerceToDeclaredScalar(val, type_str)) |coerced| {
-                        self.stack[self.sp - ac + i] = coerced;
-                    }
-                }
+                const text = try self.objectToString(val.object);
+                slot.* = .{ .string = Value.String.borrowed(text) };
+            } else if (!strict) {
+                // a value that passes still takes the declared scalar type in
+                // weak mode (int 5 into a float parameter is float(5))
+                if (try self.coerceToDeclaredScalar(val, type_str)) |coerced| slot.* = coerced;
             }
         }
-        return false;
+        return null;
+    }
+
+    const ArgTypeFailure = struct {
+        args: []const Value,
+        index: usize,
+        type_str: []const u8,
+        variadic: bool,
+        internal_caller: bool,
+    };
+
+    fn argTypeError(self: *VM, name: []const u8, func: ?*const ObjFunction, failure: ArgTypeFailure) RuntimeError!*PhpObject {
+        const i = failure.index;
+        const val = failure.args[i];
+        // php names the parameter, except for arguments gathered by a variadic
+        const param_name = if (failure.variadic) "" else if (func) |f| (if (i < f.params.len) f.params[i] else "") else "";
+        // php suffixes the message with the call site: ", called in <file> on
+        // line N"; the caller is the current top frame
+        var cs_file: []const u8 = self.file_path;
+        var cs_line: u32 = 0;
+        if (self.frame_count >= 1) {
+            const caller = &self.frames[self.frame_count - 1];
+            if (caller.script_path.len > 0) cs_file = caller.script_path else if (caller.func) |cf| if (cf.file_path.len > 0) {
+                cs_file = cf.file_path;
+            };
+            const cip: usize = if (caller.ip > 0) caller.ip - 1 else 0;
+            if (self.sourceLocation(caller.chunk, cip)) |loc| cs_line = loc.line;
+        }
+        const shown = try self.callableDisplayName(name, func);
+        const site = if (failure.internal_caller) "" else std.fmt.allocPrint(self.allocator, ", called in {s} on line {d}", .{ cs_file, cs_line }) catch return error.RuntimeError;
+        defer if (!failure.internal_caller) self.allocator.free(site);
+        const msg = if (param_name.len > 0)
+            std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} ({s}) must be of type {s}, {s} given{s}", .{ shown, i + 1, param_name, failure.type_str, valueTypeName(val), site }) catch return error.RuntimeError
+        else
+            std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} must be of type {s}, {s} given{s}", .{ shown, i + 1, failure.type_str, valueTypeName(val), site }) catch return error.RuntimeError;
+        try self.strings.append(self.allocator, msg);
+        self.error_msg = msg;
+        // php raises it inside the callee, at its declaration
+        const at: ?SourcePosition = if (func) |f| if (f.file_path.len > 0) SourcePosition{ .file = f.file_path, .line = f.start_line } else null else null;
+        const exc = try self.newBuiltinException("TypeError", msg, at);
+        if (func) |f| try self.prependCallToTrace(exc, f, failure.args);
+        return exc;
     }
 
     // when a value already satisfies a single scalar declared type but isn't
@@ -17714,7 +17865,8 @@ pub const VM = struct {
                     return false;
                 }
             }
-            const msg = std.fmt.allocPrint(self.allocator, "{s}(): Return value must be of type {s}, {s} returned", .{ func_name, ti.return_type, valueTypeName(val.*) }) catch return error.RuntimeError;
+            const shown = if (frame.func) |f| (if (f.display_name.len > 0) f.display_name else func_name) else func_name;
+            const msg = std.fmt.allocPrint(self.allocator, "{s}(): Return value must be of type {s}, {s} returned", .{ shown, ti.return_type, valueTypeName(val.*) }) catch return error.RuntimeError;
             try self.strings.append(self.allocator, msg);
             self.error_msg = msg;
             try self.popFrame();
@@ -17939,7 +18091,7 @@ pub const VM = struct {
                 self.setErrorMsg("Fatal error: Uncaught ArgumentCountError: {s}\n", .{msg});
                 return error.RuntimeError;
             }
-            if (g_type_info.count() > 0) {
+            if (func.has_param_types) {
                 if (try self.checkParamTypes(name, arg_count)) return;
             }
             self.pending_call_name = name;
@@ -18221,10 +18373,13 @@ pub const VM = struct {
             return self.borrowCallResult(result);
         } else if (self.functions.get(full_name)) |func| {
             if (args.len < func.required_params) return error.RuntimeError;
+            var checked_buf: [16]Value = undefined;
+            const checked = try self.checkedArgs(full_name, func, args, &checked_buf);
+            defer if (checked.ptr != &checked_buf and checked.ptr != args.ptr) self.allocator.free(checked);
             var new_vars = self.acquireFrameVars();
             try new_vars.put(self.allocator, "$this", .{ .object = obj });
             try self.bindClosures(&new_vars, null, full_name);
-            const trimmed = if (func.is_variadic) args else args[0..@min(args.len, func.arity)];
+            const trimmed = if (func.is_variadic) checked else checked[0..@min(checked.len, func.arity)];
             try self.bindArgs(&new_vars, func, trimmed);
             if (func.is_generator) {
                 const gen = try self.allocGenerator(.{ .func = func, .vars = new_vars });
@@ -18385,6 +18540,34 @@ pub const VM = struct {
             return self.borrowCallResult(result);
         } else if (self.functions.get(name)) |func| {
             if (args.len < func.required_params) return error.RuntimeError;
+            var checked_buf: [16]Value = undefined;
+            const checked = try self.checkedArgs(name, func, args, &checked_buf);
+            defer if (checked.ptr != &checked_buf and checked.ptr != args.ptr) self.allocator.free(checked);
+            return self.callUserFunction(name, func, checked);
+        } else if (self.functionNamedIgnoringCase(name)) |registered| {
+            return self.callByName(registered, args);
+        } else return error.RuntimeError;
+    }
+
+    // the arguments a native passes to a user function, after the callee's
+    // parameter types: coerced in weak mode (calls from internal functions
+    // are never strict), or a pending TypeError
+    fn checkedArgs(self: *VM, name: []const u8, func: *const ObjFunction, args: []const Value, buf: *[16]Value) RuntimeError![]const Value {
+        if (!func.has_param_types or g_type_info.count() == 0) return args;
+        const copy = if (args.len <= buf.len) buf[0..args.len] else try self.allocator.alloc(Value, args.len);
+        @memcpy(copy, args);
+        const internal = self.calledFromNative();
+        const exc = (self.enforceArgTypes(name, copy, .{ .strict = if (internal) false else self.topFrameStrict(), .internal = internal }) catch |err| {
+            if (copy.ptr != buf) self.allocator.free(copy);
+            return err;
+        }) orelse return copy;
+        if (copy.ptr != buf) self.allocator.free(copy);
+        self.pending_exception = .{ .object = exc };
+        return error.RuntimeError;
+    }
+
+    fn callUserFunction(self: *VM, name: []const u8, func: *const ObjFunction, args: []const Value) RuntimeError!Value {
+        {
             if (self.ic) |ic| ic.pending_arg_count = @intCast(@min(args.len, 255));
             self.pending_call_name = name;
             self.pending_called_class = self.closureScopeByName(name);
@@ -18413,9 +18596,7 @@ pub const VM = struct {
                 return self.executeFunctionWithRefs(func, new_vars, closure_refs);
             }
             return self.executeFunction(func, new_vars);
-        } else if (self.functionNamedIgnoringCase(name)) |registered| {
-            return self.callByName(registered, args);
-        } else return error.RuntimeError;
+        }
     }
 
     fn closureHasRefCaptures(self: *VM, name: []const u8) bool {
@@ -20033,7 +20214,7 @@ pub const VM = struct {
         if (obj.slots) |s| {
             for (s) |*v| {
                 switch (v.*) {
-                    .string, .object, .array, .generator, .fiber => {
+                    .string, .object, .array, .generator, .fiber, .resource => {
                         self.releaseValue(v.*);
                         v.* = .null;
                     },
@@ -20044,7 +20225,7 @@ pub const VM = struct {
         var it = obj.properties.iterator();
         while (it.next()) |e| {
             switch (e.value_ptr.*) {
-                .string, .object, .array, .generator, .fiber => {
+                .string, .object, .array, .generator, .fiber, .resource => {
                     self.releaseValue(e.value_ptr.*);
                     e.value_ptr.* = .null;
                 },
@@ -20123,7 +20304,7 @@ pub const VM = struct {
     pub inline fn retainValue(v: Value) void {
         switch (v) {
             .string => v.string.retain(),
-            .object => objRetain(v.object),
+            .object, .resource => |o| objRetain(o),
             .array => arrayRetain(v.array),
             .generator => genRetain(v.generator),
             .fiber => fiberRetain(v.fiber),
@@ -20163,7 +20344,7 @@ pub const VM = struct {
     pub inline fn releaseValue(self: *VM, v: Value) void {
         switch (v) {
             .string => if (v.string.releaseDeferred()) |owner| self.queueStringRelease(owner),
-            .object => self.objRelease(v.object),
+            .object, .resource => |o| self.objRelease(o),
             .array => self.arrayRelease(v.array),
             .generator => self.genRelease(v.generator),
             .fiber => self.fiberRelease(v.fiber),
@@ -20207,7 +20388,7 @@ pub const VM = struct {
     pub inline fn stackRetain(v: Value) void {
         switch (v) {
             .string => v.string.retain(),
-            .object => objRetain(v.object),
+            .object, .resource => |o| objRetain(o),
             .generator => genRetain(v.generator),
             .fiber => fiberRetain(v.fiber),
             else => {},
@@ -20217,7 +20398,7 @@ pub const VM = struct {
     pub inline fn stackRelease(self: *VM, v: Value) void {
         switch (v) {
             .string => if (v.string.releaseDeferred()) |owner| self.queueStringRelease(owner),
-            .object => self.objRelease(v.object),
+            .object, .resource => |o| self.objRelease(o),
             // the stack does not count arrays, but an array leaving the stack
             // with no durable owner is an orphaned temporary (a literal or
             // call result consumed by a native); queue it so the drain frees

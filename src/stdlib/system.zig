@@ -784,7 +784,7 @@ fn buildBacktrace(ctx: *NativeContext, ignore_args: bool, provide_object: bool, 
                 try entry.set(alloc, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(func.name[sep + 2 ..]) });
                 try entry.set(alloc, .{ .string = Value.String.borrowed("type") }, .{ .string = Value.String.borrowed(type_str) });
             } else {
-                try entry.set(alloc, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(func.name) });
+                try entry.set(alloc, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(try vm.funcDisplayName(func)) });
                 if (frame.called_class) |cls| {
                     try entry.set(alloc, .{ .string = Value.String.borrowed("class") }, .{ .string = Value.String.borrowed(cls) });
                     try entry.set(alloc, .{ .string = Value.String.borrowed("type") }, .{ .string = Value.String.borrowed(type_str) });

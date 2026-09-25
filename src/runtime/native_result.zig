@@ -5,7 +5,7 @@ pub const NativeResult = struct {
     value: Value,
 
     pub fn scalar(value: Value) NativeResult {
-        std.debug.assert(value != .string and value != .array and value != .object and value != .generator and value != .fiber);
+        std.debug.assert(value != .string and value != .array and value != .object and value != .generator and value != .fiber and value != .resource);
         return .{ .value = value };
     }
 

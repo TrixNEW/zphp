@@ -75,8 +75,8 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     if (val == .string) {
                         val.string.retain();
                         locals[slot] = val;
-                    } else if (val == .object) {
-                        VM.objRetain(val.object);
+                    } else if (val == .object or val == .resource) {
+                        VM.objRetain(if (val == .object) val.object else val.resource);
                         locals[slot] = val;
                     } else if (val == .array) {
                         locals[slot] = try copyValue(self, ic, val);
@@ -110,7 +110,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .add => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
-                    if (a == .object or b == .object) {
+                    if (a == .object or b == .object or a == .resource or b == .resource) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -127,7 +127,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .subtract => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
-                    if (a == .object or b == .object) {
+                    if (a == .object or b == .object or a == .resource or b == .resource) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -144,7 +144,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .multiply => {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
-                    if (a == .object or b == .object) {
+                    if (a == .object or b == .object or a == .resource or b == .resource) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -162,7 +162,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
                     const result = if (a == .int and b == .int) a.int < b.int else if (a == .float and b == .float) a.float < b.float else blk: {
-                        if (a == .object or b == .object) {
+                        if (a == .object or b == .object or a == .resource or b == .resource) {
                             frame.ip = ip - 1;
                             self.sp = sp;
                             return;
@@ -182,7 +182,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
                     const result = if (a == .int and b == .int) a.int <= b.int else blk: {
-                        if (a == .object or b == .object) {
+                        if (a == .object or b == .object or a == .resource or b == .resource) {
                             frame.ip = ip - 1;
                             self.sp = sp;
                             return;
@@ -202,7 +202,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
                     const result = if (a == .int and b == .int) a.int > b.int else blk: {
-                        if (a == .object or b == .object) {
+                        if (a == .object or b == .object or a == .resource or b == .resource) {
                             frame.ip = ip - 1;
                             self.sp = sp;
                             return;
@@ -222,7 +222,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const b = self.stack[sp - 1];
                     const a = self.stack[sp - 2];
                     const result = if (a == .int and b == .int) a.int >= b.int else blk: {
-                        if (a == .object or b == .object) {
+                        if (a == .object or b == .object or a == .resource or b == .resource) {
                             frame.ip = ip - 1;
                             self.sp = sp;
                             return;
@@ -275,7 +275,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .modulo => {
                     const b_mod = self.stack[sp - 1];
                     const a_mod = self.stack[sp - 2];
-                    if (a_mod == .object or b_mod == .object) {
+                    if (a_mod == .object or b_mod == .object or a_mod == .resource or b_mod == .resource) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -511,7 +511,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const ag_key = self.stack[sp - 1];
                     const ag_arr = self.stack[sp - 2];
                     sp -= 2;
-                    if (ag_arr == .array) {
+                    if (ag_arr == .array and ag_key != .resource) {
                         if (self.globals_array) |ga| {
                             if (ag_arr.array == ga) {
                                 frame.ip = ip - 1;
@@ -539,7 +539,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const agv_key = self.stack[sp - 1];
                     const agv_arr = self.stack[sp - 2];
                     sp -= 2;
-                    if (agv_arr == .array) {
+                    if (agv_arr == .array and agv_key != .resource) {
                         const agv_arr_key = Value.toArrayKey(agv_key);
                         const agv_existing = agv_arr.array.get(agv_arr_key);
                         if (agv_existing == .array) {
@@ -563,7 +563,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .array_elem_inc => {
                     const aei_key = self.stack[sp - 1];
                     const aei_arr = self.stack[sp - 2];
-                    if (aei_arr == .array) {
+                    if (aei_arr == .array and aei_key != .resource) {
                         const ak = Value.toArrayKey(aei_key);
                         const old = aei_arr.array.get(ak);
                         if (old == .int) {
@@ -587,7 +587,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .array_elem_dec => {
                     const aei_key = self.stack[sp - 1];
                     const aei_arr = self.stack[sp - 2];
-                    if (aei_arr == .array) {
+                    if (aei_arr == .array and aei_key != .resource) {
                         const ak = Value.toArrayKey(aei_key);
                         const old = aei_arr.array.get(ak);
                         if (old == .int) {
@@ -647,12 +647,12 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const as_arr = self.stack[sp - 3];
                     // an object stored into an array element - bail to runLoop's
                     // array_set so the element holder refcounts it (Stage 1)
-                    if (as_val == .object) {
+                    if (as_val == .object or as_val == .resource) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
                     }
-                    if (as_arr == .array) {
+                    if (as_arr == .array and as_key != .resource) {
                         arraySetOwned(self, ic, as_arr.array, Value.toArrayKey(as_key), as_val) catch {
                             frame.ip = ip - 1;
                             self.sp = sp;
@@ -672,7 +672,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                 .array_push => {
                     const ap_val = self.stack[sp - 1];
                     const ap_arr = self.stack[sp - 2];
-                    if (ap_val == .object) {
+                    if (ap_val == .object or ap_val == .resource) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
@@ -697,12 +697,12 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     const ase_val = self.stack[sp - 1];
                     const ase_key = self.stack[sp - 2];
                     const ase_arr = self.stack[sp - 3];
-                    if (ase_val == .object) {
+                    if (ase_val == .object or ase_val == .resource) {
                         frame.ip = ip - 1;
                         self.sp = sp;
                         return;
                     }
-                    if (ase_arr == .array) {
+                    if (ase_arr == .array and ase_key != .resource) {
                         arraySetOwned(self, ic, ase_arr.array, Value.toArrayKey(ase_key), ase_val) catch {
                             frame.ip = ip - 1;
                             self.sp = sp;

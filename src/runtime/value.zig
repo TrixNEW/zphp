@@ -75,7 +75,7 @@ fn releaseReplaced(old: Value) void {
 fn retainStored(value: Value) void {
     switch (value) {
         .string => |str| str.retain(),
-        .object => |o| o.retain(),
+        .object, .resource => |o| o.retain(),
         .array => |a| a.retain(),
         .generator => |g| g.retain(),
         .fiber => |f| f.retain(),
@@ -1171,6 +1171,32 @@ pub const PhpString = struct {
     }
 };
 
+// the classes that carry a resource's state, with the php type each reports
+const resource_kinds = .{
+    .{ "FileHandle", "stream" },
+    .{ "DirectoryHandle", "stream" },
+    .{ "StreamContext", "stream-context" },
+    .{ "ProcessResource", "process" },
+};
+
+// a closed resource reports "Unknown", as php does once it is freed
+pub fn resourceTypeName(r: *const PhpObject) []const u8 {
+    if (resourceClosed(r)) return "Unknown";
+    inline for (resource_kinds) |kind| if (std.mem.eql(u8, r.class_name, kind[0])) return kind[1];
+    return r.class_name;
+}
+
+// unserialize must never build one of these as a plain object
+pub fn isResourceClass(name: []const u8) bool {
+    inline for (resource_kinds) |kind| if (std.mem.eql(u8, name, kind[0])) return true;
+    return false;
+}
+
+pub fn resourceClosed(r: *const PhpObject) bool {
+    const open = r.get("__open");
+    return open == .bool and !open.bool;
+}
+
 pub const Value = union(enum) {
     pub const String = PhpString;
 
@@ -1183,6 +1209,10 @@ pub const Value = union(enum) {
     object: *PhpObject,
     generator: *Generator,
     fiber: *Fiber,
+    // php's resource type (streams, contexts, processes). the payload is a
+    // PhpObject so natives keep their state in its property bag, but scripts
+    // never see it as an object; its id is the resource id
+    resource: *PhpObject,
 
     // sentinel for "default = []" in function params - fillDefaults creates a fresh empty array
     var empty_array_sentinel: PhpArray = .{};
@@ -1190,6 +1220,32 @@ pub const Value = union(enum) {
 
     pub fn isEmptyArrayDefault(self: Value) bool {
         return self == .array and self.array == &empty_array_sentinel;
+    }
+
+    // the type a php TypeError names: "bool" for either boolean, the class
+    // for an object
+    pub fn typeName(self: Value) []const u8 {
+        return switch (self) {
+            .bool => "bool",
+            else => self.valueName(),
+        };
+    }
+
+    // like typeName, but spells a boolean as its value ("true given"), as
+    // php's value-name messages do
+    pub fn valueName(self: Value) []const u8 {
+        return switch (self) {
+            .null => "null",
+            .bool => |b| if (b) "true" else "false",
+            .int => "int",
+            .float => "float",
+            .string => "string",
+            .array => "array",
+            .object => |o| o.class_name,
+            .generator => "Generator",
+            .fiber => "Fiber",
+            .resource => "resource",
+        };
     }
 
     pub fn isTruthy(self: Value) bool {
@@ -1201,7 +1257,7 @@ pub const Value = union(enum) {
             .string => |s| s.len > 0 and !std.mem.eql(u8, s.bytes(), "0"),
             .array => |a| a.entries.items.len > 0,
             .object => |o| if (nativeCast(o, .bool)) |v| v.bool else true,
-            .generator, .fiber => true,
+            .generator, .fiber, .resource => true,
         };
     }
 
@@ -1333,7 +1389,14 @@ pub const Value = union(enum) {
         return false;
     }
 
-    pub fn equal(a: Value, b: Value) bool {
+    // php compares a resource by its id
+    inline fn resourceAsId(v: Value) Value {
+        return if (v == .resource) .{ .int = v.resource.id } else v;
+    }
+
+    pub fn equal(a_in: Value, b_in: Value) bool {
+        const a = resourceAsId(a_in);
+        const b = resourceAsId(b_in);
         if (a == .object and b == .object) {
             if (a.object == b.object) return true;
             if (nativeCompare(a, b)) |order| return order == 0;
@@ -1418,6 +1481,7 @@ pub const Value = union(enum) {
             .object => |ao| ao == b.object,
             .generator => |ag| ag == b.generator,
             .fiber => |af| af == b.fiber,
+            .resource => |ar| ar == b.resource,
         };
     }
 
@@ -1425,7 +1489,9 @@ pub const Value = union(enum) {
         return compare(a, b) < 0;
     }
 
-    pub fn compare(a: Value, b: Value) i64 {
+    pub fn compare(a_in: Value, b_in: Value) i64 {
+        const a = resourceAsId(a_in);
+        const b = resourceAsId(b_in);
         if (a == .object and b == .object) {
             if (a.object == b.object) return 0;
             if (nativeCompare(a, b)) |order| return order;
@@ -1584,6 +1650,7 @@ pub const Value = union(enum) {
             .array => |arr| if (arr.entries.items.len > 0) @as(i64, 1) else 0,
             .object => |o| if (nativeCast(o, .int)) |n| n.int else 1,
             .generator, .fiber => 1,
+            .resource => |r| r.id,
         };
     }
 
@@ -1595,6 +1662,7 @@ pub const Value = union(enum) {
             .float => |f| f,
             .string => |s| parseLeadingFloat(s.bytes()),
             .object => |o| if (nativeCast(o, .float)) |n| n.float else 1.0,
+            .resource => |r| @floatFromInt(r.id),
             .array, .generator, .fiber => 0.0,
         };
     }
@@ -1695,6 +1763,7 @@ pub const Value = union(enum) {
             .bool => |b| .{ .int = if (b) 1 else 0 },
             .float => |f| .{ .int = dvalToLval(f) },
             .null => .{ .string = Value.String.borrowed("") },
+            .resource => |r| .{ .int = r.id },
             .array, .object, .generator, .fiber => .{ .int = 0 },
         };
     }
@@ -1752,6 +1821,10 @@ pub const Value = union(enum) {
             .object => try buf.appendSlice(allocator, "Object"),
             .generator => try buf.appendSlice(allocator, ""),
             .fiber => try buf.appendSlice(allocator, ""),
+            .resource => |r| {
+                var tmp: [40]u8 = undefined;
+                try buf.appendSlice(allocator, std.fmt.bufPrint(&tmp, "Resource id #{d}", .{r.id}) catch unreachable);
+            },
         }
     }
 

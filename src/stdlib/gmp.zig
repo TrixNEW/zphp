@@ -610,20 +610,6 @@ fn gmpUnserialize(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
 // operators for GMP, converting the other operand the way the gmp_*
 // functions do and raising their errors
 
-fn typeName(v: Value) []const u8 {
-    return switch (v) {
-        .null => "null",
-        .bool => "bool",
-        .int => "int",
-        .float => "float",
-        .string => "string",
-        .array => "array",
-        .object => |o| o.class_name,
-        .generator => "Generator",
-        .fiber => "Fiber",
-    };
-}
-
 // left pending: an operator can be reached from inside a native (sort, max),
 // which must unwind before anything is dispatched
 fn throwOperand(ctx: *NativeContext, class_name: []const u8, comptime fmt: []const u8, args: anytype) RuntimeError {
@@ -661,7 +647,7 @@ fn operandMpz(ctx: *NativeContext, v: Value) RuntimeError!*ZphpMpz {
             const src = if (std.mem.eql(u8, o.class_name, "GMP")) getMpz(o) else null;
             zphp_mpz_set(p, src orelse return throwOperand(ctx, "TypeError", "Number must be of type GMP|string|int, {s} given", .{o.class_name}));
         },
-        else => return throwOperand(ctx, "TypeError", "Number must be of type GMP|string|int, {s} given", .{typeName(v)}),
+        else => return throwOperand(ctx, "TypeError", "Number must be of type GMP|string|int, {s} given", .{v.typeName()}),
     }
     return p;
 }

@@ -75,9 +75,10 @@ fn native_stat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     return NativeResult.borrowed(.{ .array = arr });
 }
 
-fn native_flock(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 2 or args[0] != .object or args[1] != .int) return NativeResult.scalar(.{ .bool = false });
-    const fd = args[0].object.get("__fd");
+fn native_flock(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const obj = try filesystem.streamArg(ctx, args, .{ .func = "flock" });
+    if (args.len < 2 or args[1] != .int) return NativeResult.scalar(.{ .bool = false });
+    const fd = obj.get("__fd");
     if (fd != .int) return NativeResult.scalar(.{ .bool = false });
     const file = @import("../platform.zig").fileFromFd(fd.int) orelse return NativeResult.scalar(.{ .bool = false });
     const op = args[1].int & 0x3;
@@ -101,15 +102,16 @@ fn native_flock(_: *NativeContext, args: []const Value) RuntimeError!NativeResul
 
 // sockets switch modes; php's own memory and temp streams accept the call;
 // a plain file refuses it, as php does on windows
-fn native_stream_set_blocking(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 2 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
-    const obj = args[0].object;
+fn native_stream_set_blocking(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const obj = try filesystem.streamArg(ctx, args, .{ .func = "stream_set_blocking" });
+    if (args.len < 2) return NativeResult.scalar(.{ .bool = false });
     const net = obj.get("__net");
     if (net == .bool and net.bool) {
         const fd = obj.get("__fd");
         if (fd != .int) return NativeResult.scalar(.{ .bool = false });
         const sock = platform.socketFromInt(fd.int) orelse return NativeResult.scalar(.{ .bool = false });
         platform.setNonBlocking(sock, !args[1].isTruthy()) catch return NativeResult.scalar(.{ .bool = false });
+        try obj.set(ctx.allocator, "__blocking", .{ .bool = args[1].isTruthy() });
         return NativeResult.scalar(.{ .bool = true });
     }
     const path = obj.get("__path");

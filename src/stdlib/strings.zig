@@ -5589,7 +5589,8 @@ fn vsprintfArgsTooFew(ctx: *NativeContext, fmt: []const u8, argc: usize) Runtime
 }
 
 fn native_fscanf(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 2 or args[0] != .object) return NativeResult.scalar(.null);
+    _ = try @import("filesystem.zig").streamArg(ctx, args, .{ .func = "fscanf" });
+    if (args.len < 2) return NativeResult.scalar(.null);
     // read one line via fgets
     const line = try ctx.vm.callByName("fgets", &.{args[0]});
     if (line == .bool and !line.bool) return NativeResult.scalar(.{ .bool = false });

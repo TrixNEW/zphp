@@ -947,6 +947,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
     const is_arrow = raw_use_count == 0xFFFFFFFF;
     const use_count: u32 = if (is_arrow) 0 else raw_use_count;
     const use_vars = self.ast.extra_data[node.data.rhs + 2 .. node.data.rhs + 2 + use_count];
+    const display_name = try closureDisplayName(self, lineForToken(self, node.main_token));
 
     var sub = Compiler{
         .ast = self.ast,
@@ -971,7 +972,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         .use_const_aliases = self.use_const_aliases,
         .current_class = self.current_class,
         .current_parent = self.current_parent,
-        .current_function = "{closure}",
+        .current_function = display_name,
         .in_trait = self.in_trait,
     };
     errdefer {
@@ -1063,6 +1064,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         .start_line = lineForToken(self, node.main_token),
         .end_line = endLineForBlockStartingAt(self, node.main_token),
         .doc_comment = docCommentForToken(self, node.main_token),
+        .display_name = display_name,
     };
 
     try self.functions.append(self.allocator, func);
@@ -1071,6 +1073,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
     const return_type = try extractReturnType(self, node.data.lhs, @intCast(param_nodes.len));
     if (param_types.len > 0 or return_type.len > 0) {
         try self.type_hints.append(self.allocator, .{ .name = owned_name, .param_types = param_types, .return_type = return_type });
+        self.functions.items[self.functions.items.len - 1].has_param_types = param_types.len > 0;
     }
 
     // closure-level attributes
@@ -3152,6 +3155,7 @@ fn compilePropertyHook(self: *Compiler, class_name: []const u8, prop_name: []con
         .file_path = self.file_path,
         .start_line = if (body_idx != 0) lineForToken(self, self.ast.nodes[body_idx].main_token) else 0,
         .returns_ref = (hook_flags & 4) != 0,
+        .has_param_types = param_types.len > 0 and param_types[0].len > 0,
     });
 
     for (sub.functions.items) |f| try self.functions.append(self.allocator, f);
@@ -3244,4 +3248,21 @@ fn needsVarSync(chunk: *const Chunk) bool {
 
 fn opcodeWidth(b: u8) usize {
     return OpCode.widthFromByte(b);
+}
+
+// php names a closure after where it is written: `{closure:<scope>:<line>}`,
+// the scope being the enclosing closure's name, `Class::method()`, `func()`,
+// or the file at the top level
+fn closureDisplayName(self: *Compiler, line: u32) ![]const u8 {
+    const f = self.current_function;
+    const name = if (std.mem.startsWith(u8, f, "{closure:"))
+        try std.fmt.allocPrint(self.allocator, "{{closure:{s}:{d}}}", .{ f, line })
+    else if (f.len > 0 and self.current_class.len > 0)
+        try std.fmt.allocPrint(self.allocator, "{{closure:{s}::{s}():{d}}}", .{ self.current_class, f, line })
+    else if (f.len > 0)
+        try std.fmt.allocPrint(self.allocator, "{{closure:{s}():{d}}}", .{ f, line })
+    else
+        try std.fmt.allocPrint(self.allocator, "{{closure:{s}:{d}}}", .{ self.file_path, line });
+    try self.string_allocs.append(self.allocator, name);
+    return name;
 }

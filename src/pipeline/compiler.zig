@@ -665,7 +665,8 @@ pub const Compiler = struct {
             return;
         }
         if (std.mem.eql(u8, name, "__METHOD__")) {
-            const val = if (self.current_class.len > 0 and self.current_function.len > 0) blk: {
+            const in_closure = std.mem.startsWith(u8, self.current_function, "{closure:");
+            const val = if (self.current_class.len > 0 and self.current_function.len > 0 and !in_closure) blk: {
                 const full = try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ self.current_class, self.current_function });
                 try self.string_allocs.append(self.allocator, full);
                 break :blk full;

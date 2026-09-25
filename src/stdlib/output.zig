@@ -1,6 +1,7 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
 const Value = @import("../runtime/value.zig").Value;
+const value_mod = @import("../runtime/value.zig");
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
 const ClassDef = @import("../runtime/vm.zig").ClassDef;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
@@ -245,6 +246,10 @@ fn varDumpValue(ctx: *NativeContext, val: Value, depth: usize) !void {
             try appendIndent(out, a, indent);
             try out.appendSlice(a, "}\n");
         },
+        .resource => |r| {
+            try appendIndent(out, a, indent);
+            try out.writer(a).print("resource({d}) of type ({s})\n", .{ r.id, value_mod.resourceTypeName(r) });
+        },
     }
 }
 
@@ -441,6 +446,7 @@ fn printRValueImpl(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: 
             try appendIndent(out, a, depth * 4);
             try out.appendSlice(a, ")\n");
         },
+        .resource => try val.format(out, a),
     }
 }
 
@@ -499,11 +505,6 @@ fn varExportString(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), s: []
         if (j >= s.len) break;
         i = j + 1;
     }
-}
-
-// php exports a resource as NULL, inline like any scalar
-fn isResource(v: Value) bool {
-    return v == .object and @import("types.zig").isResourceObject(v.object.class_name);
 }
 
 fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: Value, depth: usize, ctx: *NativeContext) !void {
@@ -570,7 +571,7 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
                     .object => |oo| visitedContains(@intFromPtr(oo)),
                     else => false,
                 };
-                if ((entry.value == .array or entry.value == .object) and !ev_recurses and !isResource(entry.value)) {
+                if ((entry.value == .array or entry.value == .object) and !ev_recurses) {
                     try out.append(a, '\n');
                     for (0..(depth + 1) * 2) |_| try out.append(a, ' ');
                 }
@@ -581,10 +582,6 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
             try out.append(a, ')');
         },
         .object => |obj| {
-            if (isResource(val)) {
-                try out.appendSlice(a, "NULL");
-                return;
-            }
             const obj_ptr = @intFromPtr(obj);
             if (visitedContains(obj_ptr)) {
                 try out.appendSlice(a, "NULL");
@@ -671,6 +668,7 @@ fn varExportValue(a: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8), val: V
             }
         },
         .generator, .fiber => try out.appendSlice(a, "(object)"),
+        .resource => try out.appendSlice(a, "NULL"),
     }
 }
 

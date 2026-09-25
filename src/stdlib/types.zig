@@ -4,6 +4,7 @@ const platform = @import("../platform.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
+const value_mod = @import("../runtime/value.zig");
 const VM = @import("../runtime/vm.zig").VM;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
 const ClassDef = @import("../runtime/vm.zig").ClassDef;
@@ -168,6 +169,7 @@ pub const entries = .{
     .{ "filter_var_array", native_filter_var_array },
     .{ "is_resource", native_is_resource },
     .{ "get_resource_type", native_get_resource_type },
+    .{ "get_resource_id", native_get_resource_id },
 };
 
 fn native_define(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -280,17 +282,8 @@ fn count(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
 // 'array', 'true', 'false', 'null', or the class name for objects.
 // closures live as strings tagged with the '__closure_' prefix in zphp
 pub fn phpTypeName(v: Value) []const u8 {
-    return switch (v) {
-        .null => "null",
-        .bool => |b| if (b) "true" else "false",
-        .int => "int",
-        .float => "float",
-        .string => |s| if (std.mem.startsWith(u8, s.bytes(), "__closure_")) "Closure" else "string",
-        .array => "array",
-        .object => |o| o.class_name,
-        .generator => "Generator",
-        .fiber => "Fiber",
-    };
+    if (v == .string and std.mem.startsWith(u8, v.string.bytes(), "__closure_")) return "Closure";
+    return v.valueName();
 }
 
 // php warns when an object without a numeric conversion is cast to a number
@@ -382,8 +375,8 @@ fn gettype(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
         .float => NativeResult.literal("double"),
         .string => |s| if (std.mem.startsWith(u8, s.bytes(), "__closure_")) NativeResult.literal("object") else NativeResult.literal("string"),
         .array => NativeResult.literal("array"),
-        .object => |o| if (std.mem.eql(u8, o.class_name, "FileHandle")) NativeResult.literal("resource") else NativeResult.literal("object"),
-        .generator, .fiber => NativeResult.literal("object"),
+        .object, .generator, .fiber => NativeResult.literal("object"),
+        .resource => |r| if (value_mod.resourceClosed(r)) NativeResult.literal("resource (closed)") else NativeResult.literal("resource"),
     };
 }
 
@@ -396,9 +389,13 @@ fn get_debug_type(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
         .float => NativeResult.literal("float"),
         .string => |s| if (std.mem.startsWith(u8, s.bytes(), "__closure_")) NativeResult.literal("Closure") else NativeResult.literal("string"),
         .array => NativeResult.literal("array"),
-        .object => |o| if (std.mem.eql(u8, o.class_name, "FileHandle")) NativeResult.literal("resource (stream)") else try NativeResult.copyString(ctx.allocator, o.class_name),
+        .object => |o| try NativeResult.copyString(ctx.allocator, o.class_name),
         .generator => NativeResult.literal("Generator"),
         .fiber => NativeResult.literal("Fiber"),
+        .resource => |r| if (value_mod.resourceClosed(r))
+            NativeResult.literal("resource (closed)")
+        else
+            NativeResult.takeString(try Value.String.adopt(ctx.allocator, try std.fmt.allocPrint(ctx.allocator, "resource ({s})", .{value_mod.resourceTypeName(r)}))),
     };
 }
 
@@ -746,7 +743,7 @@ fn get_class(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
     if (args[0] == .generator) return NativeResult.literal("Generator");
     if (args[0] == .fiber) return NativeResult.literal("Fiber");
     if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) return NativeResult.literal("Closure");
-    return NativeResult.scalar(.{ .bool = false });
+    return throwObjectArg(ctx, "get_class", args[0]);
 }
 
 fn get_called_class(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -948,14 +945,7 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
         const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
         fillName(ctx, args, name);
         if (syntax_only) return NativeResult.scalar(.{ .bool = true });
-        if (ctx.vm.functionExists(name)) return NativeResult.scalar(.{ .bool = true });
-        // Class::method string form
-        if (std.mem.indexOf(u8, name, "::")) |sep| {
-            const class_part = name[0..sep];
-            const method_part = name[sep + 2 ..];
-            if (ctx.vm.hasMethod(class_part, method_part)) return NativeResult.scalar(.{ .bool = true });
-        }
-        return NativeResult.scalar(.{ .bool = false });
+        return NativeResult.scalar(.{ .bool = ctx.vm.isValueCallable(val) });
     }
     if (val == .object) {
         if (std.mem.eql(u8, val.object.class_name, "Closure")) return NativeResult.scalar(.{ .bool = true });
@@ -984,19 +974,7 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
             fillName(ctx, args, resolved);
         }
         if (syntax_only) return NativeResult.scalar(.{ .bool = true });
-        if (ctx.vm.classes.get(class_name)) |cdef| {
-            if (cdef.methods.get(method)) |mi| {
-                if (mi.visibility != .public) return NativeResult.scalar(.{ .bool = false });
-                // [ClassName, 'method'] is only callable when method is static.
-                // instance methods need an actual object on the left
-                if (target == .string and !mi.is_static) return NativeResult.scalar(.{ .bool = false });
-            }
-        }
-        var buf: [256]u8 = undefined;
-        const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ class_name, method }) catch return NativeResult.scalar(.{ .bool = false });
-        if (ctx.vm.native_fns.contains(full)) return NativeResult.scalar(.{ .bool = true });
-        if (ctx.vm.functions.contains(full)) return NativeResult.scalar(.{ .bool = true });
-        return NativeResult.scalar(.{ .bool = false });
+        return NativeResult.scalar(.{ .bool = ctx.vm.isValueCallable(val) });
     }
     return NativeResult.scalar(.{ .bool = false });
 }
@@ -1363,7 +1341,14 @@ fn native_spl_object_id(ctx: *NativeContext, args: []const Value) RuntimeError!N
     if (args[0] == .string and std.mem.startsWith(u8, args[0].string.bytes(), "__closure_")) {
         return NativeResult.scalar(.{ .int = @intCast(@intFromPtr(args[0].string.bytes().ptr)) });
     }
-    return NativeResult.scalar(Value{ .int = 0 });
+    return throwObjectArg(ctx, "spl_object_id", args[0]);
+}
+
+fn throwObjectArg(ctx: *NativeContext, comptime func: []const u8, v: Value) RuntimeError {
+    const msg = try std.fmt.allocPrint(ctx.allocator, func ++ "(): Argument #1 ($object) must be of type object, {s} given", .{v.valueName()});
+    try ctx.strings.append(ctx.allocator, msg);
+    try ctx.vm.setPendingException("TypeError", msg);
+    return error.RuntimeError;
 }
 
 fn native_exit(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -2134,6 +2119,7 @@ fn native_match_unhandled_msg(ctx: *NativeContext, args: []const Value) RuntimeE
         },
         .generator => try buf.appendSlice(ctx.allocator, "of type Generator"),
         .fiber => try buf.appendSlice(ctx.allocator, "of type Fiber"),
+        .resource => try buf.appendSlice(ctx.allocator, "of type resource"),
     }
     const owned = try buf.toOwnedSlice(ctx.allocator);
     return NativeResult.takeString(try Value.String.adopt(ctx.allocator, owned));
@@ -3259,29 +3245,27 @@ fn isValidIPv6(s: []const u8) bool {
 }
 
 fn native_is_resource(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 1) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.scalar(.{ .bool = args[0] == .object and isResourceObject(args[0].object.class_name) });
+    const open = args.len > 0 and args[0] == .resource and !value_mod.resourceClosed(args[0].resource);
+    return NativeResult.scalar(.{ .bool = open });
 }
 
 fn native_get_resource_type(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 1) return NativeResult.scalar(.{ .bool = false });
-    if (args[0] == .object) {
-        const cn = args[0].object.class_name;
-        // map zphp internal class names to PHP-canonical resource type strings
-        if (std.mem.eql(u8, cn, "FileHandle")) return NativeResult.literal("stream");
-        if (std.mem.eql(u8, cn, "StreamContext")) return NativeResult.literal("stream-context");
-        if (std.mem.eql(u8, cn, "CurlHandle")) return NativeResult.literal("curl");
-        if (std.mem.eql(u8, cn, "GdImage")) return NativeResult.literal("gd");
-        return NativeResult.copyString(ctx.allocator, cn);
-    }
-    return NativeResult.scalar(.{ .bool = false });
+    const r = try resourceArg(ctx, "get_resource_type", args);
+    return NativeResult.copyString(ctx.allocator, value_mod.resourceTypeName(r));
 }
 
-pub fn isResourceObject(name: []const u8) bool {
-    return std.mem.eql(u8, name, "__stream") or
-        std.mem.eql(u8, name, "__file") or
-        std.mem.eql(u8, name, "__curl") or
-        std.mem.eql(u8, name, "FileHandle");
+fn native_get_resource_id(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const r = try resourceArg(ctx, "get_resource_id", args);
+    return NativeResult.scalar(.{ .int = r.id });
+}
+
+fn resourceArg(ctx: *NativeContext, comptime name: []const u8, args: []const Value) RuntimeError!*PhpObject {
+    const v: Value = if (args.len > 0) args[0] else .null;
+    if (v == .resource) return v.resource;
+    const msg = try std.fmt.allocPrint(ctx.allocator, name ++ "(): Argument #1 ($resource) must be of type resource, {s} given", .{v.typeName()});
+    try ctx.strings.append(ctx.allocator, msg);
+    try ctx.vm.setPendingException("TypeError", msg);
+    return error.RuntimeError;
 }
 
 fn native_spl_object_hash(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -3304,10 +3288,10 @@ fn native_spl_object_hash(ctx: *NativeContext, args: []const Value) RuntimeError
             if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
                 id = @intCast(@intFromPtr(s.bytes().ptr));
             } else {
-                return NativeResult.scalar(.{ .bool = false });
+                return throwObjectArg(ctx, "spl_object_hash", args[0]);
             }
         },
-        else => return NativeResult.scalar(.{ .bool = false }),
+        else => return throwObjectArg(ctx, "spl_object_hash", args[0]),
     }
     // PHP format: 16 hex chars of id, then 16 zeros
     const hash = try std.fmt.allocPrint(ctx.allocator, "{x:0>16}0000000000000000", .{id});

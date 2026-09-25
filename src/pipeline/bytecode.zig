@@ -673,6 +673,8 @@ pub const ObjFunction = struct {
     start_line: u32 = 0,
     end_line: u32 = 0,
     doc_comment: []const u8 = "",
+    // php's name for a closure, `{closure:<scope>:<line>}`, empty otherwise
+    display_name: []const u8 = "",
     // 0 = unconditional (hoisted at registration). > 0 = conditionally
     // declared; registration is deferred until the declare_fn opcode with the
     // matching id executes (PHP runtime function binding)

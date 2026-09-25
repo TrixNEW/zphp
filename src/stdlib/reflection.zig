@@ -2950,7 +2950,10 @@ fn rfInvokeArgs(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
 
 fn rfGetName(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
-    return NativeResult.share(this.get("name"));
+    const name = this.get("name");
+    // a closure is held by its instance name; php reports `{closure:...}`
+    if (name == .string) if (ctx.vm.functions.get(name.string.bytes())) |func| if (func.display_name.len > 0) return NativeResult.copyString(ctx.allocator, func.display_name);
+    return NativeResult.share(name);
 }
 
 fn rfGetParameters(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {

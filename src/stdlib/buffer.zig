@@ -207,24 +207,10 @@ fn thisBytes(ctx: *NativeContext) RuntimeError![]u8 {
     return (try thisWindow(ctx)).bytes() orelse throwNamed(ctx, transfer_exception, "the buffer was transferred to another thread", .{});
 }
 
-fn typeName(v: Value) []const u8 {
-    return switch (v) {
-        .null => "null",
-        .bool => "bool",
-        .int => "int",
-        .float => "float",
-        .string => "string",
-        .array => "array",
-        .object => |o| o.class_name,
-        .generator => "Generator",
-        .fiber => "Fiber",
-    };
-}
-
 fn intArg(ctx: *NativeContext, args: []const Value, index: usize, comptime method: []const u8, comptime param: []const u8) RuntimeError!i64 {
     const v: Value = if (index < args.len) args[index] else .null;
     if (v == .int) return v.int;
-    return throwNamed(ctx, "TypeError", buffer_class ++ "::" ++ method ++ "(): Argument #{d} (${s}) must be of type int, {s} given", .{ index + 1, param, typeName(v) });
+    return throwNamed(ctx, "TypeError", buffer_class ++ "::" ++ method ++ "(): Argument #{d} (${s}) must be of type int, {s} given", .{ index + 1, param, v.typeName() });
 }
 
 fn lengthArg(ctx: *NativeContext, args: []const Value, index: usize, comptime method: []const u8) RuntimeError!usize {
@@ -251,7 +237,7 @@ fn construct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
 }
 
 fn fromString(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 1 or args[0] != .string) return throwNamed(ctx, "TypeError", buffer_class ++ "::fromString(): Argument #1 ($bytes) must be of type string, {s} given", .{typeName(if (args.len > 0) args[0] else .null)});
+    if (args.len < 1 or args[0] != .string) return throwNamed(ctx, "TypeError", buffer_class ++ "::fromString(): Argument #1 ($bytes) must be of type string, {s} given", .{Value.typeName(if (args.len > 0) args[0] else .null)});
     const src = args[0].string.bytes();
     const region = try newRegion(ctx, src.len);
     @memcpy(region.storage.?.bytes, src);
@@ -285,16 +271,14 @@ fn write(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
         .string => |s| s.bytes(),
         .object => |o| if (windowOf(o)) |w| w.bytes() orelse return throwNamed(ctx, transfer_exception, "the source buffer was transferred to another thread", .{}) else null,
         else => null,
-    } orelse return throwNamed(ctx, "TypeError", buffer_class ++ "::write(): Argument #2 ($data) must be of type " ++ buffer_class ++ "|string, {s} given", .{typeName(if (args.len > 1) args[1] else .null)});
+    } orelse return throwNamed(ctx, "TypeError", buffer_class ++ "::write(): Argument #2 ($data) must be of type " ++ buffer_class ++ "|string, {s} given", .{Value.typeName(if (args.len > 1) args[1] else .null)});
     const dest = try span(ctx, bytes, offset, src.len);
     if (@intFromPtr(dest.ptr) <= @intFromPtr(src.ptr)) std.mem.copyForwards(u8, dest, src) else std.mem.copyBackwards(u8, dest, src);
     return NativeResult.scalar(.null);
 }
 
 fn streamArg(ctx: *NativeContext, args: []const Value, comptime method: []const u8) RuntimeError!*PhpObject {
-    const v: Value = if (args.len > 0) args[0] else .null;
-    if (v != .object or !filesystem.isOpenStream(v.object)) return throwNamed(ctx, "TypeError", buffer_class ++ "::" ++ method ++ "(): Argument #1 ($stream) must be an open stream resource", .{});
-    return v.object;
+    return filesystem.streamArg(ctx, args, .{ .func = buffer_class ++ "::" ++ method });
 }
 
 fn readFrom(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -349,9 +333,9 @@ fn writer(comptime T: type, comptime endian: std.builtin.Endian, comptime method
             if (@typeInfo(T) == .float) return switch (v) {
                 .int => |i| @floatFromInt(i),
                 .float => |f| @floatCast(f),
-                else => throwNamed(ctx, "TypeError", buffer_class ++ "::" ++ method ++ "(): Argument #2 ($value) must be of type float, {s} given", .{typeName(v)}),
+                else => throwNamed(ctx, "TypeError", buffer_class ++ "::" ++ method ++ "(): Argument #2 ($value) must be of type float, {s} given", .{v.typeName()}),
             };
-            if (v != .int) return throwNamed(ctx, "TypeError", buffer_class ++ "::" ++ method ++ "(): Argument #2 ($value) must be of type int, {s} given", .{typeName(v)});
+            if (v != .int) return throwNamed(ctx, "TypeError", buffer_class ++ "::" ++ method ++ "(): Argument #2 ($value) must be of type int, {s} given", .{v.typeName()});
             return std.math.cast(T, v.int) orelse throwNamed(ctx, "ValueError", buffer_class ++ "::" ++ method ++ "(): Argument #2 ($value) must be between {d} and {d}", .{ std.math.minInt(T), std.math.maxInt(T) });
         }
     }.call;

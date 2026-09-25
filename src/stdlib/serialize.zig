@@ -1,6 +1,7 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
 const types = @import("types.zig");
+const value_mod = @import("../runtime/value.zig");
 const serialization_generated = @import("serialization_generated.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
@@ -379,17 +380,14 @@ fn serializeValue(ctx: *NativeContext, buf: *std.ArrayListUnmanaged(u8), sctx: *
             }
             try buf.append(a, '}');
         },
+        // php writes a resource as int 0, with no back-reference slot of its own
+        .resource => try buf.appendSlice(a, "i:0;"),
         .object => |proxy| {
             var obj = proxy;
             if (obj.lazy) |state| {
                 if (!state.skip_serialize) try ctx.vm.triggerLazyInit(obj);
             }
             obj = obj.storage();
-            // php writes a resource as int 0, with no back-reference slot of its own
-            if (types.isResourceObject(obj.class_name)) {
-                try buf.appendSlice(a, "i:0;");
-                return;
-            }
             try refuseNotSerializable(ctx, obj.class_name, .serialize);
             // emit a back-reference if we've already serialized this object
             if (sctx.objects.get(obj)) |existing_slot| {
@@ -775,7 +773,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             const name_len = std.fmt.parseInt(usize, s[pos + 2 .. colon1], 10) catch return error.RuntimeError;
             if (colon1 + 2 + name_len + 1 >= s.len) return error.RuntimeError;
             const orig_class = s[colon1 + 2 .. colon1 + 2 + name_len];
-            const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class) and !types.isResourceObject(orig_class);
+            const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class) and !value_mod.isResourceClass(orig_class);
             if (class_allowed) try refuseNotSerializable(ctx, orig_class, .unserialize);
             const class_name = try keptClassName(ctx, class_allowed, orig_class);
             var p = colon1 + 2 + name_len + 2;
@@ -898,7 +896,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             const name_len = std.fmt.parseInt(usize, s[pos + 2 .. colon1], 10) catch return error.RuntimeError;
             if (colon1 + 2 + name_len + 1 >= s.len) return error.RuntimeError;
             const orig_class = s[colon1 + 2 .. colon1 + 2 + name_len];
-            const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class) and !types.isResourceObject(orig_class);
+            const class_allowed = uctx.classAllowed(orig_class) and ctx.vm.classes.contains(orig_class) and !value_mod.isResourceClass(orig_class);
             if (class_allowed) try refuseNotSerializable(ctx, orig_class, .unserialize);
             const class_name = try keptClassName(ctx, class_allowed, orig_class);
             var p = colon1 + 2 + name_len + 2;

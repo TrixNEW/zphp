@@ -334,6 +334,15 @@ pub fn setNonBlocking(sock: std.posix.socket_t, enabled: bool) !void {
     _ = try std.posix.fcntl(sock, std.posix.F.SETFL, next);
 }
 
+// whether a descriptor is in blocking mode; windows cannot be asked, so the
+// caller's knowledge (inherit) answers there
+pub fn isBlocking(sock: std.posix.socket_t, inherit: bool) bool {
+    if (is_windows) return inherit;
+    const nonblock: usize = @as(usize, 1) << @bitOffsetOf(std.posix.O, "NONBLOCK");
+    const flags = std.posix.fcntl(sock, std.posix.F.GETFL, 0) catch return inherit;
+    return flags & nonblock == 0;
+}
+
 pub fn recv(sock: std.posix.socket_t, buf: []u8) !usize {
     return std.posix.recv(sock, buf, 0);
 }

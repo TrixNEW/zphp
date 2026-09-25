@@ -100,20 +100,6 @@ const Source = struct {
     }
 };
 
-fn typeName(v: Value) []const u8 {
-    return switch (v) {
-        .object => |o| o.class_name,
-        .null => "null",
-        .bool => "bool",
-        .int => "int",
-        .float => "float",
-        .string => "string",
-        .array => "array",
-        .generator => "Generator",
-        .fiber => "Fiber",
-    };
-}
-
 fn throwNamed(ctx: *NativeContext, class_name: []const u8, comptime fmt: []const u8, args: anytype) RuntimeError {
     const msg = try std.fmt.allocPrint(ctx.allocator, fmt, args);
     try ctx.vm.strings.append(ctx.allocator, msg);
@@ -129,7 +115,7 @@ fn collectSources(ctx: *NativeContext, arr: *PhpArray, out: *std.ArrayListUnmana
                 if (v.object.native.get(channel.Channel, .channel)) |ch| break :blk .{ .key = entry.key, .kind = .{ .channel = ch } };
                 if (workers.futureTask(v.object)) |task| break :blk .{ .key = entry.key, .kind = .{ .future = .{ .obj = v.object, .task = task } } };
             }
-            return throwNamed(ctx, "TypeError", "Zphp\\select(): Argument #1 ($sources) must contain only Zphp\\Channel and Zphp\\Future, {s} given", .{typeName(v)});
+            return throwNamed(ctx, "TypeError", "Zphp\\select(): Argument #1 ($sources) must contain only Zphp\\Channel and Zphp\\Future, {s} given", .{v.typeName()});
         };
         try out.append(ctx.allocator, source);
     }
@@ -180,7 +166,7 @@ fn deadlineArg(ctx: *NativeContext, args: []const Value) RuntimeError!?i128 {
 }
 
 fn nativeSelect(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 1 or args[0] != .array) return throwNamed(ctx, "TypeError", "Zphp\\select(): Argument #1 ($sources) must be of type array, {s} given", .{typeName(if (args.len > 0) args[0] else .null)});
+    if (args.len < 1 or args[0] != .array) return throwNamed(ctx, "TypeError", "Zphp\\select(): Argument #1 ($sources) must be of type array, {s} given", .{Value.typeName(if (args.len > 0) args[0] else .null)});
     if (args[0].array.entries.items.len == 0) return throwNamed(ctx, "ValueError", "Zphp\\select(): Argument #1 ($sources) must not be empty", .{});
     const deadline = try deadlineArg(ctx, args);
     var sources: std.ArrayListUnmanaged(Source) = .{};

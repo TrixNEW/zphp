@@ -67,8 +67,8 @@ fn warn(ctx: *NativeContext, comptime fmt: []const u8, args: anytype) RuntimeErr
 }
 
 fn parseSpec(ctx: *NativeContext, item: Value) RuntimeError!?Spec {
-    if (item == .object) {
-        const fdv = item.object.get("__fd");
+    if (item == .resource) {
+        const fdv = item.resource.get("__fd");
         if (fdv != .int or fdv.int < 0) return null;
         return .{ .redirect = fdv.int };
     }
@@ -186,13 +186,52 @@ fn startupInfo(slots: []const Slot) windows.STARTUPINFOW {
     return si;
 }
 
-// php's windows build hands the command to cmd.exe as `/s /c "<command>"`
-// so cmd strips exactly the outer quotes and runs the rest verbatim
-fn commandLine(allocator: std.mem.Allocator, command: []const u8) ![:0]u16 {
-    const argv = platform.shellArgv(command);
-    const joined = try std.fmt.allocPrint(allocator, "{s} /s {s} \"{s}\"", .{ argv[0], argv[1], command });
+// a string command goes to cmd.exe as `/s /c "<command>"`, so cmd strips
+// exactly the outer quotes and runs the rest verbatim; an array command
+// runs directly, each argument quoted the way the C runtime splits them
+fn commandLine(allocator: std.mem.Allocator, command: Command) ![:0]u16 {
+    const joined = switch (command) {
+        .shell => |line| blk: {
+            const argv = platform.shellArgv(line);
+            break :blk try std.fmt.allocPrint(allocator, "{s} /s {s} \"{s}\"", .{ argv[0], argv[1], line });
+        },
+        .argv => |words| try argvLine(allocator, words),
+    };
     defer allocator.free(joined);
     return std.unicode.wtf8ToWtf16LeAllocZ(allocator, joined);
+}
+
+const Command = union(enum) { shell: []const u8, argv: []const []const u8 };
+
+fn argvLine(allocator: std.mem.Allocator, words: []const []const u8) ![]u8 {
+    var line: std.ArrayListUnmanaged(u8) = .{};
+    errdefer line.deinit(allocator);
+    for (words, 0..) |word, i| {
+        if (i > 0) try line.append(allocator, ' ');
+        try appendQuotedArg(allocator, &line, word);
+    }
+    return line.toOwnedSlice(allocator);
+}
+
+// backslashes are literal unless they precede a quote, where each one needs
+// doubling; a quote is escaped, and an argument with a space or tab, or an
+// empty one, is wrapped in quotes
+fn appendQuotedArg(allocator: std.mem.Allocator, line: *std.ArrayListUnmanaged(u8), arg: []const u8) !void {
+    const quote = arg.len == 0 or std.mem.indexOfAny(u8, arg, " \t") != null;
+    if (quote) try line.append(allocator, '"');
+    var backslashes: usize = 0;
+    for (arg) |c| {
+        if (c == '\\') {
+            backslashes += 1;
+            continue;
+        }
+        const run = if (c == '"') backslashes * 2 + 1 else backslashes;
+        try line.appendNTimes(allocator, '\\', run);
+        backslashes = 0;
+        try line.append(allocator, c);
+    }
+    try line.appendNTimes(allocator, '\\', if (quote) backslashes * 2 else backslashes);
+    if (quote) try line.append(allocator, '"');
 }
 
 fn appendEnvString(allocator: std.mem.Allocator, block: *std.ArrayListUnmanaged(u16), text: []const u8) !void {
@@ -245,7 +284,7 @@ const Spawned = struct {
 };
 
 const SpawnOptions = struct {
-    command: []const u8,
+    command: Command,
     descs: []const Desc,
     cwd: ?[]const u8,
     env: Value,
@@ -331,11 +370,11 @@ fn pipeFd(pipes: []const ProcPipe, role: i64) ?platform.Fd {
 }
 
 fn makePipeHandle(ctx: *NativeContext, proc: *PhpObject, role: i64, fd: platform.Fd, mode: []const u8) RuntimeError!*PhpObject {
-    const handle = try ctx.createObject("FileHandle");
+    const handle = try ctx.createResource("FileHandle");
     try handle.set(ctx.allocator, "__open", .{ .bool = true });
     try handle.set(ctx.allocator, "__mode", .{ .string = Value.String.borrowed(mode) });
     try handle.set(ctx.allocator, "__fd", .{ .int = @intCast(fd) });
-    try handle.set(ctx.allocator, "__proc_ref", .{ .object = proc });
+    try handle.set(ctx.allocator, "__proc_ref", .{ .resource = proc });
     try handle.set(ctx.allocator, "__proc_role", .{ .int = role });
     return handle;
 }
@@ -346,7 +385,7 @@ fn buildPipesArray(ctx: *NativeContext, proc: *PhpObject, descs: []const Desc, p
         const mode = pipeMode(desc.spec) orelse continue;
         const fd = pipeFd(pipes, desc.role) orelse continue;
         const handle = try makePipeHandle(ctx, proc, desc.role, fd, mode);
-        try arr.set(ctx.allocator, .{ .int = desc.role }, .{ .object = handle });
+        try arr.set(ctx.allocator, .{ .int = desc.role }, .{ .resource = handle });
         ctx.vm.adoptProcPipe(proc, desc.role, handle);
     }
     return .{ .array = arr };
@@ -360,11 +399,23 @@ fn markSpawnFailed(ctx: *NativeContext, proc: *PhpObject) RuntimeError!void {
 }
 
 pub fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 3 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const cmd_copy = try ctx.vm.allocator.dupe(u8, args[0].string.bytes());
+    if (args.len < 3 or (args[0] != .string and args[0] != .array)) return NativeResult.scalar(.{ .bool = false });
+    var words: std.ArrayListUnmanaged([]const u8) = .{};
+    defer words.deinit(ctx.allocator);
+    if (args[0] == .array) {
+        for (args[0].array.entries.items) |entry| try words.append(ctx.allocator, try filesystem.ownedText(ctx, entry.value));
+        if (words.items.len == 0) {
+            try ctx.vm.setPendingException("ValueError", "proc_open(): Argument #1 ($command) must not be empty");
+            return error.RuntimeError;
+        }
+    }
+    const cmd_copy = if (args[0] == .string)
+        try ctx.vm.allocator.dupe(u8, args[0].string.bytes())
+    else
+        try argvLine(ctx.vm.allocator, words.items);
     try ctx.vm.strings.append(ctx.allocator, cmd_copy);
 
-    const proc = try ctx.createObject("ProcessResource");
+    const proc = try ctx.vm.allocResource("ProcessResource");
     try proc.set(ctx.allocator, "__cmd", .{ .string = Value.String.borrowed(cmd_copy) });
     try proc.set(ctx.allocator, "__exit", .{ .int = 0 });
     try proc.set(ctx.allocator, "__running", .{ .bool = true });
@@ -379,7 +430,7 @@ pub fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!N
     flushInheritedOutput(ctx, descs.items);
 
     const opts: SpawnOptions = .{
-        .command = cmd_copy,
+        .command = if (args[0] == .string) .{ .shell = cmd_copy } else .{ .argv = words.items },
         .descs = descs.items,
         .cwd = if (args.len >= 4 and args[3] == .string) args[3].string.bytes() else null,
         .env = if (args.len >= 5) args[4] else .null,
@@ -397,8 +448,9 @@ pub fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!N
     try proc.set(ctx.allocator, "__reaped", .{ .bool = false });
 
     const pipes = try buildPipesArray(ctx, proc, descs.items, spawned.pipes.items);
+    ctx.vm.numberResource(proc);
     ctx.setCallerVar(2, args.len, pipes);
-    return NativeResult.borrowed(.{ .object = proc });
+    return NativeResult.borrowed(.{ .resource = proc });
 }
 
 fn processHandle(pc: *const ProcChild) ?windows.HANDLE {
@@ -436,8 +488,8 @@ fn cachedExit(proc: *PhpObject) i64 {
 }
 
 pub fn native_proc_close(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len == 0 or args[0] != .object) return NativeResult.scalar(.{ .int = -1 });
-    const proc = args[0].object;
+    const proc = try filesystem.processArg(ctx, args, "proc_close");
+    try proc.set(ctx.allocator, "__open", .{ .bool = false });
     const pc = ctx.vm.lookupProcChild(proc) orelse return NativeResult.scalar(.{ .int = cachedExit(proc) });
     for (pc.pipe_fds.items) |*pipe| if (pipe.role == 0) pipe.close();
     if (processHandle(pc)) |handle| {
@@ -450,8 +502,7 @@ pub fn native_proc_close(ctx: *NativeContext, args: []const Value) RuntimeError!
 }
 
 pub fn native_proc_get_status(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len == 0 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
-    const proc = args[0].object;
+    const proc = try filesystem.processArg(ctx, args, "proc_get_status");
     var running = false;
     if (ctx.vm.lookupProcChild(proc)) |pc| {
         if (!pc.reaped) {
@@ -477,8 +528,8 @@ pub fn native_proc_get_status(ctx: *NativeContext, args: []const Value) RuntimeE
 // php's windows build ignores the signal argument and always ends the
 // process with exit code 255
 pub fn native_proc_terminate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len == 0 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
-    const pc = ctx.vm.lookupProcChild(args[0].object) orelse return NativeResult.scalar(.{ .bool = false });
+    const proc = try filesystem.processArg(ctx, args, "proc_terminate");
+    const pc = ctx.vm.lookupProcChild(proc) orelse return NativeResult.scalar(.{ .bool = false });
     const handle = processHandle(pc) orelse return NativeResult.scalar(.{ .bool = false });
     return NativeResult.scalar(.{ .bool = kernel32.TerminateProcess(handle, terminate_exit_code) != 0 });
 }

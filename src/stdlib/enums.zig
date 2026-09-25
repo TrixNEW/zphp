@@ -82,19 +82,6 @@ fn argDisplayString(ctx: *NativeContext, arg: Value) ![]const u8 {
     };
 }
 
-fn valueTypeName(v: Value) []const u8 {
-    return switch (v) {
-        .int => "int",
-        .float => "float",
-        .string => "string",
-        .bool => "bool",
-        .null => "null",
-        .array => "array",
-        .object => |o| o.class_name,
-        else => "value",
-    };
-}
-
 fn isNumericIntStr(s: []const u8) bool {
     if (s.len == 0) return false;
     var i: usize = 0;
@@ -119,7 +106,7 @@ fn checkEnumArgType(ctx: *NativeContext, backed: anytype, enum_name: []const u8,
         else => true,
     };
     if (ok) return null;
-    const msg = try std.fmt.allocPrint(ctx.allocator, "{s}::{s}(): Argument #1 ($value) must be of type {s}, {s} given", .{ enum_name, fn_name, want, valueTypeName(arg) });
+    const msg = try std.fmt.allocPrint(ctx.allocator, "{s}::{s}(): Argument #1 ($value) must be of type {s}, {s} given", .{ enum_name, fn_name, want, arg.typeName() });
     try ctx.vm.strings.append(ctx.allocator, msg);
     _ = try throwBuiltin(ctx, "TypeError", msg);
     return null;

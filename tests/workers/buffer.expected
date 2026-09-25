@@ -68,7 +68,7 @@ int(8)
 string(8) "the file"
 int(0)
 TypeError: Zphp\Buffer::readFrom(): Argument #1 ($stream) must be an open stream resource
-TypeError: Zphp\Buffer::writeTo(): Argument #1 ($stream) must be an open stream resource
+TypeError: Zphp\Buffer::writeTo(): Argument #1 ($stream) must be of type resource, string given
 bool(true)
 bool(true)
 bool(true)
