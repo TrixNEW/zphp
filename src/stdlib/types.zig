@@ -101,8 +101,8 @@ pub const entries = .{
     .{ "get_included_files", native_get_included_files },
     .{ "get_required_files", native_get_included_files },
     .{ "memory_get_usage", native_memory_get_usage },
-    .{ "memory_get_peak_usage", native_memory_get_usage },
-    .{ "memory_reset_peak_usage", native_noop_null },
+    .{ "memory_get_peak_usage", native_memory_get_peak_usage },
+    .{ "memory_reset_peak_usage", native_memory_reset_peak_usage },
     .{ "eval", native_eval },
     .{ "gc_enabled", native_gc_enabled },
     .{ "gc_disable", native_gc_disable },
@@ -1632,6 +1632,7 @@ fn native_ini_set(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     var buf = std.ArrayListUnmanaged(u8){};
     defer buf.deinit(ctx.allocator);
     try args[1].format(&buf, ctx.allocator);
+    if (std.mem.eql(u8, name, "memory_limit") and !try setMemoryLimit(ctx, buf.items)) return NativeResult.scalar(Value{ .bool = false });
     const new_val = try buf.toOwnedSlice(ctx.allocator);
     try ctx.vm.strings.append(ctx.allocator, new_val);
     const owned_name = try ctx.allocator.dupe(u8, name);
@@ -1706,13 +1707,50 @@ fn native_register_shutdown_function(ctx: *NativeContext, args: []const Value) R
     return NativeResult.scalar(.null);
 }
 
-fn native_memory_get_usage(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    // pull current process RSS via getrusage. PHP distinguishes "current" from
-    // "peak" usage; zphp's arena doesn't track byte-accurate current bytes per
-    // call, so we report the OS-level resident-set peak. matches the common
-    // "did memory grow?" check and stays monotonic, while giving a value that's
-    // proportional to actual usage (unlike the previous 1024-byte stub)
-    return NativeResult.scalar(.{ .int = platform.peakRss() });
+fn native_memory_get_usage(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const used = if (ctx.vm.memory) |m| m.usage() else 0;
+    const real = args.len > 0 and args[0].isTruthy();
+    return NativeResult.scalar(.{ .int = @intCast(if (real) VM.realMemoryUsage(used) else used) });
+}
+
+fn native_memory_get_peak_usage(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const peak = if (ctx.vm.memory) |m| m.peakUsage() else 0;
+    const real = args.len > 0 and args[0].isTruthy();
+    return NativeResult.scalar(.{ .int = @intCast(if (real) VM.realMemoryUsage(peak) else peak) });
+}
+
+fn native_memory_reset_peak_usage(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    if (ctx.vm.memory) |m| m.resetPeak();
+    return NativeResult.scalar(.null);
+}
+
+// ini_set('memory_limit', ...): php's quantity diagnostics, and a limit below
+// what is already in use is refused. false when refused
+fn setMemoryLimit(ctx: *NativeContext, text: []const u8) RuntimeError!bool {
+    const memory = @import("../runtime/memory.zig");
+    const q = memory.parseQuantity(text);
+    if (q.problem) |problem| {
+        const trimmed = std.mem.trim(u8, text, " \t\n\r");
+        const msg = switch (problem) {
+            .no_digits => try std.fmt.allocPrint(ctx.allocator, "Invalid \"memory_limit\" setting. Invalid quantity \"{s}\": no valid leading digits, interpreting as \"0\" for backwards compatibility", .{trimmed}),
+            .unknown_multiplier => |u| try std.fmt.allocPrint(ctx.allocator, "Invalid \"memory_limit\" setting. Invalid quantity \"{s}\": unknown multiplier \"{c}\", interpreting as \"{s}\" for backwards compatibility", .{ trimmed, u.multiplier, u.used }),
+            .out_of_range => try std.fmt.allocPrint(ctx.allocator, "Invalid \"memory_limit\" setting. Invalid quantity \"{s}\": value is out of range, using overflow result for backwards compatibility", .{trimmed}),
+        };
+        defer ctx.allocator.free(msg);
+        try ctx.vm.emitWarning(msg);
+    }
+    const account = ctx.vm.memory orelse return true;
+    if (q.value >= 0) {
+        const in_use = VM.realMemoryUsage(account.usage());
+        if (@as(u64, @intCast(q.value)) < in_use) {
+            const msg = try std.fmt.allocPrint(ctx.allocator, "Failed to set memory limit to {d} bytes (Current memory usage is {d} bytes)", .{ q.value, in_use });
+            defer ctx.allocator.free(msg);
+            try ctx.vm.emitWarning(msg);
+            return false;
+        }
+        account.limit = @intCast(q.value);
+    } else account.limit = 0;
+    return true;
 }
 
 fn native_set_error_handler(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -1906,6 +1944,7 @@ fn native_ini_restore(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.null);
     const name = args[0].string.bytes();
     _ = ctx.vm.ini_settings.remove(name);
+    if (std.mem.eql(u8, name, "memory_limit")) ctx.vm.applyConfiguredMemoryLimit();
     if (@import("../ini_config.zig").get(name)) |configured| {
         const owned_name = try ctx.allocator.dupe(u8, name);
         try ctx.vm.strings.append(ctx.allocator, owned_name);
@@ -2150,9 +2189,9 @@ fn native_error_log(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
                 _ = stdout_file.write(vm.output.items) catch {};
                 vm.output.clearRetainingCapacity();
             }
-            const stderr_file = std.fs.File.stderr();
-            stderr_file.writeAll(message) catch return NativeResult.scalar(.{ .bool = false });
-            stderr_file.writeAll("\n") catch {};
+            const line = try std.fmt.allocPrint(ctx.allocator, "{s}\n", .{message});
+            defer ctx.allocator.free(line);
+            vm.writeLog(line);
             return NativeResult.scalar(.{ .bool = true });
         },
     }

@@ -3,6 +3,7 @@ const native_params = @import("../stdlib/native_params.zig");
 const platform = @import("../platform.zig");
 const Value = @import("value.zig").Value;
 const Region = @import("region.zig").Region;
+const MemoryAccount = @import("memory.zig").MemoryAccount;
 const PhpArray = @import("value.zig").PhpArray;
 const byref_args = @import("../stdlib/byref_args.zig");
 const PhpObject = @import("value.zig").PhpObject;
@@ -499,6 +500,9 @@ pub const VM = struct {
     // calls go deeper (ensureCallRoom), so their addresses never move
     frames: []CallFrame = &.{},
     frame_room: Region(CallFrame) = .{},
+    // counts what `allocator` hands out and enforces memory_limit; the VM
+    // allocates through it and it wraps the allocator the VM was built with
+    memory: ?*MemoryAccount = null,
     frame_count: usize = 0,
     frame_high_water: usize = 0,
     stack: []Value = &.{},
@@ -1680,7 +1684,12 @@ pub const VM = struct {
         return self.string_pool.allocator();
     }
 
-    fn initVm(vm: *VM, allocator: Allocator) RuntimeError!void {
+    fn initVm(vm: *VM, parent: Allocator) RuntimeError!void {
+        const account = try parent.create(MemoryAccount);
+        account.* = .{ .parent = parent };
+        vm.memory = account;
+        vm.allocator = account.allocator();
+        const allocator = vm.allocator;
         vm.string_pool.backing = allocator;
         if (platform.getenv("ZPHP_HEAP_STATS") != null) vm.debug_closure_owners = .{};
         if (platform.getenv("ZPHP_NO_POOL") != null) vm.debug_no_pool = true;
@@ -1716,6 +1725,8 @@ pub const VM = struct {
         var ii = vm.interfaces.keyIterator();
         while (ii.next()) |k| try vm.builtin_interfaces.put(allocator, k.*, {});
         vm.builtins_recorded = true;
+        vm.applyConfiguredMemoryLimit();
+        account.rebase();
     }
 
     // stdlib class/interface/trait registration. callable both at VM init time
@@ -2902,6 +2913,11 @@ pub const VM = struct {
         for (self.serve_cache_keys.items) |k| self.allocator.free(k);
         self.serve_cache_keys.deinit(self.allocator);
         self.serve_compile_cache.deinit(self.allocator);
+        // last: everything above freed through it
+        if (self.memory) |account| {
+            self.memory = null;
+            account.parent.destroy(account);
+        }
     }
 
     pub fn clearRealDirCache(self: *VM) void {
@@ -3080,6 +3096,11 @@ pub const VM = struct {
             self.compile_results.clearRetainingCapacity();
             self.chunk_to_result.clearRetainingCapacity();
         }
+        // each request starts its memory count and limit afresh
+        if (self.memory) |account| {
+            self.applyConfiguredMemoryLimit();
+            account.rebase();
+        }
     }
 
     fn releaseHookFn(ctx: *anyopaque, value: Value) void {
@@ -3186,7 +3207,33 @@ pub const VM = struct {
         // at script end run every still-live object's __destruct (PHP's
         // shutdown guarantee), then drain - on success or error
         defer self.runShutdownDestructors();
-        try self.run();
+        self.run() catch |err| return self.reportMemoryExhausted(err);
+    }
+
+    // an allocation memory_limit refused surfaces as OutOfMemory wherever it
+    // happened; raise php's fatal for it once the script has stopped
+    pub fn reportMemoryExhausted(self: *VM, err: RuntimeError) RuntimeError {
+        const account = self.memory orelse return err;
+        const refused = account.refused orelse return err;
+        if (account.reporting) return err;
+        account.reporting = true;
+        var buf: [160]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Allowed memory size of {d} bytes exhausted (tried to allocate {d} bytes)", .{ account.limit, refused }) catch unreachable;
+        self.raiseError(1, msg) catch |raised| return raised;
+        return error.RuntimeError;
+    }
+
+    // memory_limit as configured: php.ini or -d, else php's default
+    pub fn applyConfiguredMemoryLimit(self: *VM) void {
+        const text = @import("../ini_config.zig").get("memory_limit") orelse "128M";
+        const bytes = @import("memory.zig").parseQuantity(text).value;
+        if (bytes != 0) self.memory.?.limit = if (bytes < 0) 0 else @intCast(bytes);
+    }
+
+    // memory_get_usage(true): php reports memory in 2MB chunks
+    pub fn realMemoryUsage(bytes: usize) usize {
+        const chunk: usize = 2 * 1024 * 1024;
+        return @max(chunk, std.mem.alignForward(usize, bytes, chunk));
     }
 
     // PHP guarantees every object still alive at request end has its
@@ -12035,9 +12082,11 @@ pub const VM = struct {
             _ = std.fs.File.stdout().write(self.output.items) catch {};
             self.output.clearRetainingCapacity();
         }
-        const log_text = std.fmt.allocPrint(self.allocator, "PHP {s}:  {s} in {s} on line {d}\n", .{ label, msg, at.file, at.line }) catch return;
-        defer self.allocator.free(log_text);
-        _ = std.fs.File.stderr().write(log_text) catch {};
+        if (self.logErrorsEnabled()) {
+            const log_text = std.fmt.allocPrint(self.allocator, "PHP {s}:  {s} in {s} on line {d}\n", .{ label, msg, at.file, at.line }) catch return;
+            defer self.allocator.free(log_text);
+            self.writeLog(log_text);
+        }
         if (!self.displayErrorsEnabled()) return;
         const display_text = std.fmt.allocPrint(self.allocator, "\n{s}: {s} in {s} on line {d}\n", .{ label, msg, at.file, at.line }) catch return;
         defer self.allocator.free(display_text);
@@ -12059,6 +12108,43 @@ pub const VM = struct {
             8192, 16384 => "Deprecated",
             else => "Notice",
         };
+    }
+
+    fn iniFlagOn(self: *const VM, name: []const u8, default: []const u8) bool {
+        const val = self.ini_settings.get(name) orelse @import("../ini_config.zig").get(name) orelse default;
+        if (val.len == 0) return false;
+        if (std.mem.eql(u8, val, "0")) return false;
+        return !(std.ascii.eqlIgnoreCase(val, "off") or std.ascii.eqlIgnoreCase(val, "false") or std.ascii.eqlIgnoreCase(val, "no"));
+    }
+
+    pub fn logErrorsEnabled(self: *const VM) bool {
+        return self.iniFlagOn("log_errors", "1");
+    }
+
+    // php's error log: the error_log file when one is set, each line stamped
+    // with the date in the default timezone, else stderr
+    pub fn writeLog(self: *VM, line: []const u8) void {
+        const path = self.ini_settings.get("error_log") orelse @import("../ini_config.zig").get("error_log") orelse "";
+        if (path.len == 0) {
+            _ = std.fs.File.stderr().write(line) catch {};
+            return;
+        }
+        var ctx = self.makeContext(null);
+        const stamp = @import("../stdlib/datetime.zig").formatTimestamp(&ctx, std.time.timestamp(), "d-M-Y H:i:s e") catch {
+            _ = std.fs.File.stderr().write(line) catch {};
+            return;
+        };
+        defer if (stamp.value == .string) stamp.value.string.release();
+        const file = std.fs.cwd().createFile(path, .{ .truncate = false }) catch {
+            _ = std.fs.File.stderr().write(line) catch {};
+            return;
+        };
+        defer file.close();
+        file.seekFromEnd(0) catch {};
+        const text = if (stamp.value == .string) stamp.value.string.bytes() else "";
+        const entry = std.fmt.allocPrint(self.allocator, "[{s}] {s}", .{ text, line }) catch return;
+        defer self.allocator.free(entry);
+        file.writeAll(entry) catch {};
     }
 
     pub fn displayErrorsEnabled(self: *const VM) bool {
@@ -19415,8 +19501,9 @@ pub const VM = struct {
     pub fn ensureHandlerRoom(self: *VM, count: usize) RuntimeError!void {
         const want = self.handler_count + count;
         if (want <= self.handler_room.committed) return;
-        const target = @min(max_handlers, @max(want, self.handler_room.committed * 2));
-        if (want <= max_handlers and (self.handler_room.ensure(target) catch return error.OutOfMemory)) return;
+        const target = growTarget(want, self.handler_room.committed, max_handlers);
+        const before = self.callRegionBytes();
+        if (want <= max_handlers and (self.handler_room.ensure(target) catch return error.OutOfMemory)) return self.chargeRegionGrowth(before);
         self.setErrorMsg("Fatal error: Maximum nesting of {d} try blocks reached\n", .{max_handlers});
         return error.RuntimeError;
     }
@@ -19451,12 +19538,39 @@ pub const VM = struct {
     fn ensureStackSlots(self: *VM, count: usize) RuntimeError!void {
         const want = self.sp + count + stack_headroom;
         if (want <= self.stack_room.committed) return;
-        const target = @min(max_stack_slots, @max(want, self.stack_room.committed * 2));
+        const target = growTarget(want, self.stack_room.committed, max_stack_slots);
+        const before = self.callRegionBytes();
         if (want <= max_stack_slots and
             (self.stack_room.ensure(target) catch return error.OutOfMemory) and
-            (self.ic.?.arg_stack_room.ensureFilled(target, .none) catch return error.OutOfMemory)) return;
+            (self.ic.?.arg_stack_room.ensureFilled(target, .none) catch return error.OutOfMemory)) return self.chargeRegionGrowth(before);
         self.setErrorMsg("Fatal error: Maximum function nesting level of {d} reached\n", .{max_frames});
         return error.RuntimeError;
+    }
+
+    // committed bytes of the call-depth regions, which count toward memory
+    // use as php's VM stack does
+    fn callRegionBytes(self: *VM) usize {
+        const ic = self.ic.?;
+        return self.frame_room.committed * @sizeOf(CallFrame) +
+            self.stack_room.committed * @sizeOf(Value) +
+            self.handler_room.committed * @sizeOf(ExceptionHandler) +
+            ic.arg_stack_room.committed * @sizeOf(RefSource) +
+            ic.sp_save_room.committed * @sizeOf(usize) +
+            ic.arg_counts_room.committed +
+            ic.fga_offsets_room.committed * @sizeOf(u32) +
+            ic.fga_room.committed * @sizeOf(Value);
+    }
+
+    fn chargeRegionGrowth(self: *VM, before: usize) RuntimeError!void {
+        const after = self.callRegionBytes();
+        const account = self.memory orelse return;
+        if (after > before and !account.chargeExternal(after - before)) return error.OutOfMemory;
+    }
+
+    // a region grows only when it is short, and then by doubling
+    fn growTarget(want: usize, committed: usize, cap: usize) usize {
+        if (want <= committed) return committed;
+        return @min(cap, @max(want, committed * 2));
     }
 
     // commits in doubling steps; false when a limit would be crossed
@@ -19466,9 +19580,10 @@ pub const VM = struct {
         const want_slots = self.sp + stack_headroom;
         const want_fga = ic.fga_sp + fga_headroom * frames;
         if (want_frames > max_frames or want_slots > max_stack_slots or want_fga > max_stack_slots) return false;
-        const frame_target = @min(max_frames, @max(want_frames, self.frame_room.committed * 2));
-        const slot_target = @min(max_stack_slots, @max(want_slots, self.stack_room.committed * 2));
-        const fga_target = @min(max_stack_slots, @max(want_fga, ic.fga_room.committed * 2));
+        const before = self.callRegionBytes();
+        const frame_target = growTarget(want_frames, self.frame_room.committed, max_frames);
+        const slot_target = growTarget(want_slots, self.stack_room.committed, max_stack_slots);
+        const fga_target = growTarget(want_fga, ic.fga_room.committed, max_stack_slots);
         const ok = (self.frame_room.ensure(frame_target) catch return error.OutOfMemory) and
             (ic.sp_save_room.ensure(frame_target) catch return error.OutOfMemory) and
             (ic.arg_counts_room.ensureFilled(frame_target, 0xFF) catch return error.OutOfMemory) and
@@ -19476,6 +19591,7 @@ pub const VM = struct {
             (self.stack_room.ensure(slot_target) catch return error.OutOfMemory) and
             (ic.arg_stack_room.ensureFilled(slot_target, .none) catch return error.OutOfMemory) and
             (ic.fga_room.ensureFilled(fga_target, .null) catch return error.OutOfMemory);
+        try self.chargeRegionGrowth(before);
         return ok;
     }
 

@@ -9,8 +9,8 @@ function spawnAndClose(int $n): void
     }
 }
 
-spawnAndClose(200);
+spawnAndClose(50);
 $before = memory_get_usage();
-spawnAndClose(1000);
+spawnAndClose(300);
 $growth = memory_get_usage() - $before;
-echo ($growth < 1024 * 1024) ? "bounded\n" : "unbounded\n";
+echo ($growth < 4096) ? "bounded\n" : "unbounded\n";
