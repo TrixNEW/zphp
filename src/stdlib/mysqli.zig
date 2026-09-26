@@ -263,7 +263,7 @@ fn mysqliQuery(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
                 try exception.set(ctx.allocator, "message", .{ .string = Value.String.borrowed(message) });
                 try exception.set(ctx.allocator, "code", .{ .int = 0 });
                 try exception.set(ctx.allocator, "sqlstate", .{ .string = Value.String.borrowed("00000") });
-                ctx.vm.pending_exception = .{ .object = exception };
+                ctx.vm.raise(.{ .object = exception });
                 return error.RuntimeError;
             }
             try ctx.vm.emitWarning(message);
@@ -590,7 +590,7 @@ fn reportArgumentError(ctx: *NativeContext, class: []const u8, msg: []const u8) 
     const obj = try ctx.createObject(class);
     try obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed(msg) });
     try obj.set(ctx.allocator, "code", .{ .int = 0 });
-    ctx.vm.pending_exception = .{ .object = obj };
+    ctx.vm.raise(.{ .object = obj });
     return error.RuntimeError;
 }
 
@@ -621,7 +621,7 @@ fn reportFailure(ctx: *NativeContext, conn: *mysql.MYSQL, operation: []const u8,
         try obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed((try dupZ(ctx, message))) });
         try obj.set(ctx.allocator, "sqlstate", .{ .string = Value.String.borrowed((try dupZ(ctx, state))) });
         try obj.set(ctx.allocator, "code", .{ .int = code });
-        ctx.vm.pending_exception = .{ .object = obj };
+        ctx.vm.raise(.{ .object = obj });
         return error.RuntimeError;
     }
     const warning = try std.fmt.allocPrint(ctx.allocator, "{s}(): ({s}/{d}): {s}", .{ operation, state, code, message });

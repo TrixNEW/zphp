@@ -261,6 +261,8 @@ pub const NativeContext = struct {
 pub const NativeResult = @import("native_result.zig").NativeResult;
 const extension = @import("../extension.zig");
 pub const NativeFn = *const fn (*NativeContext, []const Value) RuntimeError!NativeResult;
+pub const NativeTable = @import("natives.zig").Table(NativeFn);
+pub const Native = NativeTable.Native;
 pub const NativeBinop = enum { add, sub, mul, div, mod, pow, compare, negate, bit_and, bit_or, bit_xor, bit_not, shl, shr };
 
 pub const CaptureEntry = struct {
@@ -533,7 +535,7 @@ pub const VM = struct {
     sp: usize = 0,
     functions: std.StringHashMapUnmanaged(*const ObjFunction) = .{},
     function_attributes: std.StringHashMapUnmanaged([]const AttributeDef) = .{},
-    native_fns: std.StringHashMapUnmanaged(NativeFn) = .{},
+    native_fns: NativeTable = .{},
     output: std.ArrayListUnmanaged(u8) = .{},
     strings: std.ArrayListUnmanaged([]const u8) = .{},
     // persistent_strings are heap-allocated keys whose lifetime must outlive
@@ -1337,6 +1339,7 @@ pub const VM = struct {
                 const pending = vm.pending_exception orelse return statusOf(err);
                 if (pending != .object) return statusOf(err);
                 vm.pending_exception = null;
+                defer vm.stackRelease(pending);
                 if (vm.throwObject(pending.object)) {
                     dispatched.* = true;
                     return Status.ok;
@@ -1499,6 +1502,7 @@ pub const VM = struct {
             class_ptr: usize = 0,
             func: ?*const ObjFunction = null,
             native: ?NativeFn = null,
+            native_arity: @import("natives.zig").Arity = .{},
             full_name: []const u8 = "",
         };
 
@@ -3171,7 +3175,7 @@ pub const VM = struct {
     fn objectCompareHook(ctx: *anyopaque, a: Value, b: Value) ?i64 {
         const self: *VM = @ptrCast(@alignCast(ctx));
         const order = self.objectBinop(.compare, a, b) catch {
-            self.pending_exception = null;
+            self.discardPending();
             return null;
         };
         return if (order) |v| v.int else null;
@@ -3302,7 +3306,7 @@ pub const VM = struct {
             obj.destructed = true;
             if (obj.ownsDestructor() and self.hasMethod(obj.class_name, "__destruct")) {
                 _ = self.callMethod(obj, "__destruct", &.{}) catch {
-                    self.pending_exception = null;
+                    self.discardPending();
                 };
             }
         }
@@ -7469,7 +7473,7 @@ pub const VM = struct {
                         }
                     }
                     if (self.handler_count <= self.handler_floor) {
-                        self.pending_exception = exception;
+                        self.setPendingOwned(exception);
                         return error.RuntimeError;
                     }
 
@@ -7477,7 +7481,7 @@ pub const VM = struct {
 
                     // handler belongs to an outer runLoop - propagate up
                     if (handler.frame_count <= base_frame and base_frame > 0) {
-                        self.pending_exception = exception;
+                        self.setPendingOwned(exception);
                         return error.RuntimeError;
                     }
 
@@ -7740,7 +7744,7 @@ pub const VM = struct {
                                                 }
                                                 self.discardArgTransport(handler.sp);
                                                 self.sp = handler.sp;
-                                                self.push(exc);
+                                                self.pushTransfer(exc);
                                                 self.currentFrame().ip = handler.catch_ip;
                                                 continue;
                                             }
@@ -8304,7 +8308,7 @@ pub const VM = struct {
                                         }
                                         self.discardArgTransport(handler.sp);
                                         self.sp = handler.sp;
-                                        self.push(exc);
+                                        self.pushTransfer(exc);
                                         self.currentFrame().ip = handler.catch_ip;
                                         continue;
                                     }
@@ -8365,10 +8369,12 @@ pub const VM = struct {
                                         if (i < func.defaults.len) ctor_locals[i + 1] = try self.resolveParamDefault(func, i);
                                     }
                                 }
+                                self.saveFrameArgs(@intCast(ac));
                                 self.dropN(ac);
                                 try self.ensureCallRoom();
                                 self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = .{}, .locals = ctor_locals, .func = func, .called_class = class_name };
                                 self.frames[self.frame_count].entry_sp = self.sp;
+                                self.setFrameArgCount(@intCast(ac));
                                 self.frame_count += 1;
                                 self.retainFrameObjects(self.frame_count - 1);
                                 if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
@@ -8410,6 +8416,7 @@ pub const VM = struct {
                                     if (self.dispatchPendingException(base_frame)) continue;
                                     return err;
                                 };
+                                self.saveFrameArgs(@intCast(ac));
                                 self.dropN(ac);
                                 if (!func.is_variadic and ac < func.arity) for (ac..func.arity) |i| {
                                     const default = if (i < func.defaults.len) try self.resolveParamDefault(func, i) else Value.null;
@@ -8418,6 +8425,7 @@ pub const VM = struct {
                                 try self.ensureCallRoom();
                                 self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = class_name, .ref_slots = ctor_refs, .ref_owner = ctor_owner };
                                 self.frames[self.frame_count].entry_sp = self.sp;
+                                self.setFrameArgCount(@intCast(ac));
                                 self.frame_count += 1;
                                 self.retainFrameObjects(self.frame_count - 1);
                                 if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
@@ -8526,7 +8534,7 @@ pub const VM = struct {
                                         }
                                         self.discardArgTransport(handler.sp);
                                         self.sp = handler.sp;
-                                        self.push(exc);
+                                        self.pushTransfer(exc);
                                         self.currentFrame().ip = handler.catch_ip;
                                         continue;
                                     }
@@ -8556,6 +8564,7 @@ pub const VM = struct {
                                 if (self.dispatchPendingException(base_frame)) continue;
                                 return err;
                             };
+                            self.saveFrameArgs(@intCast(ac));
                             self.dropN(ac + 1);
                             for (@min(ac, func.arity)..func.arity) |i| {
                                 const default = if (i < func.defaults.len) try self.resolveParamDefault(func, i) else Value.null;
@@ -8564,6 +8573,7 @@ pub const VM = struct {
                             try self.ensureCallRoom();
                             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func, .called_class = class_name, .ref_slots = ctor_refs, .ref_owner = ctor_owner };
                             self.frames[self.frame_count].entry_sp = self.sp;
+                            self.setFrameArgCount(@intCast(ac));
                             self.frame_count += 1;
                             self.retainFrameObjects(self.frame_count - 1);
                             if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
@@ -9065,7 +9075,7 @@ pub const VM = struct {
                         } else if (std.mem.eql(u8, method_name, "throw")) {
                             const ex = if (ac > 0) self.stack[self.sp + 1] else Value{ .null = {} };
                             if (gen.state == .completed) {
-                                self.pending_exception = ex;
+                                self.raise(ex);
                                 if (self.dispatchPendingException(base_frame)) continue;
                                 return error.RuntimeError;
                             }
@@ -9187,7 +9197,7 @@ pub const VM = struct {
                             const prev_floor = self.handler_floor;
                             self.current_fiber = fiber;
                             self.handler_floor = hb;
-                            self.pending_exception = exc_val;
+                            self.raise(exc_val);
                             const dispatched = self.dispatchPendingException(fb);
                             self.current_fiber = prev_fiber;
                             self.handler_floor = prev_floor;
@@ -9294,7 +9304,8 @@ pub const VM = struct {
                                     try self.enterMethodLocalsOnly(func, obj, arg_count);
                                     continue;
                                 }
-                            } else if (mc_entry.native) |native| {
+                            } else if (mc_entry.native) |native_call| {
+                                const native: Native = .{ .call = native_call, .arity = mc_entry.native_arity };
                                 var args_buf: [16]Value = undefined;
                                 for (0..ac) |i| args_buf[i] = self.stack[self.sp - ac + i];
                                 self.saveFrameArgs(arg_count);
@@ -9397,7 +9408,7 @@ pub const VM = struct {
                             const mc_chunk_key2 = @intFromPtr(self.currentChunk());
                             const mc_idx2 = InlineCache.methodIndex(mc_chunk_key2, mc_ip2);
                             if (mvr.visibility == .public) {
-                                ic.method[mc_idx2] = .{ .key = mc_ip2, .chunk_key = mc_chunk_key2, .class_ptr = @intFromPtr(obj.class_name.ptr), .native = native, .full_name = full_name };
+                                ic.method[mc_idx2] = .{ .key = mc_ip2, .chunk_key = mc_chunk_key2, .class_ptr = @intFromPtr(obj.class_name.ptr), .native = native.call, .native_arity = native.arity, .full_name = full_name };
                             }
                         }
                         var args_buf: [16]Value = undefined;
@@ -9435,7 +9446,7 @@ pub const VM = struct {
                                     }
                                     self.discardArgTransport(handler.sp);
                                     self.sp = handler.sp;
-                                    self.push(exc);
+                                    self.pushTransfer(exc);
                                     self.currentFrame().ip = handler.catch_ip;
                                     continue;
                                 }
@@ -9692,7 +9703,7 @@ pub const VM = struct {
                                     }
                                     self.discardArgTransport(handler.sp);
                                     self.sp = handler.sp;
-                                    self.push(exc);
+                                    self.pushTransfer(exc);
                                     self.currentFrame().ip = handler.catch_ip;
                                     continue;
                                 }
@@ -9849,7 +9860,7 @@ pub const VM = struct {
                                     }
                                     self.discardArgTransport(handler.sp);
                                     self.sp = handler.sp;
-                                    self.push(exc);
+                                    self.pushTransfer(exc);
                                     self.currentFrame().ip = handler.catch_ip;
                                     continue;
                                 }
@@ -10026,7 +10037,7 @@ pub const VM = struct {
                                     }
                                     self.discardArgTransport(handler.sp);
                                     self.sp = handler.sp;
-                                    self.push(exc);
+                                    self.pushTransfer(exc);
                                     self.currentFrame().ip = handler.catch_ip;
                                     continue;
                                 }
@@ -10307,7 +10318,7 @@ pub const VM = struct {
                                             }
                                             self.discardArgTransport(handler.sp);
                                             self.sp = handler.sp;
-                                            self.push(exc);
+                                            self.pushTransfer(exc);
                                             self.currentFrame().ip = handler.catch_ip;
                                             continue;
                                         }
@@ -11567,14 +11578,41 @@ pub const VM = struct {
                 const called_by_native = next_native < native_count and natives[next_native].depth == i;
                 const call_site: ?SourcePosition = if (i > 0 and !called_by_native) self.framePosition(i - 1) else null;
                 const entry = try self.newTraceEntry(f, call_site);
-                const args = try self.traceArgs(entry);
-                for (f.params) |pname| try args.append(self.allocator, frameParamValue(&self.frames[i], f, pname));
+                try self.appendPassedArgs(try self.traceArgs(entry), i, f);
                 try arr.append(self.allocator, .{ .array = entry });
             };
             try self.tryAppendRequireFrame(arr, i);
             if (i == 0) break;
         }
         return arr;
+    }
+
+    // what a trace shows as a frame's arguments: the ones the call passed, as
+    // the parameters hold them now, a variadic parameter spread out, and
+    // arguments past the declared ones as they were passed
+    fn appendPassedArgs(self: *VM, args: *PhpArray, frame_idx: usize, f: *const ObjFunction) !void {
+        const frame = &self.frames[frame_idx];
+        const declared = if (f.is_variadic) f.params.len - 1 else f.params.len;
+        const passed: ?usize = if (self.ic) |ic| (if (ic.arg_counts[frame_idx] == 0xFF) null else ic.arg_counts[frame_idx]) else null;
+        for (f.params[0..@min(passed orelse declared, declared)]) |pname| try args.append(self.allocator, frameParamValue(frame, f, pname));
+        if (f.is_variadic) {
+            const rest = frameParamValue(frame, f, f.params[declared]);
+            if (rest == .array) for (rest.array.entries.items) |e| try args.append(self.allocator, e.value);
+            return;
+        }
+        const count = passed orelse return;
+        if (count <= declared) return;
+        const saved = self.passedArgs(frame_idx, count) orelse return;
+        for (saved[declared..]) |v| try args.append(self.allocator, v);
+    }
+
+    // the arguments saved for a frame's func_get_args, when they were
+    fn passedArgs(self: *VM, frame_idx: usize, count: usize) ?[]const Value {
+        const ic = self.ic orelse return null;
+        if (frame_idx >= ic.fga_offsets_room.committed or ic.fga_offsets[frame_idx] == fga_unsaved) return null;
+        const offset: usize = ic.fga_offsets[frame_idx];
+        if (offset + count > ic.fga_room.committed) return null;
+        return ic.fga_buf[offset .. offset + count];
     }
 
     fn nativeTraceEntry(self: *VM, call: *const NativeCall, call_site: ?SourcePosition) !*PhpArray {
@@ -11670,7 +11708,32 @@ pub const VM = struct {
         defer owned_message.release();
         try obj.set(self.allocator, "message", .{ .string = owned_message });
         try obj.set(self.allocator, "code", .{ .int = 0 });
-        self.pending_exception = .{ .object = obj };
+        self.raise(.{ .object = obj });
+    }
+
+    // pending_exception owns one reference to the throwable it holds. raise
+    // takes a reference of its own; setPendingOwned stores one the caller
+    // hands over; takePending hands it back to a caller that moves it on;
+    // discardPending drops it
+    pub fn raise(self: *VM, exc: Value) void {
+        stackRetain(exc);
+        self.setPendingOwned(exc);
+    }
+
+    pub fn setPendingOwned(self: *VM, exc: Value) void {
+        if (self.pending_exception) |old| self.stackRelease(old);
+        self.pending_exception = exc;
+    }
+
+    pub fn takePending(self: *VM) ?Value {
+        const exc = self.pending_exception orelse return null;
+        self.pending_exception = null;
+        return exc;
+    }
+
+    pub fn discardPending(self: *VM) void {
+        const exc = self.takePending() orelse return;
+        self.stackRelease(exc);
     }
 
     // php keys an array by a resource's id, with a warning
@@ -11714,7 +11777,7 @@ pub const VM = struct {
         };
         if (self.pending_exception) |ex| {
             if (ex == .object and @intFromPtr(ex.object) == marker_ptr) {
-                self.pending_exception = null;
+                self.discardPending();
             } else {
                 // finally raised something other than our marker - dispatch into
                 // the caller's handler chain
@@ -12356,7 +12419,7 @@ pub const VM = struct {
     // outer loop
     fn throwObject(self: *VM, obj: *PhpObject) bool {
         if (self.handler_count <= self.handler_floor) {
-            self.pending_exception = .{ .object = obj };
+            self.raise(.{ .object = obj });
             return false;
         }
 
@@ -12364,7 +12427,7 @@ pub const VM = struct {
 
         // handler belongs to an outer runLoop - propagate up
         if (handler.frame_count <= self.run_base_frame and self.run_base_frame > 0) {
-            self.pending_exception = .{ .object = obj };
+            self.raise(.{ .object = obj });
             return false;
         }
 
@@ -12397,7 +12460,7 @@ pub const VM = struct {
         }
         self.discardArgTransport(handler.sp);
         self.sp = handler.sp;
-        self.push(exc);
+        self.pushTransfer(exc);
         self.currentFrame().ip = handler.catch_ip;
         return true;
     }
@@ -12508,7 +12571,7 @@ pub const VM = struct {
 
         if (gen.pending_throw) |ex| {
             gen.pending_throw = null;
-            self.pending_exception = ex;
+            self.raise(ex);
             // try to dispatch within the generator's frame; if no handler, the exception
             // will propagate when runUntilFrame catches the eventual error
             if (self.dispatchPendingException(return_frame)) {
@@ -13092,7 +13155,9 @@ pub const VM = struct {
             try self.ensureCallRoom();
             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func };
             self.frames[self.frame_count].entry_sp = self.sp;
+            self.saveFrameArgs(0);
             self.frame_count += 1;
+            self.setFrameArgCount(0);
             self.retainFrameObjects(self.frame_count - 1);
             if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
             try self.runLoop(self.frame_count - 1);
@@ -13913,7 +13978,7 @@ pub const VM = struct {
                     const raw = self.resolveAttrConstant(self.readAttrValue());
                     args[ai] = self.resolveDefault(raw) catch |err| blk: {
                         if (self.pending_exception == null) return err;
-                        self.pending_exception = null;
+                        self.discardPending();
                         break :blk raw;
                     };
                 }
@@ -17214,14 +17279,14 @@ pub const VM = struct {
         while (true) {
             const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ current, method_name }) catch return error.RuntimeError;
             if (self.functions.getEntry(full)) |entry| return entry.key_ptr.*;
-            if (self.native_fns.getEntry(full)) |entry| return entry.key_ptr.*;
+            if (self.native_fns.getKey(full)) |key| return key;
             if (self.classes.get(current)) |cls| {
                 var methods = cls.methods.keyIterator();
                 while (methods.next()) |declared| {
                     if (!std.ascii.eqlIgnoreCase(declared.*, method_name)) continue;
                     const canonical = std.fmt.bufPrint(&buf, "{s}::{s}", .{ current, declared.* }) catch return error.RuntimeError;
                     if (self.functions.getEntry(canonical)) |entry| return entry.key_ptr.*;
-                    if (self.native_fns.getEntry(canonical)) |entry| return entry.key_ptr.*;
+                    if (self.native_fns.getKey(canonical)) |key| return key;
                 }
                 if (cls.parent) |p| {
                     current = p;
@@ -17715,20 +17780,27 @@ pub const VM = struct {
     // does not own arrays and a refcount-0 array arg is never queued, so it
     // cannot be freed mid-native - retaining arrays here would instead
     // QUEUE them (releaseValue queues at 0) and free live data (Stage 2)
-    fn invokeNative(self: *VM, native: NativeFn, ctx: *NativeContext, call: NativeInvocation) RuntimeError!Value {
+    fn invokeNative(self: *VM, native: Native, ctx: *NativeContext, call: NativeInvocation) RuntimeError!Value {
         const input_args = call.args;
         const name = call.name;
         // the call is on the native stack while it runs, so a trace made
         // inside it shows it and user code it calls back is called by an
-        // internal function. call_user_func(_array), strlen and count stay
-        // off it: php compiles them to plain calls or opcodes
+        // internal function. call_user_func(_array) stays off it, and so do
+        // strlen and count unless their argument count is wrong: php compiles
+        // them to plain calls or opcodes
         const outer = self.native_call;
         defer self.native_call = outer;
         var record: NativeCall = undefined;
         const label = call.label orelse name orelse "";
-        if (!isUserCallForwarder(name) and !isFrameOutNative(label)) {
+        const admitted = native.arity.admits(input_args.len);
+        if (!isUserCallForwarder(name) and (!admitted or !isFrameOutNative(label))) {
             record = .{ .label = label, .args = input_args, .depth = self.frame_count, .instance = call.instance, .outer = outer };
             self.native_call = &record;
+        }
+        if (!admitted) {
+            var buf: [256]u8 = undefined;
+            try self.setPendingException("ArgumentCountError", native.arity.describe(&buf, label, input_args.len));
+            return error.RuntimeError;
         }
         var args_buf: [256]Value = undefined;
         if (input_args.len > args_buf.len) return error.RuntimeError;
@@ -17769,7 +17841,7 @@ pub const VM = struct {
                 if (a.array.refcount == 0) self.queueArrayRelease(a.array);
             };
         }
-        const result = try native(ctx, native_args);
+        const result = try native.call(ctx, native_args);
         return result.value;
     }
 
@@ -17856,6 +17928,7 @@ pub const VM = struct {
                 const pending = self.pending_exception orelse return err;
                 if (pending != .object) return err;
                 self.pending_exception = null;
+                defer self.stackRelease(pending);
                 if (self.throwObject(pending.object)) return true;
                 return error.RuntimeError;
             };
@@ -17879,7 +17952,7 @@ pub const VM = struct {
         const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
         defer self.allocator.free(msg);
         const at: ?SourcePosition = if (self.ic.?.default_site) |func| .{ .file = func.file_path, .line = func.start_line } else null;
-        self.pending_exception = .{ .object = try self.newBuiltinException("Error", msg, at) };
+        self.raise(.{ .object = try self.newBuiltinException("Error", msg, at) });
         return error.RuntimeError;
     }
 
@@ -18048,7 +18121,7 @@ pub const VM = struct {
         self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = vars, .locals = try self.allocLocals(func, &vars), .func = func, .call_name = self.pending_call_name, .called_class = self.pending_called_class };
         self.frames[self.frame_count].entry_sp = self.sp;
         self.consumePendingArgCount();
-        if (self.pending_invoke_args) |pia| self.saveFrameArgsSlice(pia);
+        if (self.pending_invoke_args) |pia| self.saveFrameArgsSlice(pia) else self.markArgsUnsaved();
         self.pending_call_name = null;
         self.pending_called_class = null;
         self.frame_count += 1;
@@ -18398,6 +18471,7 @@ pub const VM = struct {
         const handler = self.user_exception_handler orelse return;
         self.user_exception_handler = null;
         self.pending_exception = null;
+        defer self.stackRelease(exc);
         var engine = self.engineCall();
         self.native_call = &engine;
         defer self.native_call = engine.outer;
@@ -18759,7 +18833,7 @@ pub const VM = struct {
                         }
                         self.discardArgTransport(handler.sp);
                         self.sp = handler.sp;
-                        self.push(exc);
+                        self.pushTransfer(exc);
                         self.currentFrame().ip = handler.catch_ip;
                         return;
                     }
@@ -19247,7 +19321,7 @@ pub const VM = struct {
             return err;
         }) orelse return copy;
         if (copy.ptr != buf) self.allocator.free(copy);
-        self.pending_exception = .{ .object = exc };
+        self.raise(.{ .object = exc });
         return error.RuntimeError;
     }
 
@@ -19769,6 +19843,15 @@ pub const VM = struct {
         return ok;
     }
 
+    // the offset a frame whose arguments were not saved records, so no one
+    // reads another call's values in their place
+    const fga_unsaved = std.math.maxInt(u32);
+
+    pub fn markArgsUnsaved(self: *VM) void {
+        const ic = self.ic orelse return;
+        if (self.frame_count < ic.fga_offsets_room.committed) ic.fga_offsets[self.frame_count] = fga_unsaved;
+    }
+
     pub fn saveFrameArgs(self: *VM, arg_count: u8) void {
         const ic = self.ic orelse return;
         if (self.frame_count >= ic.fga_offsets_room.committed) return;
@@ -19778,7 +19861,10 @@ pub const VM = struct {
             return;
         }
         const sp = ic.fga_sp;
-        if (sp + ac > ic.fga_room.committed) return;
+        if (sp + ac > ic.fga_room.committed) {
+            ic.fga_offsets[self.frame_count] = fga_unsaved;
+            return;
+        }
         ic.fga_offsets[self.frame_count] = sp;
         for (0..ac) |i| {
             ic.fga_buf[sp + i] = self.stack[self.sp - ac + i];
@@ -19801,8 +19887,7 @@ pub const VM = struct {
         }
         const sp = ic.fga_sp;
         if (sp + ac > ic.fga_room.committed) {
-            // signal "no saved args" by leaving offsets stale; getFrameArgs
-            // will read whatever's there but at least we shouldn't crash
+            ic.fga_offsets[self.frame_count] = fga_unsaved;
             return;
         }
         ic.fga_offsets[self.frame_count] = sp;
@@ -19812,7 +19897,9 @@ pub const VM = struct {
 
     pub fn restoreFrameArgsSp(self: *VM) void {
         const ic = self.ic orelse return;
-        ic.fga_sp = ic.fga_offsets[self.frame_count];
+        const offset = ic.fga_offsets[self.frame_count];
+        // a frame that saved nothing moved nothing
+        if (offset != fga_unsaved) ic.fga_sp = offset;
     }
 
     pub fn getFrameArgs(self: *VM) ?[]const Value {
@@ -19821,6 +19908,7 @@ pub const VM = struct {
         const ac_raw = ic.arg_counts[fc];
         if (ac_raw == 0xFF) return null;
         const ac: usize = ac_raw;
+        if (fc >= ic.fga_offsets_room.committed or ic.fga_offsets[fc] == fga_unsaved) return null;
         const offset: usize = ic.fga_offsets[fc];
         if (offset + ac > ic.fga_room.committed) return null;
         return ic.fga_buf[offset .. offset + ac];
@@ -20031,7 +20119,7 @@ pub const VM = struct {
                     _ = self.callMethod(obj, "__destruct", &.{}) catch {
                         // a throwing destructor must not corrupt the drop site
                         // it was called from - swallow (revisit for fidelity)
-                        self.pending_exception = null;
+                        self.discardPending();
                     };
                     // a destructor that stored $this resurrected the object:
                     // it stays alive with its properties and is never pooled

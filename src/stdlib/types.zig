@@ -1820,7 +1820,7 @@ fn native_assert(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     if (args[0].isTruthy()) return NativeResult.scalar(.{ .bool = true });
     // a Throwable as the 2nd arg is always thrown on failure, regardless of assert.exception
     if (args.len >= 2 and args[1] == .object) {
-        ctx.vm.pending_exception = args[1];
+        ctx.vm.raise(args[1]);
         return error.RuntimeError;
     }
     if (ctx.vm.ini_callbacks.get("assert.callback")) |cb| {

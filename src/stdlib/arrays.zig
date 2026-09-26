@@ -998,7 +998,7 @@ fn array_combine(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         try obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed("array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements") });
         try obj.set(ctx.allocator, "code", .{ .int = 0 });
         try ctx.vm.objects.append(ctx.allocator, obj);
-        ctx.vm.pending_exception = .{ .object = obj };
+        ctx.vm.raise(.{ .object = obj });
         return error.RuntimeError;
     }
 

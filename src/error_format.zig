@@ -402,6 +402,21 @@ fn writeFrameArgs(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM, frame_i
 
 // a call argument the way php's traces show it: quoted strings cut to 15
 // bytes, Array and Object(Class) placeholders, scalars as they are
+// php's smart_str_append_escaped: backslashes and control bytes escaped,
+// anything outside printable ascii as \xHH
+fn writeEscaped(buf: *Writer, alloc: std.mem.Allocator, bytes: []const u8) void {
+    for (bytes) |c| switch (c) {
+        '\n' => write(buf, alloc, "\\n"),
+        '\r' => write(buf, alloc, "\\r"),
+        '\t' => write(buf, alloc, "\\t"),
+        0x0c => write(buf, alloc, "\\f"),
+        0x0b => write(buf, alloc, "\\v"),
+        0x1b => write(buf, alloc, "\\e"),
+        '\\' => write(buf, alloc, "\\\\"),
+        else => if (c < 32 or c > 126) writeFmt(buf, alloc, "\\x{X:0>2}", .{c}) else writeFmt(buf, alloc, "{c}", .{c}),
+    };
+}
+
 pub fn writeTraceArg(buf: *Writer, alloc: std.mem.Allocator, v: Value) void {
     switch (v) {
         .null => write(buf, alloc, "NULL"),
@@ -412,10 +427,11 @@ pub fn writeTraceArg(buf: *Writer, alloc: std.mem.Allocator, v: Value) void {
             // a closure passed as a callable is its synthetic name in zphp
             if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
                 write(buf, alloc, "Object(Closure)");
-            } else if (s.len <= 15) {
-                writeFmt(buf, alloc, "'{s}'", .{s.bytes()});
             } else {
-                writeFmt(buf, alloc, "'{s}...'", .{s.bytes()[0..15]});
+                const bytes = s.bytes();
+                write(buf, alloc, "'");
+                writeEscaped(buf, alloc, bytes[0..@min(bytes.len, 15)]);
+                write(buf, alloc, if (bytes.len > 15) "...'" else "'");
             }
         },
         .array => write(buf, alloc, "Array"),

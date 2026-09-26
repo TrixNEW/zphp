@@ -896,9 +896,9 @@ fn native_get_defined_functions(ctx: *NativeContext, _: []const Value) RuntimeEr
     var result = try ctx.createArray();
 
     var internal = try ctx.createArray();
-    var iter_n = vm.native_fns.iterator();
-    while (iter_n.next()) |entry| {
-        try internal.append(alloc, .{ .string = Value.String.borrowed(entry.key_ptr.*) });
+    var iter_n = vm.native_fns.keyIterator();
+    while (iter_n.next()) |name| {
+        try internal.append(alloc, .{ .string = Value.String.borrowed(name.*) });
     }
 
     var user = try ctx.createArray();

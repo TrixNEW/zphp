@@ -621,7 +621,7 @@ fn runTask(w: *Worker, vm: *VM, task: *Task) void {
     var ctx = vm.makeContext(task_class);
     execute(&ctx, w, task);
     extension.endRequest(vm);
-    vm.pending_exception = null;
+    vm.discardPending();
     vm.error_msg = null;
     vm.drainPendingDestruct();
     flushOutput(vm);

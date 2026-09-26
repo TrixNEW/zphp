@@ -10,7 +10,7 @@ const NativeFn = *const fn (*NativeContext, []const Value) RuntimeError!NativeRe
 const pcntl_entries = if (@import("builtin").os.tag == .windows) .{} else @import("pcntl.zig").entries;
 const system_posix_entries = if (@import("builtin").os.tag == .windows) .{} else @import("system.zig").posix_entries;
 
-pub fn register(map: *std.StringHashMapUnmanaged(NativeFn), allocator: std.mem.Allocator) !void {
+pub fn register(map: *@import("../runtime/vm.zig").NativeTable, allocator: std.mem.Allocator) !void {
     const modules = .{
         @import("types.zig").entries,
         @import("math.zig").entries,

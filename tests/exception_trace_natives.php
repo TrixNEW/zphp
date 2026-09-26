@@ -27,3 +27,15 @@ $list = [3, 1, 2];
 try { usort($list, fn($a, $b) => throw new Exception("cmp")); } catch (Exception $e) { echo $e->getTraceAsString(), "\n\n"; }
 
 echo (string) new Exception("", 0, new InvalidArgumentException("cause")), "\n";
+
+function takes_text($s) { throw new Exception("text"); }
+try { takes_text("App\\Models\\User\\Profile"); } catch (Exception $e) { echo $e->getTraceAsString(), "\n"; }
+try { takes_text("a\\b\n\t\x01\xC3\xA9\x7F\"'z"); } catch (Exception $e) { echo $e->getTraceAsString(), "\n"; }
+
+function with_default($a, $b = 2) { throw new Exception("default"); }
+function spread($first, ...$rest) { throw new Exception("variadic"); }
+function no_params() { throw new Exception("extra"); }
+function reassigns($x) { $x = 99; throw new Exception("reassigned"); }
+foreach ([fn() => with_default(1), fn() => spread(1, 2, 3), fn() => no_params(7, 8), fn() => reassigns(1), fn() => array_map('no_params', [5])] as $call) {
+    try { $call(); } catch (Exception $e) { echo $e->getTrace()[0]['function'], ': ', json_encode($e->getTrace()[0]['args']), "\n"; }
+}

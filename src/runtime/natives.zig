@@ -1,0 +1,96 @@
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const native_params = @import("../stdlib/native_params.zig");
+
+// the natives a VM can call, each with the argument counts php accepts for it.
+// the counts come from the signature table once, at registration, so a call
+// checks them without another lookup
+
+pub fn Table(comptime NativeFn: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Native = struct {
+            call: NativeFn,
+            arity: Arity,
+        };
+
+        map: std.StringHashMapUnmanaged(Native) = .{},
+
+        pub fn put(self: *Self, allocator: Allocator, name: []const u8, call: NativeFn) !void {
+            try self.map.put(allocator, name, .{ .call = call, .arity = Arity.of(name) });
+        }
+
+        pub fn get(self: *const Self, name: []const u8) ?Native {
+            return self.map.get(name);
+        }
+
+        pub fn contains(self: *const Self, name: []const u8) bool {
+            return self.map.contains(name);
+        }
+
+        pub fn count(self: *const Self) usize {
+            return self.map.count();
+        }
+
+        pub fn getKey(self: *const Self, name: []const u8) ?[]const u8 {
+            return self.map.getKey(name);
+        }
+
+        pub fn keyIterator(self: *const Self) std.StringHashMapUnmanaged(Native).KeyIterator {
+            return self.map.keyIterator();
+        }
+
+        pub fn deinit(self: *Self, allocator: Allocator) void {
+            self.map.deinit(allocator);
+        }
+    };
+}
+
+// how many arguments php lets a call pass; a native without a signature
+// accepts any number
+pub const Arity = struct {
+    min: u16 = 0,
+    max: u16 = unbounded,
+
+    pub const unbounded = std.math.maxInt(u16);
+
+    pub fn of(name: []const u8) Arity {
+        const signature = native_params.get(name) orelse return .{};
+        var arity: Arity = .{ .max = 0 };
+        for (signature.params) |param| {
+            if (param.variadic) return .{ .min = arity.min, .max = unbounded };
+            arity.max += 1;
+            if (param.default == .required) arity.min = arity.max;
+        }
+        return arity;
+    }
+
+    pub fn admits(self: Arity, given: usize) bool {
+        return given >= self.min and (self.max == unbounded or given <= self.max);
+    }
+
+    // php's ArgumentCountError message for a call that passed `given`
+    pub fn describe(self: Arity, buf: []u8, name: []const u8, given: usize) []const u8 {
+        const exact = self.min == self.max;
+        const bound: u16 = if (given < self.min) self.min else self.max;
+        const kind = if (exact) "exactly" else if (given < self.min) "at least" else "at most";
+        const noun = if (bound == 1) "argument" else "arguments";
+        return std.fmt.bufPrint(buf, "{s}() expects {s} {d} {s}, {d} given", .{ name, kind, bound, noun, given }) catch "wrong argument count";
+    }
+};
+
+test "arity follows the signature" {
+    const strlen = Arity.of("strlen");
+    try std.testing.expect(strlen.admits(1));
+    try std.testing.expect(!strlen.admits(0));
+    try std.testing.expect(!strlen.admits(2));
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("strlen() expects exactly 1 argument, 0 given", strlen.describe(&buf, "strlen", 0));
+    const sprintf = Arity.of("sprintf");
+    try std.testing.expect(sprintf.admits(9));
+    try std.testing.expectEqualStrings("sprintf() expects at least 1 argument, 0 given", sprintf.describe(&buf, "sprintf", 0));
+    const explode = Arity.of("explode");
+    try std.testing.expectEqualStrings("explode() expects at most 3 arguments, 4 given", explode.describe(&buf, "explode", 4));
+    try std.testing.expect(Arity.of("zphp_unknown_native").admits(40));
+}

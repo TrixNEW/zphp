@@ -201,7 +201,10 @@ pub fn uncaughtDescription(vm: *VM, allocator: std.mem.Allocator) ?[]u8 {
         if (exc != .object) return null;
         vm.pending_exception = null;
         const result = vm.callMethod(exc.object, "__toString", &.{}) catch {
-            if (vm.pending_exception != null) continue;
+            if (vm.pending_exception != null) {
+                vm.stackRelease(exc);
+                continue;
+            }
             vm.pending_exception = exc;
             return null;
         };

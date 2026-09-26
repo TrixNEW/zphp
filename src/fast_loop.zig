@@ -1100,6 +1100,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                                     return;
                                 }
                                 self.sp = sp;
+                                if (mc_ac > mc_func.arity) self.saveFrameArgs(@intCast(mc_ac)) else self.markArgsUnsaved();
                                 self.dropN(mc_ac + 1);
                                 sp = self.sp;
                                 frame.ip = ip;
