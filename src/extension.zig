@@ -89,6 +89,30 @@ pub const Call = struct {
     args: []const Value,
     result: NativeResult = NativeResult.scalar(.null),
     threw: bool = false,
+    // value handles and the strings the call made live until it returns
+    arena: std.heap.ArenaAllocator,
+    strings: std.ArrayListUnmanaged(Value.String) = .{},
+
+    fn init(ctx: *NativeContext, ext: *Extension, args: []const Value) Call {
+        return .{ .ctx = ctx, .ext = ext, .args = args, .arena = std.heap.ArenaAllocator.init(ctx.allocator) };
+    }
+
+    fn deinit(self: *Call) void {
+        for (self.strings.items) |str| str.release();
+        self.arena.deinit();
+    }
+
+    fn own(self: *Call, str: Value.String) ?Value.String {
+        self.strings.append(self.arena.allocator(), str) catch {
+            str.release();
+            return null;
+        };
+        return str;
+    }
+
+    fn ownCopy(self: *Call, bytes: []const u8) ?Value.String {
+        return self.own(Value.String.create(self.ctx.allocator, bytes) catch return null);
+    }
 };
 
 // per-VM state slots, one per extension
@@ -119,7 +143,8 @@ const trampolines: [max_functions]NativeFn = blk: {
 };
 
 fn invoke(slot: *const Slot, ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    var call = Call{ .ctx = ctx, .ext = slot.ext, .args = args };
+    var call = Call.init(ctx, slot.ext, args);
+    defer call.deinit();
     slot.func(&call);
     if (call.threw) return error.RuntimeError;
     return call.result;
@@ -260,7 +285,8 @@ pub fn vmInit(vm: *VM) RuntimeError!void {
     for (extensions.items) |ext| {
         const init = ext.desc.worker_init orelse continue;
         var ctx = vm.makeContext(null);
-        var call = Call{ .ctx = &ctx, .ext = ext, .args = &.{} };
+        var call = Call.init(&ctx, ext, &.{});
+        defer call.deinit();
         if (init(&call) != 0) fail("extension '{s}': worker_init failed", .{ext.name});
     }
 }
@@ -320,7 +346,8 @@ pub fn beginRequest(vm: *VM) RuntimeError!void {
         }
         const init = ext.desc.request_init orelse continue;
         var ctx = vm.makeContext(null);
-        var call = Call{ .ctx = &ctx, .ext = ext, .args = &.{} };
+        var call = Call.init(&ctx, ext, &.{});
+        defer call.deinit();
         if (init(&call) != 0) {
             vm.error_msg = "extension request_init failed";
             return error.RuntimeError;
@@ -337,12 +364,12 @@ pub fn endRequest(vm: *VM) void {
         const ext = extensions.items[i];
         if (ext.desc.request_shutdown) |shutdown| {
             var ctx = vm.makeContext(null);
-            var call = Call{ .ctx = &ctx, .ext = ext, .args = &.{} };
+            var call = Call.init(&ctx, ext, &.{});
+            defer call.deinit();
             shutdown(&call);
         }
         vm.ic.?.ext_slots[ext.index].request = null;
     }
-    _ = vm.ic.?.ext_arena.reset(.retain_capacity);
 }
 
 pub fn vmDeinit(vm: *VM) void {
@@ -355,11 +382,11 @@ pub fn vmDeinit(vm: *VM) void {
         const ext = extensions.items[i];
         const shutdown = ext.desc.worker_shutdown orelse continue;
         var ctx = vm.makeContext(null);
-        var call = Call{ .ctx = &ctx, .ext = ext, .args = &.{} };
+        var call = Call.init(&ctx, ext, &.{});
+        defer call.deinit();
         shutdown(&call);
         vm.ic.?.ext_slots[ext.index].worker = null;
     }
-    vm.ic.?.ext_arena.deinit();
     vm.allocator.free(vm.ic.?.ext_slots);
     vm.ic.?.ext_slots = &.{};
 }
@@ -559,7 +586,7 @@ fn apiRegisterResource(ext: *Extension, class_name: CStr, dtor: ?ResourceDtor) c
 }
 
 fn cell(call: *Call, v: Value) ?*Value {
-    const p = call.ctx.vm.ic.?.ext_arena.allocator().create(Value) catch return null;
+    const p = call.arena.allocator().create(Value) catch return null;
     p.* = v;
     return p;
 }
@@ -616,7 +643,7 @@ fn apiGetString(call: *Call, v: ?*const Value, len: ?*usize) callconv(.c) ?[*]co
             var buf = std.ArrayListUnmanaged(u8){};
             defer buf.deinit(call.ctx.allocator);
             value.format(&buf, call.ctx.allocator) catch return null;
-            break :blk call.ctx.createString(buf.items) catch return null;
+            break :blk (call.ownCopy(buf.items) orelse return null).bytes();
         },
     };
     if (len) |l| l.* = bytes.len;
@@ -641,8 +668,7 @@ fn apiMakeFloat(call: *Call, value: f64) callconv(.c) ?*Value {
 
 fn apiMakeString(call: *Call, bytes: ?[*]const u8, len: usize) callconv(.c) ?*Value {
     const src: []const u8 = if (bytes) |b| b[0..len] else "";
-    const owned = call.ctx.createString(src) catch return null;
-    return cell(call, .{ .string = Value.String.borrowed(owned) });
+    return cell(call, .{ .string = call.ownCopy(src) orelse return null });
 }
 
 fn apiMakeArray(call: *Call) callconv(.c) ?*Value {
@@ -673,8 +699,7 @@ fn apiArraySetInt(call: *Call, arr: ?*Value, key: i64, v: ?*const Value) callcon
 fn apiArraySetString(call: *Call, arr: ?*Value, key: ?[*]const u8, key_len: usize, v: ?*const Value) callconv(.c) c_int {
     const target = arr orelse return -1;
     if (target.* != .array) return -1;
-    const k = call.ctx.createString(if (key) |p| p[0..key_len] else "") catch return -1;
-    target.array.set(call.ctx.allocator, .{ .string = Value.String.borrowed(k) }, (v orelse return -1).*) catch return -1;
+    target.array.setCopiedKey(call.ctx.allocator, if (key) |p| p[0..key_len] else "", (v orelse return -1).*) catch return -1;
     return 0;
 }
 
@@ -745,8 +770,7 @@ fn apiObjectSet(call: *Call, v: ?*Value, name: CStr, new_value: ?*const Value) c
     const value = v orelse return -1;
     const n = cstr(name) orelse return -1;
     if (value.* != .object) return -1;
-    const stable = call.ctx.createString(n) catch return -1;
-    value.object.set(call.ctx.allocator, stable, (new_value orelse return -1).*) catch return -1;
+    value.object.set(call.ctx.allocator, n, (new_value orelse return -1).*) catch return -1;
     return 0;
 }
 
@@ -790,7 +814,7 @@ fn failedCall(call: *Call, comptime fmt: []const u8, args: anytype) void {
     const vm = call.ctx.vm;
     if (vm.pending_exception != null) return;
     const msg = std.fmt.allocPrint(call.ctx.allocator, fmt, args) catch return;
-    call.ctx.strings.append(call.ctx.allocator, msg) catch return;
+    defer call.ctx.allocator.free(msg);
     _ = vm.throwBuiltinException("Error", vm.error_msg orelse msg) catch {};
 }
 

@@ -838,7 +838,6 @@ pub const VM = struct {
     serve_compile_cache: std.StringHashMapUnmanaged(*CompileResult) = .{},
     serve_cache_keys: std.ArrayListUnmanaged([]const u8) = .{},
     response_code: i64 = 200,
-    response_content_type: []const u8 = "text/html",
     response_headers: ?*PhpArray = null,
     last_http_response_headers: ?*PhpArray = null,
     headers_sent: bool = false,
@@ -1387,7 +1386,6 @@ pub const VM = struct {
         // one slot per loaded extension, an arena for the value handles a
         // call hands out, and whether request_init has run
         ext_slots: []extension.VmSlot = &.{},
-        ext_arena: std.heap.ArenaAllocator = undefined,
         ext_request_active: bool = false,
         // provenance of the call family opcode being executed, saved across a
         // nested call so a native callback's own calls cannot clobber it
@@ -1473,10 +1471,6 @@ pub const VM = struct {
         fga_sp: u32 = 0,
         // set before pushing a frame, consumed by executeFunction et al
         pending_arg_count: u8 = 0xFF,
-        // concat_assign string buffer - avoids O(n) realloc per append
-        concat_buf: std.ArrayListUnmanaged(u8) = .{},
-        concat_slot: u16 = 0xFFFF,
-        concat_frame: usize = 0,
 
         const PropIC = struct {
             key: usize = 0,
@@ -1742,7 +1736,6 @@ pub const VM = struct {
         const locals_buf = try allocator.alloc(Value, 8192);
         vm.ic.?.locals_buf = locals_buf.ptr;
         vm.ic.?.locals_cap = 8192;
-        vm.ic.?.ext_arena = std.heap.ArenaAllocator.init(allocator);
         try extension.vmInit(vm);
         // snapshot the builtin heap + class registration so serve-mode reset can
         // keep it instead of rebuilding every request (registry native fns are
@@ -2809,10 +2802,11 @@ pub const VM = struct {
             ic_ptr.fga_offsets_room.deinit();
             self.allocator.free(ic_ptr.active_args);
             self.allocator.free(ic_ptr.intent);
-            ic_ptr.concat_buf.deinit(self.allocator);
             ic_ptr.autoloading.deinit(self.allocator);
             ic_ptr.trait_sites.deinit(self.allocator);
             ic_ptr.included.deinit(self.allocator);
+            self.dropIncludeError(&ic_ptr.include_parse_error);
+            self.dropIncludeError(&ic_ptr.include_compile_error);
             ic_ptr.foreach_pins.deinit(self.allocator);
             self.freeIniValues(ic_ptr);
             ic_ptr.ini_values.deinit(self.allocator);
@@ -2837,6 +2831,7 @@ pub const VM = struct {
         while (ctfn_iter.next()) |e| e.value_ptr.*.deinit(self.allocator);
         self.chunk_to_func_names.deinit(self.allocator);
         self.chunk_to_result.deinit(self.allocator);
+        self.clearPharAliases();
         self.phar_aliases.deinit(self.allocator);
         self.exception_handler_stack.deinit(self.allocator);
         for (self.vars_pool.items) |*hm| {
@@ -2933,6 +2928,7 @@ pub const VM = struct {
         self.global_vars.deinit(self.allocator);
         self.clearRealDirCache();
         self.realdir_cache.deinit(self.allocator);
+        self.clearStreamWrappers();
         self.stream_wrappers_unregistered.deinit(self.allocator);
         self.stream_wrappers_user.deinit(self.allocator);
         if (self.serve_mode) {
@@ -3013,6 +3009,7 @@ pub const VM = struct {
         self.pending_exception = null;
         self.exception_dispatched = false;
         self.exception_handler_stack.clearRetainingCapacity();
+        self.clearPharAliases();
         self.current_fiber = null;
         self.fiber_suspend_pending = false;
         self.fiber_suspend_value = .null;
@@ -3065,7 +3062,6 @@ pub const VM = struct {
         self.ob_stack.clearRetainingCapacity();
         self.request_vars.clearRetainingCapacity();
         self.response_code = 200;
-        self.response_content_type = "text/html";
         self.response_headers = null;
         self.last_http_response_headers = null;
         self.headers_sent = false;
@@ -3096,11 +3092,12 @@ pub const VM = struct {
         self.global_vars.clearRetainingCapacity();
         if (self.ic) |ic_ptr| {
             ic_ptr.included.clearRetainingCapacity();
+            self.dropIncludeError(&ic_ptr.include_parse_error);
+            self.dropIncludeError(&ic_ptr.include_compile_error);
             ic_ptr.foreach_pins.clearRetainingCapacity();
         }
         self.clearRealDirCache();
-        self.stream_wrappers_unregistered.clearRetainingCapacity();
-        self.stream_wrappers_user.clearRetainingCapacity();
+        self.clearStreamWrappers();
         self.magic_get_guard.clearRetainingCapacity();
         self.magic_call_guard.clearRetainingCapacity();
         if (self.serve_mode) {
@@ -3472,7 +3469,7 @@ pub const VM = struct {
         defer ast.deinit();
         if (ast.errors.len == 0) return;
         const summary = @import("../error_format.zig").parseErrorSummary(self.allocator, &ast) catch null;
-        if (summary) |s| try self.strings.append(self.allocator, s);
+        defer if (summary) |s| self.allocator.free(s);
         try self.setPendingException("ParseError", summary orelse "syntax error");
         if (self.pending_exception) |exc| if (exc == .object) {
             try exc.object.set(self.allocator, "file", .{ .string = Value.String.borrowed("") });
@@ -3494,14 +3491,14 @@ pub const VM = struct {
             const error_line = @import("../error_format.zig").parseErrorLine(&ast);
             ast.deinit();
             self.allocator.free(wrapped);
-            if (summary) |s| try self.strings.append(self.allocator, s);
+            defer if (summary) |s| self.allocator.free(s);
             try self.setPendingException("ParseError", summary orelse "syntax error");
             // php places the error in the evaluated code: "<file>(<line>) : eval()'d code"
             if (self.pending_exception) |exc| if (exc == .object) {
                 const caller = self.currentSourcePosition();
                 const where = try std.fmt.allocPrint(self.allocator, "{s}({d}) : eval()'d code", .{ caller.file, caller.line });
-                try self.strings.append(self.allocator, where);
-                try exc.object.set(self.allocator, "file", .{ .string = Value.String.borrowed(where) });
+                defer self.allocator.free(where);
+                try exc.object.setCopiedString(self.allocator, "file", where);
                 try exc.object.set(self.allocator, "line", .{ .int = error_line });
             };
             return error.RuntimeError;
@@ -3520,7 +3517,7 @@ pub const VM = struct {
             if (diag) |d| {
                 const caller = self.currentSourcePosition();
                 const where = try std.fmt.allocPrint(self.allocator, "{s}({d}) : eval()'d code", .{ caller.file, caller.line });
-                try self.strings.append(self.allocator, where);
+                defer self.allocator.free(where);
                 return self.raiseCompileFatal(d.message, .{ .file = where, .line = line });
             }
             self.setErrorMsg("eval(): compile error", .{});
@@ -3779,21 +3776,6 @@ pub const VM = struct {
                     if (self.currentFrame().ref_slots.get(name)) |cell| {
                         self.push(cell.*);
                     } else if (self.currentFrame().vars.get(name)) |val| {
-                        // if this variable is backed by the concat buffer,
-                        // materialize a stable copy so the buffer can safely
-                        // reallocate on future appends
-                        if (self.ic) |ic| {
-                            if (val == .string and val.string.len > 0 and
-                                ic.concat_buf.items.len > 0 and
-                                val.string.ptr == ic.concat_buf.items.ptr)
-                            {
-                                const stable = try self.allocator.alloc(u8, val.string.len);
-                                @memcpy(stable, val.string.bytes());
-                                try self.strings.append(self.allocator, stable);
-                                self.push(.{ .string = Value.String.borrowed(stable) });
-                                continue;
-                            }
-                        }
                         self.push(val);
                     } else if (self.php_constants.get(name)) |val| {
                         self.push(val);
@@ -4113,8 +4095,7 @@ pub const VM = struct {
                     const b = self.pop();
                     const a = self.pop();
                     if (a == .string and b == .string) {
-                        const result = try self.bitwiseStrings(a.string.bytes(), b.string.bytes(), .and_op);
-                        self.push(.{ .string = Value.String.borrowed(result) });
+                        self.pushTransfer(.{ .string = try self.bitwiseStrings(a.string.bytes(), b.string.bytes(), .and_op) });
                     } else {
                         const handlers_before = self.handler_count;
                         const overloaded = self.objectBinop(.bit_and, a, b) catch {
@@ -4133,8 +4114,7 @@ pub const VM = struct {
                     const b = self.pop();
                     const a = self.pop();
                     if (a == .string and b == .string) {
-                        const result = try self.bitwiseStrings(a.string.bytes(), b.string.bytes(), .or_op);
-                        self.push(.{ .string = Value.String.borrowed(result) });
+                        self.pushTransfer(.{ .string = try self.bitwiseStrings(a.string.bytes(), b.string.bytes(), .or_op) });
                     } else {
                         const handlers_before = self.handler_count;
                         const overloaded = self.objectBinop(.bit_or, a, b) catch {
@@ -4153,8 +4133,7 @@ pub const VM = struct {
                     const b = self.pop();
                     const a = self.pop();
                     if (a == .string and b == .string) {
-                        const result = try self.bitwiseStrings(a.string.bytes(), b.string.bytes(), .xor_op);
-                        self.push(.{ .string = Value.String.borrowed(result) });
+                        self.pushTransfer(.{ .string = try self.bitwiseStrings(a.string.bytes(), b.string.bytes(), .xor_op) });
                     } else {
                         const handlers_before = self.handler_count;
                         const overloaded = self.objectBinop(.bit_xor, a, b) catch {
@@ -4189,10 +4168,9 @@ pub const VM = struct {
                     switch (v) {
                         .int, .float => self.push(.{ .int = ~Value.toInt(v) }),
                         .string => |str| {
-                            const out = try self.allocator.alloc(u8, str.bytes().len);
-                            try self.strings.append(self.allocator, out);
+                            const out = try self.stringAllocator().alloc(u8, str.bytes().len);
                             for (str.bytes(), out) |c, *o| o.* = ~c;
-                            self.push(.{ .string = Value.String.borrowed(out) });
+                            self.pushTransfer(.{ .string = try Value.String.adopt(self.stringAllocator(), out) });
                         },
                         else => {
                             const what = switch (v) {
@@ -5343,12 +5321,13 @@ pub const VM = struct {
                         @memcpy(buf[0..s.len], s);
                         if (new_len > s.len) @memset(buf[s.len..], ' ');
                         buf[target_idx] = write_byte;
-                        try self.strings.append(self.allocator, buf);
+                        const written = try Value.String.adopt(self.allocator, buf);
+                        defer written.release();
                         if (hook_cell) |cell| {
-                            const result = Value{ .string = Value.String.borrowed(buf) };
+                            const result = Value{ .string = written };
                             self.setCell(cell, result);
                             try self.propagateCellWrite(cell, result);
-                        } else try obj.set(self.allocator, pname, .{ .string = Value.String.borrowed(buf) });
+                        } else try obj.set(self.allocator, pname, .{ .string = written });
                         self.push(v);
                         continue;
                     }
@@ -5463,16 +5442,17 @@ pub const VM = struct {
                         @memcpy(buf[0..s.len], s);
                         if (new_len > s.len) @memset(buf[s.len..], ' ');
                         buf[target_idx] = write_byte;
-                        try self.strings.append(self.allocator, buf);
+                        const written = try Value.String.adopt(self.allocator, buf);
+                        defer written.release();
                         if (base == .array) {
-                            try self.arraySetOwned(base.array, ok, .{ .string = Value.String.borrowed(buf) });
+                            try self.arraySetOwned(base.array, ok, .{ .string = written });
                         } else if (base_is_array_access_obj) {
-                            _ = self.callMethod(base.object, "offsetSet", &.{ outer_key, .{ .string = Value.String.borrowed(buf) } }) catch {
+                            _ = self.callMethod(base.object, "offsetSet", &.{ outer_key, .{ .string = written } }) catch {
                                 if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                                 return error.RuntimeError;
                             };
                         } else if (outer_key == .string) {
-                            try base.object.set(self.allocator, outer_key.string.bytes(), .{ .string = Value.String.borrowed(buf) });
+                            try base.object.set(self.allocator, outer_key.string.bytes(), .{ .string = written });
                         }
                         self.push(v);
                         continue;
@@ -7531,9 +7511,7 @@ pub const VM = struct {
                     if (isSuperglobal(name) and cell == null) cell = try self.superglobalCell(name);
                     if (cell == null) {
                         if (self.frames[0].ref_slots.get(name)) |top_cell| {
-                            const owned = try self.allocator.dupe(u8, name);
-                            try self.strings.append(self.allocator, owned);
-                            try self.bindRefSlot(&self.globals_cells, owned, top_cell);
+                            try self.bindRefSlot(&self.globals_cells, try self.internName(name), top_cell);
                             cell = top_cell;
                         }
                     }
@@ -7568,9 +7546,7 @@ pub const VM = struct {
                         };
                         const c = try self.newRefCell();
                         self.setCell(c, initial);
-                        const owned = try self.allocator.dupe(u8, name);
-                        try self.strings.append(self.allocator, owned);
-                        try self.bindRefSlot(&self.globals_cells, owned, c);
+                        try self.bindRefSlot(&self.globals_cells, try self.internName(name), c);
                         cell = c;
                     }
                     // bind the local name to the cell so set_var/get_var on this
@@ -7601,9 +7577,7 @@ pub const VM = struct {
                     if (cell == null) {
                         const c = try self.newRefCell();
                         self.setCell(c, self.statics.get(key) orelse .null);
-                        const owned_key = try self.allocator.dupe(u8, key);
-                        try self.strings.append(self.allocator, owned_key);
-                        try self.bindRefSlot(&self.statics_cells, owned_key, c);
+                        try self.bindRefSlot(&self.statics_cells, try self.internName(key), c);
                         cell = c;
                     }
                     self.push(cell.?.*);
@@ -7775,11 +7749,11 @@ pub const VM = struct {
                                 self.script_strict_types = saved_strict;
                                 if (self.sp <= sp_before) self.push(.{ .bool = true });
                             } else if (self.ic.?.include_parse_error) |parse_error| {
-                                self.ic.?.include_parse_error = null;
+                                defer self.dropIncludeError(&self.ic.?.include_parse_error);
                                 if (try self.throwBuiltinExceptionAt("ParseError", parse_error.message, parse_error.at)) continue;
                                 return error.RuntimeError;
                             } else if (self.ic.?.include_compile_error) |compile_error| {
-                                self.ic.?.include_compile_error = null;
+                                defer self.dropIncludeError(&self.ic.?.include_compile_error);
                                 return self.raiseCompileFatal(compile_error.message, compile_error.at);
                             } else {
                                 self.includeNotOpened(kind, path, "Permission denied") catch if (try self.resumeRaised()) continue;
@@ -8329,6 +8303,7 @@ pub const VM = struct {
                             if (ac < func.required_params) {
                                 self.dropN(ac);
                                 const msg = try self.formatTooFewArgs(cn, ac, func);
+                                defer self.allocator.free(msg);
                                 if (try self.throwBuiltinException("ArgumentCountError", msg)) continue;
                                 self.setErrorMsg("Fatal error: Uncaught ArgumentCountError: {s}\n", .{msg});
                                 return error.RuntimeError;
@@ -8705,7 +8680,7 @@ pub const VM = struct {
                                 const msg = try std.fmt.allocPrint(self.allocator, "Cannot access {s} property {s}::${s}", .{
                                     @tagName(vr.visibility), vr.defining_class, prop_name,
                                 });
-                                try self.strings.append(self.allocator, msg);
+                                defer self.allocator.free(msg);
                                 if (try self.throwBuiltinException("Error", msg)) continue;
                                 return error.RuntimeError;
                             }
@@ -8948,7 +8923,7 @@ pub const VM = struct {
                                 const msg = try std.fmt.allocPrint(self.allocator, "Cannot access {s} property {s}::${s}", .{
                                     @tagName(vr.visibility), vr.defining_class, prop_name,
                                 });
-                                try self.strings.append(self.allocator, msg);
+                                defer self.allocator.free(msg);
                                 if (try self.throwBuiltinException("Error", msg)) continue;
                                 return error.RuntimeError;
                             }
@@ -8959,7 +8934,7 @@ pub const VM = struct {
                                     const msg = try std.fmt.allocPrint(self.allocator, "Cannot modify readonly property {s}::${s}", .{
                                         vr.defining_class, prop_name,
                                     });
-                                    try self.strings.append(self.allocator, msg);
+                                    defer self.allocator.free(msg);
                                     if (try self.throwBuiltinException("Error", msg)) continue;
                                     return error.RuntimeError;
                                 }
@@ -9361,7 +9336,7 @@ pub const VM = struct {
                         const msg = try std.fmt.allocPrint(self.allocator, "Call to {s} method {s}::{s}(){s}", .{
                             @tagName(mvr.visibility), mvr.defining_class, method_name, suffix,
                         });
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         self.dropN(ac + 1);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
@@ -9398,8 +9373,8 @@ pub const VM = struct {
                             }
                         }
                         self.dropN(ac + 1);
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -9471,6 +9446,7 @@ pub const VM = struct {
                         if (ac < func.required_params) {
                             self.dropN(ac + 1);
                             const msg = try self.formatTooFewArgs(full_name, ac, func);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("ArgumentCountError", msg)) continue;
                             self.setErrorMsg("Fatal error: Uncaught ArgumentCountError: {s}\n", .{msg});
                             return error.RuntimeError;
@@ -9554,8 +9530,8 @@ pub const VM = struct {
                         }
                     } else {
                         self.dropN(ac + 1);
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -9768,8 +9744,8 @@ pub const VM = struct {
                         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                     } else {
                         self.dropN(ac + 1);
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -9823,8 +9799,8 @@ pub const VM = struct {
                             continue;
                         }
                         self.dropN(ac + 1);
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -9927,8 +9903,8 @@ pub const VM = struct {
                         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                     } else {
                         self.dropN(ac + 1);
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -9999,8 +9975,8 @@ pub const VM = struct {
                             }
                         }
                         self.dropN(ac + 1);
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -10104,8 +10080,8 @@ pub const VM = struct {
                         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                     } else {
                         self.dropN(ac + 1);
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ obj.class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -10206,8 +10182,8 @@ pub const VM = struct {
                             try self.callStaticFunction(cs_name, 2, effective_called);
                             continue;
                         }
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -10270,10 +10246,10 @@ pub const VM = struct {
                                     if (!self.hasCallRoom(1) and !(try self.growCallRoom(1))) {
                                         self.dropN(ac);
                                         new_vars.deinit(self.allocator);
-                                        const msg = std.fmt.allocPrint(self.allocator, "Fatal error: maximum call stack depth exceeded in {s}::{s}()", .{ class_name, method_name }) catch "Fatal error: maximum call stack depth exceeded";
-                                        try self.strings.append(self.allocator, msg);
+                                        const msg = std.fmt.allocPrint(self.allocator, "Fatal error: maximum call stack depth exceeded in {s}::{s}()", .{ class_name, method_name }) catch return error.OutOfMemory;
+                                        defer self.allocator.free(msg);
                                         if (try self.throwBuiltinException("Error", msg)) continue;
-                                        self.error_msg = msg;
+                                        self.setErrorMsg("{s}", .{msg});
                                         return error.RuntimeError;
                                     }
                                     self.saveFrameArgs(arg_count);
@@ -10334,8 +10310,8 @@ pub const VM = struct {
                                 self.deinitFrameSlot(self.frame_count);
                                 self.pushNativeResult(result);
                             } else {
-                                const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch "Call to undefined method";
-                                try self.strings.append(self.allocator, msg);
+                                const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch return error.OutOfMemory;
+                                defer self.allocator.free(msg);
                                 if (try self.throwBuiltinException("Error", msg)) continue;
                                 self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                                 return error.RuntimeError;
@@ -10565,8 +10541,8 @@ pub const VM = struct {
                             try self.callStaticFunction(cs_name, 2, class_name);
                             continue;
                         }
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -10630,8 +10606,8 @@ pub const VM = struct {
                             try self.callStaticFunction(cs_name, 2, effective_called);
                             continue;
                         }
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -10698,8 +10674,8 @@ pub const VM = struct {
                             try self.callStaticFunction(cs_name, 2, effective_called);
                             continue;
                         }
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -10752,8 +10728,8 @@ pub const VM = struct {
                             try self.callStaticFunction(cs_name, 2, class_name);
                             continue;
                         }
-                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch "Call to undefined method";
-                        try self.strings.append(self.allocator, msg);
+                        const msg = std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name }) catch return error.OutOfMemory;
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         self.setErrorMsg("Fatal error: Uncaught Error: {s}", .{msg});
                         return error.RuntimeError;
@@ -11477,13 +11453,13 @@ pub const VM = struct {
     // return the function's display name for traces / __FUNCTION__-style
     // output. closures (internal name `__closure_N`) become PHP's
     // `{closure:file:line}` form so user code that reads $trace[N]['function']
-    // sees the same shape as native PHP. allocates if substitution happens
+    // sees the same shape as native PHP
     pub fn funcDisplayName(self: *VM, f: *const ObjFunction) ![]const u8 {
         if (f.display_name.len > 0) return f.display_name;
         if (!std.mem.startsWith(u8, f.name, "__closure_")) return f.name;
         const s = try std.fmt.allocPrint(self.allocator, "{{closure:{s}:{d}}}", .{ f.file_path, f.start_line });
-        try self.strings.append(self.allocator, s);
-        return s;
+        defer self.allocator.free(s);
+        return self.internName(s);
     }
 
     // how a TypeError names the called function: a closure by its php name,
@@ -11493,8 +11469,8 @@ pub const VM = struct {
         if (f.display_name.len == 0) return name;
         const class = self.closureDefClassByName(name) orelse return f.display_name;
         const s = try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ class, f.display_name });
-        try self.strings.append(self.allocator, s);
-        return s;
+        defer self.allocator.free(s);
+        return self.internName(s);
     }
 
     pub fn frameFile(self: *const VM, frame_idx: usize) []const u8 {
@@ -11760,7 +11736,7 @@ pub const VM = struct {
             .isset_or_empty => std.fmt.allocPrint(self.allocator, "Cannot access offset of type {s} in isset or empty", .{tn}),
             .unset => std.fmt.allocPrint(self.allocator, "Cannot unset offset of type {s} on array", .{tn}),
         } catch return error.RuntimeError;
-        try self.strings.append(self.allocator, msg);
+        defer self.allocator.free(msg);
         return self.throwBuiltinException("TypeError", msg);
     }
 
@@ -11972,15 +11948,14 @@ pub const VM = struct {
         return error.RuntimeError;
     }
 
-    fn bitwiseStrings(self: *VM, a: []const u8, b: []const u8, comptime op: enum { and_op, or_op, xor_op }) ![]const u8 {
+    fn bitwiseStrings(self: *VM, a: []const u8, b: []const u8, comptime op: enum { and_op, or_op, xor_op }) !Value.String {
         // PHP byte-wise op on two strings: AND truncates to shorter length,
         // OR and XOR pad shorter side with NUL bytes
         const len = switch (op) {
             .and_op => @min(a.len, b.len),
             .or_op, .xor_op => @max(a.len, b.len),
         };
-        const out = try self.allocator.alloc(u8, len);
-        try self.strings.append(self.allocator, out);
+        const out = try self.stringAllocator().alloc(u8, len);
         for (0..len) |i| {
             const ca: u8 = if (i < a.len) a[i] else 0;
             const cb: u8 = if (i < b.len) b[i] else 0;
@@ -11990,7 +11965,7 @@ pub const VM = struct {
                 .xor_op => ca ^ cb,
             };
         }
-        return out;
+        return Value.String.adopt(self.stringAllocator(), out);
     }
 
     fn isArithOperand(v: Value) bool {
@@ -12378,17 +12353,29 @@ pub const VM = struct {
     // the file loader could not compile an included file: remembered until the
     // include opcode raises it
     pub fn recordIncludeParseError(self: *VM, message: []const u8, file: []const u8, line: i64) void {
-        const msg = self.allocator.dupe(u8, message) catch return;
-        self.strings.append(self.allocator, msg) catch return self.allocator.free(msg);
-        const path = self.allocator.dupe(u8, file) catch return;
-        self.strings.append(self.allocator, path) catch return self.allocator.free(path);
-        self.ic.?.include_parse_error = .{ .message = msg, .at = .{ .file = path, .line = line } };
+        self.dropIncludeError(&self.ic.?.include_parse_error);
+        self.ic.?.include_parse_error = self.ownedPositionMessage(message, file, line);
     }
 
     pub fn recordIncludeCompileError(self: *VM, message: []const u8, file: []const u8, line: i64) void {
-        const path = self.allocator.dupe(u8, file) catch return;
-        self.strings.append(self.allocator, path) catch return self.allocator.free(path);
-        self.ic.?.include_compile_error = .{ .message = message, .at = .{ .file = path, .line = line } };
+        self.dropIncludeError(&self.ic.?.include_compile_error);
+        self.ic.?.include_compile_error = self.ownedPositionMessage(message, file, line);
+    }
+
+    fn ownedPositionMessage(self: *VM, message: []const u8, file: []const u8, line: i64) ?SourcePositionMessage {
+        const msg = self.allocator.dupe(u8, message) catch return null;
+        const path = self.allocator.dupe(u8, file) catch {
+            self.allocator.free(msg);
+            return null;
+        };
+        return .{ .message = msg, .at = .{ .file = path, .line = line } };
+    }
+
+    fn dropIncludeError(self: *VM, slot: *?SourcePositionMessage) void {
+        const record = slot.* orelse return;
+        self.allocator.free(record.message);
+        self.allocator.free(record.at.file);
+        slot.* = null;
     }
 
     // a compile-time fatal ends the script where php reports it: in the file
@@ -12396,7 +12383,7 @@ pub const VM = struct {
     pub fn raiseCompileFatal(self: *VM, message: []const u8, at: SourcePosition) RuntimeError {
         try self.setPendingException("CompileError", message);
         if (self.pending_exception) |exc| if (exc == .object) {
-            try exc.object.set(self.allocator, "file", .{ .string = Value.String.borrowed(at.file) });
+            try exc.object.setCopiedString(self.allocator, "file", at.file);
             try exc.object.set(self.allocator, "line", .{ .int = at.line });
         };
         self.uncatchable_fatal = true;
@@ -12417,7 +12404,7 @@ pub const VM = struct {
         try obj.set(self.allocator, "message", .{ .string = owned_message });
         try obj.set(self.allocator, "code", .{ .int = 0 });
         if (at) |pos| {
-            try obj.set(self.allocator, "file", .{ .string = Value.String.borrowed(pos.file) });
+            try obj.setCopiedString(self.allocator, "file", pos.file);
             try obj.set(self.allocator, "line", .{ .int = pos.line });
         }
         return obj;
@@ -13214,6 +13201,42 @@ pub const VM = struct {
     // a copy of bytes as a transient
     pub fn transientBytes(self: *VM, bytes: []const u8) RuntimeError!Value.String {
         return self.transientOwned(try Value.String.create(self.allocator, bytes));
+    }
+
+    pub fn mapPharAlias(self: *VM, alias: []const u8, path: []const u8) RuntimeError!void {
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+        const gop = try self.phar_aliases.getOrPut(self.allocator, alias);
+        if (gop.found_existing) {
+            self.allocator.free(gop.value_ptr.*);
+        } else {
+            gop.key_ptr.* = self.allocator.dupe(u8, alias) catch |err| {
+                self.phar_aliases.removeByPtr(gop.key_ptr);
+                return err;
+            };
+        }
+        gop.value_ptr.* = owned_path;
+    }
+
+    fn clearStreamWrappers(self: *VM) void {
+        var user = self.stream_wrappers_user.iterator();
+        while (user.next()) |e| {
+            self.allocator.free(e.key_ptr.*);
+            self.allocator.free(e.value_ptr.*);
+        }
+        self.stream_wrappers_user.clearRetainingCapacity();
+        var unregistered = self.stream_wrappers_unregistered.keyIterator();
+        while (unregistered.next()) |k| self.allocator.free(k.*);
+        self.stream_wrappers_unregistered.clearRetainingCapacity();
+    }
+
+    fn clearPharAliases(self: *VM) void {
+        var it = self.phar_aliases.iterator();
+        while (it.next()) |e| {
+            self.allocator.free(e.key_ptr.*);
+            self.allocator.free(e.value_ptr.*);
+        }
+        self.phar_aliases.clearRetainingCapacity();
     }
 
     // a null-terminated copy for a C call, valid until the next statement
@@ -15979,7 +16002,12 @@ pub const VM = struct {
         } else if (vr.is_readonly) {
             denial = try std.fmt.allocPrint(self.allocator, "Cannot modify readonly property {s}::${s}", .{ vr.defining_class, name });
         }
-        if (denial) |text| try self.strings.append(self.allocator, text);
+        // the denial rides along with the argument's source until a write
+        // raises it, so it is interned rather than owned by one copy
+        if (denial) |text| {
+            defer self.allocator.free(text);
+            denial = try self.internName(text);
+        }
         const index = try self.refIndex();
         const cell = cell: {
             if (index.prop_rev.get(.{ .object = obj, .class_name = "", .prop_name = name })) |cells| {
@@ -16542,8 +16570,8 @@ pub const VM = struct {
             null;
         if (caller) |c| {
             const s = std.fmt.allocPrint(self.allocator, " from '{s}' context", .{c}) catch return " from global scope";
-            self.strings.append(self.allocator, s) catch {};
-            return s;
+            defer self.allocator.free(s);
+            return self.internName(s) catch " from global scope";
         }
         return " from global scope";
     }
@@ -16604,7 +16632,7 @@ pub const VM = struct {
             msg = try std.fmt.allocPrint(self.allocator, "Cannot modify readonly property {s}::${s}", .{ vr.defining_class, name });
         }
         if (msg) |text| {
-            try self.strings.append(self.allocator, text);
+            defer self.allocator.free(text);
             if (try self.throwBuiltinException("Error", text)) return true;
             return error.RuntimeError;
         }
@@ -17045,17 +17073,16 @@ pub const VM = struct {
         if (self.hasPendingReleases()) self.drainPendingDestruct();
     }
 
-    pub fn propHookName(self: *VM, prop_name: []const u8, kind: enum { get, set }) ?[]const u8 {
+    pub fn propHookName(self: *VM, prop_name: []const u8, kind: enum { get, set }) RuntimeError![]const u8 {
         const suffix = switch (kind) {
             .get => "$hook_get",
             .set => "$hook_set",
         };
-        const name = std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prop_name, suffix }) catch return null;
-        self.strings.append(self.allocator, name) catch {
-            self.allocator.free(name);
-            return null;
-        };
-        return name;
+        var buf: [256]u8 = undefined;
+        if (std.fmt.bufPrint(&buf, "{s}{s}", .{ prop_name, suffix })) |name| return self.internName(name) else |_| {}
+        const name = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prop_name, suffix });
+        defer self.allocator.free(name);
+        return self.internName(name);
     }
 
     // Adopt the returned source binding, never manufacture storage on a virtual
@@ -17083,7 +17110,7 @@ pub const VM = struct {
     }
 
     fn propGetReturnsRef(self: *VM, obj: *PhpObject, prop_name: []const u8) RuntimeError!bool {
-        const name = self.propHookName(prop_name, .get) orelse return error.OutOfMemory;
+        const name = try self.propHookName(prop_name, .get);
         const full_name = try self.resolveMethod(obj.class_name, name);
         const func = self.functions.get(full_name) orelse return false;
         return func.returns_ref;
@@ -17099,13 +17126,8 @@ pub const VM = struct {
 
     pub fn callPropHook(self: *VM, obj: *PhpObject, prop_name: []const u8, kind: enum { get, set }, value: Value) RuntimeError!?Value {
         if (self.inPropHook(obj, prop_name)) return null;
-        const suffix = switch (kind) {
-            .get => "$hook_get",
-            .set => "$hook_set",
-        };
-        const hook_name = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prop_name, suffix });
-        try self.strings.append(self.allocator, hook_name);
         if (!self.hasPropHook(obj.class_name, prop_name, if (kind == .get) .get else .set)) return null;
+        const hook_name = try self.propHookName(prop_name, if (kind == .get) .get else .set);
         const obj_id = @intFromPtr(obj);
         try self.prop_hook_guard.append(self.allocator, .{ .obj_ptr = obj_id, .prop_name = prop_name });
         defer {
@@ -18099,8 +18121,7 @@ pub const VM = struct {
                 const joined = try self.allocator.alloc(u8, ls.len + rs.len);
                 @memcpy(joined[0..ls.len], ls);
                 @memcpy(joined[ls.len..], rs);
-                try self.strings.append(self.allocator, joined);
-                break :blk Value{ .string = Value.String.borrowed(joined) };
+                break :blk Value{ .string = try self.transientAdopted(joined) };
             },
             .neg => unreachable,
         };
@@ -18639,8 +18660,7 @@ pub const VM = struct {
             std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} ({s}) must be of type {s}, {s} given{s}", .{ shown, i + 1, param_name, failure.type_str, valueTypeName(val), site }) catch return error.RuntimeError
         else
             std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} must be of type {s}, {s} given{s}", .{ shown, i + 1, failure.type_str, valueTypeName(val), site }) catch return error.RuntimeError;
-        try self.strings.append(self.allocator, msg);
-        self.error_msg = msg;
+        defer self.allocator.free(msg);
         // php raises it inside the callee, at its declaration
         const at: ?SourcePosition = if (func) |f| if (f.file_path.len > 0) SourcePosition{ .file = f.file_path, .line = f.start_line } else null else null;
         const exc = try self.newBuiltinException("TypeError", msg, at);
@@ -18690,10 +18710,10 @@ pub const VM = struct {
             }
             const shown = if (frame.func) |f| (if (f.display_name.len > 0) f.display_name else func_name) else func_name;
             const msg = std.fmt.allocPrint(self.allocator, "{s}(): Return value must be of type {s}, {s} returned", .{ shown, ti.return_type, valueTypeName(val.*) }) catch return error.RuntimeError;
-            try self.strings.append(self.allocator, msg);
-            self.error_msg = msg;
+            defer self.allocator.free(msg);
             try self.popFrame();
             if (try self.throwBuiltinException("TypeError", msg)) return true;
+            self.setErrorMsg("{s}", .{msg});
             return error.RuntimeError;
         }
         // coerce Stringable -> string when return type allows string
@@ -18771,9 +18791,9 @@ pub const VM = struct {
                 if (std.mem.eql(u8, t, "Closure") and self.isValueCallable(val.*)) return false;
             }
             const msg = std.fmt.allocPrint(self.allocator, "Cannot assign {s} to property {s}::${s} of type {s}", .{ valueTypeName(val.*), class_name, prop_name, type_str }) catch return error.RuntimeError;
-            try self.strings.append(self.allocator, msg);
-            self.error_msg = msg;
+            defer self.allocator.free(msg);
             if (try self.throwBuiltinException("TypeError", msg)) return true;
+            self.setErrorMsg("{s}", .{msg});
             return error.RuntimeError;
         }
         // value satisfies the type; non-strict still coerces it to the exact
@@ -18903,7 +18923,7 @@ pub const VM = struct {
         } else {
             if (self.resolveFunctionName(name)) |registered| return self.callNamedFunctionV(registered, arg_count, named_extras);
             const msg = std.fmt.allocPrint(self.allocator, "Call to undefined function {s}()", .{name}) catch "Call to undefined function";
-            try self.strings.append(self.allocator, msg);
+            defer self.allocator.free(msg);
             if (try self.throwBuiltinException("Error", msg)) return;
             self.setErrorMsg("Fatal error: Uncaught Error: {s}\n", .{msg});
             return error.RuntimeError;
@@ -18915,6 +18935,7 @@ pub const VM = struct {
         const ac: usize = arg_count;
         if (ac < func.required_params) {
             const msg = try self.formatTooFewArgs(name, ac, func);
+            defer self.allocator.free(msg);
             if (try self.throwBuiltinException("ArgumentCountError", msg)) return;
             self.setErrorMsg("Fatal error: Uncaught ArgumentCountError: {s}\n", .{msg});
             return error.RuntimeError;
@@ -18994,9 +19015,9 @@ pub const VM = struct {
                 self.deinitRefSlots(&callee_refs);
                 if (self.ref_index) |ri| ri.releaseOwner(self.allocator, callee_owner);
                 const msg = std.fmt.allocPrint(self.allocator, "Maximum function nesting level of {d} reached, aborting in {s}()", .{ max_frames, name }) catch "Maximum function nesting level reached";
-                try self.strings.append(self.allocator, msg);
+                defer self.allocator.free(msg);
                 if (try self.throwBuiltinException("Error", msg)) return;
-                self.error_msg = msg;
+                self.setErrorMsg("{s}", .{msg});
                 return error.RuntimeError;
             }
             const inherit_cc = if (std.mem.startsWith(u8, name, "__closure_"))
@@ -19109,10 +19130,12 @@ pub const VM = struct {
 
     pub fn throwNamedArgProblem(self: *VM, func_name: []const u8, params: []const native_params.Param, problem: NamedArgProblem) RuntimeError!bool {
         const class: []const u8, const msg = try self.namedArgProblemMessage(func_name, params, problem);
+        defer self.allocator.free(msg);
         return self.throwBuiltinException(class, msg);
     }
 
-    // the exception class and message php raises for a misplaced named argument
+    // the exception class and message php raises for a misplaced named
+    // argument; the caller frees the message
     pub fn namedArgProblemMessage(self: *VM, func_name: []const u8, params: []const native_params.Param, problem: NamedArgProblem) RuntimeError!struct { []const u8, []const u8 } {
         const class: []const u8, const msg = switch (problem) {
             .unknown => |name| .{ "Error", try std.fmt.allocPrint(self.allocator, "Unknown named parameter ${s}", .{name}) },
@@ -19121,7 +19144,6 @@ pub const VM = struct {
             .not_passed => |i| .{ "ArgumentCountError", try std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} (${s}) not passed", .{ func_name, i + 1, params[i].name }) },
             .default_unknown => |i| .{ "ArgumentCountError", try std.fmt.allocPrint(self.allocator, "{s}(): Argument #{d} (${s}) must be passed explicitly, because the default value is not known", .{ func_name, i + 1, params[i].name }) },
         };
-        try self.strings.append(self.allocator, msg);
         return .{ class, msg };
     }
 
@@ -19300,9 +19322,7 @@ pub const VM = struct {
             if (self.sourceLocation(caller.chunk, cip)) |loc| caller_line = loc.line;
         }
         const modifier: []const u8 = if (func.required_params == func.arity) "exactly" else "at least";
-        const msg = try std.fmt.allocPrint(self.allocator, "Too few arguments to function {s}(), {d} passed in {s} on line {d} and {s} {d} expected", .{ name, ac, caller_file, caller_line, modifier, func.required_params });
-        try self.strings.append(self.allocator, msg);
-        return msg;
+        return std.fmt.allocPrint(self.allocator, "Too few arguments to function {s}(), {d} passed in {s} on line {d} and {s} {d} expected", .{ name, ac, caller_file, caller_line, modifier, func.required_params });
     }
 
     fn callValueCallable(self: *VM, callable: Value, args: []const Value) RuntimeError!Value {

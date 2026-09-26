@@ -191,8 +191,12 @@ fn sqliteCollationTrampoline(p: ?*anyopaque, alen: c_int, aptr: ?*const anyopaqu
         @as([*]const u8, @ptrCast(x))[0..@intCast(@max(blen, 0))]
     else
         "";
+    const a = Value.String.create(state.vm.allocator, a_slice) catch return 0;
+    defer a.release();
+    const b = Value.String.create(state.vm.allocator, b_slice) catch return 0;
+    defer b.release();
     var nc = state.vm.makeContext(null);
-    const result = nc.invokeCallable(state.callable, &.{ .{ .string = Value.String.borrowed(a_slice) }, .{ .string = Value.String.borrowed(b_slice) } }) catch return 0;
+    const result = nc.invokeCallable(state.callable, &.{ .{ .string = a }, .{ .string = b } }) catch return 0;
     return switch (result) {
         .int => |n| if (n < 0) @as(c_int, -1) else if (n > 0) @as(c_int, 1) else @as(c_int, 0),
         else => 0,
@@ -677,7 +681,8 @@ fn aggregateStep(ctx: *sqlite.Context, argc: c_int, argv: [*]?*sqlite.Value_t) c
     group.row += 1;
     args[0] = group.value;
     args[1] = .{ .int = group.row };
-    var nc = reg.vm.makeContext(null);
+    for (args[2..]) |*arg| arg.* = .null;
+    defer for (args[2..]) |arg| if (arg == .string) arg.string.release();
     for (args[2..], 0..) |*arg, i| {
         const v = argv[i] orelse {
             arg.* = .null;
@@ -689,15 +694,16 @@ fn aggregateStep(ctx: *sqlite.Context, argc: c_int, argv: [*]?*sqlite.Value_t) c
             sqlite.NULL => .null,
             else => blk: {
                 const ptr = sqlite.sqlite3_value_text(v) orelse break :blk .null;
-                const text = nc.createString(ptr[0..@intCast(@max(sqlite.sqlite3_value_bytes(v), 0))]) catch {
+                const text = Value.String.create(reg.vm.allocator, ptr[0..@intCast(@max(sqlite.sqlite3_value_bytes(v), 0))]) catch {
                     group.failed = true;
                     sqlite.sqlite3_result_error(ctx, "out of memory", 13);
                     return;
                 };
-                break :blk .{ .string = Value.String.borrowed(text) };
+                break :blk .{ .string = text };
             },
         };
     }
+    var nc = reg.vm.makeContext(null);
     const result = nc.invokeCallable(reg.step, args) catch {
         group.failed = true;
         sqlite.sqlite3_result_error(ctx, "callback failed", 15);

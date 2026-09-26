@@ -4,6 +4,7 @@ const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
 const OutputBufferLevel = @import("../runtime/vm.zig").OutputBufferLevel;
+const VM = @import("../runtime/vm.zig").VM;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
 pub const entries = .{
@@ -211,12 +212,6 @@ fn native_header(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     const hdr = args[0].string.bytes();
     const replace = args.len < 2 or args[1] != .bool or args[1].bool;
 
-    if (startsWithIgnoreCase(hdr, "Content-Type:")) {
-        if (std.mem.indexOf(u8, hdr, ": ")) |sep| {
-            ctx.vm.response_content_type = try ctx.createString(hdr[sep + 2 ..]);
-        }
-    }
-
     // PHP treats `header("HTTP/1.1 301 ...")` as a status-code set, not a real
     // header. parse the numeric code out and update response_code. the header
     // string stays in response_headers so headers_list() can introspect it
@@ -409,6 +404,24 @@ fn removeHeaderByName(ctx: *NativeContext, name: []const u8) void {
         i += 1;
     }
     if (removed) arr.rebuildStringIndexAssumeCapacity();
+}
+
+pub fn isContentTypeHeader(hdr: []const u8) bool {
+    return startsWithIgnoreCase(hdr, "Content-Type:");
+}
+
+// the last Content-Type header() set, or php's default
+pub fn responseContentType(vm: *const VM) []const u8 {
+    const arr = vm.response_headers orelse return "text/html";
+    var i = arr.entries.items.len;
+    while (i > 0) {
+        i -= 1;
+        const entry = arr.entries.items[i];
+        if (entry.value != .string) continue;
+        const hdr = entry.value.string.bytes();
+        if (isContentTypeHeader(hdr)) return std.mem.trim(u8, hdr["Content-Type:".len..], " \t");
+    }
+    return "text/html";
 }
 
 fn startsWithIgnoreCase(s: []const u8, prefix: []const u8) bool {

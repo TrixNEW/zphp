@@ -785,7 +785,7 @@ const TransferCheck = struct {
 
     fn refuse(self: *TransferCheck, what: []const u8) RuntimeError {
         const msg = try std.fmt.allocPrint(self.ctx.allocator, "{s} cannot be transferred between threads (at {s})", .{ what, self.path.items });
-        try self.ctx.vm.strings.append(self.ctx.allocator, msg);
+        defer self.ctx.allocator.free(msg);
         try self.ctx.vm.setPendingException(transfer_exception, msg);
         return error.RuntimeError;
     }
@@ -1083,7 +1083,7 @@ fn poolConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     const failure = pool.start();
     if (failure) |msg| {
         const copy = try ctx.allocator.dupe(u8, msg);
-        try ctx.vm.strings.append(ctx.allocator, copy);
+        defer ctx.allocator.free(copy);
         pool.destroy();
         obj.native = .{};
         try ctx.vm.setPendingException(pool_exception, copy);
@@ -1241,9 +1241,7 @@ fn rethrow(ctx: *NativeContext, task: *Task) RuntimeError {
     if (task.failure) |f| {
         const known = ctx.vm.classes.contains(f.class_name) and ctx.vm.isInstanceOf(f.class_name, "Throwable");
         if (known) {
-            const msg = try ctx.allocator.dupe(u8, f.message);
-            try ctx.vm.strings.append(ctx.allocator, msg);
-            try ctx.vm.setPendingException(f.class_name, msg);
+            try ctx.vm.setPendingException(f.class_name, f.message);
         } else {
             const msg = try std.fmt.allocPrint(ctx.allocator, "{s}: {s}", .{ f.class_name, f.message });
             defer ctx.allocator.free(msg);

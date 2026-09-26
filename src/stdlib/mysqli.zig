@@ -91,19 +91,13 @@ fn linkObj(ctx: *NativeContext, args: []const Value, idx: usize) ?*PhpObject {
     return v.object;
 }
 
-fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const buf = try ctx.allocator.allocSentinel(u8, s.len, 0);
-    @memcpy(buf[0..s.len], s);
-    try ctx.vm.strings.append(ctx.allocator, buf[0 .. s.len + 1]);
-    return buf;
+fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]const u8 {
+    return ctx.vm.transientZ(s);
 }
 
 fn setErrorState(ctx: *NativeContext, obj: *PhpObject, conn: ?*mysql.MYSQL) !void {
     if (conn) |c| {
-        const msg_span = std.mem.span(mysql.mysql_error(c));
-        const owned = try ctx.allocator.dupe(u8, msg_span);
-        try ctx.vm.strings.append(ctx.allocator, owned);
-        try obj.set(ctx.allocator, "error", .{ .string = Value.String.borrowed(owned) });
+        try obj.setCopiedString(ctx.allocator, "error", std.mem.span(mysql.mysql_error(c)));
         try obj.set(ctx.allocator, "errno", .{ .int = @intCast(mysql.mysql_errno(c)) });
     } else {
         try obj.set(ctx.allocator, "error", .{ .string = Value.String.borrowed("") });
@@ -146,14 +140,8 @@ fn doConnect(ctx: *NativeContext, obj: *PhpObject, host: ?[]const u8, user: ?[]c
     // expose the public PHP-visible properties immediately so user code
     // that reads $mysqli->server_info, ->thread_id, ->host_info etc.
     // before issuing any query works
-    const server_info = std.mem.span(mysql.mysql_get_server_info(conn));
-    const host_info = std.mem.span(mysql.mysql_get_host_info(conn));
-    const si_owned = try ctx.allocator.dupe(u8, server_info);
-    try ctx.vm.strings.append(ctx.allocator, si_owned);
-    const hi_owned = try ctx.allocator.dupe(u8, host_info);
-    try ctx.vm.strings.append(ctx.allocator, hi_owned);
-    try obj.set(ctx.allocator, "server_info", .{ .string = Value.String.borrowed(si_owned) });
-    try obj.set(ctx.allocator, "host_info", .{ .string = Value.String.borrowed(hi_owned) });
+    try obj.setCopiedString(ctx.allocator, "server_info", std.mem.span(mysql.mysql_get_server_info(conn)));
+    try obj.setCopiedString(ctx.allocator, "host_info", std.mem.span(mysql.mysql_get_host_info(conn)));
     try obj.set(ctx.allocator, "server_version", .{ .int = @intCast(mysql.mysql_get_server_version(conn)) });
     try obj.set(ctx.allocator, "thread_id", .{ .int = @intCast(mysql.mysql_thread_id(conn)) });
     try obj.set(ctx.allocator, "client_version", .{ .int = @intCast(mysql.mysql_get_client_version()) });
@@ -255,18 +243,18 @@ fn mysqliQuery(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         const native: *mysql_headers.MYSQL = @ptrCast(@alignCast(conn));
         const index: ?[]const u8 = if (native.server_status & 16 != 0) "Bad index" else if (native.server_status & 32 != 0) "No index" else null;
         if (index) |label| {
-            const message = try std.fmt.allocPrint(ctx.allocator, "{s} used in query/prepared statement {s}", .{ label, sql });
-            try ctx.vm.strings.append(ctx.allocator, message);
+            const message = try Value.String.adopt(ctx.allocator, try std.fmt.allocPrint(ctx.allocator, "{s} used in query/prepared statement {s}", .{ label, sql }));
+            defer message.release();
             if (reportMode(ctx) & 2 != 0) {
                 if (res_opt) |r| mysql.mysql_free_result(r);
                 const exception = try ctx.createObject("mysqli_sql_exception");
-                try exception.set(ctx.allocator, "message", .{ .string = Value.String.borrowed(message) });
+                try exception.set(ctx.allocator, "message", .{ .string = message });
                 try exception.set(ctx.allocator, "code", .{ .int = 0 });
                 try exception.set(ctx.allocator, "sqlstate", .{ .string = Value.String.borrowed("00000") });
                 ctx.vm.raise(.{ .object = exception });
                 return error.RuntimeError;
             }
-            try ctx.vm.emitWarning(message);
+            try ctx.vm.emitWarning(message.bytes());
         }
     }
     const res = res_opt orelse return NativeResult.scalar(.{ .bool = true });
@@ -298,18 +286,15 @@ fn fetchRow(ctx: *NativeContext, result_obj: *PhpObject, flags: u8) !Value {
             if (p_opt == null) break :blk .null;
             const p: [*:0]const u8 = p_opt.?;
             const len: usize = if (lens) |l| @intCast(l[i]) else std.mem.len(p);
-            const owned = try ctx.allocator.dupe(u8, p[0..len]);
-            try ctx.vm.strings.append(ctx.allocator, owned);
-            break :blk Value{ .string = Value.String.borrowed(owned) };
+            break :blk Value{ .string = try Value.String.create(ctx.allocator, p[0..len]) };
         };
+        defer if (cell == .string) cell.string.release();
         if (flags & 2 != 0) try arr.set(ctx.allocator, .{ .int = @intCast(i) }, cell);
         if (flags & 1 != 0) {
             const field = mysql.mysql_fetch_field(res) orelse continue;
             const fname_ptr = fieldName(field);
             const fname = std.mem.span(fname_ptr);
-            const owned_name = try ctx.allocator.dupe(u8, fname);
-            try ctx.vm.strings.append(ctx.allocator, owned_name);
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(owned_name) }, cell);
+            try arr.setCopiedKey(ctx.allocator, fname, cell);
         } else {
             _ = mysql.mysql_fetch_field(res);
         }
@@ -618,8 +603,8 @@ fn reportFailure(ctx: *NativeContext, conn: *mysql.MYSQL, operation: []const u8,
     const code = mysql.mysql_errno(conn);
     if (mode & 2 != 0) {
         const obj = try ctx.createObject("mysqli_sql_exception");
-        try obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed((try dupZ(ctx, message))) });
-        try obj.set(ctx.allocator, "sqlstate", .{ .string = Value.String.borrowed((try dupZ(ctx, state))) });
+        try obj.setCopiedString(ctx.allocator, "message", message);
+        try obj.setCopiedString(ctx.allocator, "sqlstate", state);
         try obj.set(ctx.allocator, "code", .{ .int = code });
         ctx.vm.raise(.{ .object = obj });
         return error.RuntimeError;

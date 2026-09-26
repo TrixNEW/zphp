@@ -2561,7 +2561,7 @@ fn stream_get_wrappers(ctx: *NativeContext, _: []const Value) RuntimeError!Nativ
         try result.append(ctx.allocator, .{ .string = Value.String.borrowed(w) });
     }
     var it = ctx.vm.stream_wrappers_user.keyIterator();
-    while (it.next()) |k| try result.append(ctx.allocator, .{ .string = Value.String.borrowed(k.*) });
+    while (it.next()) |k| try result.appendCopiedString(ctx.allocator, k.*);
     return NativeResult.borrowed(.{ .array = result });
 }
 
@@ -2577,20 +2577,26 @@ fn stream_wrapper_register(ctx: *NativeContext, args: []const Value) RuntimeErro
         try ctx.vm.tryAutoload(class_name);
         if (!ctx.vm.classes.contains(class_name)) return NativeResult.scalar(.{ .bool = false });
     }
-    const proto_owned = try ctx.createString(protocol);
-    const class_owned = try ctx.createString(class_name);
-    try ctx.vm.stream_wrappers_user.put(ctx.allocator, proto_owned, class_owned);
+    try ctx.vm.stream_wrappers_user.ensureUnusedCapacity(ctx.allocator, 1);
+    const proto_owned = try ctx.allocator.dupe(u8, protocol);
+    errdefer ctx.allocator.free(proto_owned);
+    const class_owned = try ctx.allocator.dupe(u8, class_name);
+    ctx.vm.stream_wrappers_user.putAssumeCapacityNoClobber(proto_owned, class_owned);
     return NativeResult.scalar(.{ .bool = true });
 }
 
 fn stream_wrapper_unregister(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const protocol = args[0].string.bytes();
-    if (ctx.vm.stream_wrappers_user.fetchRemove(protocol) != null) return NativeResult.scalar(.{ .bool = true });
+    if (ctx.vm.stream_wrappers_user.fetchRemove(protocol)) |kv| {
+        ctx.allocator.free(kv.key);
+        ctx.allocator.free(kv.value);
+        return NativeResult.scalar(.{ .bool = true });
+    }
     if (!isBuiltinWrapper(protocol)) return NativeResult.scalar(.{ .bool = false });
     if (ctx.vm.stream_wrappers_unregistered.contains(protocol)) return NativeResult.scalar(.{ .bool = false });
-    const proto_owned = try ctx.createString(protocol);
-    try ctx.vm.stream_wrappers_unregistered.put(ctx.allocator, proto_owned, {});
+    try ctx.vm.stream_wrappers_unregistered.ensureUnusedCapacity(ctx.allocator, 1);
+    ctx.vm.stream_wrappers_unregistered.putAssumeCapacityNoClobber(try ctx.allocator.dupe(u8, protocol), {});
     return NativeResult.scalar(.{ .bool = true });
 }
 
@@ -2598,8 +2604,8 @@ fn stream_wrapper_restore(ctx: *NativeContext, args: []const Value) RuntimeError
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const protocol = args[0].string.bytes();
     if (!isBuiltinWrapper(protocol)) return NativeResult.scalar(.{ .bool = false });
-    if (!ctx.vm.stream_wrappers_unregistered.contains(protocol)) return NativeResult.scalar(.{ .bool = true });
-    _ = ctx.vm.stream_wrappers_unregistered.remove(protocol);
+    const kv = ctx.vm.stream_wrappers_unregistered.fetchRemove(protocol) orelse return NativeResult.scalar(.{ .bool = true });
+    ctx.allocator.free(kv.key);
     return NativeResult.scalar(.{ .bool = true });
 }
 

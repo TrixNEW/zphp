@@ -18,6 +18,7 @@ const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const zlib = @cImport(@cInclude("zlib.h"));
 const ws_proto = @import("websocket.zig");
+const http = @import("stdlib/http.zig");
 
 // wakeups travel over connected socket pairs: the read end sits in the
 // poll set next to the connections, which is the only thing poll can wait on
@@ -1045,7 +1046,7 @@ fn processHttpRead(w: *Worker, c: *Connection) void {
     @import("stdlib/session.zig").finalizeSession(&session_ctx);
     @import("extension.zig").endRequest(&w.vm);
 
-    const ct = w.vm.response_content_type;
+    const ct = http.responseContentType(&w.vm);
     const code = w.vm.response_code;
     const extra_headers = w.vm.response_headers;
 
@@ -1191,7 +1192,7 @@ fn handleH2Request(w: *Worker, conn: *Connection, session: *h2.H2Session, stream
     @import("stdlib/session.zig").finalizeSession(&session_ctx);
     @import("extension.zig").endRequest(&w.vm);
 
-    const ct = w.vm.response_content_type;
+    const ct = http.responseContentType(&w.vm);
     const code: u16 = std.math.cast(u16, w.vm.response_code) orelse 200;
 
     session.submitResponse(stream_id, code, ct, w.vm.output.items);
@@ -1828,7 +1829,7 @@ fn writeResponse(conn: *Connection, code: i64, content_type: []const u8, extra_h
             if (entry.value == .string) {
                 const hdr = entry.value.string.bytes();
                 // Content-Type is already in the base headers above
-                if (std.mem.startsWith(u8, hdr, "Content-Type:") or std.mem.startsWith(u8, hdr, "content-type:")) continue;
+                if (http.isContentTypeHeader(hdr)) continue;
                 // header("HTTP/1.1 N ...") is PHP's way to set the status code,
                 // NOT a real header. PHP keeps it in headers_list (so user code
                 // can introspect) but does not emit it on the wire - the wire

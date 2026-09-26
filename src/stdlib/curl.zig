@@ -96,12 +96,10 @@ fn getThisObj(args: []const Value) ?*PhpObject {
     return args[0].object;
 }
 
-fn dupeZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
+// libcurl copies every string option it is handed (post fields go through
+// CURLOPT_COPYPOSTFIELDS), so a copy that lives for the call is enough
+fn dupeZ(ctx: *NativeContext, s: []const u8) ![:0]const u8 {
+    return ctx.vm.transientZ(s);
 }
 
 fn curlInit(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -250,11 +248,11 @@ fn applySetopt(ctx: *NativeContext, handle: *c.CURL, obj: *PhpObject, option: i6
             .string => value.string.bytes(),
             else => return NativeResult.scalar(.{ .bool = false }),
         };
-        const z = try dupeZ(ctx, s);
-        const code: c_uint = @intCast(c.curl_easy_setopt(handle, c.CURLOPT_POSTFIELDS, z.ptr));
-        if (code != c.CURLE_OK) return NativeResult.scalar(.{ .bool = false });
         const len_code: c_uint = @intCast(c.curl_easy_setopt(handle, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(s.len))));
-        return NativeResult.scalar(.{ .bool = len_code == c.CURLE_OK });
+        if (len_code != c.CURLE_OK) return NativeResult.scalar(.{ .bool = false });
+        const z = try dupeZ(ctx, s);
+        const code: c_uint = @intCast(c.curl_easy_setopt(handle, c.CURLOPT_COPYPOSTFIELDS, z.ptr));
+        return NativeResult.scalar(.{ .bool = code == c.CURLE_OK });
     }
 
     // CURLOPT_HTTPHEADER

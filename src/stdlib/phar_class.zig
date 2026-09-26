@@ -140,17 +140,17 @@ fn getEntries(obj: *PhpObject) ?*PhpArray {
     return null;
 }
 
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
+fn putEntry(ctx: *NativeContext, obj: *PhpObject, args: []const Value) !void {
+    const content: Value = if (args[1] == .string) args[1] else .{ .string = Value.String.borrowed("") };
+    const arr = try ensureEntries(ctx, obj);
+    try arr.set(ctx.allocator, .{ .string = args[0].string }, content);
 }
 
 fn phConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.null);
-    const filename = try dupString(ctx, args[0].string.bytes());
-    try obj.set(ctx.allocator, "__filename", .{ .string = Value.String.borrowed(filename) });
+    const filename = args[0].string.bytes();
+    try obj.set(ctx.allocator, "__filename", args[0]);
     try obj.set(ctx.allocator, "__stub", .{ .string = Value.String.borrowed(phar.default_stub) });
     try obj.set(ctx.allocator, "__alias", .{ .string = Value.String.borrowed("") });
     try obj.set(ctx.allocator, "__buffering", .{ .bool = false });
@@ -180,17 +180,16 @@ fn phConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         if (end + 2 <= bytes.len and bytes[end] == '?' and bytes[end + 1] == '>') end += 2;
         if (end < bytes.len and bytes[end] == '\r') end += 1;
         if (end < bytes.len and bytes[end] == '\n') end += 1;
-        const stub_copy = try dupString(ctx, bytes[0..end]);
-        try obj.set(ctx.allocator, "__stub", .{ .string = Value.String.borrowed(stub_copy) });
+        try obj.setCopiedString(ctx.allocator, "__stub", bytes[0..end]);
     }
 
     const entries_arr = try ensureEntries(ctx, obj);
     var it = parsed.entries.iterator();
     while (it.next()) |kv| {
         const data = phar.extract(ctx.allocator, &parsed, kv.value_ptr.*) catch continue;
-        try ctx.strings.append(ctx.allocator, data);
-        const name_copy = try dupString(ctx, kv.key_ptr.*);
-        try entries_arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name_copy) }, .{ .string = Value.String.borrowed(data) });
+        const content = try Value.String.adopt(ctx.allocator, data);
+        defer content.release();
+        try entries_arr.setCopiedKey(ctx.allocator, kv.key_ptr.*, .{ .string = content });
     }
     return NativeResult.scalar(.null);
 }
@@ -199,10 +198,7 @@ fn phAddFromString(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len < 2) return NativeResult.scalar(.null);
     if (args[0] != .string) return NativeResult.scalar(.null);
-    const name_str = try dupString(ctx, args[0].string.bytes());
-    const content = if (args[1] == .string) try dupString(ctx, args[1].string.bytes()) else "";
-    const arr = try ensureEntries(ctx, obj);
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name_str) }, .{ .string = Value.String.borrowed(content) });
+    try putEntry(ctx, obj, args);
     try saveIfNotBuffering(ctx, obj);
     return NativeResult.scalar(.null);
 }
@@ -222,11 +218,11 @@ fn phAddFile(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
         ctx.allocator.free(buf);
         return NativeResult.scalar(.null);
     };
-    try ctx.strings.append(ctx.allocator, buf);
+    const content = try Value.String.adopt(ctx.allocator, buf);
+    defer content.release();
 
     const arr = try ensureEntries(ctx, obj);
-    const name_str = try dupString(ctx, local_name);
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name_str) }, .{ .string = Value.String.borrowed(buf) });
+    try arr.setCopiedKey(ctx.allocator, local_name, .{ .string = content });
     try saveIfNotBuffering(ctx, obj);
     return NativeResult.scalar(.null);
 }
@@ -234,8 +230,7 @@ fn phAddFile(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
 fn phSetStub(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const stub = try dupString(ctx, args[0].string.bytes());
-    try obj.set(ctx.allocator, "__stub", .{ .string = Value.String.borrowed(stub) });
+    try obj.set(ctx.allocator, "__stub", args[0]);
     try saveIfNotBuffering(ctx, obj);
     return NativeResult.scalar(.{ .bool = true });
 }
@@ -255,8 +250,7 @@ fn phGetAlias(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
 fn phSetAlias(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const alias = try dupString(ctx, args[0].string.bytes());
-    try obj.set(ctx.allocator, "__alias", .{ .string = Value.String.borrowed(alias) });
+    try obj.set(ctx.allocator, "__alias", args[0]);
     try saveIfNotBuffering(ctx, obj);
     return NativeResult.scalar(.{ .bool = true });
 }
@@ -285,10 +279,7 @@ fn phOffsetGet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 fn phOffsetSet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len < 2 or args[0] != .string) return NativeResult.scalar(.null);
-    const name = try dupString(ctx, args[0].string.bytes());
-    const content = if (args[1] == .string) try dupString(ctx, args[1].string.bytes()) else "";
-    const arr = try ensureEntries(ctx, obj);
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, .{ .string = Value.String.borrowed(content) });
+    try putEntry(ctx, obj, args);
     try saveIfNotBuffering(ctx, obj);
     return NativeResult.scalar(.null);
 }
@@ -454,11 +445,7 @@ fn phMapPhar(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
     if (fp.len == 0) return NativeResult.scalar(.{ .bool = true });
     const resolved_fp = std.fs.cwd().realpathAlloc(ctx.allocator, fp) catch try ctx.allocator.dupe(u8, fp);
     defer ctx.allocator.free(resolved_fp);
-    const alias_dup = try ctx.allocator.dupe(u8, alias);
-    const fp_dup = try ctx.allocator.dupe(u8, resolved_fp);
-    try ctx.vm.strings.append(ctx.allocator, alias_dup);
-    try ctx.vm.strings.append(ctx.allocator, fp_dup);
-    try ctx.vm.phar_aliases.put(ctx.allocator, alias_dup, fp_dup);
+    try ctx.vm.mapPharAlias(alias, resolved_fp);
     return NativeResult.scalar(.{ .bool = true });
 }
 

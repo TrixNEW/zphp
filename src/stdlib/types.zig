@@ -3008,10 +3008,8 @@ fn native_filter_var(_ctx: *NativeContext, args: []const Value) RuntimeError!Nat
             return NativeResult.share(fail_val);
         },
         272 => { // FILTER_VALIDATE_REGEXP
-            const s = if (value == .string) value.string.bytes() else if (value == .int) (try _ctx.createString(blk: {
-                var b: [32]u8 = undefined;
-                break :blk std.fmt.bufPrint(&b, "{d}", .{value.int}) catch "";
-            })) else return NativeResult.share(fail_default);
+            var int_buf: [32]u8 = undefined;
+            const s = if (value == .string) value.string.bytes() else if (value == .int) std.fmt.bufPrint(&int_buf, "{d}", .{value.int}) catch unreachable else return NativeResult.share(fail_default);
             if (opts_arr) |opts| {
                 const re_v = opts.get(.{ .string = Value.String.borrowed("regexp") });
                 if (re_v == .string) {

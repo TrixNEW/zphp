@@ -155,11 +155,7 @@ fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeEr
     const root: *c.xmlNode = @ptrCast(c.xmlDocGetRootElement(doc) orelse return);
     const target_ns = try attrValue(ctx.allocator, root, "targetNamespace");
     defer if (target_ns) |v| ctx.allocator.free(v);
-    if (target_ns) |v| {
-        const owned = try ctx.allocator.dupe(u8, v);
-        try ctx.strings.append(ctx.allocator, owned);
-        try obj.set(ctx.allocator, "__uri", .{ .string = Value.String.borrowed(owned) });
-    }
+    if (target_ns) |v| try obj.setCopiedString(ctx.allocator, "__uri", v);
     const functions = try ctx.createArray();
     const types = try ctx.createArray();
     var child: ?*c.xmlNode = @ptrCast(root.children);
@@ -174,11 +170,7 @@ fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeEr
                     if (std.mem.eql(u8, localName(nodeName(en)), "address")) {
                         const loc = try attrValue(ctx.allocator, en, "location");
                         defer if (loc) |v| ctx.allocator.free(v);
-                        if (loc) |v| {
-                            const owned = try ctx.allocator.dupe(u8, v);
-                            try ctx.strings.append(ctx.allocator, owned);
-                            try obj.set(ctx.allocator, "__location", .{ .string = Value.String.borrowed(owned) });
-                        }
+                        if (loc) |v| try obj.setCopiedString(ctx.allocator, "__location", v);
                     }
                 }
             }
@@ -189,9 +181,9 @@ fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeEr
                 const name = try attrValue(ctx.allocator, on, "name");
                 defer if (name) |v| ctx.allocator.free(v);
                 if (name) |v| {
-                    const sig = try std.fmt.allocPrint(ctx.allocator, "void {s}()", .{v});
-                    try ctx.strings.append(ctx.allocator, sig);
-                    try functions.set(ctx.allocator, .{ .int = functions.next_int_key }, .{ .string = Value.String.borrowed(sig) });
+                    const sig = try Value.String.adopt(ctx.allocator, try std.fmt.allocPrint(ctx.allocator, "void {s}()", .{v}));
+                    defer sig.release();
+                    try functions.append(ctx.allocator, .{ .string = sig });
                 }
             }
         } else if (std.mem.eql(u8, lname, "types")) {
@@ -204,6 +196,7 @@ fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeEr
                     defer if (name) |v| ctx.allocator.free(v);
                     if (name) |v| {
                         var decl = std.ArrayListUnmanaged(u8){};
+                        errdefer decl.deinit(ctx.allocator);
                         try decl.appendSlice(ctx.allocator, "struct ");
                         try decl.appendSlice(ctx.allocator, v);
                         try decl.appendSlice(ctx.allocator, " {\n");
@@ -234,9 +227,9 @@ fn parseWsdl(ctx: *NativeContext, obj: *PhpObject, source: []const u8) RuntimeEr
                             }
                         }
                         try decl.appendSlice(ctx.allocator, "}");
-                        const owned = try decl.toOwnedSlice(ctx.allocator);
-                        try ctx.strings.append(ctx.allocator, owned);
-                        try types.set(ctx.allocator, .{ .int = types.next_int_key }, .{ .string = Value.String.borrowed(owned) });
+                        const owned = try Value.String.adopt(ctx.allocator, try decl.toOwnedSlice(ctx.allocator));
+                        defer owned.release();
+                        try types.append(ctx.allocator, .{ .string = owned });
                     }
                 }
             }
@@ -515,11 +508,10 @@ fn parseSoapResponse(ctx: *NativeContext, xml: []const u8) RuntimeError!NativeRe
     if (std.mem.indexOf(u8, body, "Fault") != null) {
         const code = extractBetween(body, "<faultcode>", "</faultcode>") orelse "Server";
         const str = extractBetween(body, "<faultstring>", "</faultstring>") orelse "SOAP fault";
-        const owned_code = try ctx.allocator.dupe(u8, code);
-        const owned_str = try ctx.allocator.dupe(u8, str);
-        try ctx.strings.append(ctx.allocator, owned_code);
-        try ctx.strings.append(ctx.allocator, owned_str);
-        try ctx.vm.setPendingException("SoapFault", owned_str);
+        try ctx.vm.setPendingException("SoapFault", str);
+        const fault = ctx.vm.pending_exception.?.object;
+        try fault.setCopiedString(ctx.allocator, "faultcode", code);
+        try fault.setCopiedString(ctx.allocator, "faultstring", str);
         return NativeResult.scalar(.{ .bool = false });
     }
 
@@ -593,9 +585,7 @@ fn soapClientCall(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     var action_buf: [512]u8 = undefined;
     const action = std.fmt.bufPrint(&action_buf, "{s}#{s}", .{ uri, method }) catch return NativeResult.scalar(.null);
 
-    const env_owned = try ctx.allocator.dupe(u8, envelope);
-    try ctx.strings.append(ctx.allocator, env_owned);
-    try obj.set(ctx.allocator, "__last_request", .{ .string = Value.String.borrowed(env_owned) });
+    try obj.setCopiedString(ctx.allocator, "__last_request", envelope);
 
     const resp = httpPostSoap(ctx.allocator, location, action, envelope) catch {
         try ctx.vm.setPendingException("SoapFault", "SOAP HTTP request failed");
@@ -604,12 +594,8 @@ fn soapClientCall(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     defer ctx.allocator.free(resp.body);
     defer ctx.allocator.free(resp.headers);
 
-    const resp_owned = try ctx.allocator.dupe(u8, resp.body);
-    try ctx.strings.append(ctx.allocator, resp_owned);
-    try obj.set(ctx.allocator, "__last_response", .{ .string = Value.String.borrowed(resp_owned) });
-    const rh_owned = try ctx.allocator.dupe(u8, resp.headers);
-    try ctx.strings.append(ctx.allocator, rh_owned);
-    try obj.set(ctx.allocator, "__last_response_headers", .{ .string = Value.String.borrowed(rh_owned) });
+    try obj.setCopiedString(ctx.allocator, "__last_response", resp.body);
+    try obj.setCopiedString(ctx.allocator, "__last_response_headers", resp.headers);
 
     return try parseSoapResponse(ctx, resp.body);
 }
@@ -936,7 +922,10 @@ fn soapServerHandle(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
     const self_closing = st_end > 0 and req[st_end - 1] == '/';
 
     var arg_vals = std.ArrayListUnmanaged(Value){};
-    defer arg_vals.deinit(ctx.allocator);
+    defer {
+        for (arg_vals.items) |v| v.string.release();
+        arg_vals.deinit(ctx.allocator);
+    }
     if (!self_closing and st_end < req.len) {
         const content_start = st_end + 1;
         var close_marker = std.ArrayListUnmanaged(u8){};
@@ -960,9 +949,9 @@ fn soapServerHandle(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
             }
             const txt_start = cse + 1;
             const txt_end = std.mem.indexOfPos(u8, content, txt_start, "</") orelse content.len;
-            const txt = try xmlUnescape(ctx.allocator, content[txt_start..txt_end]);
-            try ctx.vm.strings.append(ctx.allocator, txt);
-            try arg_vals.append(ctx.allocator, .{ .string = Value.String.borrowed(txt) });
+            try arg_vals.ensureUnusedCapacity(ctx.allocator, 1);
+            const txt = try Value.String.adopt(ctx.allocator, try xmlUnescape(ctx.allocator, content[txt_start..txt_end]));
+            arg_vals.appendAssumeCapacity(.{ .string = txt });
             cp = (std.mem.indexOfPos(u8, content, txt_end, ">") orelse content.len -| 1) + 1;
         }
     }

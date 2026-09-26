@@ -36,14 +36,9 @@ fn assertEq(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     const s2 = try buf2.toOwnedSlice(ctx.allocator);
     defer ctx.allocator.free(s2);
 
-    const msg = if (args.len >= 3 and args[2] == .string)
-        args[2].string.bytes()
-    else blk: {
-        const m = try std.fmt.allocPrint(ctx.allocator, "expected {s}, got {s}", .{ s1, s2 });
-        try ctx.strings.append(ctx.allocator, m);
-        break :blk m;
-    };
-
+    if (args.len >= 3 and args[2] == .string) return failAssertion(ctx, args[2].string.bytes());
+    const msg = try std.fmt.allocPrint(ctx.allocator, "expected {s}, got {s}", .{ s1, s2 });
+    defer ctx.allocator.free(msg);
     return failAssertion(ctx, msg);
 }
 

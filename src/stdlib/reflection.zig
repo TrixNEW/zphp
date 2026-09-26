@@ -4462,6 +4462,7 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
                 const placed = try ctx.vm.placeNativeNamedArgs(arr, params, &resolved, &sources);
                 if (placed.problem) |problem| {
                     const class, const msg = try ctx.vm.namedArgProblemMessage(ctor_key, params, problem);
+                    defer ctx.allocator.free(msg);
                     try ctx.vm.setPendingException(class, msg);
                     return error.RuntimeError;
                 }

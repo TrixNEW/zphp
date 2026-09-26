@@ -119,8 +119,9 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
             allocator.destroy(vm);
         }
 
+        var text_buf: [1024]u8 = undefined;
         vm.interpret(&compile_result) catch {
-            printFail(path, if (vm.error_msg) |m| m else "runtime error");
+            printFail(path, failureText(vm, &text_buf) orelse "runtime error");
             result.failed = 1;
             return result;
         };
@@ -157,7 +158,8 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
         vm.frame_count = 1;
 
         vm.run() catch {
-            const err_msg = if (vm.error_msg) |m| m else "assertion failed";
+            var text_buf: [1024]u8 = undefined;
+            const err_msg = failureText(vm, &text_buf) orelse "assertion failed";
             printFail(func.name, err_msg);
             result.failed += 1;
             vm.runShutdownDestructors();
@@ -170,6 +172,16 @@ fn runTestFile(allocator: Allocator, path: []const u8) TestResult {
     }
 
     return result;
+}
+
+// the failing site's message, else the throwable nothing caught
+fn failureText(vm: *VM, buf: []u8) ?[]const u8 {
+    if (vm.error_msg) |msg| return msg;
+    const exc = vm.pending_exception orelse return null;
+    if (exc != .object) return null;
+    const message = exc.object.get("message");
+    const text = if (message == .string) message.string.bytes() else "";
+    return std.fmt.bufPrint(buf, "{s}: {s}", .{ exc.object.class_name, text }) catch text;
 }
 
 fn printPass(name: []const u8) void {
