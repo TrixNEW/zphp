@@ -848,8 +848,6 @@ pub const Fiber = struct {
 // iteration cursor, a curl easy handle with its header list and share
 pub const NativeHandle = struct {
     kind: Kind = .none,
-    owns: bool = false,
-    owns_aux: bool = false,
     ptr: usize = 0,
     aux: usize = 0,
     extra: usize = 0,

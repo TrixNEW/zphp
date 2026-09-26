@@ -14,16 +14,8 @@ const Allocator = std.mem.Allocator;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 const NativeFn = *const fn (*NativeContext, []const Value) RuntimeError!NativeResult;
 
-const c = @cImport({
-    @cInclude("libxml/parser.h");
-    @cInclude("libxml/tree.h");
-    @cInclude("libxml/xpath.h");
-    @cInclude("libxml/xpathInternals.h");
-    @cInclude("libxml/HTMLparser.h");
-    @cInclude("libxml/HTMLtree.h");
-    @cInclude("libxml/xmlerror.h");
-    @cInclude("libxml/xmlschemas.h");
-});
+pub const tree = @import("libxml_tree.zig");
+pub const c = tree.c;
 
 var global_init = std.once(globalInit);
 
@@ -106,60 +98,94 @@ fn freeCapturedError(e: *const CapturedError) void {
 }
 
 // ---------------- pointer storage on PhpObject ----------------
-// every wrapper keeps its xmlNodePtr in the object's native handle (kind
-// .dom). for DOMDocument the pointer is an xmlDocPtr (cast-compatible with
-// xmlNodePtr - libxml2 itself uses this dual identity throughout tree.c).
-//
-// the document wrapper owns the xmlDoc lifecycle: cleanupResources frees it.
-// child wrappers reference nodes inside the doc and free nothing themselves -
-// xmlFreeDoc walks the tree and frees everything. the one exception is a
-// wrapper made by `clone`: its node is a detached copy nothing else reaches,
-// so it carries `owns` and the sweep frees it while it is still unattached
+// a wrapper's native handle (kind .dom) has the node it wraps in ptr (the
+// xmlDoc itself for a DOMDocument) and in aux the document it holds a
+// reference on. libxml_tree.zig counts those references: a document lives
+// while any wrapper points into it, a detached node while its wrappers live,
+// and each node has one DOM wrapper at a time so it comes back as the same
+// object
 
 pub fn getNodePtr(obj: *const PhpObject) ?*c.xmlNode {
     return obj.native.get(c.xmlNode, .dom);
 }
 
 fn getDocPtr(obj: *const PhpObject) ?*c.xmlDoc {
-    return obj.native.get(c.xmlDoc, .dom);
+    return obj.native.getAux(c.xmlDoc, .dom);
 }
 
-pub fn setNodePtr(obj: *PhpObject, node: ?*c.xmlNode) void {
-    obj.native = .{ .kind = .dom, .ptr = NativeHandle.addr(node) };
+fn attachNode(obj: *PhpObject, node: *c.xmlNode) !void {
+    try tree.hold(node.doc, node);
+    obj.native = .{ .kind = .dom, .ptr = @intFromPtr(node), .aux = NativeHandle.addr(node.doc) };
+    tree.setDomWrapper(node, obj);
 }
 
-fn setDocPtr(obj: *PhpObject, doc: ?*c.xmlDoc) void {
-    obj.native = .{ .kind = .dom, .ptr = NativeHandle.addr(doc) };
+fn attachDocument(obj: *PhpObject, doc: *c.xmlDoc) !void {
+    try tree.hold(doc, null);
+    obj.native = .{ .kind = .dom, .ptr = @intFromPtr(doc), .aux = @intFromPtr(doc) };
+    tree.setDocWrapper(doc, obj);
+}
+
+// drops what a wrapper holds; the tree goes when nothing else holds it
+fn detach(obj: *PhpObject) void {
+    if (obj.native.kind != .dom) return;
+    const node = getNodePtr(obj);
+    const doc = getDocPtr(obj);
+    obj.native = .{};
+    if (node) |n| {
+        if (tree.isDocument(n)) {
+            const d: *c.xmlDoc = @ptrCast(n);
+            if (tree.docWrapper(d) == obj) {
+                tree.setDocWrapper(d, null);
+                tree.saveDocOptions(d, documentOptions(obj));
+            }
+        } else if (tree.domWrapper(n) == obj) tree.setDomWrapper(n, null);
+    }
+    tree.release(doc, node);
+}
+
+fn cleanupWrapper(obj: *PhpObject) bool {
+    detach(obj);
+    return true;
+}
+
+// the DOMDocument options php keeps with the document, not the wrapper
+const document_options = [_][]const u8{ "formatOutput", "preserveWhiteSpace", "validateOnParse", "resolveExternals", "substituteEntities", "strictErrorChecking", "recover" };
+const default_document_options: u16 = 0b0100010;
+
+fn documentOptions(obj: *const PhpObject) u16 {
+    var bits: u16 = 0;
+    for (document_options, 0..) |name, i| {
+        const v = obj.get(name);
+        if (v == .bool and v.bool) bits |= @as(u16, 1) << @intCast(i);
+    }
+    return bits;
+}
+
+fn setDocumentOptions(ctx: *NativeContext, obj: *PhpObject, bits: u16) !void {
+    for (document_options, 0..) |name, i| {
+        try obj.set(ctx.allocator, name, .{ .bool = bits & (@as(u16, 1) << @intCast(i)) != 0 });
+    }
 }
 
 // ---------------- clone ----------------
 
 fn cloneDocHandle(_: *VM, src: *PhpObject, copy: *PhpObject) bool {
-    const doc = getDocPtr(src) orelse {
-        setDocPtr(copy, null);
-        return true;
-    };
+    const doc = getDocPtr(src) orelse return true;
     const dup = c.xmlCopyDoc(doc, 1) orelse return false;
-    setDocPtr(copy, dup);
-    pointOwnerAtSelf(copy);
+    attachDocument(copy, dup) catch {
+        c.xmlFreeDoc(dup);
+        return false;
+    };
     return true;
 }
 
-// the property copy left the clone's __owner on the original document
-fn pointOwnerAtSelf(copy: *PhpObject) void {
-    const slot = copy.properties.getPtr("__owner") orelse return;
-    slot.* = .{ .object = copy };
-    copy.retain();
-}
-
 fn cloneNodeHandle(_: *VM, src: *PhpObject, copy: *PhpObject) bool {
-    const node = getNodePtr(src) orelse {
-        setNodePtr(copy, null);
-        return true;
-    };
+    const node = getNodePtr(src) orelse return true;
     const dup = c.xmlDocCopyNode(node, node.doc, 1) orelse return false;
-    setNodePtr(copy, dup);
-    copy.native.owns = true;
+    attachNode(copy, dup) catch {
+        c.xmlFreeNode(dup);
+        return false;
+    };
     return true;
 }
 
@@ -215,21 +241,22 @@ fn classForNodeType(t: c.xmlElementType) []const u8 {
     };
 }
 
-// wrap an xmlNodePtr in a fresh DOM* object. shares the doc wrapper for
-// the owning document so identity flows back to the same wrapper
-fn wrapNode(ctx: *NativeContext, node: ?*c.xmlNode, owner_doc: ?*PhpObject) !Value {
+// the wrapper of a node: the one it already has, or a new one
+pub fn wrapNode(ctx: *NativeContext, node: ?*c.xmlNode) !Value {
     const n = node orelse return .null;
-    const cls = classForNodeType(n.type);
-    const obj = try ctx.createObject(cls);
-    setNodePtr(obj, n);
-    if (owner_doc) |d| try obj.set(ctx.allocator, "__owner", .{ .object = d });
+    if (tree.isDocument(n)) return wrapDocument(ctx, @ptrCast(n));
+    if (tree.domWrapper(n)) |existing| return .{ .object = existing };
+    const obj = try ctx.createObject(classForNodeType(n.type));
+    try attachNode(obj, n);
     return .{ .object = obj };
 }
 
-fn getOwnerDocObj(obj: *PhpObject) ?*PhpObject {
-    const v = obj.get("__owner");
-    if (v == .object) return v.object;
-    return null;
+fn wrapDocument(ctx: *NativeContext, doc: *c.xmlDoc) !Value {
+    if (tree.docWrapper(doc)) |existing| return .{ .object = existing };
+    const obj = try ctx.createObject("DOMDocument");
+    try setDocumentOptions(ctx, obj, tree.savedDocOptions(doc) orelse default_document_options);
+    try attachDocument(obj, doc);
+    return .{ .object = obj };
 }
 
 // ---------------- DOMDocument methods ----------------
@@ -249,16 +276,24 @@ fn domDocConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Native
         const enc_z = try dupZ(ctx, encoding);
         doc.*.encoding = c.xmlStrdup(@ptrCast(enc_z.ptr));
     }
-    setDocPtr(obj, doc);
-    try obj.set(ctx.allocator, "__owner", .{ .object = obj });
-    try obj.set(ctx.allocator, "formatOutput", .{ .bool = false });
-    try obj.set(ctx.allocator, "preserveWhiteSpace", .{ .bool = true });
-    try obj.set(ctx.allocator, "validateOnParse", .{ .bool = false });
-    try obj.set(ctx.allocator, "resolveExternals", .{ .bool = false });
-    try obj.set(ctx.allocator, "substituteEntities", .{ .bool = false });
-    try obj.set(ctx.allocator, "strictErrorChecking", .{ .bool = true });
-    try obj.set(ctx.allocator, "recover", .{ .bool = false });
+    try setDocumentOptions(ctx, obj, default_document_options);
+    try replaceDocument(obj, doc);
     return NativeResult.scalar(.null);
+}
+
+// a load swaps the wrapper onto the new document; nodes of the old one keep it
+// alive and get a fresh DOMDocument for ownerDocument
+fn replaceDocument(obj: *PhpObject, doc: *c.xmlDoc) !void {
+    detach(obj);
+    attachDocument(obj, doc) catch |err| {
+        c.xmlFreeDoc(doc);
+        return err;
+    };
+}
+
+fn loaded(obj: *PhpObject, doc: ?*c.xmlDoc) RuntimeError!NativeResult {
+    try replaceDocument(obj, doc orelse return NativeResult.scalar(.{ .bool = false }));
+    return NativeResult.scalar(.{ .bool = true });
 }
 
 fn parseOptions(args: []const Value, idx: usize) c_int {
@@ -272,16 +307,7 @@ fn domDocLoadXML(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     const src = args[0].string.bytes();
     const opts = parseOptions(args, 1);
 
-    // replace any prior doc
-    if (getDocPtr(obj)) |old| {
-        c.xmlFreeDoc(old);
-        obj.native.ptr = 0;
-    }
-
-    const doc = c.xmlReadMemory(src.ptr, @intCast(src.len), null, null, opts);
-    if (doc == null) return NativeResult.scalar(.{ .bool = false });
-    setDocPtr(obj, doc);
-    return NativeResult.scalar(.{ .bool = true });
+    return loaded(obj, c.xmlReadMemory(src.ptr, @intCast(src.len), null, null, opts));
 }
 
 fn domDocSchemaValidateSource(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -304,15 +330,7 @@ fn domDocLoad(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
     const path_z = try filePathZ(ctx, args[0].string.bytes());
     const opts = parseOptions(args, 1);
 
-    if (getDocPtr(obj)) |old| {
-        c.xmlFreeDoc(old);
-        obj.native.ptr = 0;
-    }
-
-    const doc = if (bundle.packedSource(path_z)) |src| c.xmlReadMemory(src.ptr, @intCast(src.len), path_z.ptr, null, opts) else c.xmlReadFile(path_z.ptr, null, opts);
-    if (doc == null) return NativeResult.scalar(.{ .bool = false });
-    setDocPtr(obj, doc);
-    return NativeResult.scalar(.{ .bool = true });
+    return loaded(obj, if (bundle.packedSource(path_z)) |src| c.xmlReadMemory(src.ptr, @intCast(src.len), path_z.ptr, null, opts) else c.xmlReadFile(path_z.ptr, null, opts));
 }
 
 fn domDocLoadHTML(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -321,15 +339,7 @@ fn domDocLoadHTML(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     const src = args[0].string.bytes();
     const opts = parseOptions(args, 1);
 
-    if (getDocPtr(obj)) |old| {
-        c.xmlFreeDoc(old);
-        obj.native.ptr = 0;
-    }
-
-    const doc = c.htmlReadMemory(src.ptr, @intCast(src.len), null, null, opts);
-    if (doc == null) return NativeResult.scalar(.{ .bool = false });
-    setDocPtr(obj, doc);
-    return NativeResult.scalar(.{ .bool = true });
+    return loaded(obj, c.htmlReadMemory(src.ptr, @intCast(src.len), null, null, opts));
 }
 
 fn domDocLoadHTMLFile(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -338,15 +348,7 @@ fn domDocLoadHTMLFile(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
     const path_z = try filePathZ(ctx, args[0].string.bytes());
     const opts = parseOptions(args, 1);
 
-    if (getDocPtr(obj)) |old| {
-        c.xmlFreeDoc(old);
-        obj.native.ptr = 0;
-    }
-
-    const doc = if (bundle.packedSource(path_z)) |src| c.htmlReadMemory(src.ptr, @intCast(src.len), path_z.ptr, null, opts) else c.htmlReadFile(path_z.ptr, null, opts);
-    if (doc == null) return NativeResult.scalar(.{ .bool = false });
-    setDocPtr(obj, doc);
-    return NativeResult.scalar(.{ .bool = true });
+    return loaded(obj, if (bundle.packedSource(path_z)) |src| c.htmlReadMemory(src.ptr, @intCast(src.len), path_z.ptr, null, opts) else c.htmlReadFile(path_z.ptr, null, opts));
 }
 
 fn formatOutputOn(obj: *PhpObject) bool {
@@ -434,7 +436,7 @@ fn domDocCreateElement(ctx: *NativeContext, args: []const Value) RuntimeError!Na
         const tn = c.xmlNewDocText(doc, @ptrCast(text_z.ptr));
         _ = c.xmlAddChild(node, tn);
     }
-    return NativeResult.borrowed(try wrapNode(ctx, node, obj));
+    return NativeResult.borrowed(try wrapNode(ctx, node));
 }
 
 fn domDocCreateTextNode(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -443,7 +445,7 @@ fn domDocCreateTextNode(ctx: *NativeContext, args: []const Value) RuntimeError!N
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const text_z = try dupZ(ctx, args[0].string.bytes());
     const node = c.xmlNewDocText(doc, @ptrCast(text_z.ptr)) orelse return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, node, obj));
+    return NativeResult.borrowed(try wrapNode(ctx, node));
 }
 
 fn domDocCreateComment(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -452,7 +454,7 @@ fn domDocCreateComment(ctx: *NativeContext, args: []const Value) RuntimeError!Na
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const text_z = try dupZ(ctx, args[0].string.bytes());
     const node = c.xmlNewDocComment(doc, @ptrCast(text_z.ptr)) orelse return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, node, obj));
+    return NativeResult.borrowed(try wrapNode(ctx, node));
 }
 
 fn domDocCreateCDATASection(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -461,7 +463,7 @@ fn domDocCreateCDATASection(ctx: *NativeContext, args: []const Value) RuntimeErr
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const text = args[0].string.bytes();
     const node = c.xmlNewCDataBlock(doc, @ptrCast(text.ptr), @intCast(text.len)) orelse return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, node, obj));
+    return NativeResult.borrowed(try wrapNode(ctx, node));
 }
 
 fn domDocCreateAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -471,7 +473,7 @@ fn domDocCreateAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!
     const name_z = try dupZ(ctx, args[0].string.bytes());
     // detached attribute: create via xmlNewDocProp on null parent
     const attr = c.xmlNewDocProp(doc, @ptrCast(name_z.ptr), null) orelse return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, @ptrCast(attr), obj));
+    return NativeResult.borrowed(try wrapNode(ctx, @ptrCast(attr)));
 }
 
 fn domDocCreateElementNS(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -504,14 +506,14 @@ fn domDocCreateElementNS(ctx: *NativeContext, args: []const Value) RuntimeError!
         const tn = c.xmlNewDocText(doc, @ptrCast(text_z.ptr));
         _ = c.xmlAddChild(node, tn);
     }
-    return NativeResult.borrowed(try wrapNode(ctx, node, obj));
+    return NativeResult.borrowed(try wrapNode(ctx, node));
 }
 
 fn domDocCreateDocumentFragment(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const node = c.xmlNewDocFragment(doc) orelse return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, node, obj));
+    return NativeResult.borrowed(try wrapNode(ctx, node));
 }
 
 fn domDocImportNode(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -522,7 +524,7 @@ fn domDocImportNode(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
     const deep: c_int = if (args.len > 1 and args[1] == .bool and args[1].bool) 1 else 0;
     const copy = c.xmlDocCopyNode(src, doc, if (deep != 0) 1 else 2);
     if (copy == null) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, copy, obj));
+    return NativeResult.borrowed(try wrapNode(ctx, copy));
 }
 
 fn domDocGetElementsByTagName(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -537,7 +539,7 @@ fn domDocGetElementsByTagName(ctx: *NativeContext, args: []const Value) RuntimeE
     if (root) |r| {
         try collectByName(ctx.allocator, r, name, &list);
     }
-    return try makeNodeList(ctx, obj, list.items);
+    return try makeNodeList(ctx, list.items);
 }
 
 fn domDocGetElementById(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -550,11 +552,11 @@ fn domDocGetElementById(ctx: *NativeContext, args: []const Value) RuntimeError!N
         // fall back to scanning for any attribute named "id" with this value
         const root = c.xmlDocGetRootElement(doc);
         if (root) |r| {
-            if (findById(r, args[0].string.bytes())) |n| return NativeResult.borrowed(try wrapNode(ctx, n, obj));
+            if (findById(r, args[0].string.bytes())) |n| return NativeResult.borrowed(try wrapNode(ctx, n));
         }
         return NativeResult.scalar(.null);
     }
-    return NativeResult.borrowed(try wrapNode(ctx, @ptrCast(attr.*.parent), obj));
+    return NativeResult.borrowed(try wrapNode(ctx, @ptrCast(attr.*.parent)));
 }
 
 fn findById(node: *c.xmlNode, id: []const u8) ?*c.xmlNode {
@@ -649,27 +651,29 @@ fn domGenericSet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
 
     if (std.mem.eql(u8, prop, "nodeValue") or std.mem.eql(u8, prop, "textContent")) {
         const s = if (val == .string) val.string.bytes() else "";
-        const s_z = try dupZ(ctx, s);
-        // wipe existing content and set fresh
-        _ = c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
+        try setContent(ctx, node, s);
         return NativeResult.scalar(.null);
     }
     if (std.mem.eql(u8, prop, "data") and (node.type == c.XML_TEXT_NODE or node.type == c.XML_CDATA_SECTION_NODE or node.type == c.XML_COMMENT_NODE)) {
-        const s = if (val == .string) val.string.bytes() else "";
-        const s_z = try dupZ(ctx, s);
-        _ = c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
+        try setContent(ctx, node, if (val == .string) val.string.bytes() else "");
         return NativeResult.scalar(.null);
     }
     if (std.mem.eql(u8, prop, "value") and node.type == c.XML_ATTRIBUTE_NODE) {
-        const s = if (val == .string) val.string.bytes() else "";
-        const s_z = try dupZ(ctx, s);
-        _ = c.xmlNodeSetContent(node, @ptrCast(s_z.ptr));
+        try setContent(ctx, node, if (val == .string) val.string.bytes() else "");
         return NativeResult.scalar(.null);
     }
     // unrecognized property: fall back to stashing in PhpObject (matches the
     // legacy dynamic-property behavior so tests aren't surprised)
     try obj.set(ctx.allocator, prop, val);
     return NativeResult.scalar(.null);
+}
+
+// libxml frees the children it replaces; the ones a wrapper holds are taken
+// out first and live on detached
+fn setContent(ctx: *NativeContext, node: *c.xmlNode, text: []const u8) !void {
+    const text_z = try dupZ(ctx, text);
+    tree.rescueChildren(node);
+    _ = c.xmlNodeSetContent(node, @ptrCast(text_z.ptr));
 }
 
 fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeError!NativeResult {
@@ -695,7 +699,6 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
         return NativeResult.scalar(.null);
     }
 
-    const owner = getOwnerDocObj(obj) orelse obj;
     const node_opt = getNodePtr(obj);
     if (node_opt == null) return NativeResult.scalar(.null);
     const node = node_opt.?;
@@ -743,39 +746,39 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
         return NativeResult.scalar(.{ .int = @intCast(node.type) });
     }
     if (std.mem.eql(u8, prop, "parentNode")) {
-        return NativeResult.borrowed(try wrapNode(ctx, node.parent, owner));
+        return NativeResult.borrowed(try wrapNode(ctx, node.parent));
     }
     if (std.mem.eql(u8, prop, "firstChild")) {
-        return NativeResult.borrowed(try wrapNode(ctx, node.children, owner));
+        return NativeResult.borrowed(try wrapNode(ctx, node.children));
     }
     if (std.mem.eql(u8, prop, "lastChild")) {
-        return NativeResult.borrowed(try wrapNode(ctx, node.last, owner));
+        return NativeResult.borrowed(try wrapNode(ctx, node.last));
     }
     if (std.mem.eql(u8, prop, "previousSibling")) {
-        return NativeResult.borrowed(try wrapNode(ctx, node.prev, owner));
+        return NativeResult.borrowed(try wrapNode(ctx, node.prev));
     }
     if (std.mem.eql(u8, prop, "nextSibling")) {
-        return NativeResult.borrowed(try wrapNode(ctx, node.next, owner));
+        return NativeResult.borrowed(try wrapNode(ctx, node.next));
     }
     if (std.mem.eql(u8, prop, "previousElementSibling")) {
         var p = node.prev;
         while (p != null and p.*.type != c.XML_ELEMENT_NODE) : (p = p.*.prev) {}
-        return NativeResult.borrowed(try wrapNode(ctx, p, owner));
+        return NativeResult.borrowed(try wrapNode(ctx, p));
     }
     if (std.mem.eql(u8, prop, "nextElementSibling")) {
         var n = node.next;
         while (n != null and n.*.type != c.XML_ELEMENT_NODE) : (n = n.*.next) {}
-        return NativeResult.borrowed(try wrapNode(ctx, n, owner));
+        return NativeResult.borrowed(try wrapNode(ctx, n));
     }
     if (std.mem.eql(u8, prop, "firstElementChild")) {
         var k = node.children;
         while (k != null and k.*.type != c.XML_ELEMENT_NODE) : (k = k.*.next) {}
-        return NativeResult.borrowed(try wrapNode(ctx, k, owner));
+        return NativeResult.borrowed(try wrapNode(ctx, k));
     }
     if (std.mem.eql(u8, prop, "lastElementChild")) {
         var k = node.last;
         while (k != null and k.*.type != c.XML_ELEMENT_NODE) : (k = k.*.prev) {}
-        return NativeResult.borrowed(try wrapNode(ctx, k, owner));
+        return NativeResult.borrowed(try wrapNode(ctx, k));
     }
     if (std.mem.eql(u8, prop, "childElementCount")) {
         var k = node.children;
@@ -790,16 +793,17 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
         defer list.deinit(ctx.allocator);
         var child = node.children;
         while (child != null) : (child = child.*.next) try list.append(ctx.allocator, child);
-        return try makeNodeList(ctx, owner, list.items);
+        return try makeNodeList(ctx, list.items);
     }
     if (std.mem.eql(u8, prop, "ownerDocument")) {
-        if (node.type == c.XML_DOCUMENT_NODE or node.type == c.XML_HTML_DOCUMENT_NODE) return NativeResult.scalar(.null);
-        return NativeResult.borrowed(.{ .object = owner });
+        if (tree.isDocument(node)) return NativeResult.scalar(.null);
+        const doc = node.doc orelse return NativeResult.scalar(.null);
+        return NativeResult.borrowed(try wrapDocument(ctx, doc));
     }
     if (std.mem.eql(u8, prop, "documentElement")) {
         if (node.type != c.XML_DOCUMENT_NODE and node.type != c.XML_HTML_DOCUMENT_NODE) return NativeResult.scalar(.null);
         const doc: *c.xmlDoc = @ptrCast(node);
-        return NativeResult.borrowed(try wrapNode(ctx, c.xmlDocGetRootElement(doc), owner));
+        return NativeResult.borrowed(try wrapNode(ctx, c.xmlDocGetRootElement(doc)));
     }
     if (std.mem.eql(u8, prop, "namespaceURI")) {
         if (node.ns != null and node.ns.*.href != null) return try cstrToValue(ctx, node.ns.*.href);
@@ -837,7 +841,7 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
     }
     if (std.mem.eql(u8, prop, "attributes")) {
         if (node.type != c.XML_ELEMENT_NODE) return NativeResult.scalar(.null);
-        return try makeNamedNodeMap(ctx, owner, node);
+        return try makeNamedNodeMap(ctx, node);
     }
     if (std.mem.eql(u8, prop, "data") or std.mem.eql(u8, prop, "value")) {
         const content = c.xmlNodeGetContent(node);
@@ -855,7 +859,7 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
         if (node.type == c.XML_ATTRIBUTE_NODE) return try cstrToValue(ctx, node.name);
     }
     if (std.mem.eql(u8, prop, "ownerElement")) {
-        if (node.type == c.XML_ATTRIBUTE_NODE) return NativeResult.borrowed(try wrapNode(ctx, node.parent, owner));
+        if (node.type == c.XML_ATTRIBUTE_NODE) return NativeResult.borrowed(try wrapNode(ctx, node.parent));
     }
     if (std.mem.eql(u8, prop, "encoding")) {
         if (node.type == c.XML_DOCUMENT_NODE or node.type == c.XML_HTML_DOCUMENT_NODE) {
@@ -876,60 +880,139 @@ fn readProperty(ctx: *NativeContext, obj: *PhpObject, prop: []const u8) RuntimeE
 
 // ---------------- DOMNode write methods ----------------
 
+// php's legacy DOM refuses children under nodes that cannot have them by
+// returning false, and throws for the rest of the structural errors
+fn childrenAllowed(node: *const c.xmlNode) bool {
+    return switch (node.type) {
+        c.XML_DOCUMENT_TYPE_NODE, c.XML_DTD_NODE, c.XML_PI_NODE, c.XML_COMMENT_NODE, c.XML_TEXT_NODE, c.XML_CDATA_SECTION_NODE, c.XML_NOTATION_NODE => false,
+        else => true,
+    };
+}
+
+const DomError = enum(i64) {
+    hierarchy_request = 3,
+    wrong_document = 4,
+    not_found = 8,
+
+    fn message(self: DomError) []const u8 {
+        return switch (self) {
+            .hierarchy_request => "Hierarchy Request Error",
+            .wrong_document => "Wrong Document Error",
+            .not_found => "Not Found Error",
+        };
+    }
+};
+
+fn throwDom(ctx: *NativeContext, err: DomError) RuntimeError!NativeResult {
+    try ctx.vm.setPendingException("DOMException", err.message());
+    try ctx.vm.pending_exception.?.object.set(ctx.allocator, "code", .{ .int = @intFromEnum(err) });
+    return error.RuntimeError;
+}
+
+fn isAncestorOrSelf(candidate: *const c.xmlNode, node: *const c.xmlNode) bool {
+    var current: ?*const c.xmlNode = node;
+    while (current) |n| : (current = n.parent) if (n == candidate) return true;
+    return false;
+}
+
+fn insertionError(parent: *const c.xmlNode, child: *const c.xmlNode) ?DomError {
+    if (tree.isDocument(child) or isAncestorOrSelf(child, parent)) return .hierarchy_request;
+    const parent_doc: ?*const c.xmlDoc = if (tree.isDocument(parent)) @ptrCast(parent) else parent.doc;
+    if (child.doc != null and child.doc != parent_doc) return .wrong_document;
+    return null;
+}
+
+// puts child under parent before `before` (at the end when null). a fragment
+// hands over its children; an attribute replaces the one of the same name
+fn insertChild(parent: *c.xmlNode, child: *c.xmlNode, before: ?*c.xmlNode) void {
+    if (child.type == c.XML_DOCUMENT_FRAG_NODE) {
+        var moving = child.children;
+        while (moving) |m| {
+            const next = m.*.next;
+            c.xmlUnlinkNode(m);
+            link(parent, m, before);
+            moving = next;
+        }
+        return;
+    }
+    c.xmlUnlinkNode(child);
+    if (child.type == c.XML_ATTRIBUTE_NODE) {
+        if (parent.type != c.XML_ELEMENT_NODE) return;
+        const href: [*c]const u8 = if (child.ns != null) child.ns.*.href else null;
+        if (c.xmlHasNsProp(parent, child.name, href)) |existing| {
+            const existing_node: *c.xmlNode = @ptrCast(existing);
+            if (existing_node != child and existing_node.type == c.XML_ATTRIBUTE_NODE) tree.discard(existing_node);
+        }
+        _ = c.xmlAddChild(parent, child);
+        return;
+    }
+    link(parent, child, before);
+}
+
+// links by hand: xmlAddChild merges a text node into a text neighbour and
+// frees it, which php never does
+fn link(parent: *c.xmlNode, child: *c.xmlNode, before: ?*c.xmlNode) void {
+    const prev: ?*c.xmlNode = if (before) |b| b.prev else parent.last;
+    child.parent = parent;
+    child.prev = prev;
+    child.next = before;
+    if (prev) |p| p.next = child else parent.children = child;
+    if (before) |b| b.prev = child else parent.last = child;
+}
+
+fn insertAt(ctx: *NativeContext, parent: *c.xmlNode, child_obj: *PhpObject, before: ?*c.xmlNode) RuntimeError!NativeResult {
+    const child = getNodePtr(child_obj) orelse return NativeResult.scalar(.{ .bool = false });
+    if (!childrenAllowed(parent)) return NativeResult.scalar(.{ .bool = false });
+    if (insertionError(parent, child)) |err| return throwDom(ctx, err);
+    if (child == before) return NativeResult.borrowed(.{ .object = child_obj });
+    insertChild(parent, child, before);
+    return NativeResult.borrowed(.{ .object = child_obj });
+}
+
 fn domNodeAppendChild(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const parent = getNodePtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
-    const child = getNodePtr(args[0].object) orelse return NativeResult.scalar(.{ .bool = false });
-
-    // unlink first if attached
-    c.xmlUnlinkNode(child);
-    const added = c.xmlAddChild(parent, child);
-    if (added == null) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, added, getOwnerDocObj(obj) orelse obj));
-}
-
-fn domNodeRemoveChild(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 1 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
-    _ = getNodePtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
-    const child = getNodePtr(args[0].object) orelse return NativeResult.scalar(.{ .bool = false });
-
-    c.xmlUnlinkNode(child);
-    // PHP returns the removed node; we keep it alive (libxml2 won't free unless we xmlFreeNode).
-    // since the doc owns the arena via xmlFreeDoc only for in-tree nodes, an unlinked node
-    // would leak across requests. attach it to a per-doc orphans list so xmlFreeDoc still
-    // catches it: simplest is to keep wrapping and rely on the test runner's request lifetime
-    // freeing the whole VM. for now wrap and return
-    return NativeResult.borrowed(try wrapNode(ctx, child, getOwnerDocObj(obj) orelse obj));
-}
-
-fn domNodeReplaceChild(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len < 2 or args[0] != .object or args[1] != .object) return NativeResult.scalar(.{ .bool = false });
-    const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
-    _ = getNodePtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
-    const new_node = getNodePtr(args[0].object) orelse return NativeResult.scalar(.{ .bool = false });
-    const old_node = getNodePtr(args[1].object) orelse return NativeResult.scalar(.{ .bool = false });
-
-    c.xmlUnlinkNode(new_node);
-    const replaced = c.xmlReplaceNode(old_node, new_node);
-    if (replaced == null) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, replaced, getOwnerDocObj(obj) orelse obj));
+    return insertAt(ctx, parent, args[0].object, null);
 }
 
 fn domNodeInsertBefore(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const parent = getNodePtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
+    var before: ?*c.xmlNode = null;
+    if (args.len > 1 and args[1] == .object) {
+        before = getNodePtr(args[1].object) orelse return NativeResult.scalar(.{ .bool = false });
+        if (before.?.parent != parent) return throwDom(ctx, .not_found);
+    }
+    return insertAt(ctx, parent, args[0].object, before);
+}
+
+fn domNodeRemoveChild(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 1 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
+    const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
+    const parent = getNodePtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
+    const child = getNodePtr(args[0].object) orelse return NativeResult.scalar(.{ .bool = false });
+    if (!childrenAllowed(parent)) return NativeResult.scalar(.{ .bool = false });
+    if (child.parent != parent) return throwDom(ctx, .not_found);
+    c.xmlUnlinkNode(child);
+    return NativeResult.borrowed(.{ .object = args[0].object });
+}
+
+fn domNodeReplaceChild(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 2 or args[0] != .object or args[1] != .object) return NativeResult.scalar(.{ .bool = false });
+    const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
+    const parent = getNodePtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const new_node = getNodePtr(args[0].object) orelse return NativeResult.scalar(.{ .bool = false });
-
-    var ref: ?*c.xmlNode = null;
-    if (args.len > 1 and args[1] == .object) ref = getNodePtr(args[1].object);
-
-    c.xmlUnlinkNode(new_node);
-    const added = if (ref) |r| c.xmlAddPrevSibling(r, new_node) else c.xmlAddChild(parent, new_node);
-    if (added == null) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, added, getOwnerDocObj(obj) orelse obj));
+    const old_node = getNodePtr(args[1].object) orelse return NativeResult.scalar(.{ .bool = false });
+    if (!childrenAllowed(parent)) return NativeResult.scalar(.{ .bool = false });
+    if (old_node.parent != parent) return throwDom(ctx, .not_found);
+    if (insertionError(parent, new_node)) |err| return throwDom(ctx, err);
+    if (new_node != old_node) {
+        insertChild(parent, new_node, old_node);
+        c.xmlUnlinkNode(old_node);
+    }
+    return NativeResult.borrowed(.{ .object = args[1].object });
 }
 
 fn domNodeCloneNode(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -937,7 +1020,7 @@ fn domNodeCloneNode(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
     const node = getNodePtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const deep: c_int = if (args.len > 0 and args[0] == .bool and args[0].bool) 1 else 2;
     const copy = c.xmlDocCopyNode(node, node.doc, deep);
-    return NativeResult.borrowed(try wrapNode(ctx, copy, getOwnerDocObj(obj) orelse obj));
+    return NativeResult.borrowed(try wrapNode(ctx, copy));
 }
 
 fn domNodeHasChildNodes(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -1018,9 +1101,10 @@ fn domElementSetAttribute(ctx: *NativeContext, args: []const Value) RuntimeError
     const node = getNodePtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const name_z = try dupZ(ctx, args[0].string.bytes());
     const val_z = try dupZ(ctx, args[1].string.bytes());
+    if (c.xmlHasProp(node, @ptrCast(name_z.ptr))) |existing| tree.rescueChildren(@ptrCast(existing));
     const attr = c.xmlSetProp(node, @ptrCast(name_z.ptr), @ptrCast(val_z.ptr));
     if (attr == null) return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.borrowed(try wrapNode(ctx, @ptrCast(attr), getOwnerDocObj(obj) orelse obj));
+    return NativeResult.borrowed(try wrapNode(ctx, @ptrCast(attr)));
 }
 
 fn domElementHasAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -1036,8 +1120,14 @@ fn domElementRemoveAttribute(ctx: *NativeContext, args: []const Value) RuntimeEr
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const node = getNodePtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const name_z = try dupZ(ctx, args[0].string.bytes());
-    const rc = c.xmlUnsetProp(node, @ptrCast(name_z.ptr));
-    return NativeResult.scalar(.{ .bool = rc == 0 });
+    return NativeResult.scalar(.{ .bool = discardAttribute(c.xmlHasProp(node, @ptrCast(name_z.ptr))) });
+}
+
+fn discardAttribute(found: ?*c.xmlAttr) bool {
+    const attr: *c.xmlNode = @ptrCast(found orelse return false);
+    if (attr.type != c.XML_ATTRIBUTE_NODE) return false;
+    tree.discard(attr);
+    return true;
 }
 
 fn domElementGetAttributeNS(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -1081,6 +1171,8 @@ fn domElementSetAttributeNS(ctx: *NativeContext, args: []const Value) RuntimeErr
     // strip prefix from qname to get localname
     const local = if (std.mem.indexOfScalar(u8, qname, ':')) |i| qname[i + 1 ..] else qname;
     const local_z = try dupZ(ctx, local);
+    const href: [*c]const u8 = if (ns_ptr) |ns| ns.href else null;
+    if (c.xmlHasNsProp(node, @ptrCast(local_z.ptr), href)) |existing| tree.rescueChildren(@ptrCast(existing));
     _ = c.xmlSetNsProp(node, ns_ptr, @ptrCast(local_z.ptr), @ptrCast(val_z.ptr));
     return NativeResult.scalar(.null);
 }
@@ -1108,9 +1200,8 @@ fn domElementRemoveAttributeNS(ctx: *NativeContext, args: []const Value) Runtime
         @ptrCast((try dupZ(ctx, args[0].string.bytes())).ptr)
     else
         null;
-    _ = ns_ptr;
     const name_z = try dupZ(ctx, args[1].string.bytes());
-    _ = c.xmlUnsetNsProp(node, null, @ptrCast(name_z.ptr));
+    _ = discardAttribute(c.xmlHasNsProp(node, @ptrCast(name_z.ptr), ns_ptr));
     return NativeResult.scalar(.null);
 }
 
@@ -1122,7 +1213,7 @@ fn domElementGetElementsByTagName(ctx: *NativeContext, args: []const Value) Runt
     defer list.deinit(ctx.allocator);
     var child = node.children;
     while (child != null) : (child = child.*.next) try collectByName(ctx.allocator, child, args[0].string.bytes(), &list);
-    return try makeNodeList(ctx, getOwnerDocObj(obj) orelse obj, list.items);
+    return try makeNodeList(ctx, list.items);
 }
 
 fn domGetElementsByTagNameNS(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -1135,13 +1226,13 @@ fn domGetElementsByTagNameNS(ctx: *NativeContext, args: []const Value) RuntimeEr
     // start at the root element
     if (node.type == c.XML_DOCUMENT_NODE) {
         const root = c.xmlDocGetRootElement(@ptrCast(node));
-        if (root == null) return try makeNodeList(ctx, obj, &.{});
+        if (root == null) return try makeNodeList(ctx, &.{});
         node = root;
     }
     var list = std.ArrayList(*c.xmlNode){};
     defer list.deinit(ctx.allocator);
     try collectByNameNS(ctx.allocator, node, ns, name, &list);
-    return try makeNodeList(ctx, getOwnerDocObj(obj) orelse obj, list.items);
+    return try makeNodeList(ctx, list.items);
 }
 
 fn domElementGetAttributeNode(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -1151,7 +1242,7 @@ fn domElementGetAttributeNode(ctx: *NativeContext, args: []const Value) RuntimeE
     const name_z = try dupZ(ctx, args[0].string.bytes());
     const attr = c.xmlHasProp(node, @ptrCast(name_z.ptr));
     if (attr == null) return NativeResult.scalar(.null);
-    return NativeResult.borrowed(try wrapNode(ctx, @ptrCast(attr), getOwnerDocObj(obj) orelse obj));
+    return NativeResult.borrowed(try wrapNode(ctx, @ptrCast(attr)));
 }
 
 // ---------------- DOMCharacterData methods ----------------
@@ -1182,11 +1273,11 @@ fn domCdSubstringData(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
 
 // ---------------- DOMNodeList ----------------
 
-fn makeNodeList(ctx: *NativeContext, owner_doc: *PhpObject, nodes: []*c.xmlNode) RuntimeError!NativeResult {
+fn makeNodeList(ctx: *NativeContext, nodes: []*c.xmlNode) RuntimeError!NativeResult {
     const list_obj = try ctx.createObject("DOMNodeList");
     const arr = try ctx.createArray();
     for (nodes, 0..) |n, i| {
-        const wrapped = try wrapNode(ctx, n, owner_doc);
+        const wrapped = try wrapNode(ctx, n);
         try arr.set(ctx.allocator, .{ .int = @intCast(i) }, wrapped);
     }
     try list_obj.set(ctx.allocator, "__items", .{ .array = arr });
@@ -1268,14 +1359,14 @@ fn getThisOf(ctx: *NativeContext) ?*PhpObject {
 
 // ---------------- DOMNamedNodeMap ----------------
 
-fn makeNamedNodeMap(ctx: *NativeContext, owner_doc: *PhpObject, element: *c.xmlNode) RuntimeError!NativeResult {
+fn makeNamedNodeMap(ctx: *NativeContext, element: *c.xmlNode) RuntimeError!NativeResult {
     const map_obj = try ctx.createObject("DOMNamedNodeMap");
     const arr = try ctx.createArray();
     const named = try ctx.createArray();
     var attr = element.properties;
     var i: usize = 0;
     while (attr != null) : (attr = attr.*.next) {
-        const wrapped = try wrapNode(ctx, @ptrCast(attr), owner_doc);
+        const wrapped = try wrapNode(ctx, @ptrCast(attr));
         try arr.set(ctx.allocator, .{ .int = @intCast(i) }, wrapped);
         if (attr.*.name != null) {
             const name = attr.*.name;
@@ -1370,18 +1461,18 @@ fn domXpathQuery(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     defer c.xmlXPathFreeObject(result);
 
     if (result.*.type != c.XPATH_NODESET) {
-        return try makeNodeList(ctx, doc_v.object, &.{});
+        return try makeNodeList(ctx, &.{});
     }
     const ns = result.*.nodesetval;
-    if (ns == null) return try makeNodeList(ctx, doc_v.object, &.{});
+    if (ns == null) return try makeNodeList(ctx, &.{});
 
-    return try buildXpathNodeList(ctx, doc_v.object, ns);
+    return try buildXpathNodeList(ctx, ns);
 }
 
 // build a DOMNodeList from an xmlXPath nodeset. namespace pseudo-nodes get
 // converted into standalone PhpObjects right away because the underlying
 // xmlNs entries are freed when xmlXPathFreeObject runs on this result
-fn buildXpathNodeList(ctx: *NativeContext, owner_doc: *PhpObject, xset: *c.xmlNodeSet) RuntimeError!NativeResult {
+fn buildXpathNodeList(ctx: *NativeContext, xset: *c.xmlNodeSet) RuntimeError!NativeResult {
     const list_obj = try ctx.createObject("DOMNodeList");
     const arr = try ctx.createArray();
     var i: usize = 0;
@@ -1389,9 +1480,9 @@ fn buildXpathNodeList(ctx: *NativeContext, owner_doc: *PhpObject, xset: *c.xmlNo
         const n = xset.nodeTab[i];
         if (n == null) continue;
         const wrapped = if (n.*.type == c.XML_NAMESPACE_DECL)
-            try wrapNamespaceNode(ctx, owner_doc, @ptrCast(n))
+            try wrapNamespaceNode(ctx, @ptrCast(n))
         else
-            try wrapNode(ctx, n, owner_doc);
+            try wrapNode(ctx, n);
         try arr.set(ctx.allocator, .{ .int = @intCast(i) }, wrapped);
     }
     try list_obj.set(ctx.allocator, "__items", .{ .array = arr });
@@ -1400,10 +1491,9 @@ fn buildXpathNodeList(ctx: *NativeContext, owner_doc: *PhpObject, xset: *c.xmlNo
     return NativeResult.borrowed(.{ .object = list_obj });
 }
 
-fn wrapNamespaceNode(ctx: *NativeContext, owner_doc: *PhpObject, ns: *c.xmlNs) !Value {
+fn wrapNamespaceNode(ctx: *NativeContext, ns: *c.xmlNs) !Value {
     const obj = try ctx.createObject("DOMNameSpaceNode");
     try obj.set(ctx.allocator, "__ns_kind", .{ .bool = true });
-    try obj.set(ctx.allocator, "__owner", .{ .object = owner_doc });
     if (ns.prefix != null) {
         const slice = ns.prefix[0..cstrLen(ns.prefix)];
         try obj.setCopiedString(ctx.allocator, "__ns_prefix", slice);
@@ -1451,8 +1541,8 @@ fn domXpathEvaluate(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
     switch (result.*.type) {
         c.XPATH_NODESET => {
             const xs = result.*.nodesetval;
-            if (xs == null) return try makeNodeList(ctx, doc_v.object, &.{});
-            return try buildXpathNodeList(ctx, doc_v.object, xs);
+            if (xs == null) return try makeNodeList(ctx, &.{});
+            return try buildXpathNodeList(ctx, xs);
         },
         c.XPATH_BOOLEAN => return NativeResult.scalar(.{ .bool = result.*.boolval != 0 }),
         c.XPATH_NUMBER => return NativeResult.scalar(.{ .float = result.*.floatval }),
@@ -1498,7 +1588,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
 }
 
 fn registerDocClass(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "DOMDocument", .native_clone = cloneDocHandle };
+    var def = ClassDef{ .name = "DOMDocument", .parent = "DOMNode", .native_clone = cloneDocHandle, .native_cleanup = cleanupWrapper };
     try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
     try def.methods.put(a, "loadXML", .{ .name = "loadXML", .arity = 1 });
     try def.methods.put(a, "load", .{ .name = "load", .arity = 1 });
@@ -1563,7 +1653,7 @@ fn registerDocClass(vm: *VM, a: Allocator) !void {
 }
 
 fn registerNodeClass(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "DOMNode", .native_clone = cloneNodeHandle };
+    var def = ClassDef{ .name = "DOMNode", .native_clone = cloneNodeHandle, .native_cleanup = cleanupWrapper };
     try def.methods.put(a, "appendChild", .{ .name = "appendChild", .arity = 1 });
     try def.methods.put(a, "removeChild", .{ .name = "removeChild", .arity = 1 });
     try def.methods.put(a, "replaceChild", .{ .name = "replaceChild", .arity = 2 });
@@ -1919,18 +2009,7 @@ fn libxmlSetExternalEntityLoader(_: *NativeContext, _: []const Value) RuntimeErr
     return NativeResult.scalar(.{ .bool = true });
 }
 
+// the request-end sweep: wrappers still alive let go of their trees
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
-    for (objects.items) |obj| freeDetachedCopy(obj);
-    for (objects.items) |obj| {
-        if (std.mem.eql(u8, obj.class_name, "DOMDocument")) {
-            if (getDocPtr(obj)) |doc| c.xmlFreeDoc(doc);
-        }
-    }
-}
-
-// a cloned node that was appended somewhere is freed with its tree
-fn freeDetachedCopy(obj: *PhpObject) void {
-    if (!obj.native.owns) return;
-    const node = getNodePtr(obj) orelse return;
-    if (node.parent == null) c.xmlFreeNode(node);
+    for (objects.items) |obj| if (!obj.pooled) detach(obj);
 }

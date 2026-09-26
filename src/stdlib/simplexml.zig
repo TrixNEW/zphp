@@ -14,22 +14,17 @@ const ClassDef = vm_mod.ClassDef;
 const Allocator = std.mem.Allocator;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
-const c = @cImport({
-    @cInclude("libxml/parser.h");
-    @cInclude("libxml/tree.h");
-    @cInclude("libxml/xpath.h");
-    @cInclude("libxml/xpathInternals.h");
-});
+const tree = dom.tree;
+const c = dom.c;
 
 // SimpleXMLElement wraps a single xmlNodePtr plus tracking state for the
 // "sibling set" semantics PHP exposes - $root->item is a wrapper around the
 // first <item>, but iterating it walks all <item> siblings under $root
 //
 // the native handle (kind .simplexml) carries the pointers: ptr is the
-// xmlNodePtr of the current element, aux the owning xmlDocPtr (owns_aux
-// when this wrapper frees it at request end), extra the iteration cursor.
-// a wrapper made by `clone` holds a detached node copy and marks owns so
-// the request-end sweep frees it while it is still unattached
+// xmlNodePtr of the current element, aux the xmlDocPtr, extra the iteration
+// cursor. every wrapper holds a reference on its document and its node
+// through libxml_tree.zig, shared with any DOM wrappers of the same tree
 //
 // state stored on the PhpObject:
 //   __ns    : optional default namespace filter (URI)
@@ -40,6 +35,7 @@ pub const entries = .{
     .{ "simplexml_load_string", sxmlLoadString },
     .{ "simplexml_load_file", sxmlLoadFile },
     .{ "simplexml_import_dom", sxmlImportDom },
+    .{ "dom_import_simplexml", sxmlExportDom },
 };
 
 // a copy that lives until the next statement boundary unless stored
@@ -84,21 +80,37 @@ fn setCursor(obj: *PhpObject, node: ?*c.xmlNode) void {
     obj.native.extra = NativeHandle.addr(node);
 }
 
-fn setHandle(obj: *PhpObject, doc: ?*c.xmlDoc, node: ?*c.xmlNode) void {
+fn setHandle(obj: *PhpObject, doc: ?*c.xmlDoc, node: ?*c.xmlNode) !void {
+    try tree.hold(doc, node);
     obj.native = .{ .kind = .simplexml, .ptr = NativeHandle.addr(node), .aux = NativeHandle.addr(doc) };
+}
+
+fn detach(obj: *PhpObject) void {
+    if (obj.native.kind != .simplexml) return;
+    const node = getNodePtr(obj);
+    const doc = getDocPtr(obj);
+    obj.native = .{};
+    tree.release(doc, node);
+}
+
+fn cleanupWrapper(obj: *PhpObject) bool {
+    detach(obj);
+    return true;
 }
 
 // php copies the whole document when the wrapper sits on the root element
 // and otherwise copies just the node into the same document
 fn cloneHandle(_: *VM, src: *PhpObject, copy: *PhpObject) bool {
     const node = getNodePtr(src) orelse {
-        setHandle(copy, getDocPtr(src), null);
+        setHandle(copy, getDocPtr(src), null) catch return false;
         return true;
     };
     if (isRootElement(node)) return cloneWholeDoc(node, copy);
     const dup = c.xmlDocCopyNode(node, node.doc, 1) orelse return false;
-    setHandle(copy, getDocPtr(src), dup);
-    copy.native.owns = true;
+    setHandle(copy, getDocPtr(src), dup) catch {
+        c.xmlFreeNode(dup);
+        return false;
+    };
     return true;
 }
 
@@ -113,8 +125,10 @@ fn cloneWholeDoc(node: *const c.xmlNode, copy: *PhpObject) bool {
         c.xmlFreeDoc(dup);
         return false;
     };
-    setHandle(copy, dup, root);
-    copy.native.owns_aux = true;
+    setHandle(copy, dup, root) catch {
+        c.xmlFreeDoc(dup);
+        return false;
+    };
     return true;
 }
 
@@ -130,17 +144,17 @@ const IterMode = enum { siblings, children };
 
 fn buildWrapperMode(ctx: *NativeContext, doc: *c.xmlDoc, node: *c.xmlNode, mode: IterMode) !*PhpObject {
     const obj = try ctx.createObject("SimpleXMLElement");
-    setHandle(obj, doc, node);
     try obj.set(ctx.allocator, "__is_attr", .{ .bool = false });
     try obj.set(ctx.allocator, "__iter_children", .{ .bool = mode == .children });
+    try setHandle(obj, doc, node);
     return obj;
 }
 
 fn buildAttrWrapper(ctx: *NativeContext, doc: *c.xmlDoc, owner: *c.xmlNode, attr_name: []const u8) !*PhpObject {
     const obj = try ctx.createObject("SimpleXMLElement");
-    setHandle(obj, doc, owner);
     try obj.set(ctx.allocator, "__is_attr", .{ .bool = true });
     try obj.setCopiedString(ctx.allocator, "__attr_name", attr_name);
+    try setHandle(obj, doc, owner);
     return obj;
 }
 
@@ -305,8 +319,8 @@ fn sxmlLoadString(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
         c.xmlFreeDoc(doc);
         return NativeResult.scalar(.{ .bool = false });
     };
+    errdefer c.xmlFreeDoc(doc);
     const wrapper = try buildRootWrapper(ctx, doc, root);
-    wrapper.native.owns_aux = true;
     return NativeResult.borrowed(.{ .object = wrapper });
 }
 
@@ -325,8 +339,8 @@ fn sxmlLoadFile(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
         c.xmlFreeDoc(doc);
         return NativeResult.scalar(.{ .bool = false });
     };
+    errdefer c.xmlFreeDoc(doc);
     const wrapper = try buildRootWrapper(ctx, doc, root);
-    wrapper.native.owns_aux = true;
     return NativeResult.borrowed(.{ .object = wrapper });
 }
 
@@ -341,6 +355,12 @@ fn sxmlImportDom(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     const doc = target.doc orelse return NativeResult.scalar(.null);
     const wrapper = try buildWrapper(ctx, doc, target);
     return NativeResult.borrowed(.{ .object = wrapper });
+}
+
+fn sxmlExportDom(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 1 or args[0] != .object) return NativeResult.scalar(.null);
+    const node = getNodePtr(args[0].object) orelse return NativeResult.scalar(.null);
+    return NativeResult.borrowed(try dom.wrapNode(ctx, node));
 }
 
 // ---------------- SimpleXMLElement::__construct ----------------
@@ -364,10 +384,13 @@ fn sxmlConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         c.xmlFreeDoc(doc);
         return NativeResult.scalar(.null);
     };
-    setHandle(obj, doc, root);
-    obj.native.owns_aux = true;
     try obj.set(ctx.allocator, "__is_attr", .{ .bool = false });
     try obj.set(ctx.allocator, "__iter_children", .{ .bool = true });
+    detach(obj);
+    setHandle(obj, doc, root) catch |err| {
+        c.xmlFreeDoc(doc);
+        return err;
+    };
     return NativeResult.scalar(.null);
 }
 
@@ -489,9 +512,9 @@ fn sxmlAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     const node = getNodePtr(obj) orelse return NativeResult.scalar(.null);
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.null);
     const wrapper = try ctx.createObject("SimpleXMLElement");
-    setHandle(wrapper, doc, node);
     try wrapper.set(ctx.allocator, "__is_attr", .{ .bool = false });
     try wrapper.set(ctx.allocator, "__attr_view", .{ .bool = true });
+    try setHandle(wrapper, doc, node);
     // namespace filter mirrors children(): when called without args, PHP only
     // emits no-namespace attrs (so empty string __ns acts as the default)
     var resolved_ns: []const u8 = "";
@@ -568,7 +591,7 @@ fn sxmlXpath(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
         var i: usize = 0;
         while (i < @as(usize, @intCast(ns.*.nodeNr))) : (i += 1) {
             const n = ns.*.nodeTab[i];
-            if (n == null) continue;
+            if (n == null or n.*.type == c.XML_NAMESPACE_DECL) continue;
             const wrapper = try buildWrapper(ctx, doc, n);
             try arr.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .object = wrapper });
         }
@@ -862,6 +885,7 @@ fn sxmlOffsetSet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     if (args[0] != .string or args[1] != .string) return NativeResult.scalar(.null);
     const name_z = try dupZ(ctx, args[0].string.bytes());
     const val_z = try dupZ(ctx, args[1].string.bytes());
+    if (c.xmlHasProp(node, @ptrCast(name_z.ptr))) |existing| tree.rescueChildren(@ptrCast(existing));
     _ = c.xmlSetProp(node, @ptrCast(name_z.ptr), @ptrCast(val_z.ptr));
     return NativeResult.scalar(.null);
 }
@@ -870,6 +894,7 @@ fn sxmlOffsetSet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
 // removes all existing text/element children first so the post-state is a
 // single text node, matching PHP's `$elem->child = 'value'` semantics
 fn setNodeText(ctx: *NativeContext, n: *c.xmlNode, text: []const u8) !void {
+    tree.rescueChildren(n);
     var ch = n.children;
     while (ch != null) {
         const nxt = ch.*.next;
@@ -920,7 +945,10 @@ fn sxmlOffsetUnset(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     const node = getNodePtr(obj) orelse return NativeResult.scalar(.null);
     const name_z = try dupZ(ctx, args[0].string.bytes());
-    _ = c.xmlUnsetProp(node, @ptrCast(name_z.ptr));
+    if (c.xmlHasProp(node, @ptrCast(name_z.ptr))) |found| {
+        const attr: *c.xmlNode = @ptrCast(found);
+        if (attr.type == c.XML_ATTRIBUTE_NODE) tree.discard(attr);
+    }
     return NativeResult.scalar(.null);
 }
 
@@ -970,21 +998,23 @@ fn sxmlGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
     // children / sibling iteration uses a custom xml-tree walker so duplicate-
     // name children each get their own (name, child) pair in foreach
     const iter_obj = try ctx.createObject("SimpleXMLChildrenIter");
-    setHandle(iter_obj, doc, null);
     // forward namespace filter from the wrapper to the iter so sxiAcceptable
     // can drop nodes outside the requested namespace
     const fwd_ns = obj.get("__ns");
     if (fwd_ns == .string) try iter_obj.set(ctx.allocator, "__ns", .{ .string = fwd_ns.string });
     if (obj.get("__iter_children") == .bool and obj.get("__iter_children").bool) {
         // start from the node's first child
-        iter_obj.native.ptr = @intFromPtr(node);
         try iter_obj.set(ctx.allocator, "__mode", .{ .string = Value.String.borrowed("children") });
+        try setHandle(iter_obj, doc, node);
     } else {
         // sibling mode: start from $this and only emit same-named siblings
-        if (node.name == null) return NativeResult.borrowed(.{ .object = iter_obj });
-        iter_obj.native.ptr = @intFromPtr(node);
+        if (node.name == null) {
+            try setHandle(iter_obj, doc, null);
+            return NativeResult.borrowed(.{ .object = iter_obj });
+        }
         try iter_obj.set(ctx.allocator, "__mode", .{ .string = Value.String.borrowed("siblings") });
         try iter_obj.setCopiedString(ctx.allocator, "__same_name", node.name[0..cstrLen(node.name)]);
+        try setHandle(iter_obj, doc, node);
     }
     return NativeResult.borrowed(.{ .object = iter_obj });
 }
@@ -992,7 +1022,7 @@ fn sxmlGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
 // ---------------- registration ----------------
 
 pub fn register(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "SimpleXMLElement", .native_clone = cloneHandle };
+    var def = ClassDef{ .name = "SimpleXMLElement", .native_clone = cloneHandle, .native_cleanup = cleanupWrapper };
     try def.interfaces.append(a, "Countable");
     try def.interfaces.append(a, "IteratorAggregate");
     try def.interfaces.append(a, "ArrayAccess");
@@ -1048,7 +1078,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // siblings without going through a deduplicating PhpArray, so duplicate-
     // name siblings (multiple <a> under a parent) each get their own iteration
     // step and the foreach key is the actual element name
-    var iter_def = ClassDef{ .name = "SimpleXMLChildrenIter" };
+    var iter_def = ClassDef{ .name = "SimpleXMLChildrenIter", .native_cleanup = cleanupWrapper };
     try iter_def.interfaces.append(a, "Iterator");
     try iter_def.methods.put(a, "rewind", .{ .name = "rewind", .arity = 0 });
     try iter_def.methods.put(a, "valid", .{ .name = "valid", .arity = 0 });
@@ -1101,9 +1131,9 @@ fn sxmlIterCurrent(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
     const node = getCursor(obj) orelse return NativeResult.scalar(.null);
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.null);
     const wrapper = try ctx.createObject("SimpleXMLIterator");
-    setHandle(wrapper, doc, node);
     try wrapper.set(ctx.allocator, "__is_attr", .{ .bool = false });
     try wrapper.set(ctx.allocator, "__iter_children", .{ .bool = true });
+    try setHandle(wrapper, doc, node);
     return NativeResult.borrowed(.{ .object = wrapper });
 }
 
@@ -1126,9 +1156,9 @@ fn sxmlIterGetChildren(ctx: *NativeContext, _: []const Value) RuntimeError!Nativ
     const node = getCursor(obj) orelse return NativeResult.scalar(.null);
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.null);
     const wrapper = try ctx.createObject("SimpleXMLIterator");
-    setHandle(wrapper, doc, node);
     try wrapper.set(ctx.allocator, "__is_attr", .{ .bool = false });
     try wrapper.set(ctx.allocator, "__iter_children", .{ .bool = true });
+    try setHandle(wrapper, doc, node);
     return NativeResult.borrowed(.{ .object = wrapper });
 }
 
@@ -1212,18 +1242,7 @@ fn sxiAcceptable(obj: *PhpObject, n: *c.xmlNode) bool {
     return true;
 }
 
+// the request-end sweep: wrappers still alive let go of their trees
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
-    for (objects.items) |obj| freeDetachedCopy(obj);
-    for (objects.items) |obj| {
-        if (!std.mem.eql(u8, obj.class_name, "SimpleXMLElement")) continue;
-        if (!obj.native.owns_aux) continue;
-        if (getDocPtr(obj)) |doc| c.xmlFreeDoc(doc);
-    }
-}
-
-// a cloned node that was appended somewhere is freed with its tree
-fn freeDetachedCopy(obj: *PhpObject) void {
-    if (!obj.native.owns) return;
-    const node = getNodePtr(obj) orelse return;
-    if (node.parent == null) c.xmlFreeNode(node);
+    for (objects.items) |obj| if (!obj.pooled) detach(obj);
 }

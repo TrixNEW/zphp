@@ -284,26 +284,19 @@ fn xrIsValid(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     return NativeResult.scalar(.{ .bool = c.xmlTextReaderIsValid(r) == 1 });
 }
 
-fn xrExpand(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    // expand() returns a DOMNode for the current node. requires the dom module's
-    // wrapping. building a DOMElement/DOMText/etc wrapper here would create a
-    // node tied to an internal reader doc; PHP's documented behavior is the
-    // same. We pass through to dom.wrapNode equivalent.
+// php hands back a copy: the reader frees the expanded node when it moves on.
+// the copy joins the base node's document, or none
+fn xrExpand(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const r = getReader(obj) orelse return NativeResult.scalar(.{ .bool = false });
     const node = c.xmlTextReaderExpand(r) orelse return NativeResult.scalar(.{ .bool = false });
-    // build a minimal DOMNode wrapper. dispatch class name from node type
-    const cls = switch (node.*.type) {
-        1 => "DOMElement", // XML_ELEMENT_NODE
-        3 => "DOMText",
-        4 => "DOMCdataSection",
-        7 => "DOMProcessingInstruction",
-        8 => "DOMComment",
-        else => "DOMNode",
-    };
-    const dom_obj = try ctx.createObject(cls);
-    dom.setNodePtr(dom_obj, @ptrCast(node));
-    return NativeResult.borrowed(.{ .object = dom_obj });
+    var doc: ?*dom.c.xmlDoc = null;
+    if (args.len > 0 and args[0] == .object) {
+        const base = dom.getNodePtr(args[0].object) orelse return NativeResult.scalar(.{ .bool = false });
+        doc = if (dom.tree.isDocument(base)) @ptrCast(base) else base.doc;
+    }
+    const copy = dom.c.xmlDocCopyNode(@ptrCast(node), doc, 1) orelse return NativeResult.scalar(.{ .bool = false });
+    return NativeResult.borrowed(try dom.wrapNode(ctx, copy));
 }
 
 fn xrGet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
