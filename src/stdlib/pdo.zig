@@ -1016,9 +1016,7 @@ fn pdoSetAttribute(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     // last value set even for attributes that don't influence native behavior
     var key_buf: [32]u8 = undefined;
     const key = std.fmt.bufPrint(&key_buf, "__attr_{d}", .{attr}) catch return NativeResult.scalar(.{ .bool = true });
-    const owned_key = try ctx.allocator.dupe(u8, key);
-    try ctx.vm.strings.append(ctx.allocator, owned_key);
-    try obj.set(ctx.allocator, owned_key, args[1]);
+    try obj.set(ctx.allocator, key, args[1]);
     return NativeResult.scalar(.{ .bool = true });
 }
 
@@ -1496,10 +1494,9 @@ fn populateObjectFromRow(ctx: *NativeContext, obj: *PhpObject, stmt: *sqlite.Stm
     while (i < col_count) : (i += 1) {
         if (sqlite.sqlite3_column_name(stmt, i)) |name_ptr| {
             const name = std.mem.span(name_ptr);
-            const owned = try ctx.createString(name);
             const val = try columnToValue(ctx, stmt, i);
             defer if (val == .string) val.string.release();
-            try obj.set(ctx.allocator, owned, val);
+            try obj.set(ctx.allocator, name, val);
         }
     }
 }
@@ -1655,9 +1652,8 @@ fn getDefaultFetchMode(obj: *PhpObject) i64 {
 // helpers
 
 fn fetchRowAsObject(ctx: *NativeContext, stmt: *sqlite.Stmt) !Value {
-    const obj = try ctx.vm.allocator.create(PhpObject);
+    const obj = try ctx.vm.allocObjectShell();
     obj.* = .{ .class_name = "stdClass" };
-    try ctx.vm.objects.append(ctx.vm.allocator, obj);
     const col_count = sqlite.sqlite3_column_count(stmt);
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
@@ -1665,26 +1661,24 @@ fn fetchRowAsObject(ctx: *NativeContext, stmt: *sqlite.Stmt) !Value {
         defer if (val == .string) val.string.release();
         if (sqlite.sqlite3_column_name(stmt, i)) |name_ptr| {
             const name = std.mem.span(name_ptr);
-            try obj.set(ctx.allocator, try ctx.createString(name), val);
+            try obj.set(ctx.allocator, name, val);
         }
     }
     return .{ .object = obj };
 }
 
 fn fetchRowAsClass(ctx: *NativeContext, stmt: *sqlite.Stmt, class_name: []const u8) !Value {
-    const obj = try ctx.vm.allocator.create(PhpObject);
-    obj.* = .{ .class_name = class_name };
-    try ctx.vm.objects.append(ctx.vm.allocator, obj);
+    const obj = try ctx.vm.allocObjectShell();
+    obj.* = .{ .class_name = try ctx.vm.stableClassName(class_name) };
     if (ctx.vm.classes.contains(class_name)) try ctx.vm.initObjectProperties(obj, class_name);
     const col_count = sqlite.sqlite3_column_count(stmt);
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (sqlite.sqlite3_column_name(stmt, i)) |name_ptr| {
             const name = std.mem.span(name_ptr);
-            const owned = try ctx.createString(name);
             const val = try columnToValue(ctx, stmt, i);
             defer if (val == .string) val.string.release();
-            try obj.set(ctx.allocator, owned, val);
+            try obj.set(ctx.allocator, name, val);
         }
     }
     return .{ .object = obj };

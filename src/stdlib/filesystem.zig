@@ -1708,7 +1708,7 @@ fn native_fclose(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
             ctx.allocator.free(r.stderr);
         } else |_| {}
         obj.set(ctx.allocator, "__open", .{ .bool = false }) catch {};
-        obj.properties.put(std.heap.page_allocator, "__popen_cmd", .null) catch {};
+        obj.set(ctx.allocator, "__popen_cmd", .null) catch {};
         return NativeResult.scalar(.{ .bool = true });
     }
     if (isZlibWriting(obj)) {
@@ -3795,9 +3795,8 @@ fn native_linkinfo(_: *NativeContext, args: []const Value) RuntimeError!NativeRe
 }
 
 fn native_finfo_open(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const obj = try ctx.allocator.create(PhpObject);
+    const obj = try ctx.vm.allocObjectShell();
     obj.* = .{ .class_name = "finfo" };
-    try ctx.vm.objects.append(ctx.allocator, obj);
     return NativeResult.borrowed(.{ .object = obj });
 }
 

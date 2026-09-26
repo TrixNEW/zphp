@@ -1075,7 +1075,7 @@ fn native_get_object_vars(ctx: *NativeContext, args: []const Value) RuntimeError
             if (caller_class == null or decl == null or !std.mem.eql(u8, caller_class.?, decl.?)) continue;
         }
         if (vis == .protected and !can_see_protected) continue;
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, entry.value_ptr.*);
+        try arr.setCopiedKey(ctx.allocator, name, entry.value_ptr.*);
     }
     return NativeResult.borrowed(.{ .array = arr });
 }

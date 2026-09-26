@@ -802,7 +802,7 @@ fn rextConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         return throwReflection(ctx, msg);
     }
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
-    this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(try ctx.createString(args[0].string.bytes())) }) catch return error.OutOfMemory;
+    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(try ctx.vm.internName(args[0].string.bytes())) });
     return NativeResult.scalar(.null);
 }
 
@@ -1097,8 +1097,7 @@ fn rcConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         return throwReflection(ctx, msg);
     }
 
-    const stable_name = try ctx.createString(class_name);
-    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(stable_name) });
+    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(try ctx.vm.stableClassName(class_name)) });
     try this.set(ctx.allocator, "_is_interface", .{ .bool = ctx.vm.interfaces.contains(class_name) });
     try this.set(ctx.allocator, "_is_trait", .{ .bool = ctx.vm.traits.contains(class_name) });
     return NativeResult.scalar(.null);
@@ -1233,10 +1232,9 @@ fn rcNewInstance(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
             return error.RuntimeError;
         }
     }
-    const obj = try ctx.vm.allocator.create(PhpObject);
+    const obj = try ctx.vm.allocObjectShell();
     ctx.vm.next_object_id += 1;
-    obj.* = .{ .class_name = class_name, .id = ctx.vm.next_object_id };
-    try ctx.vm.objects.append(ctx.vm.allocator, obj);
+    obj.* = .{ .class_name = try ctx.vm.stableClassName(class_name), .id = ctx.vm.next_object_id };
     // full slot layout + per-instance default copies (walks the parent chain,
     // deep-clones array defaults) - the raw cls.properties loop skipped both,
     // so inherited typed props read as uninitialized
@@ -1267,10 +1265,9 @@ fn rcNewInstanceArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Nati
         ctor_args[i] = arr.entries.items[i].value;
     }
 
-    const obj = try ctx.vm.allocator.create(PhpObject);
+    const obj = try ctx.vm.allocObjectShell();
     ctx.vm.next_object_id += 1;
-    obj.* = .{ .class_name = class_name, .id = ctx.vm.next_object_id };
-    try ctx.vm.objects.append(ctx.vm.allocator, obj);
+    obj.* = .{ .class_name = try ctx.vm.stableClassName(class_name), .id = ctx.vm.next_object_id };
 
     try ctx.vm.initObjectProperties(obj, class_name);
 
@@ -1783,11 +1780,10 @@ fn rcNewLazyGhost(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
     if (args.len < 1) return NativeResult.scalar(.null);
-    const obj = try ctx.vm.allocator.create(PhpObject);
+    const obj = try ctx.vm.allocObjectShell();
     // the lazy object owns its initializer until it runs or is cleared
     VM.retainValue(args[0]);
-    obj.* = .{ .class_name = class_name };
-    try ctx.vm.objects.append(ctx.vm.allocator, obj);
+    obj.* = .{ .class_name = try ctx.vm.stableClassName(class_name) };
     try ctx.vm.initObjectProperties(obj, class_name);
     const state = try ctx.allocator.create(PhpObject.LazyState);
     const count = if (obj.slots) |slots| slots.len else 0;
@@ -1832,10 +1828,9 @@ fn rcNewInstanceWithoutConstructor(ctx: *NativeContext, _: []const Value) Runtim
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
 
-    const obj = try ctx.vm.allocator.create(PhpObject);
+    const obj = try ctx.vm.allocObjectShell();
     ctx.vm.next_object_id += 1;
-    obj.* = .{ .class_name = class_name, .id = ctx.vm.next_object_id };
-    try ctx.vm.objects.append(ctx.vm.allocator, obj);
+    obj.* = .{ .class_name = try ctx.vm.stableClassName(class_name), .id = ctx.vm.next_object_id };
 
     // mirror the `new` path: install slot layout + per-instance default copies
     // (initObjectProperties deep-clones array/object defaults via copyDefault, so
@@ -4501,8 +4496,7 @@ fn reConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         return throwReflection(ctx, msg);
     }
 
-    const stable_name = try ctx.createString(class_name);
-    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(stable_name) });
+    try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(try ctx.vm.stableClassName(class_name)) });
     try this.set(ctx.allocator, "_is_interface", .{ .bool = false });
     try this.set(ctx.allocator, "_is_trait", .{ .bool = false });
     return NativeResult.scalar(.null);
@@ -4873,8 +4867,7 @@ fn rcResetAsLazy(ctx: *NativeContext, args: []const Value, proxy: bool) RuntimeE
         obj.slots = null;
     }
     for (obj.properties.values()) |v| ctx.vm.releaseValue(v);
-    obj.properties.clearRetainingCapacity();
-    obj.unset_slots.clearRetainingCapacity();
+    obj.clearProperties(ctx.allocator);
     try ctx.vm.initObjectProperties(obj, obj.class_name);
     VM.retainValue(args[1]);
     const state = try ctx.allocator.create(PhpObject.LazyState);

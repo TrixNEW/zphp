@@ -192,6 +192,14 @@ pub const PhpArray = struct {
         self.has_int_keys = true;
     }
 
+    // a string key from bytes the array does not own (an object's property
+    // name, a buffer), stored as its own counted copy
+    pub fn setCopiedKey(self: *PhpArray, allocator: std.mem.Allocator, key: []const u8, value: Value) !void {
+        const owned = try PhpString.create(allocator, key);
+        defer owned.release();
+        try self.set(allocator, .{ .string = owned }, value);
+    }
+
     pub fn set(self: *PhpArray, allocator: std.mem.Allocator, raw_key: Key, value: Value) !void {
         // a store choke point: the element takes a new reference to the
         // value (callers pass raw values, never copyValue'd ones) and the
@@ -459,6 +467,9 @@ pub const RefIndex = struct {
     fwd: std.AutoHashMapUnmanaged(*Value, std.ArrayListUnmanaged(BindingTarget)) = .{},
     prop_rev: std.HashMapUnmanaged(PropRefKey, std.ArrayListUnmanaged(*Value), PropRefKeyContext, 80) = .{},
     by_owner: std.AutoHashMapUnmanaged(OwnerId, std.ArrayListUnmanaged(OwnedBinding)) = .{},
+    // the property names bindings refer to, copied once and kept until clear,
+    // so a binding never borrows bytes its creator may free
+    names: std.StringHashMapUnmanaged(void) = .{},
     next_owner: OwnerId = 1,
 
     pub fn createOwner(self: *RefIndex) OwnerId {
@@ -467,8 +478,13 @@ pub const RefIndex = struct {
         return owner;
     }
 
-    pub fn addOwned(self: *RefIndex, a: std.mem.Allocator, owner: OwnerId, cell: *Value, target: BindingTarget) !void {
+    pub fn addOwned(self: *RefIndex, a: std.mem.Allocator, owner: OwnerId, cell: *Value, given: BindingTarget) !void {
         std.debug.assert(owner != 0);
+        const target: BindingTarget = switch (given) {
+            .object => |o| .{ .object = .{ .object = o.object, .prop_name = try self.keepName(a, o.prop_name) } },
+            .static => |st| .{ .static = .{ .class_name = st.class_name, .prop_name = try self.keepName(a, st.prop_name) } },
+            .array, .capture => given,
+        };
         const gop = try self.by_owner.getOrPut(a, owner);
         if (!gop.found_existing) gop.value_ptr.* = .{};
         for (gop.value_ptr.items) |existing| {
@@ -481,6 +497,17 @@ pub const RefIndex = struct {
             .static => |s| try self.addPropRev(a, .{ .object = null, .class_name = s.class_name, .prop_name = s.prop_name }, cell),
             .array, .capture => {},
         }
+    }
+
+    fn keepName(self: *RefIndex, a: std.mem.Allocator, name: []const u8) ![]const u8 {
+        const gop = try self.names.getOrPut(a, name);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = a.dupe(u8, name) catch |err| {
+                self.names.removeByPtr(gop.key_ptr);
+                return err;
+            };
+        }
+        return gop.key_ptr.*;
     }
 
     pub fn releaseOwner(self: *RefIndex, a: std.mem.Allocator, owner: OwnerId) void {
@@ -677,6 +704,9 @@ pub const RefIndex = struct {
         var it2 = self.prop_rev.valueIterator();
         while (it2.next()) |list| list.deinit(a);
         self.prop_rev.clearRetainingCapacity();
+        var names = self.names.keyIterator();
+        while (names.next()) |name| a.free(name.*);
+        self.names.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *RefIndex, a: std.mem.Allocator) void {
@@ -684,6 +714,7 @@ pub const RefIndex = struct {
         self.fwd.deinit(a);
         self.prop_rev.deinit(a);
         self.by_owner.deinit(a);
+        self.names.deinit(a);
     }
 };
 
@@ -878,6 +909,7 @@ pub const NativeHandle = struct {
 
 pub const PhpObject = struct {
     class_name: []const u8,
+    // dynamic and undeclared properties; the object owns every key's bytes
     properties: std.StringArrayHashMapUnmanaged(Value) = .{},
     slots: ?[]Value = null,
     slot_layout: ?*SlotLayout = null,
@@ -885,7 +917,7 @@ pub const PhpObject = struct {
     // a slot can hold a default value of `.null` AND be considered "present"
     // (no __get triggered), so we need a side-channel to distinguish "unset"
     // from "null". needed by PHP's lazy-init via `unset($this->x); ... $this->x`
-    // pattern that triggers __get
+    // pattern that triggers __get. owns its keys like properties
     unset_slots: std.StringHashMapUnmanaged(void) = .{},
     // PHP's __set recursion guard. when __set is invoked for prop X on this
     // object, writes to X from inside __set skip __set and write directly,
@@ -976,7 +1008,10 @@ pub const PhpObject = struct {
             allocator.free(state.pending);
             allocator.destroy(state);
         }
+        for (self.properties.keys()) |name| allocator.free(name);
         self.properties.deinit(allocator);
+        var unset_names = self.unset_slots.keyIterator();
+        while (unset_names.next()) |name| allocator.free(name.*);
         self.unset_slots.deinit(allocator);
         self.magic_set_active.deinit(allocator);
         self.magic_get_active.deinit(allocator);
@@ -996,11 +1031,52 @@ pub const PhpObject = struct {
     }
 
     pub fn markUnset(self: *PhpObject, allocator: std.mem.Allocator, name: []const u8) !void {
-        try self.unset_slots.put(allocator, name, {});
+        const gop = try self.unset_slots.getOrPut(allocator, name);
+        if (gop.found_existing) return;
+        gop.key_ptr.* = allocator.dupe(u8, name) catch |err| {
+            self.unset_slots.removeByPtr(gop.key_ptr);
+            return err;
+        };
     }
 
-    pub fn clearUnset(self: *PhpObject, name: []const u8) void {
-        _ = self.unset_slots.remove(name);
+    pub fn clearUnset(self: *PhpObject, allocator: std.mem.Allocator, name: []const u8) void {
+        if (self.unset_slots.count() == 0) return;
+        const removed = self.unset_slots.fetchRemove(name) orelse return;
+        allocator.free(removed.key);
+    }
+
+    // stores an already-counted value; a new property's name is copied, so
+    // callers may pass bytes that die with the call
+    pub fn putProperty(self: *PhpObject, allocator: std.mem.Allocator, name: []const u8, value: Value) !void {
+        const gop = try self.properties.getOrPut(allocator, name);
+        if (gop.found_existing) {
+            const old = gop.value_ptr.*;
+            gop.value_ptr.* = value;
+            releaseReplaced(old);
+            return;
+        }
+        gop.key_ptr.* = allocator.dupe(u8, name) catch |err| {
+            self.properties.swapRemoveAt(gop.index);
+            return err;
+        };
+        gop.value_ptr.* = value;
+    }
+
+    // the removed property's value, handed to the caller to release
+    pub fn removeProperty(self: *PhpObject, allocator: std.mem.Allocator, name: []const u8) ?Value {
+        const removed = self.properties.fetchOrderedRemove(name) orelse return null;
+        allocator.free(removed.key);
+        return removed.value;
+    }
+
+    // drops every property without releasing the values, which the caller
+    // has already released or taken
+    pub fn clearProperties(self: *PhpObject, allocator: std.mem.Allocator) void {
+        for (self.properties.keys()) |name| allocator.free(name);
+        self.properties.clearRetainingCapacity();
+        var unset_names = self.unset_slots.keyIterator();
+        while (unset_names.next()) |name| allocator.free(name.*);
+        self.unset_slots.clearRetainingCapacity();
     }
 
     pub fn getSlotIndex(self: *const PhpObject, name: []const u8) ?u16 {
@@ -1055,7 +1131,7 @@ pub const PhpObject = struct {
         // ones) and the value it replaces is released through the VM's hook
         retainStored(value);
         // a write resurrects a previously-unset property
-        self.clearUnset(name);
+        self.clearUnset(allocator, name);
         if (self.slots) |s| {
             if (self.getSlotIndex(name)) |idx| {
                 const old = s[idx];
@@ -1064,14 +1140,7 @@ pub const PhpObject = struct {
                 return;
             }
         }
-        const gop = try self.properties.getOrPut(allocator, name);
-        if (gop.found_existing) {
-            const old = gop.value_ptr.*;
-            gop.value_ptr.* = value;
-            releaseReplaced(old);
-        } else {
-            gop.value_ptr.* = value;
-        }
+        try self.putProperty(allocator, name, value);
     }
 
     // scope-aware variant for the set_prop opcode path where we know the
@@ -1079,7 +1148,7 @@ pub const PhpObject = struct {
     pub fn setForScope(self: *PhpObject, allocator: std.mem.Allocator, name: []const u8, value: Value, scope: ?[]const u8) !void {
         if (self.storage() != self) return self.storage().setForScope(allocator, name, value, scope);
         retainStored(value);
-        self.clearUnset(name);
+        self.clearUnset(allocator, name);
         if (self.slots) |s| {
             if (self.getSlotIndexForScope(name, scope)) |idx| {
                 const old = s[idx];
@@ -1088,14 +1157,7 @@ pub const PhpObject = struct {
                 return;
             }
         }
-        const gop = try self.properties.getOrPut(allocator, name);
-        if (gop.found_existing) {
-            const old = gop.value_ptr.*;
-            gop.value_ptr.* = value;
-            releaseReplaced(old);
-        } else {
-            gop.value_ptr.* = value;
-        }
+        try self.putProperty(allocator, name, value);
     }
 };
 

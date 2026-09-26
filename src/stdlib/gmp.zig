@@ -578,7 +578,7 @@ fn gmpSerialize(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult
     if (obj.properties.count() > 0) {
         const props = try ctx.createArray();
         var it = obj.properties.iterator();
-        while (it.next()) |e| try props.set(ctx.allocator, .{ .string = Value.String.borrowed(e.key_ptr.*) }, e.value_ptr.*);
+        while (it.next()) |e| try props.setCopiedKey(ctx.allocator, e.key_ptr.*, e.value_ptr.*);
         try arr.append(ctx.allocator, .{ .array = props });
     }
     return NativeResult.borrowed(.{ .array = arr });
@@ -600,7 +600,7 @@ fn gmpUnserialize(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     setMpz(obj, p);
     const props = data.get(.{ .int = 1 });
     if (props == .array) for (props.array.entries.items) |e| {
-        if (e.key == .string) try obj.set(ctx.allocator, try ctx.createString(e.key.string.bytes()), e.value);
+        if (e.key == .string) try obj.set(ctx.allocator, e.key.string.bytes(), e.value);
     };
     return NativeResult.scalar(.null);
 }
@@ -707,7 +707,7 @@ fn gmpBinop(ctx: *NativeContext, op: vm_mod.NativeBinop, a: Value, b: Value) Run
 fn gmpDebugInfo(ctx: *NativeContext, obj: *PhpObject) RuntimeError!*@import("../runtime/value.zig").PhpArray {
     const arr = try ctx.createArray();
     var it = obj.properties.iterator();
-    while (it.next()) |e| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(e.key_ptr.*) }, e.value_ptr.*);
+    while (it.next()) |e| try arr.setCopiedKey(ctx.allocator, e.key_ptr.*, e.value_ptr.*);
     const cstr = if (getMpz(obj)) |p| zphp_mpz_get_str(10, p) else null;
     const num = try Value.String.create(ctx.allocator, if (cstr) |c| c[0..cstrLen(c)] else "0");
     if (cstr) |c| zphp_gmp_free(c);

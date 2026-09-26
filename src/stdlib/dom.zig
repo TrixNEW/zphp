@@ -1218,7 +1218,7 @@ fn domNodeListCount(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
 
 fn domNodeListRewind(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const obj = getThisOf(ctx) orelse return NativeResult.scalar(.null);
-    obj.properties.put(std.heap.page_allocator, "__pos", .{ .int = 0 }) catch {};
+    obj.set(ctx.allocator, "__pos", .{ .int = 0 }) catch {};
     return NativeResult.scalar(.null);
 }
 

@@ -799,9 +799,8 @@ fn parseObject(ctx: *NativeContext, s: []const u8, pos: *usize, assoc: bool, max
         return .{ .array = arr };
     }
 
-    const obj = try ctx.allocator.create(PhpObject);
+    const obj = try ctx.vm.allocObjectShell();
     obj.* = .{ .class_name = "stdClass" };
-    try ctx.vm.objects.append(ctx.allocator, obj);
     if (pos.* < s.len and s[pos.*] == '}') {
         pos.* += 1;
         return .{ .object = obj };
@@ -823,8 +822,7 @@ fn parseObject(ctx: *NativeContext, s: []const u8, pos: *usize, assoc: bool, max
         pos.* += 1;
         const val = try parseValue(ctx, s, pos, assoc, max_depth, cur_depth + 1, flags);
         defer if (val == .string) val.string.release();
-        const stored_key = if (obj.properties.getKey(key_str)) |existing| existing else try ctx.createString(key_str);
-        try obj.set(ctx.allocator, stored_key, val);
+        try obj.set(ctx.allocator, key_str, val);
         skipWhitespace(s, pos);
         if (pos.* < s.len and s[pos.*] == ',') {
             pos.* += 1;

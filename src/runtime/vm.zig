@@ -1602,12 +1602,7 @@ pub const VM = struct {
     fn allocUserObject(self: *VM, class_name: []const u8) RuntimeError!*PhpObject {
         const obj = try self.allocObjectShell();
         self.next_object_id += 1;
-        const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
-            const owned = try self.allocator.dupe(u8, class_name);
-            errdefer self.allocator.free(owned);
-            try self.strings.append(self.allocator, owned);
-            break :blk owned;
-        };
+        const stable_class_name = try self.stableClassName(class_name);
         obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
         if (self.debug_trace_class) |trace_class| if (std.mem.eql(u8, trace_class, class_name)) {
             @import("value.zig").hooks().trace_obj = obj;
@@ -1616,7 +1611,14 @@ pub const VM = struct {
         return obj;
     }
 
-    fn allocObjectShell(self: *VM) RuntimeError!*PhpObject {
+    // the bytes an object keeps for its class name: the registered name, or
+    // an interned copy for a class that is not declared (yet)
+    pub fn stableClassName(self: *VM, class_name: []const u8) ![]const u8 {
+        if (self.classes.getKey(class_name)) |registered| return registered;
+        return self.internName(class_name);
+    }
+
+    pub fn allocObjectShell(self: *VM) RuntimeError!*PhpObject {
         if (self.free_objects.pop()) |obj| return obj;
         const created = try self.allocator.create(PhpObject);
         errdefer self.allocator.destroy(created);
@@ -3294,6 +3296,10 @@ pub const VM = struct {
     }
 
     fn freeOwnedKeys(a: std.mem.Allocator, map: anytype) void {
+        if (@hasDecl(@TypeOf(map.*), "keys")) {
+            for (map.keys()) |k| a.free(k);
+            return;
+        }
         var it = map.keyIterator();
         while (it.next()) |k| a.free(k.*);
     }
@@ -5303,7 +5309,7 @@ pub const VM = struct {
                             const result = Value{ .string = Value.String.borrowed(buf) };
                             self.setCell(cell, result);
                             try self.propagateCellWrite(cell, result);
-                        } else try self.objectSetOwned(obj, pname, .{ .string = Value.String.borrowed(buf) });
+                        } else try obj.set(self.allocator, pname, .{ .string = Value.String.borrowed(buf) });
                         self.push(v);
                         continue;
                     }
@@ -5427,7 +5433,7 @@ pub const VM = struct {
                                 return error.RuntimeError;
                             };
                         } else if (outer_key == .string) {
-                            try self.objectSetOwned(base.object, outer_key.string.bytes(), .{ .string = Value.String.borrowed(buf) });
+                            try base.object.set(self.allocator, outer_key.string.bytes(), .{ .string = Value.String.borrowed(buf) });
                         }
                         self.push(v);
                         continue;
@@ -5478,7 +5484,7 @@ pub const VM = struct {
                                 return error.RuntimeError;
                             };
                         } else if (outer_key == .string) {
-                            try self.objectSetOwned(base.object, outer_key.string.bytes(), .{ .array = new_arr });
+                            try base.object.set(self.allocator, outer_key.string.bytes(), .{ .array = new_arr });
                         }
                         self.push(v);
                         continue;
@@ -6134,7 +6140,7 @@ pub const VM = struct {
                             while (it.next()) |entry| {
                                 const vr = self.findPropertyVisibility(obj.class_name, entry.key_ptr.*);
                                 if (includeProp(self, scope_class, vr.visibility, vr.defining_class)) {
-                                    try arr.set(self.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, entry.value_ptr.*);
+                                    try arr.setCopiedKey(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
                                 }
                             }
                             self.stack[self.sp - 1] = .{ .array = arr };
@@ -6433,7 +6439,7 @@ pub const VM = struct {
                         }
                         const frame = self.currentFrame();
                         const cell = try self.getOrCreateVarCell(frame, source_name);
-                        try self.objectSetOwned(obj_val.object, prop_name, cell.*);
+                        try obj_val.object.set(self.allocator, prop_name, cell.*);
                         try self.regRefObject(try self.persistentRefOwner(), cell, obj_val.object, prop_name);
                         self.obj_ref_active = true;
                     }
@@ -6508,7 +6514,7 @@ pub const VM = struct {
                             var value = obj_ptr.get(prop_name);
                             if (value == .array and value.array.refcount > 1) {
                                 value = .{ .array = try self.shallowCloneCow(value.array) };
-                                try self.objectSetOwned(obj_ptr, prop_name, value);
+                                try obj_ptr.set(self.allocator, prop_name, value);
                             }
                             self.setCell(fresh, value);
                             break :blk fresh;
@@ -6533,10 +6539,7 @@ pub const VM = struct {
                         try self.bindRefSlot(&frame.ref_slots, dst_name, c);
                     } else {
                         var obj_ptr = obj_val.object;
-                        const prop_str = (try self.coerceToStringValue(name_val)).string.bytes();
-                        // dupe so the binding's prop_name outlives the temporary
-                        const prop_owned = try self.allocator.dupe(u8, prop_str);
-                        try self.strings.append(self.allocator, prop_owned);
+                        const prop_owned = (try self.coerceToStringValue(name_val)).string.bytes();
                         self.triggerLazyAccess(obj_ptr, prop_owned) catch {
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
@@ -6592,7 +6595,7 @@ pub const VM = struct {
                             var value = obj_ptr.get(prop_owned);
                             if (value == .array and value.array.refcount > 1) {
                                 value = .{ .array = try self.shallowCloneCow(value.array) };
-                                try self.objectSetOwned(obj_ptr, prop_owned, value);
+                                try obj_ptr.set(self.allocator, prop_owned, value);
                             }
                             self.setCell(fresh, value);
                             break :blk fresh;
@@ -6788,9 +6791,7 @@ pub const VM = struct {
                                     s[idx] = .null;
                                 }
                             }
-                            if (obj.properties.fetchOrderedRemove(prop_name)) |kv| {
-                                self.releaseValue(kv.value);
-                            }
+                            if (obj.removeProperty(self.allocator, prop_name)) |removed| self.releaseValue(removed);
                         }
                     }
                     if (self.hasPendingReleases()) self.drainPendingDestruct();
@@ -6827,9 +6828,7 @@ pub const VM = struct {
                                     s[idx] = .null;
                                 }
                             }
-                            if (obj.properties.fetchOrderedRemove(prop_name)) |kv| {
-                                self.releaseValue(kv.value);
-                            }
+                            if (obj.removeProperty(self.allocator, prop_name)) |removed| self.releaseValue(removed);
                         }
                     }
                     if (self.hasPendingReleases()) self.drainPendingDestruct();
@@ -7175,7 +7174,7 @@ pub const VM = struct {
                             if (try self.throwUncloneable(src.class_name)) continue;
                             return error.RuntimeError;
                         }
-                        const copy = try self.allocator.create(PhpObject);
+                        const copy = try self.allocObjectShell();
                         self.next_object_id += 1;
                         copy.* = .{ .class_name = src.class_name, .id = self.next_object_id };
                         if (src.slots) |src_slots| {
@@ -7188,9 +7187,8 @@ pub const VM = struct {
                         }
                         var it = src.properties.iterator();
                         while (it.next()) |entry| {
-                            try copy.properties.put(self.allocator, entry.key_ptr.*, try self.copyObjectCloneValue(entry.value_ptr.*));
+                            try copy.putProperty(self.allocator, entry.key_ptr.*, try self.copyObjectCloneValue(entry.value_ptr.*));
                         }
-                        try self.objects.append(self.allocator, copy);
                         if (native_clone) |hook| if (!hook(self, src, copy)) {
                             if (try self.throwUncloneable(src.class_name)) continue;
                             return error.RuntimeError;
@@ -7216,14 +7214,13 @@ pub const VM = struct {
                             };
                         }
                         if (val.object.backingValue() != .null) {
-                            const proxy = try self.allocator.create(PhpObject);
+                            const proxy = try self.allocObjectShell();
                             self.next_object_id += 1;
                             proxy.* = .{ .class_name = val.object.class_name, .id = self.next_object_id, .slot_layout = val.object.slot_layout };
                             const state = try self.allocator.create(PhpObject.LazyState);
                             state.* = .{ .initializer = .null, .proxy = true, .pending = try self.allocator.alloc(bool, 0), .backing = copy };
                             proxy.lazy = state;
                             copy.retain();
-                            try self.objects.append(self.allocator, proxy);
                             self.push(.{ .object = proxy });
                         } else self.push(.{ .object = copy });
                     } else if (val == .string and std.mem.startsWith(u8, val.string.bytes(), "__closure_")) {
@@ -7334,10 +7331,9 @@ pub const VM = struct {
 
                 .callable_closure => {
                     const callable = self.pop();
-                    const obj = try self.allocator.create(PhpObject);
+                    const obj = try self.allocObjectShell();
                     self.next_object_id += 1;
                     obj.* = .{ .class_name = "Closure", .id = self.next_object_id };
-                    try self.objects.append(self.allocator, obj);
                     try obj.set(self.allocator, "__callable", callable);
                     self.push(.{ .object = obj });
                 },
@@ -8868,7 +8864,7 @@ pub const VM = struct {
                                     // property; without this, init()'s prior
                                     // unset() leaves the slot looking absent
                                     // to get_prop even after we write to it
-                                    obj.clearUnset(prop_name);
+                                    obj.clearUnset(self.allocator, prop_name);
                                     // the IC path writes the slot directly
                                     // (bypassing obj.set), so retain here;
                                     // release the overwritten old value
@@ -8923,7 +8919,7 @@ pub const VM = struct {
                             }
                             // overwrite-release: drop the object the property
                             // previously held before the new value lands (Stage 1)
-                            try self.objectSetForScopeOwned(obj, prop_name, val, sp_scope);
+                            try obj.setForScope(self.allocator, prop_name, val, sp_scope);
                             self.syncObjPropRefs(obj, prop_name, val);
                             // populate IC for slot-indexed writes. typed
                             // properties are cached too - the fast path runs
@@ -11662,21 +11658,12 @@ pub const VM = struct {
     }
 
     pub fn setPendingException(self: *VM, class_name: []const u8, message: []const u8) !void {
-        const obj = try self.allocator.create(PhpObject);
-        self.next_object_id += 1;
-        const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
-            const owned = try self.allocator.dupe(u8, class_name);
-            errdefer self.allocator.free(owned);
-            try self.strings.append(self.allocator, owned);
-            break :blk owned;
-        };
-        obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
+        const obj = try self.allocUserObject(class_name);
         try self.initObjectProperties(obj, class_name);
         const owned_message = try Value.String.create(self.allocator, message);
         defer owned_message.release();
         try obj.set(self.allocator, "message", .{ .string = owned_message });
         try obj.set(self.allocator, "code", .{ .int = 0 });
-        try self.objects.append(self.allocator, obj);
         self.pending_exception = .{ .object = obj };
     }
 
@@ -11706,12 +11693,11 @@ pub const VM = struct {
     // different exception raised by finally still propagates to the caller
     pub fn closeGenerator(self: *VM, gen: *Generator, base_frame: usize) RuntimeError!void {
         if (gen.state != .suspended) return;
-        const obj = try self.allocator.create(PhpObject);
+        const obj = try self.allocObjectShell();
         self.next_object_id += 1;
         obj.* = .{ .class_name = "Exception", .id = self.next_object_id };
         try obj.set(self.allocator, "message", .{ .string = Value.String.borrowed("Generator closed") });
         try obj.set(self.allocator, "code", .{ .int = 0 });
-        try self.objects.append(self.allocator, obj);
         const marker_ptr = @intFromPtr(obj);
 
         gen.pending_throw = .{ .object = obj };
@@ -12347,15 +12333,7 @@ pub const VM = struct {
     }
 
     fn newBuiltinException(self: *VM, class_name: []const u8, message: []const u8, at: ?SourcePosition) !*PhpObject {
-        const obj = try self.allocator.create(PhpObject);
-        self.next_object_id += 1;
-        const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
-            const owned = try self.allocator.dupe(u8, class_name);
-            errdefer self.allocator.free(owned);
-            try self.strings.append(self.allocator, owned);
-            break :blk owned;
-        };
-        obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
+        const obj = try self.allocUserObject(class_name);
         try self.initObjectProperties(obj, class_name);
         const owned_message = try Value.String.create(self.allocator, message);
         defer owned_message.release();
@@ -12365,7 +12343,6 @@ pub const VM = struct {
             try obj.set(self.allocator, "file", .{ .string = Value.String.borrowed(pos.file) });
             try obj.set(self.allocator, "line", .{ .int = pos.line });
         }
-        try self.objects.append(self.allocator, obj);
         return obj;
     }
 
@@ -13779,10 +13756,9 @@ pub const VM = struct {
 
         var vj: usize = 0;
         for (0..case_count) |ci| {
-            const case_obj = try self.allocator.create(PhpObject);
+            const case_obj = try self.allocObjectShell();
             self.next_object_id += 1;
             case_obj.* = .{ .class_name = enum_name, .id = self.next_object_id };
-            try self.objects.append(self.allocator, case_obj);
             try case_obj.set(self.allocator, "name", .{ .string = Value.String.borrowed(case_names[ci]) });
             if (case_has_value[ci] == 1) {
                 try case_obj.set(self.allocator, "value", case_values[vj]);
@@ -14295,26 +14271,31 @@ pub const VM = struct {
                     // explicitly-unset properties from (array) casts
                     if (slots[i] == .null and vr.type_str.len > 0 and self.typedPropForbidsNull(vr.type_str)) continue;
                     if (obj.isUnset(name)) continue;
-                    try arr.set(self.allocator, .{ .string = Value.String.borrowed(try self.mangledPropertyKey(name, vr)) }, slots[i]);
+                    try self.setPropertyKey(arr, .{ .name = name, .declared = true }, vr, slots[i]);
                 }
             }
         }
         var it = obj.properties.iterator();
         while (it.next()) |entry| {
             const vr = self.findPropertyVisibility(obj.class_name, entry.key_ptr.*);
-            try arr.set(self.allocator, .{ .string = Value.String.borrowed(try self.mangledPropertyKey(entry.key_ptr.*, vr)) }, entry.value_ptr.*);
+            try self.setPropertyKey(arr, .{ .name = entry.key_ptr.* }, vr, entry.value_ptr.*);
         }
     }
 
-    fn mangledPropertyKey(self: *VM, name: []const u8, vr: anytype) ![]const u8 {
-        const key = switch (vr.visibility) {
-            .public => return name,
-            .protected => try std.fmt.allocPrint(self.allocator, "\x00*\x00{s}", .{name}),
-            .private => try std.fmt.allocPrint(self.allocator, "\x00{s}\x00{s}", .{ vr.defining_class, name }),
-        };
-        errdefer self.allocator.free(key);
-        try self.strings.append(self.allocator, key);
-        return key;
+    // php's (array) key for a property: the bare name when public, else the
+    // name mangled with its visibility. a declared name is class metadata and
+    // its mangled form is interned; an object's own names are copied
+    fn setPropertyKey(self: *VM, arr: *PhpArray, prop: struct { name: []const u8, declared: bool = false }, vr: anytype, value: Value) !void {
+        if (vr.visibility == .public) {
+            if (prop.declared) return arr.set(self.allocator, .{ .string = Value.String.borrowed(prop.name) }, value);
+            return arr.setCopiedKey(self.allocator, prop.name, value);
+        }
+        var mangled: std.ArrayListUnmanaged(u8) = .{};
+        defer mangled.deinit(self.allocator);
+        const w = mangled.writer(self.allocator);
+        if (vr.visibility == .protected) try w.print("\x00*\x00{s}", .{prop.name}) else try w.print("\x00{s}\x00{s}", .{ vr.defining_class, prop.name });
+        if (prop.declared) return arr.set(self.allocator, .{ .string = Value.String.borrowed(try self.internName(mangled.items)) }, value);
+        try arr.setCopiedKey(self.allocator, mangled.items, value);
     }
 
     // request-lifetime bytes for a name that recurs across calls, kept once
@@ -15413,7 +15394,7 @@ pub const VM = struct {
         for (items) |target| {
             switch (target) {
                 .array => |t| try self.arraySetOwned(t.array, t.key, val),
-                .object => |t| try self.objectSetOwned(t.object, t.prop_name, val),
+                .object => |t| try t.object.set(self.allocator, t.prop_name, val),
                 .static => |t| {
                     try self.writeStaticProp(t.class_name, t.prop_name, val);
                 },
@@ -15453,7 +15434,7 @@ pub const VM = struct {
         const bindings = ri.ownerBindings(self.currentFrame().ref_owner) orelse return;
         for (bindings) |binding| switch (binding.target) {
             .array => |target| try self.arraySetOwned(target.array, target.key, binding.cell.*),
-            .object => |target| try self.objectSetOwned(target.object, target.prop_name, binding.cell.*),
+            .object => |target| try target.object.set(self.allocator, target.prop_name, binding.cell.*),
             .static => |target| try self.writeStaticProp(target.class_name, target.prop_name, binding.cell.*),
             .capture => |target| self.writeCaptureMirror(target.closure, target.var_name, binding.cell.*),
         };
@@ -15867,9 +15848,7 @@ pub const VM = struct {
         };
         // The property target is weak; receiver reclamation detaches it. The
         // argument owns the cell, never the temporary receiver.
-        const owned_name = try self.allocator.dupe(u8, name);
-        try self.strings.append(self.allocator, owned_name);
-        try self.regRefObject(try self.persistentRefOwner(), cell, obj, owned_name);
+        try self.regRefObject(try self.persistentRefOwner(), cell, obj, name);
         self.obj_ref_active = true;
         self.setArgSource(slot, .{ .cell = .{ .value = cell, .denial = denial } });
     }
@@ -16830,12 +16809,29 @@ pub const VM = struct {
         defer self.allocator.free(saved);
         for (saved) |v| retainValue(v);
         defer for (saved) |v| self.releaseValue(v);
-        var props = try obj.properties.clone(self.allocator);
+        var props: std.StringArrayHashMapUnmanaged(Value) = .{};
         defer props.deinit(self.allocator);
-        for (props.values()) |v| retainValue(v);
+        defer freeOwnedKeys(self.allocator, &props);
         defer for (props.values()) |v| self.releaseValue(v);
-        var unset = try obj.unset_slots.clone(self.allocator);
+        for (obj.properties.keys(), obj.properties.values()) |name, v| {
+            const kept = try self.allocator.dupe(u8, name);
+            props.putNoClobber(self.allocator, kept, v) catch |err| {
+                self.allocator.free(kept);
+                return err;
+            };
+            retainValue(v);
+        }
+        var unset: std.StringHashMapUnmanaged(void) = .{};
         defer unset.deinit(self.allocator);
+        defer freeOwnedKeys(self.allocator, &unset);
+        var unset_names = obj.unset_slots.keyIterator();
+        while (unset_names.next()) |name| {
+            const kept = try self.allocator.dupe(u8, name.*);
+            unset.putNoClobber(self.allocator, kept, {}) catch |err| {
+                self.allocator.free(kept);
+                return err;
+            };
+        }
         state.running = true;
         defer state.running = false;
         var ctx = self.makeContext(null);
@@ -16851,14 +16847,13 @@ pub const VM = struct {
                 slot.* = v;
             }
             for (obj.properties.values()) |v| self.releaseValue(v);
-            obj.properties.clearRetainingCapacity();
-            for (props.keys(), props.values()) |k, v| {
+            obj.clearProperties(self.allocator);
+            for (props.keys(), props.values()) |name, v| {
                 retainValue(v);
-                obj.properties.put(self.allocator, k, v) catch unreachable;
+                obj.putProperty(self.allocator, name, v) catch self.releaseValue(v);
             }
-            obj.unset_slots.deinit(self.allocator);
-            obj.unset_slots = unset;
-            unset = .{};
+            var restored = unset.keyIterator();
+            while (restored.next()) |name| obj.markUnset(self.allocator, name.*) catch {};
         }
         if (state.proxy) {
             const result = try ctx.invokeCallable(state.initializer, &.{.{ .object = obj }});
@@ -17915,16 +17910,10 @@ pub const VM = struct {
             self.error_msg = msg;
             return error.RuntimeError;
         }
-        const obj = try self.allocator.create(PhpObject);
+        const obj = try self.allocObjectShell();
         self.next_object_id += 1;
-        const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
-            const owned = try self.allocator.dupe(u8, class_name);
-            errdefer self.allocator.free(owned);
-            try self.strings.append(self.allocator, owned);
-            break :blk owned;
-        };
+        const stable_class_name = try self.stableClassName(class_name);
         obj.* = .{ .class_name = stable_class_name, .id = self.next_object_id };
-        try self.objects.append(self.allocator, obj);
         try self.initObjectProperties(obj, class_name);
 
         var resolved_args: [16]Value = undefined;
@@ -20996,24 +20985,6 @@ pub const VM = struct {
         }
         array.remove(key);
         self.releaseValue(old);
-    }
-
-    pub fn objectSetOwned(self: *VM, object: *PhpObject, name: []const u8, value: Value) !void {
-        var stable_name = name;
-        if (object.getSlotIndex(name) == null and !object.storage().properties.contains(name)) {
-            stable_name = try self.allocator.dupe(u8, name);
-            try self.strings.append(self.allocator, stable_name);
-        }
-        try object.set(self.allocator, stable_name, value);
-    }
-
-    pub fn objectSetForScopeOwned(self: *VM, object: *PhpObject, name: []const u8, value: Value, scope: ?[]const u8) !void {
-        var stable_name = name;
-        if (object.getSlotIndexForScope(name, scope) == null and !object.storage().properties.contains(name)) {
-            stable_name = try self.allocator.dupe(u8, name);
-            try self.strings.append(self.allocator, stable_name);
-        }
-        try object.setForScope(self.allocator, stable_name, value, scope);
     }
 
     pub inline fn retainValue(v: Value) void {

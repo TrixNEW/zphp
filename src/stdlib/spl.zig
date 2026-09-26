@@ -637,9 +637,8 @@ fn wmiValid(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
 
 fn weakRefCreate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .object) return NativeResult.scalar(.null);
-    const ref = try ctx.vm.allocator.create(PhpObject);
+    const ref = try ctx.vm.allocObjectShell();
     ref.* = .{ .class_name = "WeakReference" };
-    try ctx.vm.objects.append(ctx.vm.allocator, ref);
     try ref.set(ctx.vm.allocator, "__target", args[0]);
     return NativeResult.borrowed(.{ .object = ref });
 }
@@ -662,9 +661,8 @@ fn weakMapGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!Native
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     const keys_v = obj.get("__keys");
     const data_v = obj.get("__data");
-    const iter = try ctx.vm.allocator.create(PhpObject);
+    const iter = try ctx.vm.allocObjectShell();
     iter.* = .{ .class_name = "WeakMapIterator" };
-    try ctx.vm.objects.append(ctx.vm.allocator, iter);
     if (keys_v == .array) try iter.set(ctx.allocator, "__objs", keys_v);
     if (data_v == .array) try iter.set(ctx.allocator, "__info", data_v);
     try iter.set(ctx.allocator, "__cursor", .{ .int = 0 });
@@ -997,7 +995,7 @@ fn aoGetArrayCopy(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResu
             }
         }
         var it = storage.properties.iterator();
-        while (it.next()) |entry| try copy.set(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, entry.value_ptr.*);
+        while (it.next()) |entry| try copy.setCopiedKey(ctx.allocator, entry.key_ptr.*, entry.value_ptr.*);
         return NativeResult.borrowed(.{ .array = copy });
     }
     const arr = getData(obj) orelse {
@@ -1256,7 +1254,7 @@ fn aiGetArrayCopy(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResu
             }
         }
         var it = storage.properties.iterator();
-        while (it.next()) |entry| try copy.set(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) }, entry.value_ptr.*);
+        while (it.next()) |entry| try copy.setCopiedKey(ctx.allocator, entry.key_ptr.*, entry.value_ptr.*);
         return NativeResult.borrowed(.{ .array = copy });
     }
     const arr = getData(obj) orelse {

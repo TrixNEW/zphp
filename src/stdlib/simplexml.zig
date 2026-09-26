@@ -239,9 +239,8 @@ fn nodeToJsonValue(ctx: *NativeContext, node: *c.xmlNode) RuntimeError!Value {
     if (!has_attr and !has_elem_child) {
         // empty element: PHP returns an empty object, not an empty list. give
         // back a stdClass so json_encode renders `{}`
-        const obj = try ctx.allocator.create(PhpObject);
+        const obj = try ctx.vm.allocObjectShell();
         obj.* = .{ .class_name = "stdClass" };
-        try ctx.vm.objects.append(ctx.allocator, obj);
         return .{ .object = obj };
     }
 

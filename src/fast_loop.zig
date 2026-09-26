@@ -1021,7 +1021,7 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                                 // resurrect on write - mirrors runLoop set_prop
                                 const sp_name_idx: u16 = (@as(u16, code[sp_ip]) << 8) | code[sp_ip + 1];
                                 const sp_prop_name = consts[sp_name_idx].string.bytes();
-                                sp_obj.clearUnset(sp_prop_name);
+                                sp_obj.clearUnset(self.allocator, sp_prop_name);
                                 // overwrite-release: drop the object the slot held
                                 const sp_old_prop = s[sp_entry.slot_index];
                                 s[sp_entry.slot_index] = copied;
