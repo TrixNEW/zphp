@@ -684,11 +684,7 @@ fn putContents(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         return NativeResult.scalar(.{ .int = @intCast(data.len) });
     }
     if (std.mem.eql(u8, path, "php://stderr")) {
-        if (ctx.vm.output.items.len > 0) {
-            const stdout = std.fs.File.stdout();
-            _ = stdout.write(ctx.vm.output.items) catch {};
-            ctx.vm.output.clearRetainingCapacity();
-        }
+        ctx.vm.flushOutputToStdout();
         const stderr = std.fs.File.stderr();
         const n = stderr.write(data) catch return NativeResult.scalar(.{ .bool = false });
         return NativeResult.scalar(.{ .int = @intCast(n) });
@@ -1851,13 +1847,7 @@ pub fn streamWrite(ctx: *NativeContext, obj: *PhpObject, data: []const u8) Runti
         try ctx.vm.output.appendSlice(ctx.allocator, data);
         return data.len;
     }
-    if (platform.isStderr(file)) {
-        if (ctx.vm.output.items.len > 0) {
-            const stdout = std.fs.File.stdout();
-            _ = stdout.write(ctx.vm.output.items) catch {};
-            ctx.vm.output.clearRetainingCapacity();
-        }
-    }
+    if (platform.isStderr(file)) ctx.vm.flushOutputToStdout();
     // a blocking stream takes all of it; a non-blocking one what fits now
     var written: usize = 0;
     while (written < data.len) {
@@ -3094,10 +3084,7 @@ fn runShellCapture(allocator: std.mem.Allocator, command: []const u8, stdin_data
 // writes directly to fd 1 while echo still sits in vm.output
 fn flushVmOutputForInheritedChild(vm: *@import("../runtime/vm.zig").VM, stdout_b: StdioBehavior, stderr_b: StdioBehavior) void {
     if (stdout_b == .capture and stderr_b == .capture) return;
-    if (vm.output.items.len == 0) return;
-    const stdout = std.fs.File.stdout();
-    _ = stdout.write(vm.output.items) catch {};
-    vm.output.clearRetainingCapacity();
+    vm.flushOutputToStdout();
 }
 
 fn runShellWith(
@@ -3506,11 +3493,7 @@ fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
         }
     }
     const inherits_out = (!stdout_specified or stdout_inherit) or (!stderr_specified or stderr_inherit);
-    if (inherits_out and ctx.vm.output.items.len > 0) {
-        const stdout = std.fs.File.stdout();
-        _ = stdout.write(ctx.vm.output.items) catch {};
-        ctx.vm.output.clearRetainingCapacity();
-    }
+    if (inherits_out) ctx.vm.flushOutputToStdout();
 
     // spawn the child live now (php spawns at proc_open, not at first read) via
     // fork/exec. the pid + parent-side pipe fds live in vm.proc_children keyed by

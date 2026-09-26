@@ -670,33 +670,55 @@ fn runWithVM(allocator: std.mem.Allocator, result: *CompileResult, script_path: 
                 var ctx = vm.makeContext(null);
                 _ = ctx.invokeCallable(handler, &.{exc}) catch {};
                 vm.releaseValue(handler);
+                // an exception the handler threw is reported before shutdown
+                // functions run, as php does
+                const handler_failed = vm.pending_exception != null and !vm.exit_requested;
+                if (handler_failed) try reportRuntimeError(allocator, vm);
                 vm.runShutdownCallbacks() catch {};
                 if (vm.output.items.len > 0) try writeStdout(vm.output.items);
                 if (platform.getenv("ZPHP_DBG_PROFILE") != null) dumpProfile(vm);
                 if (vm.exit_requested) std.process.exit(vm.exit_code);
-                if (vm.pending_exception != null) {
-                    const fallback = error_format.formatRuntimeError(allocator, vm);
-                    if (fallback.len > 0 and (vm.error_reporting_level & 1) != 0) try writeStderr(fallback);
-                    std.process.exit(255);
-                }
+                if (handler_failed) std.process.exit(255);
                 return;
             }
         }
+        try reportRuntimeError(allocator, vm);
         vm.runShutdownCallbacks() catch {};
         if (vm.output.items.len > 0) try writeStdout(vm.output.items);
         if (platform.getenv("ZPHP_DBG_PROFILE") != null) dumpProfile(vm);
-        const msg = error_format.formatRuntimeError(allocator, vm);
-        if ((vm.error_reporting_level & 1) != 0) {
-            if (msg.len > 0) {
-                try writeStderr(msg);
-            } else {
-                try writeStderr(vm.error_msg orelse "runtime error\n");
-            }
-        }
         std.process.exit(255);
     };
     vm.runShutdownCallbacks() catch {};
     if (vm.output.items.len > 0) try writeStdout(vm.output.items);
+}
+
+// the script stopped on an error: an uncaught exception is reported as php
+// does, a log copy per log_errors and a display copy per display_errors;
+// zphp's own fatals print their diagnostic to stderr
+// the display copy joins the script's buffered output so it lands in order
+fn reportRuntimeError(allocator: std.mem.Allocator, vm: *VM) !void {
+    if ((vm.error_reporting_level & 1) == 0) return;
+    if (vm.pending_exception == null) {
+        const msg = error_format.formatRuntimeError(allocator, vm);
+        vm.flushOutputToStdout();
+        try writeStderr(if (msg.len > 0) msg else vm.error_msg orelse "runtime error\n");
+        return;
+    }
+    if (vm.logErrorsEnabled()) {
+        vm.flushOutputToStdout();
+        vm.writeLog(error_format.formatUncaught(allocator, vm, .log));
+    }
+    switch (vm.displayTarget()) {
+        .none => {},
+        .stdout => {
+            try vm.output.append(vm.allocator, '\n');
+            try vm.output.appendSlice(vm.allocator, error_format.formatUncaught(allocator, vm, .display));
+        },
+        .stderr => {
+            vm.flushOutputToStdout();
+            try writeStderr(error_format.formatUncaught(allocator, vm, .display));
+        },
+    }
 }
 
 fn buildFile(allocator: std.mem.Allocator, args: []const []const u8) !void {

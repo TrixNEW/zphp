@@ -4,6 +4,8 @@
 
 ini_set('log_errors', '0');
 ini_set('display_errors', '0');
+// the configured default varies between installs
+ini_set('memory_limit', '128M');
 
 set_error_handler(function (int $no, string $message) {
     echo "warning: $message\n";

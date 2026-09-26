@@ -172,7 +172,7 @@ pub fn formatRuntimeError(alloc: std.mem.Allocator, vm: *const VM) []const u8 {
     var buf: Writer = .{};
 
     if (vm.pending_exception) |exc| {
-        formatUncaughtException(&buf, alloc, vm, exc);
+        formatUncaughtException(&buf, alloc, vm, exc, .log);
     } else if (vm.error_msg) |msg| {
         // some error_msg values already have a leading 'Fatal error:' or
         // similar prefix (set via setErrorMsg("Fatal error: ..."). detect
@@ -212,7 +212,18 @@ fn appendPhpLocationLine(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM) 
     }
 }
 
-fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM, exc: Value) void {
+pub const Copy = enum { log, display };
+
+// one copy of php's report for the pending uncaught exception: the log copy
+// ("PHP Fatal error:  ...") or the display copy ("Fatal error: ..."); the
+// caller routes each per log_errors and display_errors. the caller owns it
+pub fn formatUncaught(alloc: std.mem.Allocator, vm: *const VM, copy: Copy) []const u8 {
+    var buf: Writer = .{};
+    if (vm.pending_exception) |exc| formatUncaughtException(&buf, alloc, vm, exc, copy);
+    return buf.toOwnedSlice(alloc) catch "";
+}
+
+fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM, exc: Value, copy: Copy) void {
     var class_name: []const u8 = "Exception";
     var message: []const u8 = "";
 
@@ -232,6 +243,8 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
     const frame_path: []const u8 = if (frame.func) |fn_| fn_.file_path else "";
     const path_raw: []const u8 = if (frame_path.len > 0) frame_path else vm.file_path;
     const path = displayPath(path_raw);
+    const lead: []const u8 = if (copy == .log) "PHP " else "";
+    const gap: []const u8 = if (copy == .log) ":  " else ": ";
 
     // an uncaught ParseError prints the way php reports a syntax error: at
     // the exception's own file and line, with no stack trace
@@ -241,8 +254,7 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
         const where = displayPath(if (file_v == .string) file_v.string.bytes() else path_raw);
         const line: i64 = if (line_v == .int) line_v.int else 0;
         const label: []const u8 = if (std.mem.eql(u8, class_name, "ParseError")) "Parse error" else "Fatal error";
-        writeFmt(buf, alloc, "PHP {s}:  {s} in {s} on line {d}\n", .{ label, message, where, line });
-        if (vm.displayErrorsEnabled()) writeFmt(buf, alloc, "\n{s}: {s} in {s} on line {d}\n", .{ label, message, where, line });
+        writeFmt(buf, alloc, "{s}{s}{s}{s} in {s} on line {d}\n", .{ lead, label, gap, message, where, line });
         return;
     }
 
@@ -251,36 +263,28 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
     // matches how PHP prints `Maximum execution time of N seconds exceeded`
     if (vm.uncatchable_fatal) {
         if (vm.sourceLocation(frame.chunk, ip)) |loc| {
-            writeFmt(buf, alloc, "\nFatal error: {s} in {s} on line {d}\n", .{ message, path, loc.line });
+            writeFmt(buf, alloc, "{s}Fatal error{s}{s} in {s} on line {d}\n", .{ lead, gap, message, path, loc.line });
         } else {
-            writeFmt(buf, alloc, "\nFatal error: {s} in {s}\n", .{ message, path });
+            writeFmt(buf, alloc, "{s}Fatal error{s}{s} in {s}\n", .{ lead, gap, message, path });
         }
         return;
     }
 
-    // PHP emits the log_errors copy with the 'PHP ' prefix always; the bare
-    // 'Fatal error:' display copy is emitted only when display_errors is on.
-    // header uses 'in {path}:{line}' (the exception format, not the 'on line N'
-    // fatal format). no source-line snippet - the stack trace names the site
+    // the header uses 'in {path}:{line}' (the exception format, not the
+    // 'on line N' fatal format). no source-line snippet - the stack trace
+    // names the site
     const maybe_loc = vm.sourceLocation(frame.chunk, ip);
-    const display_on = vm.displayErrorsEnabled();
-    var blocks: u8 = 0;
-    while (blocks < 2) : (blocks += 1) {
-        if (blocks == 1 and !display_on) break;
-        const prefix: []const u8 = if (blocks == 0) "PHP Fatal error:  Uncaught" else "Fatal error: Uncaught";
-        if (blocks == 1) write(buf, alloc, "\n");
-        if (maybe_loc) |loc| {
-            writeFmt(buf, alloc, "{s} {s}: {s} in {s}:{d}\n", .{ prefix, class_name, message, path, loc.line });
-        } else {
-            writeFmt(buf, alloc, "{s} {s}: {s} in {s}\n", .{ prefix, class_name, message, path });
-        }
-        write(buf, alloc, "Stack trace:\n");
-        writeStackTrace(buf, alloc, vm);
-        if (maybe_loc) |loc| {
-            writeFmt(buf, alloc, "  thrown in {s} on line {d}\n", .{ path, loc.line });
-        } else {
-            writeFmt(buf, alloc, "  thrown in {s}\n", .{path});
-        }
+    if (maybe_loc) |loc| {
+        writeFmt(buf, alloc, "{s}Fatal error{s}Uncaught {s}: {s} in {s}:{d}\n", .{ lead, gap, class_name, message, path, loc.line });
+    } else {
+        writeFmt(buf, alloc, "{s}Fatal error{s}Uncaught {s}: {s} in {s}\n", .{ lead, gap, class_name, message, path });
+    }
+    write(buf, alloc, "Stack trace:\n");
+    writeStackTrace(buf, alloc, vm);
+    if (maybe_loc) |loc| {
+        writeFmt(buf, alloc, "  thrown in {s} on line {d}\n", .{ path, loc.line });
+    } else {
+        writeFmt(buf, alloc, "  thrown in {s}\n", .{path});
     }
 }
 

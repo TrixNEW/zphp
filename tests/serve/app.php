@@ -6,6 +6,14 @@ $path = parse_url($_SERVER["REQUEST_URI"], PHP_URL_PATH);
 
 if ($path === "/health") {
     echo json_encode(["status" => "ok"]);
+} elseif ($path === "/warning-midway") {
+    echo "before ";
+    trigger_error("careful", E_USER_WARNING);
+    echo "after";
+} elseif ($path === "/uncaught") {
+    register_shutdown_function(function () { echo " shutdown"; });
+    echo "partial";
+    throw new RuntimeException("boom");
 } elseif ($path === "/echo") {
     echo json_encode([
         "method" => $method,

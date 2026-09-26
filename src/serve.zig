@@ -1005,6 +1005,10 @@ fn processHttpRead(w: *Worker, c: *Connection) void {
         // return like a normal response
         if (w.vm.exit_requested) {
             // fall through to the normal response-write path below
+        } else if (w.vm.pending_exception != null) {
+            // an uncaught exception is reported as php-fpm does: logged, shown
+            // in the page per display_errors, and answered with a 500
+            reportUncaught(w);
         } else {
             // include diagnostics so the harness can see WHY a 500 fired
             var err_buf: [4096]u8 = undefined;
@@ -1048,6 +1052,32 @@ fn processHttpRead(w: *Worker, c: *Connection) void {
     writeResponse(c, code, ct, extra_headers, w.vm.output.items, c.keep_alive, acceptsGzip(&req), w.allocator) catch {};
     shiftBuffer(c, consumed);
     if (!c.keep_alive) c.state = .closing;
+}
+
+fn reportUncaught(w: *Worker) void {
+    const vm = &w.vm;
+    if ((vm.error_reporting_level & 1) != 0) {
+        if (vm.logErrorsEnabled()) {
+            const log_copy = error_format.formatUncaught(w.allocator, vm, .log);
+            defer w.allocator.free(log_copy);
+            vm.writeLog(log_copy);
+        }
+        switch (vm.displayTarget()) {
+            .none => {},
+            .stdout => {
+                const display_copy = error_format.formatUncaught(w.allocator, vm, .display);
+                defer w.allocator.free(display_copy);
+                vm.output.append(vm.allocator, '\n') catch {};
+                vm.output.appendSlice(vm.allocator, display_copy) catch {};
+            },
+            .stderr => {
+                const display_copy = error_format.formatUncaught(w.allocator, vm, .display);
+                defer w.allocator.free(display_copy);
+                _ = std.fs.File.stderr().write(display_copy) catch {};
+            },
+        }
+    }
+    vm.response_code = 500;
 }
 
 // HTTP/2 processing
@@ -1144,9 +1174,13 @@ fn handleH2Request(w: *Worker, conn: *Connection, session: *h2.H2Session, stream
     }
 
     w.vm.interpret(dispatch.result) catch {
-        session.submitResponse(stream_id, 500, "text/plain", "Internal Server Error");
-        stream.resetRequest(w.allocator);
-        return;
+        if (w.vm.pending_exception != null) {
+            reportUncaught(w);
+        } else if (!w.vm.exit_requested) {
+            session.submitResponse(stream_id, 500, "text/plain", "Internal Server Error");
+            stream.resetRequest(w.allocator);
+            return;
+        }
     };
 
     var session_ctx = w.vm.makeContext(null);

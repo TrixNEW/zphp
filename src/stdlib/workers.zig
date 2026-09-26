@@ -537,7 +537,7 @@ fn workerMain(w: *Worker) void {
 // results) have a frame under them
 fn bootstrap(vm: *VM, pool: *Pool) ?*CompileResult {
     var buf: [1024]u8 = undefined;
-    const loaded = if (pool.bootstrap) |path| loadBootstrap(vm, pool, path, &buf) else emptyMain(vm, pool);
+    const loaded = if (pool.bootstrap) |path| loadBootstrap(vm, pool, path, &buf) else emptyMain(pool);
     const result = loaded orelse return null;
     vm.interpret(result) catch {
         const msg = describeError(vm, &buf) orelse "bootstrap script failed";
@@ -556,26 +556,28 @@ fn loadBootstrap(vm: *VM, pool: *Pool, path: []const u8, buf: []u8) ?*CompileRes
         pool.reportStart("bootstrap: no file loader");
         return null;
     };
-    return loader(path, vm.allocator, vm) orelse {
+    // the worker frees its compiled bootstrap after its VM, so the result
+    // comes from the pool's allocator rather than the VM's counted one
+    return loader(path, pool.allocator, vm) orelse {
         const msg = std.fmt.bufPrint(buf, "bootstrap script {s} could not be compiled", .{path}) catch "bootstrap script could not be compiled";
         pool.reportStart(msg);
         return null;
     };
 }
 
-fn emptyMain(vm: *VM, pool: *Pool) ?*CompileResult {
-    return compileEmpty(vm) catch {
+fn emptyMain(pool: *Pool) ?*CompileResult {
+    return compileEmpty(pool.allocator) catch {
         pool.reportStart("worker: out of memory");
         return null;
     };
 }
 
-fn compileEmpty(vm: *VM) !*CompileResult {
-    var ast = try parser.parse(vm.allocator, "<?php");
+fn compileEmpty(allocator: std.mem.Allocator) !*CompileResult {
+    var ast = try parser.parse(allocator, "<?php");
     defer ast.deinit();
-    var result = try compiler.compileWithPath(&ast, vm.allocator, "worker");
+    var result = try compiler.compileWithPath(&ast, allocator, "worker");
     errdefer result.deinit();
-    const heap = try vm.allocator.create(CompileResult);
+    const heap = try allocator.create(CompileResult);
     heap.* = result;
     return heap;
 }

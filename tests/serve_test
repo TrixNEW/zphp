@@ -73,6 +73,13 @@ check_contains() {
 resp=$(curl -s http://localhost:$PORT/health)
 check "health body" '{"status":"ok"}' "$resp"
 
+# a diagnostic mid-request is logged and leaves the response intact
+check "warning keeps the response" "before after" "$(curl -s http://localhost:$PORT/warning-midway)"
+# an uncaught exception answers 500 with the output so far and still runs
+# shutdown functions, as php-fpm does with display_errors off
+check "uncaught exception status" "500" "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$PORT/uncaught)"
+check "uncaught exception body" "partial shutdown" "$(curl -s http://localhost:$PORT/uncaught)"
+
 # test: GET params
 resp=$(curl -s "http://localhost:$PORT/echo?name=alice&age=30")
 check_contains "get params name" '"name":"alice"' "$resp"

@@ -58,10 +58,7 @@ fn cHandler(sig: c_int) callconv(.c) void {
 fn native_pcntl_fork(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     // flush any buffered output BEFORE fork so the parent's stdout isn't
     // re-emitted by every child when they exit
-    if (ctx.vm.output.items.len > 0) {
-        _ = std.posix.write(1, ctx.vm.output.items) catch {};
-        ctx.vm.output.clearRetainingCapacity();
-    }
+    ctx.vm.flushOutputToStdout();
     const pid = std.c.fork();
     if (pid < 0) {
         last_errno = std.c._errno().*;

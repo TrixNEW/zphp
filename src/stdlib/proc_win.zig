@@ -351,9 +351,7 @@ fn flushInheritedOutput(ctx: *NativeContext, descs: []const Desc) void {
         if (desc.role == 2) stderr_owned = true;
     }
     if (stdout_owned and stderr_owned) return;
-    if (ctx.vm.output.items.len == 0) return;
-    platform.writeStdout(ctx.vm.output.items);
-    ctx.vm.output.clearRetainingCapacity();
+    ctx.vm.flushOutputToStdout();
 }
 
 fn pipeMode(spec: Spec) ?[]const u8 {

@@ -1599,13 +1599,9 @@ fn iniDefault(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "error_log")) return "";
     if (std.mem.eql(u8, name, "html_errors")) return "0";
     if (std.mem.eql(u8, name, "max_execution_time")) return "0";
-    // 'stderr' matches PHP CLI's actual default in 8.0+. log_errors emission
-    // still goes to stderr; the bare display copy is suppressed because
-    // display_errors=STDERR collapses into the log stream. userland
-    // 'ini_set(display_errors, 1)' opts back into the dual-stream behavior of
-    // display_errors=STDOUT (display copy on stdout, log copy on stderr).
-    // displayErrorsEnabled treats this default + 0/Off as "no display copy"
-    if (std.mem.eql(u8, name, "display_errors")) return "stderr";
+    // one log copy on stderr and no display copy: php with display_errors=0
+    // and log_errors=1, the setting the compatibility runners pin php to
+    if (std.mem.eql(u8, name, "display_errors")) return "0";
     if (std.mem.eql(u8, name, "error_reporting")) return "30719";
     if (std.mem.eql(u8, name, "zend.assertions")) return "1";
     if (std.mem.eql(u8, name, "assert.active")) return "1";
@@ -2184,11 +2180,7 @@ fn native_error_log(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
             // stderr with a trailing newline. flush buffered stdout first so
             // the merged stream order matches PHP's unbuffered CLI stdout
             const vm = ctx.vm;
-            if (vm.output.items.len > 0) {
-                const stdout_file = std.fs.File.stdout();
-                _ = stdout_file.write(vm.output.items) catch {};
-                vm.output.clearRetainingCapacity();
-            }
+            vm.flushOutputToStdout();
             const line = try std.fmt.allocPrint(ctx.allocator, "{s}\n", .{message});
             defer ctx.allocator.free(line);
             vm.writeLog(line);

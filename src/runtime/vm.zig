@@ -12078,19 +12078,25 @@ pub const VM = struct {
 
     fn printError(self: *VM, level: i64, msg: []const u8, at: SourcePosition) void {
         const label = errorLabel(level);
-        if (self.output.items.len > 0) {
-            _ = std.fs.File.stdout().write(self.output.items) catch {};
-            self.output.clearRetainingCapacity();
-        }
+        self.flushOutputToStdout();
         if (self.logErrorsEnabled()) {
             const log_text = std.fmt.allocPrint(self.allocator, "PHP {s}:  {s} in {s} on line {d}\n", .{ label, msg, at.file, at.line }) catch return;
             defer self.allocator.free(log_text);
             self.writeLog(log_text);
         }
-        if (!self.displayErrorsEnabled()) return;
-        const display_text = std.fmt.allocPrint(self.allocator, "\n{s}: {s} in {s} on line {d}\n", .{ label, msg, at.file, at.line }) catch return;
-        defer self.allocator.free(display_text);
-        self.output.appendSlice(self.allocator, display_text) catch {};
+        switch (self.displayTarget()) {
+            .none => {},
+            .stdout => {
+                const display_text = std.fmt.allocPrint(self.allocator, "\n{s}: {s} in {s} on line {d}\n", .{ label, msg, at.file, at.line }) catch return;
+                defer self.allocator.free(display_text);
+                self.output.appendSlice(self.allocator, display_text) catch {};
+            },
+            .stderr => {
+                const display_text = std.fmt.allocPrint(self.allocator, "{s}: {s} in {s} on line {d}\n", .{ label, msg, at.file, at.line }) catch return;
+                defer self.allocator.free(display_text);
+                _ = std.fs.File.stderr().write(display_text) catch {};
+            },
+        }
     }
 
     pub fn errorLabel(level: i64) []const u8 {
@@ -12142,22 +12148,35 @@ pub const VM = struct {
         defer file.close();
         file.seekFromEnd(0) catch {};
         const text = if (stamp.value == .string) stamp.value.string.bytes() else "";
-        const entry = std.fmt.allocPrint(self.allocator, "[{s}] {s}", .{ text, line }) catch return;
+        // php ends each logged entry with PHP_EOL
+        const body = std.mem.trimRight(u8, line, "\n");
+        const eol = if (platform.is_windows) "\r\n" else "\n";
+        const entry = std.fmt.allocPrint(self.allocator, "[{s}] {s}{s}", .{ text, body, eol }) catch return;
         defer self.allocator.free(entry);
         file.writeAll(entry) catch {};
     }
 
+    // stdout carries a CLI script's output, so what is buffered goes out
+    // before anything else reaches the terminal or a child process inherits
+    // the stream. in serve the buffer is the response body and stays put
+    pub fn flushOutputToStdout(self: *VM) void {
+        if (self.serve_mode or self.output.items.len == 0) return;
+        platform.writeStdout(self.output.items);
+        self.output.clearRetainingCapacity();
+    }
+
+    pub const DisplayTarget = enum { none, stdout, stderr };
+
+    // php's display_errors: the display copy of a diagnostic goes to stdout
+    // (1, On, stdout), to stderr (stderr), or nowhere
+    pub fn displayTarget(self: *const VM) DisplayTarget {
+        const val = self.ini_settings.get("display_errors") orelse @import("../ini_config.zig").get("display_errors") orelse "0";
+        if (std.ascii.eqlIgnoreCase(val, "stderr")) return .stderr;
+        return if (self.iniFlagOn("display_errors", "0")) .stdout else .none;
+    }
+
     pub fn displayErrorsEnabled(self: *const VM) bool {
-        // PHP's display_errors: '1'/'On'/'stdout' enables a separate display
-        // copy that goes to stdout. '0'/'Off'/'stderr' (CLI default) suppress
-        // the display copy - only the 'PHP Label:' log copy goes to stderr
-        const val = self.ini_settings.get("display_errors") orelse "stderr";
-        if (val.len == 0) return false;
-        if (std.mem.eql(u8, val, "0")) return false;
-        if (std.ascii.eqlIgnoreCase(val, "off")) return false;
-        if (std.ascii.eqlIgnoreCase(val, "false")) return false;
-        if (std.ascii.eqlIgnoreCase(val, "stderr")) return false;
-        return true;
+        return self.displayTarget() != .none;
     }
 
     fn stringHasLeadingNumericish(s: []const u8) bool {
