@@ -5,6 +5,7 @@ const PhpObject = @import("../runtime/value.zig").PhpObject;
 const NativeHandle = @import("../runtime/value.zig").NativeHandle;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
+const VM = @import("../runtime/vm.zig").VM;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
 const c = @cImport({
@@ -514,6 +515,24 @@ fn native_dn2ufn(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
 
 fn native_count_references(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     return NativeResult.scalar(.{ .int = 0 });
+}
+
+fn closeConnection(obj: *PhpObject) bool {
+    if (getLdap(obj)) |ld| _ = c.ldap_unbind_ext_s(ld, null, null);
+    obj.native = .{};
+    return true;
+}
+
+fn freeResult(obj: *PhpObject) bool {
+    if (getResult(obj)) |r| _ = c.ldap_msgfree(r);
+    obj.native = .{};
+    return true;
+}
+
+// php's final handle classes; ldap_connect and the search functions make them
+pub fn register(vm: *VM, a: std.mem.Allocator) !void {
+    try vm.classes.put(a, "LDAP\\Connection", .{ .name = "LDAP\\Connection", .is_final = true, .native_cleanup = closeConnection });
+    try vm.classes.put(a, "LDAP\\Result", .{ .name = "LDAP\\Result", .is_final = true, .native_cleanup = freeResult });
 }
 
 pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {

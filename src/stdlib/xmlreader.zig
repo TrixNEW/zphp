@@ -23,22 +23,12 @@ fn readerForFile(path_z: [:0]const u8, enc: [*c]const u8, opts: c_int) ?*c.xmlTe
     return c.xmlReaderForFile(path_z.ptr, enc, opts);
 }
 
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
-}
-
-fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
+fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]const u8 {
+    return ctx.vm.transientZ(s);
 }
 
 // a file path as php's stream layer opens it, null-terminated for libxml
-fn filePathZ(ctx: *NativeContext, path: []const u8) ![:0]u8 {
+fn filePathZ(ctx: *NativeContext, path: []const u8) ![:0]const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     return dupZ(ctx, paths.streamPath(&buf, path));
 }
@@ -79,7 +69,7 @@ fn xrOpen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     closeExisting(obj);
 
     const path_z = try filePathZ(ctx, args[0].string.bytes());
-    const enc_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
+    const enc_z: ?[:0]const u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
         try dupZ(ctx, args[1].string.bytes())
     else
         null;
@@ -95,7 +85,7 @@ fn xrOpen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
 fn xrXml(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const src = args[0].string.bytes();
-    const enc_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
+    const enc_z: ?[:0]const u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
         try dupZ(ctx, args[1].string.bytes())
     else
         null;
@@ -125,7 +115,7 @@ fn xrFromString(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const obj = try ctx.createObject("XMLReader");
     const src = args[0].string.bytes();
-    const enc_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
+    const enc_z: ?[:0]const u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
         try dupZ(ctx, args[1].string.bytes())
     else
         null;
@@ -141,7 +131,7 @@ fn xrFromUri(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const obj = try ctx.createObject("XMLReader");
     const path_z = try filePathZ(ctx, args[0].string.bytes());
-    const enc_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
+    const enc_z: ?[:0]const u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
         try dupZ(ctx, args[1].string.bytes())
     else
         null;

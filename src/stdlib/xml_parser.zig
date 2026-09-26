@@ -45,11 +45,8 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.php_constants.put(a, "XML_ERROR_INVALID_TOKEN", .{ .int = 4 });
 }
 
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.vm.strings.append(ctx.allocator, owned);
-    return owned;
-}
+// names and text handed to handlers are transients: a handler's argument
+// holds them across its statements, and whatever it stores keeps them
 
 fn create(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const obj = try ctx.createObject("XMLParser");
@@ -313,10 +310,10 @@ fn xmlParse(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
                     if (quote != 0) _ = st.advance();
                     const folded_an = try foldName(ctx, aname, st.case_fold);
                     const unesc = try unescapeEntities(ctx, raw_val);
-                    try attrs.set(ctx.allocator, .{ .string = Value.String.borrowed(folded_an) }, .{ .string = Value.String.borrowed(unesc) });
+                    try attrs.set(ctx.allocator, .{ .string = folded_an }, .{ .string = unesc });
                 } else if (aname.len > 0) {
                     const folded_an = try foldName(ctx, aname, st.case_fold);
-                    try attrs.set(ctx.allocator, .{ .string = Value.String.borrowed(folded_an) }, .{ .string = Value.String.borrowed("") });
+                    try attrs.set(ctx.allocator, .{ .string = folded_an }, .{ .string = Value.String.borrowed("") });
                 } else {
                     break;
                 }
@@ -341,16 +338,15 @@ fn xmlParse(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     return NativeResult.scalar(.{ .int = 1 });
 }
 
-fn foldName(ctx: *NativeContext, name: []const u8, case_fold: bool) ![]const u8 {
-    if (!case_fold) return try dupString(ctx, name);
+fn foldName(ctx: *NativeContext, name: []const u8, case_fold: bool) !Value.String {
+    if (!case_fold) return ctx.vm.transientBytes(name);
     const buf = try ctx.allocator.alloc(u8, name.len);
     for (name, 0..) |c, i| buf[i] = std.ascii.toUpper(c);
-    try ctx.vm.strings.append(ctx.allocator, buf);
-    return buf;
+    return ctx.vm.transientAdopted(buf);
 }
 
-fn unescapeEntities(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    if (std.mem.indexOfScalar(u8, s, '&') == null) return try dupString(ctx, s);
+fn unescapeEntities(ctx: *NativeContext, s: []const u8) !Value.String {
+    if (std.mem.indexOfScalar(u8, s, '&') == null) return ctx.vm.transientBytes(s);
     var out: std.ArrayListUnmanaged(u8) = .{};
     errdefer out.deinit(ctx.allocator);
     var i: usize = 0;
@@ -385,28 +381,26 @@ fn unescapeEntities(ctx: *NativeContext, s: []const u8) ![]const u8 {
         try out.append(ctx.allocator, s[i]);
         i += 1;
     }
-    const owned = try out.toOwnedSlice(ctx.allocator);
-    try ctx.vm.strings.append(ctx.allocator, owned);
-    return owned;
+    return ctx.vm.transientAdopted(try out.toOwnedSlice(ctx.allocator));
 }
 
-fn invokeStart(ctx: *NativeContext, st: *ParseState, name: []const u8, attrs: *PhpArray) !void {
+fn invokeStart(ctx: *NativeContext, st: *ParseState, name: Value.String, attrs: *PhpArray) !void {
     const handler = st.parser.get("__start_handler");
     if (handler == .null or (handler == .bool and !handler.bool)) return;
     var args = [_]Value{
         .{ .object = st.parser },
-        .{ .string = Value.String.borrowed(name) },
+        .{ .string = name },
         .{ .array = attrs },
     };
     _ = invokeCallable(ctx, st.parser, handler, args[0..]) catch {};
 }
 
-fn invokeEnd(ctx: *NativeContext, st: *ParseState, name: []const u8) !void {
+fn invokeEnd(ctx: *NativeContext, st: *ParseState, name: Value.String) !void {
     const handler = st.parser.get("__end_handler");
     if (handler == .null or (handler == .bool and !handler.bool)) return;
     var args = [_]Value{
         .{ .object = st.parser },
-        .{ .string = Value.String.borrowed(name) },
+        .{ .string = name },
     };
     _ = invokeCallable(ctx, st.parser, handler, args[0..]) catch {};
 }
@@ -417,7 +411,7 @@ fn flushText(ctx: *NativeContext, st: *ParseState, raw: []const u8) !void {
     const decoded = try unescapeEntities(ctx, raw);
     if (st.skip_white) {
         var all_ws = true;
-        for (decoded) |c| {
+        for (decoded.bytes()) |c| {
             if (!std.ascii.isWhitespace(c)) {
                 all_ws = false;
                 break;
@@ -427,7 +421,7 @@ fn flushText(ctx: *NativeContext, st: *ParseState, raw: []const u8) !void {
     }
     var args = [_]Value{
         .{ .object = st.parser },
-        .{ .string = Value.String.borrowed(decoded) },
+        .{ .string = decoded },
     };
     _ = invokeCallable(ctx, st.parser, handler, args[0..]) catch {};
 }

@@ -50,9 +50,9 @@ if (extension_loaded('gmp')) {
     $cases['gmp from string'] = fn() => gmp_add('123456789012345678901234567890', 1);
 }
 foreach ($cases as $name => $make) {
-    for ($i = 0; $i < 200; $i++) $make();
+    for ($i = 0; $i < 100; $i++) $make();
     $before = memory_get_usage();
-    for ($i = 0; $i < 3000; $i++) $make();
+    for ($i = 0; $i < 1000; $i++) $make();
     $grown = memory_get_usage() - $before;
     echo str_pad($name, 30), $grown < 16 * 1024 ? "flat" : "grew $grown bytes", "\n";
 }

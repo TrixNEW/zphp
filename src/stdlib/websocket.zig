@@ -13,8 +13,14 @@ const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const Allocator = std.mem.Allocator;
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
+// the handle borrows the serve connection's socket, which serve closes
+fn dropHandle(obj: *PhpObject) bool {
+    obj.native = .{};
+    return true;
+}
+
 pub fn register(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "WebSocketConnection" };
+    var def = ClassDef{ .name = "WebSocketConnection", .native_cleanup = dropHandle };
     try def.methods.put(a, "send", .{ .name = "send", .arity = 1 });
     try def.methods.put(a, "close", .{ .name = "close", .arity = 0 });
     try vm.classes.put(a, "WebSocketConnection", def);

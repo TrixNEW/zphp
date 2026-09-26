@@ -42,22 +42,17 @@ pub const entries = .{
     .{ "simplexml_import_dom", sxmlImportDom },
 };
 
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
+// a copy that lives until the next statement boundary unless stored
+fn dupString(ctx: *NativeContext, s: []const u8) !Value.String {
+    return ctx.vm.transientBytes(s);
 }
 
-fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
+fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]const u8 {
+    return ctx.vm.transientZ(s);
 }
 
 // a file path as php's stream layer opens it, null-terminated for libxml
-fn filePathZ(ctx: *NativeContext, path: []const u8) ![:0]u8 {
+fn filePathZ(ctx: *NativeContext, path: []const u8) ![:0]const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     return dupZ(ctx, paths.streamPath(&buf, path));
 }
@@ -145,15 +140,8 @@ fn buildAttrWrapper(ctx: *NativeContext, doc: *c.xmlDoc, owner: *c.xmlNode, attr
     const obj = try ctx.createObject("SimpleXMLElement");
     setHandle(obj, doc, owner);
     try obj.set(ctx.allocator, "__is_attr", .{ .bool = true });
-    try obj.set(ctx.allocator, "__attr_name", .{ .string = Value.String.borrowed(try dupString(ctx, attr_name)) });
+    try obj.setCopiedString(ctx.allocator, "__attr_name", attr_name);
     return obj;
-}
-
-fn nodeContent(ctx: *NativeContext, node: *c.xmlNode) ![]const u8 {
-    const content = c.xmlNodeGetContent(node);
-    if (content == null) return "";
-    defer c.xmlFree.?(content);
-    return try dupString(ctx, content[0..cstrLen(content)]);
 }
 
 fn nameMatches(n: *c.xmlNode, name: []const u8) bool {
@@ -177,7 +165,7 @@ pub fn elementToJsonValue(ctx: *NativeContext, obj: *PhpObject) RuntimeError!Val
         const v = c.xmlGetProp(node, name_z.ptr);
         if (v == null) return .{ .string = Value.String.borrowed("") };
         defer c.xmlFree.?(v);
-        return .{ .string = Value.String.borrowed(try dupString(ctx, v[0..cstrLen(v)])) };
+        return .{ .string = try ctx.vm.transientBytes(v[0..cstrLen(v)]) };
     }
     return try nodeToJsonValue(ctx, node);
 }
@@ -241,7 +229,7 @@ fn nodeToJsonValue(ctx: *NativeContext, node: *c.xmlNode) RuntimeError!Value {
                 }
             }
         }
-        return .{ .string = Value.String.borrowed(try dupString(ctx, buf.items)) };
+        return .{ .string = try ctx.vm.transientBytes(buf.items) };
     }
 
     if (!has_attr and !has_elem_child) {
@@ -261,15 +249,15 @@ fn nodeToJsonValue(ctx: *NativeContext, node: *c.xmlNode) RuntimeError!Value {
             if (a.name == null) continue;
             const aname = try dupString(ctx, a.name[0..cstrLen(a.name)]);
             const an_z = try ctx.allocator.allocSentinel(u8, aname.len, 0);
-            @memcpy(an_z[0..aname.len], aname);
+            @memcpy(an_z[0..aname.len], aname.bytes());
             defer ctx.allocator.free(an_z);
             const v = c.xmlGetProp(node, an_z.ptr);
             if (v == null) {
-                try attrs.set(ctx.allocator, .{ .string = Value.String.borrowed(aname) }, .{ .string = Value.String.borrowed("") });
+                try attrs.set(ctx.allocator, .{ .string = aname }, .{ .string = Value.String.borrowed("") });
             } else {
                 defer c.xmlFree.?(v);
                 const vs = try dupString(ctx, v[0..cstrLen(v)]);
-                try attrs.set(ctx.allocator, .{ .string = Value.String.borrowed(aname) }, .{ .string = Value.String.borrowed(vs) });
+                try attrs.set(ctx.allocator, .{ .string = aname }, .{ .string = vs });
             }
         }
         try result.set(ctx.allocator, .{ .string = Value.String.borrowed("@attributes") }, .{ .array = attrs });
@@ -282,9 +270,9 @@ fn nodeToJsonValue(ctx: *NativeContext, node: *c.xmlNode) RuntimeError!Value {
         if (cn.name == null) continue;
         const cname = try dupString(ctx, cn.name[0..cstrLen(cn.name)]);
         const child_val = try nodeToJsonValue(ctx, cn);
-        const existing = result.get(.{ .string = Value.String.borrowed(cname) });
+        const existing = result.get(.{ .string = cname });
         if (existing == .null) {
-            try result.set(ctx.allocator, .{ .string = Value.String.borrowed(cname) }, child_val);
+            try result.set(ctx.allocator, .{ .string = cname }, child_val);
         } else if (existing == .array and isSequentialList(existing.array)) {
             try existing.array.append(ctx.allocator, child_val);
         } else {
@@ -292,7 +280,7 @@ fn nodeToJsonValue(ctx: *NativeContext, node: *c.xmlNode) RuntimeError!Value {
             const list = try ctx.vm.allocArray();
             try list.append(ctx.allocator, existing);
             try list.append(ctx.allocator, child_val);
-            try result.set(ctx.allocator, .{ .string = Value.String.borrowed(cname) }, .{ .array = list });
+            try result.set(ctx.allocator, .{ .string = cname }, .{ .array = list });
         }
     }
     return .{ .array = result };
@@ -492,9 +480,7 @@ fn sxmlChildren(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
             }
         }
     }
-    const owned = try ctx.allocator.dupe(u8, resolved_ns);
-    try ctx.strings.append(ctx.allocator, owned);
-    try wrapper.set(ctx.allocator, "__ns", .{ .string = Value.String.borrowed(owned) });
+    try wrapper.setCopiedString(ctx.allocator, "__ns", resolved_ns);
     return NativeResult.borrowed(.{ .object = wrapper });
 }
 
@@ -522,9 +508,7 @@ fn sxmlAttributes(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
             }
         }
     }
-    const owned = try ctx.allocator.dupe(u8, resolved_ns);
-    try ctx.strings.append(ctx.allocator, owned);
-    try wrapper.set(ctx.allocator, "__ns", .{ .string = Value.String.borrowed(owned) });
+    try wrapper.setCopiedString(ctx.allocator, "__ns", resolved_ns);
     return NativeResult.borrowed(.{ .object = wrapper });
 }
 
@@ -601,9 +585,7 @@ fn sxmlRegisterXPathNamespace(ctx: *NativeContext, args: []const Value) RuntimeE
         try obj.set(ctx.allocator, "__namespaces", .{ .array = arr });
         ns_map = .{ .array = arr };
     }
-    const key = try dupString(ctx, args[0].string.bytes());
-    const val = try dupString(ctx, args[1].string.bytes());
-    try ns_map.array.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, .{ .string = Value.String.borrowed(val) });
+    try ns_map.array.set(ctx.allocator, .{ .string = try dupString(ctx, args[0].string.bytes()) }, .{ .string = try dupString(ctx, args[1].string.bytes()) });
     return NativeResult.scalar(.{ .bool = true });
 }
 
@@ -612,7 +594,7 @@ fn sxmlAddChild(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     const node = getNodePtr(obj) orelse return NativeResult.scalar(.null);
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.null);
-    const content_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string) try dupZ(ctx, args[1].string.bytes()) else null;
+    const content_z: ?[:0]const u8 = if (args.len > 1 and args[1] == .string) try dupZ(ctx, args[1].string.bytes()) else null;
     const ns_str: ?[]const u8 = if (args.len > 2 and args[2] == .string and args[2].string.bytes().len > 0) args[2].string.bytes() else null;
 
     // split "prefix:local" so the namespace is created with the right prefix
@@ -679,9 +661,7 @@ fn collectNamespaces(ctx: *NativeContext, node: *c.xmlNode, arr: *PhpArray, recu
         if (ns.*.href == null) continue;
         const prefix: []const u8 = if (ns.*.prefix != null) ns.*.prefix[0..cstrLen(ns.*.prefix)] else "";
         const uri = ns.*.href[0..cstrLen(ns.*.href)];
-        const k = try dupString(ctx, prefix);
-        const v = try dupString(ctx, uri);
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(k) }, .{ .string = Value.String.borrowed(v) });
+        try arr.set(ctx.allocator, .{ .string = try dupString(ctx, prefix) }, .{ .string = try dupString(ctx, uri) });
     }
     if (recursive) {
         var ch = node.children;
@@ -772,8 +752,7 @@ fn sxmlGet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (obj.get("__attr_view") == .bool and obj.get("__attr_view").bool) {
         const wrap = try buildAttrWrapper(ctx, doc, node, name);
         if (ns_filter) |ns| {
-            const owned = try dupString(ctx, ns);
-            try wrap.set(ctx.allocator, "__attr_ns", .{ .string = Value.String.borrowed(owned) });
+            try wrap.setCopiedString(ctx.allocator, "__attr_ns", ns);
         }
         return NativeResult.borrowed(.{ .object = wrap });
     }
@@ -786,9 +765,7 @@ fn sxmlGet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
         const wrapper = try buildWrapper(ctx, doc, ch);
         // propagate namespace filter so chained child accesses keep working
         if (ns_filter) |ns| {
-            const owned = try ctx.allocator.dupe(u8, ns);
-            try ctx.strings.append(ctx.allocator, owned);
-            try wrapper.set(ctx.allocator, "__ns", .{ .string = Value.String.borrowed(owned) });
+            try wrapper.setCopiedString(ctx.allocator, "__ns", ns);
         }
         return NativeResult.borrowed(.{ .object = wrapper });
     }
@@ -914,12 +891,12 @@ fn sxmlSet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
         .int => |i| blk: {
             var buf: [32]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "{d}", .{i}) catch break :blk "";
-            break :blk try dupString(ctx, s);
+            break :blk (try dupString(ctx, s)).bytes();
         },
         .float => |f| blk: {
             var buf: [64]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "{d}", .{f}) catch break :blk "";
-            break :blk try dupString(ctx, s);
+            break :blk (try dupString(ctx, s)).bytes();
         },
         .bool => |b| if (b) "1" else "",
         else => return NativeResult.scalar(.null),
@@ -979,11 +956,9 @@ fn sxmlGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
             // can resolve via xmlGetNsProp instead of xmlGetProp
             if (attr.*.ns != null and attr.*.ns.*.href != null) {
                 const href = attr.*.ns.*.href;
-                const owned = try dupString(ctx, href[0..cstrLen(href)]);
-                try wrapped_obj.set(ctx.allocator, "__attr_ns", .{ .string = Value.String.borrowed(owned) });
+                try wrapped_obj.setCopiedString(ctx.allocator, "__attr_ns", href[0..cstrLen(href)]);
             }
-            const key = try dupString(ctx, an);
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, .{ .object = wrapped_obj });
+            try arr.set(ctx.allocator, .{ .string = try dupString(ctx, an) }, .{ .object = wrapped_obj });
         }
         const iter_obj = try ctx.createObject("ArrayIterator");
         try iter_obj.set(ctx.allocator, "__data", .{ .array = arr });
@@ -1009,8 +984,7 @@ fn sxmlGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRes
         if (node.name == null) return NativeResult.borrowed(.{ .object = iter_obj });
         iter_obj.native.ptr = @intFromPtr(node);
         try iter_obj.set(ctx.allocator, "__mode", .{ .string = Value.String.borrowed("siblings") });
-        const name_copy = try dupString(ctx, node.name[0..cstrLen(node.name)]);
-        try iter_obj.set(ctx.allocator, "__same_name", .{ .string = Value.String.borrowed(name_copy) });
+        try iter_obj.setCopiedString(ctx.allocator, "__same_name", node.name[0..cstrLen(node.name)]);
     }
     return NativeResult.borrowed(.{ .object = iter_obj });
 }

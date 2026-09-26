@@ -34,18 +34,8 @@ fn wrapImg(ctx: *NativeContext, im: ?*c.gdImageStruct) RuntimeError!NativeResult
     return NativeResult.borrowed(.{ .object = obj });
 }
 
-fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
-}
-
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
+fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]const u8 {
+    return ctx.vm.transientZ(s);
 }
 
 fn argInt(args: []const Value, idx: usize) ?i64 {
@@ -594,9 +584,9 @@ fn imgGetSize(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
     try arr.set(ctx.allocator, .{ .int = 0 }, .{ .int = @intCast(im.?.sx) });
     try arr.set(ctx.allocator, .{ .int = 1 }, .{ .int = @intCast(im.?.sy) });
     try arr.set(ctx.allocator, .{ .int = 2 }, .{ .int = typ });
-    try arr.set(ctx.allocator, .{ .int = 3 }, .{ .string = Value.String.borrowed(try dupString(ctx, "")) });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "mime")) }, .{ .string = Value.String.borrowed(try dupString(ctx, mime)) });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, "bits")) }, .{ .int = 8 });
+    try arr.set(ctx.allocator, .{ .int = 3 }, .{ .string = Value.String.borrowed("") });
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("mime") }, mime);
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("bits") }, .{ .int = 8 });
     return NativeResult.borrowed(.{ .array = arr });
 }
 

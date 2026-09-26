@@ -1797,6 +1797,7 @@ pub const VM = struct {
         try @import("../stdlib/gd.zig").register(vm, allocator);
         try @import("../stdlib/soap.zig").register(vm, allocator);
         try @import("../stdlib/mysqli.zig").register(vm, allocator);
+        try @import("../stdlib/ldap.zig").register(vm, allocator);
         try @import("../stdlib/tokenizer.zig").register(vm, allocator);
 
         // HashContext is the type returned by hash_init - register so
@@ -13210,6 +13211,20 @@ pub const VM = struct {
         return str;
     }
 
+    // a copy of bytes as a transient
+    pub fn transientBytes(self: *VM, bytes: []const u8) RuntimeError!Value.String {
+        return self.transientOwned(try Value.String.create(self.allocator, bytes));
+    }
+
+    // a null-terminated copy for a C call, valid until the next statement
+    // boundary
+    pub fn transientZ(self: *VM, bytes: []const u8) RuntimeError![:0]const u8 {
+        const buf = try self.allocator.allocSentinel(u8, bytes.len, 0);
+        @memcpy(buf, bytes);
+        const str = self.transientOwned(try Value.String.adopt(self.allocator, buf.ptr[0 .. bytes.len + 1]));
+        return str.bytes()[0..bytes.len :0];
+    }
+
     // bytes the caller owns, handed over as a transient
     pub fn transientAdopted(self: *VM, bytes: []u8) RuntimeError!Value.String {
         return self.transientOwned(try Value.String.adopt(self.allocator, bytes));
@@ -17781,8 +17796,11 @@ pub const VM = struct {
         return self.cloneArrayValue(val);
     }
 
+    // a clone's property: its own copy of an array, and its own reference to
+    // anything counted
     fn copyObjectCloneValue(self: *VM, val: Value) RuntimeError!Value {
-        return self.cloneArrayValue(val);
+        if (val == .array) return self.cloneArrayValue(val);
+        return self.copyValue(val);
     }
 
     fn preparePropertyStore(self: *VM, val: Value) RuntimeError!Value {

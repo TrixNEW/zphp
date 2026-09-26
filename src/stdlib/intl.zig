@@ -160,18 +160,9 @@ extern fn zphp_uidna_info_init(info: *anyopaque) void;
 
 // ---------------- helpers ----------------
 
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
-}
 
-fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
+fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]const u8 {
+    return ctx.vm.transientZ(s);
 }
 
 fn cstrLen(p: [*:0]const u8) usize {
@@ -207,6 +198,24 @@ fn cloneHook(comptime T: type, comptime kind: NativeHandle.Kind, comptime dupFn:
     }.hook;
 }
 
+// the cleanup of a class whose handle is one ICU object: closed when the
+// object dies, so the request-end sweep finds nothing left
+fn closeHook(comptime T: type, comptime kind: NativeHandle.Kind, comptime closeFn: anytype) fn (*PhpObject) bool {
+    return struct {
+        fn hook(obj: *PhpObject) bool {
+            if (obj.native.get(T, kind)) |p| closeFn(p);
+            obj.native = .{};
+            return true;
+        }
+    }.hook;
+}
+
+const closeCollator = closeHook(UCollator, .collator, zphp_ucol_close);
+const closeNumFmt = closeHook(UNumberFormat, .number_formatter, zphp_unum_close);
+const closeTranslit = closeHook(UTransliterator, .transliterator, zphp_utrans_close);
+const closeCal = closeHook(UCalendar, .calendar, zphp_ucal_close);
+const closeBrk = closeHook(ZphpBrk, .break_iterator, zphp_ubrk_close);
+
 const cloneNumFmt = cloneHook(UNumberFormat, .number_formatter, zphp_unum_clone, zphp_unum_close);
 const cloneTranslit = cloneHook(UTransliterator, .transliterator, zphp_utrans_clone, zphp_utrans_close);
 const cloneDateFmt = cloneHook(UDateFormat, .date_formatter, zphp_udat_clone, zphp_udat_close);
@@ -239,14 +248,6 @@ fn u16ToOwned(ctx: *NativeContext, s: []const u16) ![]u8 {
     _ = zphp_u_strToUTF8(buf.ptr, cap, &actual, s.ptr, @intCast(s.len), &status);
     if (intlRecord(ctx.vm, status)) return error.RuntimeError;
     buf = try ctx.allocator.realloc(buf, @intCast(actual));
-    return buf;
-}
-
-fn u16ToUtf8(ctx: *NativeContext, s: []const u16) ![]const u8 {
-    if (s.len == 0) return try dupString(ctx, "");
-    const buf = try u16ToOwned(ctx, s);
-    errdefer ctx.allocator.free(buf);
-    try ctx.strings.append(ctx.allocator, buf);
     return buf;
 }
 
@@ -360,7 +361,7 @@ const DisplayFn = *const fn (loc: [*:0]const u8, inLoc: [*:0]const u8, buf: [*]U
 fn displayCall(ctx: *NativeContext, args: []const Value, comptime fn_ptr: DisplayFn) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.null);
     const tgt_z = try dupZ(ctx, args[0].string.bytes());
-    const in_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string) try dupZ(ctx, args[1].string.bytes()) else null;
+    const in_z: ?[:0]const u8 = if (args.len > 1 and args[1] == .string) try dupZ(ctx, args[1].string.bytes()) else null;
     const in_ptr: [*:0]const u8 = if (in_z) |z| z.ptr else zphp_uloc_getDefault();
     var buf: [256]UChar = undefined;
     var status: UErrorCode = U_ZERO_ERROR;
@@ -944,7 +945,7 @@ fn calCreateInstance(ctx: *NativeContext, args: []const Value) RuntimeError!Nati
     const cal = (try openCalendar(ctx, tz_opt, locale, 0)) orelse return NativeResult.scalar(.null);
     const obj = try ctx.createObject("IntlGregorianCalendar");
     obj.native = handle(.calendar, cal);
-    try obj.set(ctx.allocator, "__locale", .{ .string = Value.String.borrowed(try dupString(ctx, locale)) });
+    try obj.setCopiedString(ctx.allocator, "__locale", locale);
     return NativeResult.borrowed(.{ .object = obj });
 }
 
@@ -968,7 +969,7 @@ fn calConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
         }
         const cal = (try openCalendar(ctx, tz_opt, locale, 0)) orelse return NativeResult.scalar(.null);
         obj.native = handle(.calendar, cal);
-        try obj.set(ctx.allocator, "__locale", .{ .string = Value.String.borrowed(try dupString(ctx, locale)) });
+        try obj.setCopiedString(ctx.allocator, "__locale", locale);
         return NativeResult.scalar(.null);
     }
 
@@ -977,7 +978,7 @@ fn calConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     const def_locale = def_locale_ptr[0..cstrLen(def_locale_ptr)];
     const cal = (try openCalendar(ctx, null, def_locale, 0)) orelse return NativeResult.scalar(.null);
     obj.native = handle(.calendar, cal);
-    try obj.set(ctx.allocator, "__locale", .{ .string = Value.String.borrowed(try dupString(ctx, def_locale)) });
+    try obj.setCopiedString(ctx.allocator, "__locale", def_locale);
     if (args.len >= 3 and args[0] == .int and args[1] == .int and args[2] == .int) {
         var status: UErrorCode = U_ZERO_ERROR;
         if (args.len >= 6 and args[3] == .int and args[4] == .int and args[5] == .int) {
@@ -1237,7 +1238,7 @@ fn brkMakeInstance(ctx: *NativeContext, brk_type: c_int, locale: []const u8) Run
     const obj = try ctx.createObject("IntlBreakIterator");
     obj.native = handle(.break_iterator, w);
     try obj.set(ctx.allocator, "__type", .{ .int = @intCast(brk_type) });
-    try obj.set(ctx.allocator, "__locale", .{ .string = Value.String.borrowed(try dupString(ctx, locale)) });
+    try obj.setCopiedString(ctx.allocator, "__locale", locale);
     return NativeResult.borrowed(.{ .object = obj });
 }
 
@@ -1276,7 +1277,7 @@ fn brkSetText(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
     zphp_ubrk_setText(w, ptr, @intCast(txt.len), &status);
     if (intlRecord(ctx.vm, status)) return NativeResult.scalar(.{ .bool = false });
     // also store the text so getText round-trips without losing it
-    try obj.set(ctx.allocator, "__text", .{ .string = Value.String.borrowed(try dupString(ctx, txt)) });
+    try obj.setCopiedString(ctx.allocator, "__text", txt);
     return NativeResult.scalar(.{ .bool = true });
 }
 
@@ -1831,7 +1832,7 @@ fn graphemeStrSplit(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
         const end = @min(i + step, n_g);
         const a: usize = @intCast(bounds.items[i]);
         const b: usize = @intCast(bounds.items[end]);
-        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try dupString(ctx, s[a..b])) });
+        try arr.appendCopiedString(ctx.allocator, s[a..b]);
     }
     return NativeResult.borrowed(.{ .array = arr });
 }
@@ -2051,7 +2052,7 @@ fn intlCharToupper(_: *NativeContext, args: []const Value) RuntimeError!NativeRe
 
 fn registerBreakIteratorClass(vm: *VM, a: Allocator) !void {
     inline for (.{ "IntlBreakIterator", "IntlRuleBasedBreakIterator", "IntlCodePointBreakIterator" }) |cls_name| {
-        var def = ClassDef{ .name = cls_name, .native_clone = cloneBrk };
+        var def = ClassDef{ .name = cls_name, .native_cleanup = closeBrk, .native_clone = cloneBrk };
         if (comptime !std.mem.eql(u8, cls_name, "IntlBreakIterator")) {
             def.parent = "IntlBreakIterator";
         }
@@ -2116,7 +2117,7 @@ fn registerBreakIteratorClass(vm: *VM, a: Allocator) !void {
 
 fn registerIntlCalendarClass(vm: *VM, a: Allocator) !void {
     inline for (.{ "IntlCalendar", "IntlGregorianCalendar" }) |cls_name| {
-        var def = ClassDef{ .name = cls_name, .native_clone = cloneCal };
+        var def = ClassDef{ .name = cls_name, .native_cleanup = closeCal, .native_clone = cloneCal };
         if (comptime std.mem.eql(u8, cls_name, "IntlGregorianCalendar")) {
             def.parent = "IntlCalendar";
         }
@@ -2383,9 +2384,7 @@ fn localeParseLocale(ctx: *NativeContext, args: []const Value) RuntimeError!Nati
     }) {
         var key_buf: [16]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "variant{d}", .{vi}) catch break;
-        const owned_key = try ctx.allocator.dupe(u8, key);
-        try ctx.vm.strings.append(ctx.allocator, owned_key);
-        try out.set(ctx.allocator, .{ .string = Value.String.borrowed(owned_key) }, .{ .string = Value.String.borrowed(parts[idx]) });
+        try out.setCopiedKey(ctx.allocator, key, .{ .string = Value.String.borrowed(parts[idx]) });
     }
     return NativeResult.borrowed(.{ .array = out });
 }
@@ -2435,7 +2434,7 @@ fn localeAcceptFromHttp(ctx: *NativeContext, args: []const Value) RuntimeError!N
 }
 
 fn registerCollatorClass(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "Collator" };
+    var def = ClassDef{ .name = "Collator", .native_cleanup = closeCollator };
     try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
     try def.methods.put(a, "create", .{ .name = "create", .arity = 1, .is_static = true });
     try def.methods.put(a, "compare", .{ .name = "compare", .arity = 2 });
@@ -2468,7 +2467,7 @@ fn registerCollatorClass(vm: *VM, a: Allocator) !void {
 }
 
 fn registerNumberFormatterClass(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "NumberFormatter", .native_clone = cloneNumFmt };
+    var def = ClassDef{ .name = "NumberFormatter", .native_cleanup = closeNumFmt, .native_clone = cloneNumFmt };
     try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
     try def.methods.put(a, "create", .{ .name = "create", .arity = 2, .is_static = true });
     try def.methods.put(a, "format", .{ .name = "format", .arity = 1 });
@@ -2509,7 +2508,7 @@ fn registerNumberFormatterClass(vm: *VM, a: Allocator) !void {
 }
 
 fn registerTransliteratorClass(vm: *VM, a: Allocator) !void {
-    var def = ClassDef{ .name = "Transliterator", .native_clone = cloneTranslit };
+    var def = ClassDef{ .name = "Transliterator", .native_cleanup = closeTranslit, .native_clone = cloneTranslit };
     try def.methods.put(a, "create", .{ .name = "create", .arity = 1, .is_static = true });
     try def.methods.put(a, "transliterate", .{ .name = "transliterate", .arity = 1 });
     try def.constant_order.append(a, "FORWARD");

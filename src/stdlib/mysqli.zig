@@ -697,7 +697,7 @@ pub const entries = .{
 };
 
 pub fn register(vm: *VM, a: Allocator) !void {
-    var mc = ClassDef{ .name = "mysqli" };
+    var mc = ClassDef{ .name = "mysqli", .native_cleanup = closeConnection };
     inline for (.{
         .{ "__construct", 6 },        .{ "connect", 6 },       .{ "real_connect", 6 },
         .{ "close", 0 },              .{ "query", 1 },         .{ "real_query", 1 },
@@ -733,7 +733,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "mysqli::commit", mysqliCommit);
     try vm.native_fns.put(a, "mysqli::rollback", mysqliRollback);
 
-    var rc = ClassDef{ .name = "mysqli_result" };
+    var rc = ClassDef{ .name = "mysqli_result", .native_cleanup = freeResult };
     inline for (.{
         .{ "fetch_assoc", 0 },  .{ "fetch_array", 1 }, .{ "fetch_row", 0 }, .{ "fetch_all", 1 },
         .{ "fetch_object", 2 }, .{ "free", 0 },        .{ "close", 0 },     .{ "data_seek", 1 },
@@ -765,6 +765,19 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try exception.methods.put(a, "getSqlState", .{ .name = "getSqlState", .arity = 0 });
     try vm.classes.put(a, "mysqli_sql_exception", exception);
     try vm.native_fns.put(a, "mysqli_sql_exception::getSqlState", exceptionSqlState);
+}
+
+// results are always stored, so one outliving its connection stays valid
+fn freeResult(obj: *PhpObject) bool {
+    if (getRes(obj)) |r| mysql.mysql_free_result(r);
+    obj.native = .{};
+    return true;
+}
+
+fn closeConnection(obj: *PhpObject) bool {
+    if (getConn(obj)) |conn| mysql.mysql_close(conn);
+    obj.native = .{};
+    return true;
 }
 
 pub fn cleanupConnections(objects: std.ArrayListUnmanaged(*PhpObject)) void {

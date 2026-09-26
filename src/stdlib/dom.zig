@@ -170,22 +170,17 @@ fn getThis(ctx: *NativeContext) ?*PhpObject {
     return v.object;
 }
 
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
+// a copy that lives until the next statement boundary unless stored
+fn dupString(ctx: *NativeContext, s: []const u8) !Value.String {
+    return ctx.vm.transientBytes(s);
 }
 
-fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
+fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]const u8 {
+    return ctx.vm.transientZ(s);
 }
 
 // a file path as php's stream layer opens it, null-terminated for libxml
-fn filePathZ(ctx: *NativeContext, path: []const u8) ![:0]u8 {
+fn filePathZ(ctx: *NativeContext, path: []const u8) ![:0]const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     return dupZ(ctx, paths.streamPath(&buf, path));
 }
@@ -488,8 +483,8 @@ fn domDocCreateElementNS(ctx: *NativeContext, args: []const Value) RuntimeError!
     const qname = args[1].string.bytes();
 
     // split qname into prefix:localname
-    var prefix_buf: ?[:0]u8 = null;
-    var local_buf: [:0]u8 = undefined;
+    var prefix_buf: ?[:0]const u8 = null;
+    var local_buf: [:0]const u8 = undefined;
     if (std.mem.indexOfScalar(u8, qname, ':')) |colon| {
         prefix_buf = try dupZ(ctx, qname[0..colon]);
         local_buf = try dupZ(ctx, qname[colon + 1 ..]);
@@ -1284,8 +1279,7 @@ fn makeNamedNodeMap(ctx: *NativeContext, owner_doc: *PhpObject, element: *c.xmlN
         try arr.set(ctx.allocator, .{ .int = @intCast(i) }, wrapped);
         if (attr.*.name != null) {
             const name = attr.*.name;
-            const key = try dupString(ctx, name[0..cstrLen(name)]);
-            try named.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, wrapped);
+            try named.set(ctx.allocator, .{ .string = try dupString(ctx, name[0..cstrLen(name)]) }, wrapped);
         }
         i += 1;
     }
@@ -1339,9 +1333,7 @@ fn domXpathRegisterNamespace(ctx: *NativeContext, args: []const Value) RuntimeEr
         try obj.set(ctx.allocator, "__namespaces", .{ .array = arr });
         ns_map = .{ .array = arr };
     }
-    const key = try dupString(ctx, args[0].string.bytes());
-    const val = try dupString(ctx, args[1].string.bytes());
-    try ns_map.array.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, .{ .string = Value.String.borrowed(val) });
+    try ns_map.array.set(ctx.allocator, .{ .string = try dupString(ctx, args[0].string.bytes()) }, .{ .string = try dupString(ctx, args[1].string.bytes()) });
     return NativeResult.scalar(.{ .bool = true });
 }
 
@@ -1414,15 +1406,15 @@ fn wrapNamespaceNode(ctx: *NativeContext, owner_doc: *PhpObject, ns: *c.xmlNs) !
     try obj.set(ctx.allocator, "__owner", .{ .object = owner_doc });
     if (ns.prefix != null) {
         const slice = ns.prefix[0..cstrLen(ns.prefix)];
-        try obj.set(ctx.allocator, "__ns_prefix", .{ .string = Value.String.borrowed(try dupString(ctx, slice)) });
+        try obj.setCopiedString(ctx.allocator, "__ns_prefix", slice);
     } else {
-        try obj.set(ctx.allocator, "__ns_prefix", .{ .string = Value.String.borrowed(try dupString(ctx, "")) });
+        try obj.setCopiedString(ctx.allocator, "__ns_prefix", "");
     }
     if (ns.href != null) {
         const slice = ns.href[0..cstrLen(ns.href)];
-        try obj.set(ctx.allocator, "__ns_href", .{ .string = Value.String.borrowed(try dupString(ctx, slice)) });
+        try obj.setCopiedString(ctx.allocator, "__ns_href", slice);
     } else {
-        try obj.set(ctx.allocator, "__ns_href", .{ .string = Value.String.borrowed(try dupString(ctx, "")) });
+        try obj.setCopiedString(ctx.allocator, "__ns_href", "");
     }
     return .{ .object = obj };
 }
@@ -1893,15 +1885,10 @@ fn buildLibXMLError(ctx: *NativeContext, e: CapturedError) RuntimeError!Value {
     try obj.set(ctx.allocator, "code", .{ .int = @intCast(e.code) });
     try obj.set(ctx.allocator, "column", .{ .int = @intCast(e.column) });
     // libxml appends a trailing space + period to most messages but PHP
-    // strips just the trailing newline (already done in handler). also copy
-    // the buffer into ctx allocator space so it shares the script lifetime
-    const msg_copy = try ctx.allocator.dupe(u8, e.message);
-    try ctx.vm.strings.append(ctx.allocator, msg_copy);
-    try obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed(msg_copy) });
+    // strips just the trailing newline (already done in handler)
+    try obj.setCopiedString(ctx.allocator, "message", e.message);
     if (e.file) |f| {
-        const fc = try ctx.allocator.dupe(u8, f);
-        try ctx.vm.strings.append(ctx.allocator, fc);
-        try obj.set(ctx.allocator, "file", .{ .string = Value.String.borrowed(fc) });
+        try obj.setCopiedString(ctx.allocator, "file", f);
     } else {
         try obj.set(ctx.allocator, "file", .{ .string = Value.String.borrowed("") });
     }
