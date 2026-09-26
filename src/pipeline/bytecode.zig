@@ -342,6 +342,13 @@ pub const OpCode = enum(u8) {
     get_class_const_dyn_name, // u16 class; constant name on the stack
     get_class_const_dyn_both, // class, then constant name, on the stack
 
+    // the static property reads of isset, ?? and empty: a missing class or
+    // property reads null instead of throwing
+    get_static_prop_quiet, // u16 class, u16 property
+    get_static_prop_dynamic_quiet, // u16 property; class name or object on the stack
+    get_static_prop_dyn_name_quiet, // u16 class; property name on the stack
+    get_static_prop_dyn_both_quiet, // class, then property name, on the stack
+
     pub fn width(self: OpCode) usize {
         return switch (self) {
             .arg_variable => 6,
@@ -375,6 +382,9 @@ pub const OpCode = enum(u8) {
             .inc_local,
             .dec_local,
             .get_static_prop_dynamic,
+            .get_static_prop_dynamic_quiet,
+            .get_static_prop_dyn_name,
+            .get_static_prop_dyn_name_quiet,
             .ensure_array_local,
             .ensure_array_prop,
             .cow_separate_local,
@@ -398,6 +408,7 @@ pub const OpCode = enum(u8) {
             .ensure_array_var, .call, .call_spread, .new_obj, .method_call, .method_call_spread, .static_call_dyn_method => 4,
             .make_var_ref, .make_var_prop_ref => 5,
             .get_static_prop,
+            .get_static_prop_quiet,
             .get_class_const,
             .set_class_const,
             .set_prop_default,
@@ -439,6 +450,7 @@ pub const OpCode = enum(u8) {
             .get_global,
             .get_static,
             .get_static_prop,
+            .get_static_prop_quiet,
             .get_class_const,
             .array_new,
             .clone_obj,

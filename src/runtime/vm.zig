@@ -5967,6 +5967,10 @@ pub const VM = struct {
                         if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                         return error.RuntimeError;
                     };
+                    _ = self.staticPropTarget(class_name, prop_name) catch {
+                        if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                        return error.RuntimeError;
+                    };
                     if (self.getStaticPropPtr(class_name, prop_name)) |slot| {
                         const cur = slot.*;
                         if (cur == .int or cur == .float or (cur == .bool and cur.bool)) {
@@ -6693,6 +6697,10 @@ pub const VM = struct {
                     const class_name = self.currentChunk().constants.items[class_idx].string.bytes();
                     const prop_name = self.currentChunk().constants.items[prop_idx].string.bytes();
                     self.resolveStaticDefaults(class_name) catch {
+                        if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                        return error.RuntimeError;
+                    };
+                    _ = self.staticPropTarget(class_name, prop_name) catch {
                         if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                         return error.RuntimeError;
                     };
@@ -10761,7 +10769,8 @@ pub const VM = struct {
                     try self.callStaticFunction(full_name, ac, class_name);
                 },
 
-                .get_static_prop => {
+                .get_static_prop, .get_static_prop_quiet => {
+                    const quiet = op == .get_static_prop_quiet;
                     const class_idx = self.readU16();
                     const prop_idx = self.readU16();
                     const class_name = self.resolveStaticClassName(self.currentChunk().constants.items[class_idx].string.bytes());
@@ -10770,10 +10779,10 @@ pub const VM = struct {
                         self.push(.{ .string = Value.String.borrowed(class_name) });
                         continue;
                     }
-                    self.push(self.readStaticProp(class_name, prop_name) catch {
+                    self.pushStaticProp(class_name, prop_name, quiet) catch {
                         if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                         return error.RuntimeError;
-                    });
+                    };
                 },
 
                 .get_class_const => {
@@ -10829,7 +10838,8 @@ pub const VM = struct {
                     } else self.releaseValue(val);
                 },
 
-                .get_static_prop_dyn_name => {
+                .get_static_prop_dyn_name, .get_static_prop_dyn_name_quiet => {
+                    const quiet = op == .get_static_prop_dyn_name_quiet;
                     const class_idx = self.readU16();
                     const class_name = self.resolveStaticClassName(self.currentChunk().constants.items[class_idx].string.bytes());
                     const name_val = self.pop();
@@ -10841,14 +10851,15 @@ pub const VM = struct {
                         // matching the static `Class::class` form
                         self.push(.{ .string = Value.String.borrowed(class_name) });
                     } else {
-                        self.push(self.readStaticProp(class_name, prop_name) catch {
+                        self.pushStaticProp(class_name, prop_name, quiet) catch {
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
-                        });
+                        };
                     }
                 },
 
-                .get_static_prop_dyn_both => {
+                .get_static_prop_dyn_both, .get_static_prop_dyn_both_quiet => {
+                    const quiet = op == .get_static_prop_dyn_both_quiet;
                     // both class and property names come from the stack:
                     // class pushed first, then property name on top
                     const name_val = self.pop();
@@ -10860,24 +10871,25 @@ pub const VM = struct {
                     } else if (std.mem.eql(u8, prop_name, "class")) {
                         self.push(.{ .string = Value.String.borrowed(class_name) });
                     } else {
-                        self.push(self.readStaticProp(class_name, prop_name) catch {
+                        self.pushStaticProp(class_name, prop_name, quiet) catch {
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
-                        });
+                        };
                     }
                 },
 
-                .get_static_prop_dynamic => {
+                .get_static_prop_dynamic, .get_static_prop_dynamic_quiet => {
+                    const quiet = op == .get_static_prop_dynamic_quiet;
                     const prop_idx = self.readU16();
                     const prop_name = self.currentChunk().constants.items[prop_idx].string.bytes();
                     const class_name = classNameOf(self.pop());
                     if (class_name.len == 0) {
                         self.push(.null);
                     } else {
-                        self.push(self.readStaticProp(class_name, prop_name) catch {
+                        self.pushStaticProp(class_name, prop_name, quiet) catch {
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
-                        });
+                        };
                     }
                 },
 
@@ -11087,32 +11099,16 @@ pub const VM = struct {
                         return error.RuntimeError;
                     };
 
+                    const cls = self.staticPropTarget(class_name, prop_name) catch {
+                        if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                        return error.RuntimeError;
+                    };
                     const val = try self.copyValue(self.peek());
-                    var target: ?*ClassDef = null;
-                    if (self.classes.getPtr(class_name)) |cls| {
-                        if (cls.static_props.contains(prop_name)) {
-                            target = cls;
-                        } else {
-                            var parent: ?[]const u8 = cls.parent;
-                            while (parent) |p| {
-                                if (self.classes.getPtr(p)) |pcls| {
-                                    if (pcls.static_props.contains(prop_name)) {
-                                        target = pcls;
-                                        break;
-                                    }
-                                    parent = pcls.parent;
-                                } else break;
-                            }
-                            if (target == null) target = cls;
-                        }
-                    }
-                    if (target) |cls| {
-                        // Stage 2 overwrite-release for static prop set
-                        const ssp_old = cls.static_props.get(prop_name) orelse Value.null;
-                        try cls.static_props.put(self.allocator, prop_name, val);
-                        self.releaseValue(ssp_old);
-                        self.syncStaticPropRefs(class_name, prop_name, val);
-                    }
+                    // Stage 2 overwrite-release for static prop set
+                    const ssp_old = cls.static_props.get(prop_name) orelse Value.null;
+                    try cls.static_props.put(self.allocator, prop_name, val);
+                    self.releaseValue(ssp_old);
+                    self.syncStaticPropRefs(class_name, prop_name, val);
                 },
 
                 .defer_prop_defaults => {
@@ -11177,29 +11173,15 @@ pub const VM = struct {
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
                         };
+                        const cls = self.staticPropTarget(class_name, prop_name) catch {
+                            self.stackRelease(rhs_val);
+                            if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                            return error.RuntimeError;
+                        };
                         const stored = try self.copyValue(rhs_val);
-                        var target: ?*ClassDef = null;
-                        if (self.classes.getPtr(class_name)) |cls| {
-                            if (cls.static_props.contains(prop_name)) {
-                                target = cls;
-                            } else {
-                                var parent: ?[]const u8 = cls.parent;
-                                while (parent) |p| {
-                                    if (self.classes.getPtr(p)) |pcls| {
-                                        if (pcls.static_props.contains(prop_name)) {
-                                            target = pcls;
-                                            break;
-                                        }
-                                        parent = pcls.parent;
-                                    } else break;
-                                }
-                                if (target == null) target = cls;
-                            }
-                        }
-                        if (target) |cls| {
-                            const old = try cls.static_props.fetchPut(self.allocator, prop_name, stored);
-                            if (old) |kv| self.releaseValue(kv.value);
-                        }
+                        const old = try cls.static_props.fetchPut(self.allocator, prop_name, stored);
+                        if (old) |kv| self.releaseValue(kv.value);
+                        self.syncStaticPropRefs(class_name, prop_name, stored);
                     }
                     self.pushTransfer(rhs_val);
                 },
@@ -17525,13 +17507,45 @@ pub const VM = struct {
 
     // a static read: autoloading the class on a miss, null when nothing
     // declares the property
-    fn readStaticProp(self: *VM, class_name: []const u8, prop_name: []const u8) RuntimeError!Value {
+    fn readStaticProp(self: *VM, class_name: []const u8, prop_name: []const u8) RuntimeError!?Value {
         if (try self.staticPropValue(class_name, prop_name)) |val| return val;
         // the lookup autoloads and keeps an autoloader's exception pending
         if (self.pending_exception != null) return error.RuntimeError;
-        if (self.classes.contains(class_name) or self.interfaces.contains(class_name)) return .null;
+        if (self.classes.contains(class_name) or self.interfaces.contains(class_name)) return null;
         try self.tryAutoload(class_name);
-        return (try self.staticPropValue(class_name, prop_name)) orelse .null;
+        return self.staticPropValue(class_name, prop_name);
+    }
+
+    // a static read: the value, or php's error for a missing class or
+    // property. a quiet read (isset, ??, empty) finds a missing property null,
+    // but a missing class is an error there too
+    fn pushStaticProp(self: *VM, class_name: []const u8, prop_name: []const u8, quiet: bool) RuntimeError!void {
+        if (try self.readStaticProp(class_name, prop_name)) |val| return self.push(val);
+        if (quiet and (self.classes.contains(class_name) or self.interfaces.contains(class_name))) return self.push(.null);
+        return self.undeclaredStaticProp(class_name, prop_name);
+    }
+
+    // the class that declares a static property a write names, loading the
+    // named class first; php refuses to create one
+    fn staticPropTarget(self: *VM, class_name: []const u8, prop_name: []const u8) RuntimeError!*ClassDef {
+        if (!self.classes.contains(class_name)) try self.tryAutoload(class_name);
+        var current: ?[]const u8 = class_name;
+        while (current) |name| {
+            const cls = self.classes.getPtr(name) orelse break;
+            if (cls.static_props.contains(prop_name)) return cls;
+            current = cls.parent;
+        }
+        return self.undeclaredStaticProp(class_name, prop_name);
+    }
+
+    fn undeclaredStaticProp(self: *VM, class_name: []const u8, prop_name: []const u8) RuntimeError {
+        const msg = if (self.classes.contains(class_name) or self.interfaces.contains(class_name))
+            try std.fmt.allocPrint(self.allocator, "Access to undeclared static property {s}::${s}", .{ class_name, prop_name })
+        else
+            try std.fmt.allocPrint(self.allocator, "Class \"{s}\" not found", .{class_name});
+        defer self.allocator.free(msg);
+        try self.setPendingException("Error", msg);
+        return error.RuntimeError;
     }
 
     // a static read autoloads the class, so its deferred defaults can only be

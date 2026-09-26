@@ -261,7 +261,7 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
             try self.emitOp(.set_static_prop_dyn);
             return;
         }
-        const class_name = self.ast.tokenSlice(class_node.main_token);
+        const class_name = try staticClassOperand(self, class_node);
         var prop_name = self.ast.tokenSlice(target.main_token);
         if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
         const class_idx = try self.addConstant(.{ .string = Value.String.borrowed(class_name) });
@@ -738,6 +738,7 @@ fn compileCoalesceFetch(self: *Compiler, node_idx: u32) Error!void {
         }
         return;
     }
+    if (n.tag == .static_prop_access) return compileStaticPropRead(self, n, true);
     try self.compileNode(node_idx);
 }
 
@@ -895,7 +896,7 @@ pub fn compileCall(self: *Compiler, node: Ast.Node) Error!void {
             // an array element or static-name property read uses isset-
             // semantics here: an undefined key or an uninitialized typed
             // property must not warn/throw, just count as empty
-            if (arg.tag == .array_access or (arg.tag == .property_access and !self.isDynamicProp(arg))) {
+            if (arg.tag == .array_access or arg.tag == .static_prop_access or (arg.tag == .property_access and !self.isDynamicProp(arg))) {
                 try compileCoalesceFetch(self, args[0]);
                 try self.emitOp(.cast_bool);
                 try self.emitOp(.not);
@@ -929,7 +930,7 @@ pub fn compileCall(self: *Compiler, node: Ast.Node) Error!void {
                     try self.compileNode(arg.data.rhs);
                     try self.emitOp(.isset_index);
                 } else {
-                    try self.compileNode(arg_idx);
+                    try compileCoalesceFetch(self, arg_idx);
                     try self.emitOp(.op_null);
                     try self.emitOp(.not_identical);
                 }
@@ -1245,7 +1246,7 @@ pub fn compileVivifyChain(self: *Compiler, node_idx: u32) Error!void {
         // COW separation + write-back (ensure_array_static_prop). dynamic
         // ($var::) class falls through to the plain load below
         const class_node = self.ast.nodes[node.data.lhs];
-        const class_name = self.ast.tokenSlice(class_node.main_token);
+        const class_name = try staticClassOperand(self, class_node);
         var prop_name = self.ast.tokenSlice(node.main_token);
         if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
         const class_idx = try self.addConstant(.{ .string = Value.String.borrowed(class_name) });
@@ -1586,6 +1587,12 @@ pub fn compileDynamicClassConst(self: *Compiler, node: Ast.Node) Error!void {
 }
 
 pub fn compileStaticPropAccess(self: *Compiler, node: Ast.Node) Error!void {
+    return compileStaticPropRead(self, node, false);
+}
+
+// a quiet read (isset, ??, empty) finds nothing instead of throwing when the
+// class or the static property does not exist
+fn compileStaticPropRead(self: *Compiler, node: Ast.Node, quiet: bool) Error!void {
     const class_node = self.ast.nodes[node.data.lhs];
 
     // Class::{expr} / Class::$$var / Class::${expr} - dynamic property name.
@@ -1595,13 +1602,13 @@ pub fn compileStaticPropAccess(self: *Compiler, node: Ast.Node) Error!void {
         if (class_node.tag != .identifier and class_node.tag != .qualified_name) {
             try self.compileNode(node.data.lhs);
             try self.compileNode(node.data.rhs);
-            try self.emitOp(.get_static_prop_dyn_both);
+            try self.emitOp(if (quiet) .get_static_prop_dyn_both_quiet else .get_static_prop_dyn_both);
             return;
         }
         const class_name = try resolveNodeClassName(self, class_node);
         const class_idx = try self.addConstant(.{ .string = Value.String.borrowed(class_name) });
         try self.compileNode(node.data.rhs);
-        try self.emitOp(.get_static_prop_dyn_name);
+        try self.emitOp(if (quiet) .get_static_prop_dyn_name_quiet else .get_static_prop_dyn_name);
         try self.emitU16(class_idx);
         return;
     }
@@ -1620,7 +1627,7 @@ pub fn compileStaticPropAccess(self: *Compiler, node: Ast.Node) Error!void {
         const raw_name = self.ast.tokenSlice(node.main_token);
         const is_prop = raw_name.len > 0 and raw_name[0] == '$';
         const prop_idx = try self.addConstant(.{ .string = Value.String.borrowed(if (is_prop) raw_name[1..] else raw_name) });
-        try self.emitOp(if (is_prop) .get_static_prop_dynamic else .get_class_const_dynamic);
+        try self.emitOp(if (!is_prop) .get_class_const_dynamic else if (quiet) .get_static_prop_dynamic_quiet else .get_static_prop_dynamic);
         try self.emitU16(prop_idx);
         return;
     }
@@ -1636,10 +1643,17 @@ pub fn compileStaticPropAccess(self: *Compiler, node: Ast.Node) Error!void {
     if (!is_static_prop and !std.mem.eql(u8, prop_name, "class")) {
         try self.emitOp(.get_class_const);
     } else {
-        try self.emitOp(.get_static_prop);
+        try self.emitOp(if (quiet and is_static_prop) .get_static_prop_quiet else .get_static_prop);
     }
     try self.emitU16(class_idx);
     try self.emitU16(prop_idx);
+}
+
+// the class operand of a static property write: a written class name resolved
+// against the namespace and imports, or a `$var` the vm reads at run time
+fn staticClassOperand(self: *Compiler, class_node: Ast.Node) ![]const u8 {
+    if (class_node.tag == .identifier or class_node.tag == .qualified_name) return resolveNodeClassName(self, class_node);
+    return self.ast.tokenSlice(class_node.main_token);
 }
 
 pub fn resolveNodeClassName(self: *Compiler, class_node: Ast.Node) ![]const u8 {
