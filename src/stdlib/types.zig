@@ -8,6 +8,7 @@ const value_mod = @import("../runtime/value.zig");
 const VM = @import("../runtime/vm.zig").VM;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
 const ClassDef = @import("../runtime/vm.zig").ClassDef;
+const includes = @import("../runtime/includes.zig");
 const RuntimeError = error{ RuntimeError, OutOfMemory };
 
 pub const entries = .{
@@ -120,7 +121,6 @@ pub const entries = .{
     .{ "error_clear_last", native_error_clear_last },
     .{ "get_include_path", native_get_include_path },
     .{ "set_include_path", native_set_include_path },
-    .{ "restore_include_path", native_noop_null },
     .{ "trigger_error", native_trigger_error },
     .{ "user_error", native_trigger_error },
     .{ "error_log", native_error_log },
@@ -1587,7 +1587,7 @@ fn iniDefault(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "precision")) return "14";
     if (std.mem.eql(u8, name, "serialize_precision")) return "-1";
     if (std.mem.eql(u8, name, "open_basedir")) return "";
-    if (std.mem.eql(u8, name, "include_path")) return ".:/usr/local/lib/php";
+    if (std.mem.eql(u8, name, "include_path")) return includes.default_include_path;
     if (std.mem.eql(u8, name, "log_errors")) return "1";
     if (std.mem.eql(u8, name, "error_log")) return "";
     if (std.mem.eql(u8, name, "html_errors")) return "0";
@@ -1622,18 +1622,24 @@ fn native_ini_set(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     defer buf.deinit(ctx.allocator);
     try args[1].format(&buf, ctx.allocator);
     if (std.mem.eql(u8, name, "memory_limit") and !try setMemoryLimit(ctx, buf.items)) return NativeResult.scalar(Value{ .bool = false });
-    const new_val = try buf.toOwnedSlice(ctx.allocator);
-    try ctx.vm.strings.append(ctx.allocator, new_val);
-    const owned_name = try ctx.allocator.dupe(u8, name);
-    try ctx.vm.strings.append(ctx.allocator, owned_name);
-    try ctx.vm.ini_settings.put(ctx.allocator, owned_name, new_val);
+    const result = try NativeResult.copyString(ctx.allocator, previous);
+    const new_val = try storeIni(ctx, name, buf.items);
     // a few ini directives map directly to live VM state. mirror them now so
     // userland `ini_set('max_execution_time', '5')` actually arms the deadline
     if (std.mem.eql(u8, name, "max_execution_time")) {
         const seconds = std.fmt.parseInt(i64, std.mem.trim(u8, new_val, " \t\r\n"), 10) catch 0;
         ctx.vm.setExecutionLimit(seconds);
     }
-    return NativeResult.copyString(ctx.allocator, previous);
+    return result;
+}
+
+fn storeIni(ctx: *NativeContext, name: []const u8, value: []const u8) ![]const u8 {
+    const new_val = try ctx.allocator.dupe(u8, value);
+    try ctx.vm.strings.append(ctx.allocator, new_val);
+    const owned_name = try ctx.allocator.dupe(u8, name);
+    try ctx.vm.strings.append(ctx.allocator, owned_name);
+    try ctx.vm.ini_settings.put(ctx.allocator, owned_name, new_val);
+    return new_val;
 }
 
 const SUPPORTED_EXTENSIONS = [_][]const u8{
@@ -1682,9 +1688,8 @@ fn native_get_extension_funcs(ctx: *NativeContext, args: []const Value) RuntimeE
 
 fn native_get_included_files(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     var arr = try ctx.createArray();
-    var iter = ctx.vm.loaded_files.iterator();
-    while (iter.next()) |entry| {
-        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(entry.key_ptr.*) });
+    for (ctx.vm.ic.?.included.keys()) |path| {
+        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(path) });
     }
     return NativeResult.borrowed(.{ .array = arr });
 }
@@ -2099,12 +2104,19 @@ fn native_iconv_mime_encode(_: *NativeContext, args: []const Value) RuntimeError
     return NativeResult.share(args[1]);
 }
 
-fn native_get_include_path(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    return NativeResult.literal(".");
+fn native_get_include_path(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    return NativeResult.copyString(ctx.allocator, includes.includePath(ctx.vm));
 }
 
-fn native_set_include_path(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    return NativeResult.literal(".");
+fn native_set_include_path(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len == 0) return NativeResult.scalar(.{ .bool = false });
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(ctx.allocator);
+    try args[0].format(&buf, ctx.allocator);
+    if (buf.items.len == 0) return NativeResult.scalar(.{ .bool = false });
+    const previous = try NativeResult.copyString(ctx.allocator, includes.includePath(ctx.vm));
+    _ = try storeIni(ctx, "include_path", buf.items);
+    return previous;
 }
 
 fn native_error_reporting(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {

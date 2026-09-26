@@ -1,6 +1,7 @@
 const std = @import("std");
 const native_params = @import("../stdlib/native_params.zig");
 const platform = @import("../platform.zig");
+const includes = @import("includes.zig");
 const Value = @import("value.zig").Value;
 const Region = @import("region.zig").Region;
 const MemoryAccount = @import("memory.zig").MemoryAccount;
@@ -690,7 +691,6 @@ pub const VM = struct {
     static_vars: std.ArrayListUnmanaged(StaticEntry) = .{},
     global_vars: std.ArrayListUnmanaged(StaticEntry) = .{},
     file_loader: ?*const FileLoader = null,
-    loaded_files: std.StringHashMapUnmanaged(void) = .{},
     // canonical directory paths keyed by the spelling a require used, so a
     // file load costs one lstat instead of a realpath per file
     realdir_cache: std.StringHashMapUnmanaged([]const u8) = .{},
@@ -1408,6 +1408,11 @@ pub const VM = struct {
         resolved_methods: std.HashMapUnmanaged(MethodKey, []const u8, MethodKey.Context, std.hash_map.default_max_load_percentage) = .{},
         resolved_methods_fn_count: usize = 0,
         resolved_methods_cls_count: usize = 0,
+        // canonical paths of files include resolution found, owned here
+        include_paths: std.StringHashMapUnmanaged(void) = .{},
+        // the files this run included, main script first, keyed by canonical
+        // path (interned in include_paths)
+        included: std.StringArrayHashMapUnmanaged(void) = .{},
         // the syntax error that made the file loader refuse an include, for
         // the include opcode to raise as ParseError
         include_parse_error: ?SourcePositionMessage = null,
@@ -1567,12 +1572,7 @@ pub const VM = struct {
     // a resource shell without an id yet, for a resource php numbers after
     // others it creates alongside it (a process after its pipes)
     pub fn allocResource(self: *VM, class_name: []const u8) RuntimeError!*PhpObject {
-        const obj = (if (self.classIsPoolSafe(class_name)) self.free_objects.pop() else null) orelse blk: {
-            const created = try self.allocator.create(PhpObject);
-            errdefer self.allocator.destroy(created);
-            try self.objects.append(self.allocator, created);
-            break :blk created;
-        };
+        const obj = try self.allocObjectShell();
         obj.* = .{ .class_name = class_name };
         return obj;
     }
@@ -1600,13 +1600,7 @@ pub const VM = struct {
     }
 
     fn allocUserObject(self: *VM, class_name: []const u8) RuntimeError!*PhpObject {
-        const reusable = self.classIsPoolSafe(class_name);
-        const obj = (if (reusable) self.free_objects.pop() else null) orelse blk: {
-            const created = try self.allocator.create(PhpObject);
-            errdefer self.allocator.destroy(created);
-            try self.objects.append(self.allocator, created);
-            break :blk created;
-        };
+        const obj = try self.allocObjectShell();
         self.next_object_id += 1;
         const stable_class_name = if (self.classes.getKey(class_name)) |registered| registered else blk: {
             const owned = try self.allocator.dupe(u8, class_name);
@@ -1622,28 +1616,30 @@ pub const VM = struct {
         return obj;
     }
 
-    fn isPoolableResourceClass(self: *VM, class_name: []const u8) bool {
-        const class = self.classes.get(class_name) orelse return false;
-        return class.native_cleanup != null;
+    fn allocObjectShell(self: *VM) RuntimeError!*PhpObject {
+        if (self.free_objects.pop()) |obj| return obj;
+        const created = try self.allocator.create(PhpObject);
+        errdefer self.allocator.destroy(created);
+        try self.objects.append(self.allocator, created);
+        return created;
     }
 
-    fn cleanupPoolableResource(self: *VM, obj: *PhpObject) bool {
-        const class = self.classes.get(obj.class_name) orelse return false;
-        const cleanup = class.native_cleanup orelse return false;
-        return cleanup(obj);
-    }
-
-    fn classIsPoolSafe(self: *VM, class_name: []const u8) bool {
-        if (self.debug_no_pool) return false;
-        const throwable = self.isInstanceOf(class_name, "Throwable");
-        const cleaned_resource = self.isPoolableResourceClass(class_name);
+    fn nativeCleanup(self: *VM, class_name: []const u8) ?*const fn (*PhpObject) bool {
         var current: ?[]const u8 = class_name;
         while (current) |name| {
-            const class = self.classes.get(name) orelse return false;
-            if (!throwable and !cleaned_resource and class.is_internal) return false;
+            const class = self.classes.get(name) orelse return null;
+            if (class.native_cleanup) |cleanup| return cleanup;
             current = class.parent;
         }
-        return true;
+        return null;
+    }
+
+    // releases what a dead object holds outside the heap; false when some
+    // native state has no cleanup and must stay put until teardown, which
+    // keeps the object out of the pool
+    fn releaseNativeState(self: *VM, obj: *PhpObject) bool {
+        if (self.nativeCleanup(obj.class_name)) |cleanup| return cleanup(obj);
+        return obj.native.kind == .none;
     }
 
     pub fn allocArray(self: *VM) RuntimeError!*PhpArray {
@@ -2774,6 +2770,9 @@ pub const VM = struct {
             ic_ptr.concat_buf.deinit(self.allocator);
             ic_ptr.autoloading.deinit(self.allocator);
             ic_ptr.trait_sites.deinit(self.allocator);
+            ic_ptr.included.deinit(self.allocator);
+            freeOwnedKeys(self.allocator, &ic_ptr.include_paths);
+            ic_ptr.include_paths.deinit(self.allocator);
             freeOwnedKeys(self.allocator, &ic_ptr.fn_lower);
             freeOwnedKeys(self.allocator, &ic_ptr.native_lower);
             freeOwnedKeys(self.allocator, &ic_ptr.resolved_calls);
@@ -2891,7 +2890,6 @@ pub const VM = struct {
         self.globals_cells.deinit(self.allocator);
         self.static_vars.deinit(self.allocator);
         self.global_vars.deinit(self.allocator);
-        self.loaded_files.deinit(self.allocator);
         self.clearRealDirCache();
         self.realdir_cache.deinit(self.allocator);
         self.stream_wrappers_unregistered.deinit(self.allocator);
@@ -3054,7 +3052,7 @@ pub const VM = struct {
         self.globals_array = null;
         self.static_vars.clearRetainingCapacity();
         self.global_vars.clearRetainingCapacity();
-        self.loaded_files.clearRetainingCapacity();
+        if (self.ic) |ic_ptr| ic_ptr.included.clearRetainingCapacity();
         self.clearRealDirCache();
         self.stream_wrappers_unregistered.clearRetainingCapacity();
         self.stream_wrappers_user.clearRetainingCapacity();
@@ -3144,6 +3142,9 @@ pub const VM = struct {
         self.installHooks();
         try @import("../ini_config.zig").applyToVm(self);
         try extension.beginRequest(self);
+        if (std.fs.path.isAbsolute(result.file_path)) {
+            if (try includes.canonical(self, result.file_path)) |main| try self.ic.?.included.put(self.allocator, main, {});
+        }
         try self.registerResultFunctions(result);
         for (result.type_hints.items) |th| {
             try g_type_info.put(self.allocator, th.name, .{ .param_types = th.param_types, .return_type = th.return_type });
@@ -3292,7 +3293,7 @@ pub const VM = struct {
         try self.indexFunctionByChunk(func.name, &func.chunk);
     }
 
-    fn freeOwnedKeys(a: std.mem.Allocator, map: *std.StringHashMapUnmanaged([]const u8)) void {
+    fn freeOwnedKeys(a: std.mem.Allocator, map: anytype) void {
         var it = map.keyIterator();
         while (it.next()) |k| a.free(k.*);
     }
@@ -7570,27 +7571,25 @@ pub const VM = struct {
                 .set_static => {},
 
                 .require => {
-                    const variant = self.readByte();
+                    const kind: IncludeKind = @enumFromInt(self.readByte());
                     const path_val = self.pop();
                     VM.retainValue(path_val);
                     defer self.releaseValue(path_val);
-                    if (path_val != .string) {
-                        self.push(.null);
-                    } else {
-                        const is_once = (variant == 1 or variant == 3);
-                        const is_require = (variant == 0 or variant == 1);
-                        const path = path_val.string.bytes();
+                    const target = self.includeTarget(kind, path_val) catch {
+                        _ = try self.resumeRaised();
+                        continue;
+                    };
+                    {
+                        const is_require = kind.required();
+                        const path = target orelse {
+                            self.push(.{ .bool = false });
+                            continue;
+                        };
 
-                        if (is_once and self.loaded_files.contains(path)) {
+                        if (kind.once() and self.ic.?.included.contains(path)) {
                             self.push(.{ .bool = true });
                         } else {
-                            const stable_path = blk: {
-                                const owned = try self.allocator.dupe(u8, path);
-                                errdefer self.allocator.free(owned);
-                                try self.strings.append(self.allocator, owned);
-                                break :blk owned;
-                            };
-                            const from_cache = self.serve_mode and self.serve_compile_cache.contains(stable_path);
+                            const from_cache = self.serve_mode and self.serve_compile_cache.contains(path);
                             const result: ?*CompileResult = if (from_cache)
                                 self.serve_compile_cache.get(path).?
                             else if (self.file_loader) |loader|
@@ -7604,7 +7603,7 @@ pub const VM = struct {
                                     try self.serve_cache_keys.append(self.allocator, duped);
                                     try self.serve_compile_cache.put(self.allocator, duped, r);
                                 }
-                                try self.loaded_files.put(self.allocator, stable_path, {});
+                                try self.ic.?.included.put(self.allocator, path, {});
                                 if (!from_cache) {
                                     try self.compile_results.append(self.allocator, r);
                                 }
@@ -7740,10 +7739,7 @@ pub const VM = struct {
                                 self.ic.?.include_compile_error = null;
                                 return self.raiseCompileFatal(compile_error.message, compile_error.at);
                             } else {
-                                if (is_require) {
-                                    self.setErrorMsg("Fatal error: require(): Failed opening required '{s}'", .{path});
-                                    return error.RuntimeError;
-                                }
+                                self.includeNotOpened(kind, path, "Permission denied") catch if (try self.resumeRaised()) continue;
                                 self.push(.{ .bool = false });
                             }
                         }
@@ -11999,6 +11995,63 @@ pub const VM = struct {
                 std.debug.print("  #{d} {s} ip={d} src_off={d}\n", .{ fi, name, f.ip, line_raw });
             }
         }
+        try self.emitWarning(msg);
+    }
+
+    const IncludeKind = enum(u8) {
+        require,
+        require_once,
+        include,
+        include_once,
+
+        fn once(kind: IncludeKind) bool {
+            return kind == .require_once or kind == .include_once;
+        }
+
+        fn required(kind: IncludeKind) bool {
+            return kind == .require or kind == .require_once;
+        }
+    };
+
+    // the canonical path an include names, or null once php's diagnostics
+    // for a file it cannot find have been raised
+    fn includeTarget(self: *VM, kind: IncludeKind, value: Value) RuntimeError!?[]const u8 {
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(self.allocator);
+        const path = switch (value) {
+            .string => |s| s.bytes(),
+            .object => |o| try self.objectToString(o),
+            else => blk: {
+                try value.format(&buf, self.allocator);
+                break :blk buf.items;
+            },
+        };
+        if (path.len == 0) {
+            try self.setPendingException("ValueError", "Path must not be empty");
+            return error.RuntimeError;
+        }
+        if (try includes.resolve(self, path)) |found| return found;
+        try self.includeNotOpened(kind, path, "No such file or directory");
+        return null;
+    }
+
+    // an include warns and evaluates to false; a require throws
+    fn includeNotOpened(self: *VM, kind: IncludeKind, path: []const u8, reason: []const u8) RuntimeError!void {
+        const nul = std.mem.indexOfScalar(u8, path, 0);
+        const shown = path[0 .. nul orelse path.len];
+        if (nul == null) {
+            const msg = try std.fmt.allocPrint(self.allocator, "{s}({s}): Failed to open stream: {s}", .{ @tagName(kind), shown, reason });
+            defer self.allocator.free(msg);
+            try self.emitWarning(msg);
+        }
+        if (kind.required()) {
+            const msg = try std.fmt.allocPrint(self.allocator, "Failed opening required '{s}' (include_path='{s}')", .{ shown, includes.includePath(self) });
+            defer self.allocator.free(msg);
+            try self.setPendingException("Error", msg);
+            return error.RuntimeError;
+        }
+        const msg = try std.fmt.allocPrint(self.allocator, "{s}(): Failed opening '{s}' for inclusion (include_path='{s}')", .{ @tagName(kind), shown, includes.includePath(self) });
+        defer self.allocator.free(msg);
         try self.emitWarning(msg);
     }
 
@@ -19894,13 +19947,9 @@ pub const VM = struct {
                 // collapse the object tree: release the objects this object's
                 // property slots held. runs after __destruct (PHP tears
                 // properties down after)
-                const cleaned_resource = self.cleanupPoolableResource(obj);
+                const reusable = self.releaseNativeState(obj);
                 self.releaseObjectProperties(obj);
-                const reusable = if (self.isPoolableResourceClass(obj.class_name))
-                    cleaned_resource
-                else
-                    self.classIsPoolSafe(obj.class_name);
-                if (!self.serve_mode and reusable) {
+                if (!self.serve_mode and !self.debug_no_pool and reusable) {
                     self.released_objects.append(self.allocator, obj) catch {};
                 }
             }

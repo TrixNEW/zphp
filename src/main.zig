@@ -4,6 +4,7 @@ const parser = @import("pipeline/parser.zig");
 const compiler = @import("pipeline/compiler.zig");
 const runtime_value = @import("runtime/value.zig");
 const VM = @import("runtime/vm.zig").VM;
+const includes = @import("runtime/includes.zig");
 const Value = runtime_value.Value;
 const CompileResult = @import("pipeline/compiler.zig").CompileResult;
 const extension = @import("extension.zig");
@@ -307,48 +308,14 @@ fn compileCacheRoot(allocator: std.mem.Allocator) ![]const u8 {
 
 const ResolvedSource = struct { abs_path: []const u8, stat: std.fs.File.Stat };
 
-// a file load used to cost a realpath (open + fcntl + close on macOS) plus
-// open + fstat before the bytecode cache was even consulted. directories
-// are canonicalized once per process and the file itself gets one lstat;
-// a file that is itself a symlink takes the full realpath route
 fn resolveSource(allocator: std.mem.Allocator, vm: *VM, path: []const u8) ?ResolvedSource {
-    const base = std.fs.path.basename(path);
-    if (base.len > 0 and !std.mem.eql(u8, base, ".") and !std.mem.eql(u8, base, "..")) {
-        if (realDir(vm, std.fs.path.dirname(path) orelse ".")) |real_dir| {
-            const sep: []const u8 = if (std.mem.endsWith(u8, real_dir, "/")) "" else "/";
-            const abs = std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ real_dir, sep, base }) catch return null;
-            if (platform.is_windows) {
-                if (std.fs.cwd().statFile(abs)) |st| {
-                    if (st.kind == .file) return .{ .abs_path = abs, .stat = st };
-                } else |_| {}
-            } else if (std.posix.fstatat(std.posix.AT.FDCWD, abs, std.posix.AT.SYMLINK_NOFOLLOW)) |st| {
-                const mode: u32 = @intCast(st.mode);
-                if (std.posix.S.ISREG(mode)) return .{ .abs_path = abs, .stat = std.fs.File.Stat.fromPosix(st) };
-            } else |_| {}
-            allocator.free(abs);
-        }
-    }
-    const abs = std.fs.cwd().realpathAlloc(allocator, path) catch allocator.dupe(u8, path) catch return null;
+    const canonical = includes.canonical(vm, path) catch return null;
+    const abs = allocator.dupe(u8, canonical orelse return null) catch return null;
     const stat = std.fs.cwd().statFile(abs) catch {
         allocator.free(abs);
         return null;
     };
     return .{ .abs_path = abs, .stat = stat };
-}
-
-fn realDir(vm: *VM, dir: []const u8) ?[]const u8 {
-    if (vm.realdir_cache.get(dir)) |real| return real;
-    const real = std.fs.cwd().realpathAlloc(vm.allocator, dir) catch return null;
-    const key = vm.allocator.dupe(u8, dir) catch {
-        vm.allocator.free(real);
-        return null;
-    };
-    vm.realdir_cache.put(vm.allocator, key, real) catch {
-        vm.allocator.free(key);
-        vm.allocator.free(real);
-        return null;
-    };
-    return real;
 }
 
 fn loadCompileCache(allocator: std.mem.Allocator, path: []const u8, stat: std.fs.File.Stat, closure_counter: u32) ?*CompileResult {

@@ -12,6 +12,7 @@ const NativeContext = vm_mod.NativeContext;
 const ClassDef = vm_mod.ClassDef;
 const phar = @import("phar.zig");
 const phar_path = @import("phar_path.zig");
+const includes = @import("../runtime/includes.zig");
 const zlib = @cImport(@cInclude("zlib.h"));
 
 const Allocator = std.mem.Allocator;
@@ -556,7 +557,8 @@ fn fetchUrl(ctx: *NativeContext, url: []const u8) RuntimeError!NativeResult {
 fn native_file_get_contents(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     try useContext(ctx, args, 2);
-    const content = (try readPath(ctx, args[0].string.bytes())) orelse return NativeResult.scalar(.{ .bool = false });
+    const path = try includePathLookup(ctx, args[0].string.bytes(), args.len > 1 and args[1].isTruthy());
+    const content = (try readPath(ctx, path)) orelse return NativeResult.scalar(.{ .bool = false });
     transientStreams(ctx, 1);
     if (args.len < 4 or args[3] == .null) return NativeResult.takeString(content);
 
@@ -1421,36 +1423,27 @@ fn native_filetype(ctx: *NativeContext, args: []const Value) RuntimeError!Native
 fn native_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     try useContext(ctx, args, 2);
-    const content = std.fs.cwd().readFileAlloc(ctx.allocator, args[0].string.bytes(), 1024 * 1024 * 64) catch return NativeResult.scalar(.{ .bool = false });
-    transientStreams(ctx, 1);
-    try ctx.strings.append(ctx.allocator, content);
-
     const flags: i64 = if (args.len >= 2) Value.toInt(args[1]) else 0;
-    const ignore_newlines = (flags & 2) != 0; // FILE_IGNORE_NEW_LINES = 2
-    // PHP: FILE_SKIP_EMPTY_LINES only takes effect when combined with FILE_IGNORE_NEW_LINES
-    const skip_empty = (flags & 4) != 0 and ignore_newlines;
+    const path = try includePathLookup(ctx, args[0].string.bytes(), (flags & FILE_USE_INCLUDE_PATH) != 0);
+    const content = (try readPath(ctx, path)) orelse return NativeResult.scalar(.{ .bool = false });
+    defer content.release();
+    transientStreams(ctx, 1);
+    const ignore_newlines = (flags & FILE_IGNORE_NEW_LINES) != 0;
+    // FILE_SKIP_EMPTY_LINES only takes effect together with FILE_IGNORE_NEW_LINES
+    const skip_empty = (flags & FILE_SKIP_EMPTY_LINES) != 0 and ignore_newlines;
 
-    var result = try ctx.createArray();
-    var start: usize = 0;
-    for (content, 0..) |c, i| {
-        if (c == '\n') {
-            const end = if (ignore_newlines) i else i + 1;
-            const line_data = content[start..end];
-            if (skip_empty and (line_data.len == 0 or (line_data.len == 1 and (line_data[0] == '\n' or line_data[0] == '\r')))) {
-                start = i + 1;
-                continue;
-            }
-            const line = try ctx.createString(line_data);
-            try result.append(ctx.allocator, .{ .string = Value.String.borrowed(line) });
-            start = i + 1;
+    const result = try ctx.createArray();
+    var lines = std.mem.splitScalar(u8, content.bytes(), '\n');
+    while (lines.next()) |line| {
+        const last = lines.index == null;
+        if (last and line.len == 0) break;
+        if (!ignore_newlines) {
+            try appendOwnedString(ctx, result, if (last) line else line.ptr[0 .. line.len + 1]);
+            continue;
         }
-    }
-    if (start < content.len) {
-        const remaining = content[start..];
-        if (!skip_empty or remaining.len > 0) {
-            const line = try ctx.createString(remaining);
-            try result.append(ctx.allocator, .{ .string = Value.String.borrowed(line) });
-        }
+        const text = if (!last and std.mem.endsWith(u8, line, "\r")) line[0 .. line.len - 1] else line;
+        if (skip_empty and text.len == 0) continue;
+        try appendOwnedString(ctx, result, text);
     }
     return NativeResult.borrowed(.{ .array = result });
 }
@@ -1458,11 +1451,23 @@ fn native_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 fn native_readfile(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     try useContext(ctx, args, 2);
-    const content = std.fs.cwd().readFileAlloc(ctx.allocator, args[0].string.bytes(), 1024 * 1024 * 64) catch return NativeResult.scalar(.{ .bool = false });
+    const path = try includePathLookup(ctx, args[0].string.bytes(), args.len > 1 and args[1].isTruthy());
+    const content = (try readPath(ctx, path)) orelse return NativeResult.scalar(.{ .bool = false });
+    defer content.release();
     transientStreams(ctx, 1);
-    defer ctx.allocator.free(content);
-    try ctx.vm.output.appendSlice(ctx.allocator, content);
-    return NativeResult.scalar(.{ .int = @intCast(content.len) });
+    try ctx.vm.output.appendSlice(ctx.allocator, content.bytes());
+    return NativeResult.scalar(.{ .int = @intCast(content.bytes().len) });
+}
+
+const FILE_USE_INCLUDE_PATH: i64 = 1;
+const FILE_IGNORE_NEW_LINES: i64 = 2;
+const FILE_SKIP_EMPTY_LINES: i64 = 4;
+
+// FILE_USE_INCLUDE_PATH: a plain name is looked up the way include looks it
+// up, and one include cannot find is opened as given
+fn includePathLookup(ctx: *NativeContext, path: []const u8, use: bool) RuntimeError![]const u8 {
+    if (!use or includes.hasScheme(path)) return path;
+    return (try includes.resolve(ctx.vm, path)) orelse path;
 }
 
 // file handle operations (fopen/fclose/fread/fwrite/fgets/feof/fseek/ftell)
@@ -1517,9 +1522,11 @@ fn native_gzfile(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
 
 fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = if (args[0] == .string) args[0].string.bytes() else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return NativeResult.scalar(.{ .bool = false });
+    const given_path = if (args[0] == .string) args[0].string.bytes() else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return NativeResult.scalar(.{ .bool = false });
     const mode = args[1].string.bytes();
     try useContext(ctx, args, 3);
+    const reading = mode.len > 0 and mode[0] == 'r' and std.mem.indexOfScalar(u8, mode, '+') == null;
+    const path = try includePathLookup(ctx, given_path, reading and args.len > 2 and args[2].isTruthy());
 
     if (userWrapperFor(ctx.vm, path)) |class_name| {
         return NativeResult.borrowed((try dispatchUserOpen(ctx, class_name, path, mode)) orelse Value{ .bool = false });
@@ -2828,12 +2835,13 @@ fn native_stat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     return NativeResult.borrowed(.{ .array = try buildStatArray(ctx, &st) });
 }
 
-fn native_chdir(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+fn native_chdir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const path = args[0].string.bytes();
     var dir = std.fs.cwd().openDir(path, .{}) catch return NativeResult.scalar(.{ .bool = false });
     defer dir.close();
     dir.setAsCwd() catch return NativeResult.scalar(.{ .bool = false });
+    ctx.vm.clearRealDirCache();
     return NativeResult.scalar(.{ .bool = true });
 }
 
@@ -2843,11 +2851,10 @@ fn native_stream_is_local(_: *NativeContext, args: []const Value) RuntimeError!N
     return NativeResult.scalar(.{ .bool = std.mem.eql(u8, scheme, "file") or std.mem.eql(u8, scheme, "phar") });
 }
 
-fn native_stream_resolve_include_path(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+fn native_stream_resolve_include_path(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
-    std.fs.cwd().access(path, .{}) catch return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.shareString(args[0].string);
+    const found = try includes.resolve(ctx.vm, args[0].string.bytes()) orelse return NativeResult.scalar(.{ .bool = false });
+    return NativeResult.copyString(ctx.allocator, found);
 }
 
 fn native_stream_isatty(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
