@@ -168,8 +168,14 @@ fn parseAttrArgAtom(self: *Compiler, tokens: []const Token, source: []const u8, 
             pos.* += 1;
             return .null;
         },
-        .identifier => {
-            const text = tokens[pos.*].lexeme(source);
+        .identifier, .backslash => {
+            // a name may be qualified (Foo\Bar) or fully qualified (\Foo), and
+            // its segments arrive as separate tokens
+            const first = pos.*;
+            if (tokens[pos.*].tag == .backslash) pos.* += 1;
+            if (pos.* >= tokens.len or tokens[pos.*].tag != .identifier) return .null;
+            while (pos.* + 2 < tokens.len and tokens[pos.* + 1].tag == .backslash and tokens[pos.* + 2].tag == .identifier) pos.* += 2;
+            const text = source[tokens[first].start..tokens[pos.*].end];
             if (std.mem.eql(u8, text, "true") or std.mem.eql(u8, text, "TRUE")) {
                 pos.* += 1;
                 return .{ .bool = true };
@@ -198,7 +204,9 @@ fn parseAttrArgAtom(self: *Compiler, tokens: []const Token, source: []const u8, 
             // constant sentinel so resolveDefault can fold it at attribute load
             // time (otherwise a bare `FLAG_A` string fed into a DeferredExpr
             // would coerce to 0 via toInt instead of resolving the constant)
-            const sentinel = std.fmt.allocPrint(allocator, "\x00CC\x00\x00{s}", .{text}) catch return .{ .string = Value.String.borrowed(text) };
+            // qualified the way a parameter default is: an unqualified name
+            // in a namespace falls back to the global constant at resolution
+            const sentinel = std.fmt.allocPrint(allocator, "\x00CC\x00\x00{s}", .{self.resolveClassName(text)}) catch return .{ .string = Value.String.borrowed(text) };
             self.string_allocs.append(allocator, sentinel) catch return .{ .string = Value.String.borrowed(text) };
             return .{ .string = Value.String.borrowed(sentinel) };
         },

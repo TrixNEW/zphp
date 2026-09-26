@@ -13937,7 +13937,15 @@ pub const VM = struct {
                     } else {
                         names[ai] = null;
                     }
-                    args[ai] = try self.resolveDefault(self.resolveAttrConstant(self.readAttrValue()));
+                    // php evaluates attribute arguments when reflection asks for
+                    // them; one that cannot be resolved yet stays deferred and
+                    // ReflectionAttribute resolves it (or raises) then
+                    const raw = self.resolveAttrConstant(self.readAttrValue());
+                    args[ai] = self.resolveDefault(raw) catch |err| blk: {
+                        if (self.pending_exception == null) return err;
+                        self.pending_exception = null;
+                        break :blk raw;
+                    };
                 }
                 attrs[i] = .{ .name = name, .args = args, .arg_names = names };
             } else {

@@ -4306,8 +4306,17 @@ fn raGetName(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
 fn raGetArguments(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.borrowed(.{ .array = try ctx.createArray() });
     const args = this.get("_arguments");
-    if (args == .array) return NativeResult.share(args);
+    if (args == .array) return NativeResult.borrowed(.{ .array = try resolvedArguments(ctx, args.array) });
     return NativeResult.borrowed(.{ .array = try ctx.createArray() });
+}
+
+// the attribute's arguments with any that were deferred at declaration
+// resolved now, as php evaluates them when asked; one that still cannot be
+// resolved raises php's error here
+fn resolvedArguments(ctx: *NativeContext, stored: *PhpArray) RuntimeError!*PhpArray {
+    const out = try ctx.createArray();
+    for (stored.entries.items) |entry| try out.set(ctx.allocator, entry.key, try ctx.vm.resolveDefault(entry.value));
+    return out;
 }
 
 fn targetName(t: i64) []const u8 {
@@ -4400,7 +4409,8 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
     }
 
     const obj = try ctx.createObject(attr_name);
-    const args_val = this.get("_arguments");
+    const stored_args = this.get("_arguments");
+    const args_val: Value = if (stored_args == .array) .{ .array = try resolvedArguments(ctx, stored_args.array) } else stored_args;
     // always call __construct even with zero attribute args - constructors
     // commonly have all-optional params plus initialization side effects
     // (e.g. Symfony's Constraint::__construct does `unset($this->groups)`
