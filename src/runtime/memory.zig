@@ -6,6 +6,17 @@ const Allocator = std.mem.Allocator;
 // memory_limit enforced on that count. an allocation that would cross the
 // limit fails, and so does every one after it until the VM reports the
 // exhaustion, so a swallowed failure cannot let a script run on unlimited
+// the allocator under every account: memory that outlives the VM that
+// allocated it, like values in flight between threads, comes from here
+pub fn root(allocator: Allocator) Allocator {
+    var current = allocator;
+    while (current.vtable == &MemoryAccount.vtable) {
+        const account: *MemoryAccount = @ptrCast(@alignCast(current.ptr));
+        current = account.parent;
+    }
+    return current;
+}
+
 pub const MemoryAccount = struct {
     parent: Allocator,
     // frees can come from other threads when values cross into worker pools

@@ -18,6 +18,7 @@ const RuntimeError = error{ RuntimeError, OutOfMemory };
 const serialize = @import("serialize.zig");
 const network = @import("network.zig");
 const platform = @import("../platform.zig");
+const memory = @import("../runtime/memory.zig");
 const extension = @import("../extension.zig");
 const channel = @import("channel.zig");
 const select = @import("select.zig");
@@ -47,9 +48,10 @@ const default_queue: usize = 1024;
 // consumer that frees on another keeps mapping fresh slabs, and two busy
 // worker VMs on a four-cpu box scatter their frees across slots and grew
 // rss by up to 90 MB over a soak that other runs finished flat. libc malloc
-// balances both. the Debug build keeps its leak-checking allocator
+// balances both. the Debug build keeps its leak-checking allocator, below
+// every VM's account since what crosses threads outlives the VM that made it
 pub fn transferAllocator(vm_allocator: std.mem.Allocator) std.mem.Allocator {
-    return if (builtin.mode == .Debug) vm_allocator else std.heap.c_allocator;
+    return if (builtin.mode == .Debug) memory.root(vm_allocator) else std.heap.c_allocator;
 }
 
 // ---------------------------------------------------------------------------
