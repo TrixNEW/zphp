@@ -520,19 +520,30 @@ fn native_getenv(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     // no-arg form returns all environment vars as an associative array
     if (args.len == 0) {
         const arr = try ctx.createArray();
-        var em = std.process.getEnvMap(ctx.allocator) catch return NativeResult.borrowed(.{ .array = arr });
-        defer em.deinit();
-        var it = em.iterator();
-        while (it.next()) |e| {
-            const key = try Value.String.create(ctx.allocator, e.key_ptr.*);
-            defer key.release();
-            try arr.setCopiedString(ctx.allocator, .{ .string = key }, e.value_ptr.*);
+        if (platform.is_windows) {
+            var em = std.process.getEnvMap(ctx.allocator) catch return NativeResult.borrowed(.{ .array = arr });
+            defer em.deinit();
+            var it = em.iterator();
+            while (it.next()) |e| try putEnvEntry(ctx, arr, e.key_ptr.*, e.value_ptr.*);
+        } else {
+            var lines = std.c.environ;
+            while (lines[0]) |entry| : (lines += 1) {
+                const line = std.mem.span(entry);
+                const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+                try putEnvEntry(ctx, arr, line[0..eq], line[eq + 1 ..]);
+            }
         }
         return NativeResult.borrowed(.{ .array = arr });
     }
     if (args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const val = std.process.getEnvVarOwned(ctx.allocator, args[0].string.bytes()) catch return NativeResult.scalar(.{ .bool = false });
     return NativeResult.takeString(try Value.String.adopt(ctx.allocator, val));
+}
+
+fn putEnvEntry(ctx: *NativeContext, arr: *PhpArray, name: []const u8, value: []const u8) !void {
+    const key = try Value.String.create(ctx.allocator, name);
+    defer key.release();
+    try arr.setCopiedString(ctx.allocator, .{ .string = key }, value);
 }
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
