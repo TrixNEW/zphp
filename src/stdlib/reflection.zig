@@ -19,6 +19,16 @@ fn retainReturned(value: Value) Value {
     return value;
 }
 
+// the function and parameter a default belongs to, resolved when asked for.
+// the compiled default is owned by the compile result, so it is never stored
+// in a property; `_default_value` only says whether the default is null, which
+// the implicitly nullable type check reads
+fn setLazyDefault(ctx: *NativeContext, obj: *PhpObject, func: *const ObjFunction, index: usize) !void {
+    try obj.set(ctx.allocator, "_default_value", if (func.defaults[index] == .null) .null else .{ .bool = false });
+    try obj.set(ctx.allocator, "_default_func", .{ .int = @intCast(@intFromPtr(func)) });
+    try obj.set(ctx.allocator, "_default_index", .{ .int = @intCast(index) });
+}
+
 pub fn register(vm: *VM, a: Allocator) !void {
     // Unit enum cases are request-lifetime objects, just like RoundingMode.
     var hook_type = ClassDef{ .name = "PropertyHookType", .is_enum = true, .is_final = true };
@@ -798,7 +808,7 @@ fn rextConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     const loaded = try ctx.vm.callByName("extension_loaded", args[0..1]);
     if (!loaded.isTruthy()) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "Extension \"{s}\" does not exist", .{args[0].string.bytes()});
-        try ctx.vm.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     }
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
@@ -841,8 +851,6 @@ fn getThis(ctx: *NativeContext) ?*PhpObject {
 }
 
 fn throwReflection(ctx: *NativeContext, msg: []const u8) RuntimeError {
-    // callers own msg lifetime. literal callers pass static strings safely;
-    // heap callers must track msg in ctx.strings before invoking this
     _ = ctx.vm.throwBuiltinException("ReflectionException", msg) catch {};
     return error.RuntimeError;
 }
@@ -1088,12 +1096,12 @@ fn rcConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 
     _ = resolveClassName(ctx.vm, class_name) catch {
         const msg = std.fmt.allocPrint(ctx.allocator, "Class \"{s}\" does not exist", .{class_name}) catch return throwReflection(ctx, "Class does not exist");
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     };
     if (ctx.vm.classes.get(class_name) == null and ctx.vm.interfaces.get(class_name) == null and !ctx.vm.traits.contains(class_name)) {
         const msg = std.fmt.allocPrint(ctx.allocator, "Class \"{s}\" does not exist", .{class_name}) catch return throwReflection(ctx, "Class does not exist");
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     }
 
@@ -1220,14 +1228,14 @@ fn rcNewInstance(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.null);
     if (ctx.vm.interfaces.contains(class_name)) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "Cannot instantiate interface {s}", .{class_name});
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("Error", msg);
         return error.RuntimeError;
     }
     if (ctx.vm.classes.get(class_name)) |cd| {
         if (cd.is_abstract) {
             const msg = try std.fmt.allocPrint(ctx.allocator, "Cannot instantiate abstract class {s}", .{class_name});
-            try ctx.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.setPendingException("Error", msg);
             return error.RuntimeError;
         }
@@ -1251,7 +1259,7 @@ fn rcNewInstanceArgs(ctx: *NativeContext, args: []const Value) RuntimeError!Nati
     if (ctx.vm.classes.get(class_name)) |cd| {
         if (cd.is_abstract) {
             const msg = try std.fmt.allocPrint(ctx.allocator, "Cannot instantiate abstract class {s}", .{class_name});
-            try ctx.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.setPendingException("Error", msg);
             return error.RuntimeError;
         }
@@ -1364,7 +1372,7 @@ fn rcGetMethod(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 
     if (!ctx.vm.hasMethod(class_name, method_name)) {
         const msg = std.fmt.allocPrint(ctx.allocator, "Method {s}::{s}() does not exist", .{ class_name, method_name }) catch return error.OutOfMemory;
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     }
 
@@ -1759,7 +1767,7 @@ fn rcGetProperty(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         return NativeResult.borrowed(.{ .object = obj });
     }
     const msg = std.fmt.allocPrint(ctx.allocator, "Property {s}::${s} does not exist", .{ class_name, prop_name }) catch return error.OutOfMemory;
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     return throwReflection(ctx, msg);
 }
 
@@ -2121,7 +2129,7 @@ fn bindClassConstant(ctx: *NativeContext, args: []const Value) RuntimeError![]co
     try ctx.vm.tryAutoload(class_name);
     const owner = findConstantOwner(ctx, class_name, const_name, 0) orelse {
         const msg = try std.fmt.allocPrint(ctx.allocator, "Constant {s}::{s} does not exist", .{ class_name, const_name });
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     };
     try this.set(ctx.allocator, "name", args[1]);
@@ -2391,7 +2399,7 @@ fn initMethodReflection(ctx: *NativeContext, this: *PhpObject, args: []const Val
             !hasAbstractMethodInChain(ctx.vm, class_name, method_name))
         {
             const msg = std.fmt.allocPrint(ctx.allocator, "Method {s}::{s}() does not exist", .{ class_name, method_name }) catch return error.OutOfMemory;
-            try ctx.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             return throwReflection(ctx, msg);
         }
     }
@@ -2650,6 +2658,13 @@ fn rpGetDefaultValue(ctx: *NativeContext, _: []const Value) RuntimeError!NativeR
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     const has_default = this.get("_has_default");
     if (has_default != .bool or !has_default.bool) return throwReflection(ctx, "Internal error: no default value available");
+    // a user function's default is evaluated when asked for, as php does:
+    // constants resolve then, and an unresolvable one throws then
+    const lazy_func = this.get("_default_func");
+    if (lazy_func == .int) {
+        const func: *const ObjFunction = @ptrFromInt(@as(usize, @intCast(lazy_func.int)));
+        return NativeResult.share(try ctx.vm.resolveParamDefault(func, @intCast(this.get("_default_index").int)));
+    }
     return NativeResult.share(this.get("_default_value"));
 }
 
@@ -3234,7 +3249,7 @@ fn populateRpFields(ctx: *NativeContext, obj: *PhpObject, func: *const ObjFuncti
     try obj.set(ctx.allocator, "_has_default", .{ .bool = has_default });
     if (has_default and i < func.defaults.len) {
         const raw = func.defaults[i];
-        try obj.set(ctx.allocator, "_default_value", try ctx.vm.resolveDefault(raw));
+        try setLazyDefault(ctx, obj, func, i);
         if (try decodeConstSentinel(ctx, raw)) |const_name| {
             try obj.set(ctx.allocator, "_default_const_name", .{ .string = Value.String.borrowed(const_name) });
         }
@@ -3344,13 +3359,12 @@ fn populateNativeRpFields(ctx: *NativeContext, obj: *PhpObject, sig: native_para
     if (p.default_constant.len > 0) try obj.set(ctx.allocator, "_default_const_name", .{ .string = Value.String.borrowed(p.default_constant) });
     try obj.set(ctx.allocator, "_by_reference", .{ .bool = p.by_ref });
     if (std.mem.indexOf(u8, key, "::")) |sep| {
-        const decl_class = try ctx.createString(key[0..sep]);
-        const meth_name = try ctx.createString(key[sep + 2 ..]);
-        try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(decl_class) });
-        try obj.set(ctx.allocator, "_method_name", .{ .string = Value.String.borrowed(meth_name) });
-        try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(meth_name) });
+        try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(try ctx.vm.stableClassName(key[0..sep])) });
+        const method_name = try ctx.vm.internName(key[sep + 2 ..]);
+        try obj.set(ctx.allocator, "_method_name", .{ .string = Value.String.borrowed(method_name) });
+        try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(method_name) });
     } else {
-        try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(try ctx.createString(key)) });
+        try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(try ctx.vm.internName(key)) });
     }
 }
 
@@ -3400,7 +3414,7 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
         try obj.set(ctx.allocator, "_has_default", .{ .bool = has_default });
         if (has_default and i < func.defaults.len) {
             const raw = func.defaults[i];
-            try obj.set(ctx.allocator, "_default_value", try ctx.vm.resolveDefault(raw));
+            try setLazyDefault(ctx, obj, func, i);
             if (try decodeConstSentinel(ctx, raw)) |const_name| {
                 try obj.set(ctx.allocator, "_default_const_name", .{ .string = Value.String.borrowed(const_name) });
             }
@@ -3761,7 +3775,7 @@ fn rpWrite(ctx: *NativeContext, args: []const Value, skip: bool) RuntimeError!Na
         const vr = ctx.vm.findPropertyVisibility(scope, prop_name);
         if (vr.is_readonly and target.getForScope(prop_name, scope) != .null) {
             const msg = try std.fmt.allocPrint(ctx.allocator, "Cannot modify readonly property {s}::${s}", .{ vr.defining_class, prop_name });
-            try ctx.vm.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             _ = ctx.vm.throwBuiltinException("Error", msg) catch {};
             return error.RuntimeError;
         }
@@ -4340,14 +4354,14 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
 
     if (!ctx.vm.classes.contains(attr_name)) {
         const msg = std.fmt.allocPrint(ctx.allocator, "Attribute class \"{s}\" not found", .{attr_name}) catch return error.OutOfMemory;
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         _ = ctx.vm.throwBuiltinException("Error", msg) catch {};
         return error.RuntimeError;
     }
 
     if (!isAttributeClass(ctx.vm, attr_name)) {
         const msg = std.fmt.allocPrint(ctx.allocator, "Attempting to use non-attribute class \"{s}\" as attribute", .{attr_name}) catch return error.OutOfMemory;
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         _ = ctx.vm.throwBuiltinException("Error", msg) catch {};
         return error.RuntimeError;
     }
@@ -4368,7 +4382,7 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
                 }
             }
             const msg = std.fmt.allocPrint(ctx.allocator, "Attribute \"{s}\" cannot target {s} (allowed targets: {s})", .{ attr_name, used, allowed_buf.items }) catch return error.OutOfMemory;
-            try ctx.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             _ = ctx.vm.throwBuiltinException("Error", msg) catch {};
             return error.RuntimeError;
         }
@@ -4379,7 +4393,7 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
         const flags = getAttributeFlags(ctx.vm, attr_name);
         if ((flags & 128) == 0) {
             const msg = std.fmt.allocPrint(ctx.allocator, "Attribute \"{s}\" must not be repeated", .{attr_name}) catch return error.OutOfMemory;
-            try ctx.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             _ = ctx.vm.throwBuiltinException("Error", msg) catch {};
             return error.RuntimeError;
         }
@@ -4429,7 +4443,7 @@ fn raNewInstance(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
                 const count = @max(pos, func.required_params);
                 for (0..count) |i| {
                     if (resolved[i] == .null and i < func.defaults.len) {
-                        resolved[i] = try ctx.vm.resolveDefault(func.defaults[i]);
+                        resolved[i] = try ctx.vm.resolveParamDefault(func, i);
                     }
                 }
                 if (count > 0) _ = try ctx.callMethod(obj, "__construct", resolved[0..count]);
@@ -4487,12 +4501,12 @@ fn reConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 
     const cls = ctx.vm.classes.get(class_name) orelse {
         const msg = std.fmt.allocPrint(ctx.allocator, "Class \"{s}\" does not exist", .{class_name}) catch return throwReflection(ctx, "Class does not exist");
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     };
     if (!cls.is_enum) {
         const msg = std.fmt.allocPrint(ctx.allocator, "Class \"{s}\" is not an enum", .{class_name}) catch return throwReflection(ctx, "Not an enum");
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     }
 
@@ -4541,7 +4555,7 @@ fn reGetCase(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
     const cls = ctx.vm.classes.get(class_name) orelse return NativeResult.scalar(.null);
     if (!cls.constants.contains(args[0].string.bytes())) {
         const msg = std.fmt.allocPrint(ctx.allocator, "Case {s}::{s} does not exist", .{ class_name, args[0].string.bytes() }) catch return throwReflection(ctx, "Case not found");
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     }
     const obj = try buildEnumCase(ctx, class_name, args[0].string.bytes(), cls.backed_type != .none);
@@ -4573,7 +4587,7 @@ fn reucConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     const is_case = if (cls) |c| containsName(c.case_order.items, args[1].string.bytes()) else false;
     if (!is_case) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "Constant {s}::{s} is not a case", .{ owner, args[1].string.bytes() });
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     }
     return NativeResult.scalar(.null);
@@ -4582,7 +4596,7 @@ fn reucConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
 fn rzextConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const name = if (args.len > 0 and args[0] == .string) args[0].string.bytes() else "";
     const msg = try std.fmt.allocPrint(ctx.allocator, "Zend Extension \"{s}\" does not exist", .{name});
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     return throwReflection(ctx, msg);
 }
 
@@ -4650,7 +4664,7 @@ fn rgGetFunction(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     const gen = getGenPtr(obj) orelse return NativeResult.scalar(.null);
     const rf = try ctx.createObject("ReflectionFunction");
-    try rf.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(try ctx.createString(gen.func.name)) });
+    try rf.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(try ctx.vm.internName(gen.func.name)) });
     return NativeResult.borrowed(.{ .object = rf });
 }
 
@@ -4678,10 +4692,10 @@ fn rgGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const arr = try ctx.createArray();
     const frame = try ctx.createArray();
     if (ctx.vm.sourceLocation(&gen.func.chunk, if (gen.ip > 0) gen.ip - 1 else 0)) |loc| {
-        try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("line")) }, .{ .int = @intCast(loc.line) });
+        try frame.set(ctx.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = @intCast(loc.line) });
     }
-    try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("file")) }, .{ .string = Value.String.borrowed(try ctx.createString(ctx.vm.file_path)) });
-    try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("function")) }, .{ .string = Value.String.borrowed(try ctx.createString(gen.func.name)) });
+    try frame.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("file") }, ctx.vm.file_path);
+    try frame.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("function") }, gen.func.name);
     try arr.append(ctx.allocator, .{ .array = frame });
     return NativeResult.borrowed(.{ .array = arr });
 }
@@ -4740,9 +4754,9 @@ fn rfibGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult
         const frame = try ctx.createArray();
         const ip = if (sf.ip > 0) sf.ip - 1 else 0;
         if (ctx.vm.sourceLocation(sf.chunk, ip)) |loc| {
-            try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("line")) }, .{ .int = @intCast(loc.line) });
+            try frame.set(ctx.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = @intCast(loc.line) });
         }
-        try frame.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString("file")) }, .{ .string = Value.String.borrowed(try ctx.createString(ctx.vm.file_path)) });
+        try frame.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("file") }, ctx.vm.file_path);
         try arr.append(ctx.allocator, .{ .array = frame });
     }
     return NativeResult.borrowed(.{ .array = arr });
@@ -4794,7 +4808,7 @@ fn rconstConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     const name = std.mem.trimLeft(u8, args[0].string.bytes(), "\\");
     if (!ctx.vm.php_constants.contains(name)) {
         const msg = std.fmt.allocPrint(ctx.allocator, "Constant \"{s}\" does not exist", .{name}) catch return throwReflection(ctx, "Constant does not exist");
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         return throwReflection(ctx, msg);
     }
     const owned = try Value.String.create(ctx.allocator, name);

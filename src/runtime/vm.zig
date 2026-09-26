@@ -1279,7 +1279,7 @@ pub const VM = struct {
         // reports a status (see Status) and returns results through pointers
         drain_pending_destruct: *const fn (*VM) void,
         check_param_types: *const fn (*VM, []const u8, u8, *bool) u8,
-        resolve_default: *const fn (*VM, Value, *Value) u8,
+        resolve_default: *const fn (*VM, *const ObjFunction, usize, *Value, *bool) u8,
         array_set_owned: *const fn (*VM, *PhpArray, PhpArray.Key, Value) u8,
         copy_value: *const fn (*VM, Value, *Value) u8,
         retain_frame_objects: *const fn (*VM, usize) void,
@@ -1320,9 +1320,20 @@ pub const VM = struct {
             return Status.ok;
         }
 
-        fn resolveDefaultEntry(vm: *VM, val: Value, out: *Value) u8 {
+        // an error a default raises lands in the fast loop's nearest catch,
+        // as a type check's does; `dispatched` tells the fast loop to return
+        fn resolveDefaultEntry(vm: *VM, func: *const ObjFunction, index: usize, out: *Value, dispatched: *bool) u8 {
             vm.flushTopWrites();
-            out.* = vm.resolveDefault(val) catch |err| return statusOf(err);
+            out.* = vm.resolveParamDefault(func, index) catch |err| {
+                const pending = vm.pending_exception orelse return statusOf(err);
+                if (pending != .object) return statusOf(err);
+                vm.pending_exception = null;
+                if (vm.throwObject(pending.object)) {
+                    dispatched.* = true;
+                    return Status.ok;
+                }
+                return statusOf(error.RuntimeError);
+            };
             return Status.ok;
         }
 
@@ -1408,6 +1419,14 @@ pub const VM = struct {
         resolved_methods: std.HashMapUnmanaged(MethodKey, []const u8, MethodKey.Context, std.hash_map.default_max_load_percentage) = .{},
         resolved_methods_fn_count: usize = 0,
         resolved_methods_cls_count: usize = 0,
+        // the function whose parameter default is being resolved, for the
+        // location of the error an unresolvable default raises
+        default_site: ?*const ObjFunction = null,
+        // values ini_set and friends stored in ini_settings, owned here by
+        // directive name; the file's and extensions' values are borrowed
+        ini_values: std.StringHashMapUnmanaged([]u8) = .{},
+        // the object a foreach snapshot stands in for, released with the snapshot
+        foreach_pins: std.AutoHashMapUnmanaged(*PhpArray, Value) = .{},
         // canonical paths of files include resolution found, owned here
         include_paths: std.StringHashMapUnmanaged(void) = .{},
         // the files this run included, main script first, keyed by canonical
@@ -1718,6 +1737,12 @@ pub const VM = struct {
         vm.builtin_obj_hw = vm.objects.items.len;
         vm.builtin_arr_hw = vm.arrays.items.len;
         vm.builtin_str_hw = vm.strings.items.len;
+        // a shell pooled during init lies below the marks, where a serve reset
+        // never tears down what it holds; request code must not be handed one
+        vm.free_objects.clearRetainingCapacity();
+        vm.free_arrays.clearRetainingCapacity();
+        vm.free_generators.clearRetainingCapacity();
+        vm.free_fibers.clearRetainingCapacity();
         var ci = vm.classes.keyIterator();
         while (ci.next()) |k| try vm.builtin_classes.put(allocator, k.*, {});
         var ii = vm.interfaces.keyIterator();
@@ -2773,6 +2798,9 @@ pub const VM = struct {
             ic_ptr.autoloading.deinit(self.allocator);
             ic_ptr.trait_sites.deinit(self.allocator);
             ic_ptr.included.deinit(self.allocator);
+            ic_ptr.foreach_pins.deinit(self.allocator);
+            self.freeIniValues(ic_ptr);
+            ic_ptr.ini_values.deinit(self.allocator);
             freeOwnedKeys(self.allocator, &ic_ptr.include_paths);
             ic_ptr.include_paths.deinit(self.allocator);
             freeOwnedKeys(self.allocator, &ic_ptr.fn_lower);
@@ -3038,6 +3066,7 @@ pub const VM = struct {
         // ini_set stores keys and values in the request arena freed below;
         // a stale entry would compare freed bytes on the next put
         self.ini_settings.clearRetainingCapacity();
+        if (self.ic) |ic_ptr| self.freeIniValues(ic_ptr);
         self.rng_seeded = false;
         self.strtok_state = null;
         self.strtok_pos = 0;
@@ -3054,7 +3083,10 @@ pub const VM = struct {
         self.globals_array = null;
         self.static_vars.clearRetainingCapacity();
         self.global_vars.clearRetainingCapacity();
-        if (self.ic) |ic_ptr| ic_ptr.included.clearRetainingCapacity();
+        if (self.ic) |ic_ptr| {
+            ic_ptr.included.clearRetainingCapacity();
+            ic_ptr.foreach_pins.clearRetainingCapacity();
+        }
         self.clearRealDirCache();
         self.stream_wrappers_unregistered.clearRetainingCapacity();
         self.stream_wrappers_user.clearRetainingCapacity();
@@ -3765,7 +3797,7 @@ pub const VM = struct {
                         // an undefined bare constant is a fatal Error in PHP 8,
                         // not a silent null
                         const msg = try std.fmt.allocPrint(self.allocator, "Undefined constant \"{s}\"", .{name});
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     } else if (name.len > 2 and name[0] == '$' and name[1] == '_') {
@@ -3776,7 +3808,7 @@ pub const VM = struct {
                         // bare identifier that resolved to neither a variable
                         // nor a constant - undefined constant, fatal in PHP 8
                         const msg = try std.fmt.allocPrint(self.allocator, "Undefined constant \"{s}\"", .{name});
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     } else {
@@ -3863,9 +3895,7 @@ pub const VM = struct {
                         var buf: [256]u8 = undefined;
                         const dollar_name = varVarName(raw_name, &buf);
                         if (isSuperglobal(dollar_name) and self.frameInGlobalScope(self.currentFrame())) {
-                            const stable = try self.allocator.dupe(u8, dollar_name);
-                            try self.strings.append(self.allocator, stable);
-                            try self.putRequestVar(stable, val);
+                            try self.putRequestVar(try self.internName(dollar_name), val);
                             self.releaseValue(val);
                             continue;
                         }
@@ -3888,8 +3918,7 @@ pub const VM = struct {
                                 }
                             }
                             if (!found_slot) {
-                                const stable_key = try std.fmt.allocPrint(self.allocator, "${s}", .{raw_name});
-                                try self.strings.append(self.allocator, stable_key);
+                                const stable_key = try self.internName(dollar_name);
                                 // Stage 2 overwrite-release on the vars map
                                 if (self.currentFrame().vars.get(stable_key)) |old| {
                                     self.releaseValue(old);
@@ -4024,7 +4053,7 @@ pub const VM = struct {
                     if (!isArithOperand(v)) {
                         const tn = Value.typeName(v);
                         const msg = try std.fmt.allocPrint(self.allocator, "Cannot negate {s}", .{tn});
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("TypeError", msg)) continue;
                         return error.RuntimeError;
                     }
@@ -4161,7 +4190,7 @@ pub const VM = struct {
                                 else => Value.typeName(v),
                             };
                             const msg = try std.fmt.allocPrint(self.allocator, "Cannot perform bitwise not on {s}", .{what});
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("TypeError", msg)) continue;
                             return error.RuntimeError;
                         },
@@ -4473,7 +4502,7 @@ pub const VM = struct {
                                         if (std.mem.eql(u8, p[1..], entry.key.string.bytes()) or std.mem.eql(u8, p, entry.key.string.bytes())) {
                                             if (assigned[pi]) {
                                                 const msg = try std.fmt.allocPrint(self.allocator, "Named parameter ${s} overwrites previous argument", .{entry.key.string.bytes()});
-                                                try self.strings.append(self.allocator, msg);
+                                                defer self.allocator.free(msg);
                                                 if (try self.throwBuiltinException("Error", msg)) {
                                                     ok = false;
                                                     break;
@@ -4514,7 +4543,7 @@ pub const VM = struct {
                                                 }
                                                 if (!coerced) {
                                                     const msg = try std.fmt.allocPrint(self.allocator, "{s}(): Argument ${s} must be of type {s}, {s} given", .{ name, entry.key.string.bytes(), vtype, valueTypeName(ev) });
-                                                    try self.strings.append(self.allocator, msg);
+                                                    defer self.allocator.free(msg);
                                                     if (try self.throwBuiltinException("TypeError", msg)) {
                                                         ok = false;
                                                         break;
@@ -4530,7 +4559,7 @@ pub const VM = struct {
                                             continue;
                                         }
                                         const msg = try std.fmt.allocPrint(self.allocator, "Unknown named parameter ${s}", .{entry.key.string.bytes()});
-                                        try self.strings.append(self.allocator, msg);
+                                        defer self.allocator.free(msg);
                                         if (try self.throwBuiltinException("Error", msg)) {
                                             ok = false;
                                             break;
@@ -4552,7 +4581,7 @@ pub const VM = struct {
                             const count = @max(pos, func.required_params);
                             for (0..count) |i| {
                                 if (resolved[i] == .null and i < func.defaults.len) {
-                                    resolved[i] = try self.resolveDefault(func.defaults[i]);
+                                    resolved[i] = try self.resolveParamDefault(func, i);
                                 }
                             }
                             for (0..count) |i| {
@@ -5018,8 +5047,7 @@ pub const VM = struct {
                     if (arr_val == .array) {
                         if (self.globals_array) |ga| {
                             if (arr_val.array == ga and key == .string) {
-                                const dollar_name = try std.fmt.allocPrint(self.allocator, "${s}", .{key.string.bytes()});
-                                try self.strings.append(self.allocator, dollar_name);
+                                const dollar_name = try self.internVarName(key.string.bytes());
                                 if (self.globals_cells.get(dollar_name)) |cell| {
                                     self.push(cell.*);
                                     continue;
@@ -5264,7 +5292,7 @@ pub const VM = struct {
                         }
                         if (existing != .object and !try self.propGetReturnsRef(obj, pname)) {
                             const msg = try std.fmt.allocPrint(self.allocator, "Indirect modification of {s}::${s} is not allowed", .{ obj.class_name, pname });
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -5868,7 +5896,7 @@ pub const VM = struct {
                         }
                         if (cur != .object and !try self.propGetReturnsRef(eap_obj, prop_name)) {
                             const msg = try std.fmt.allocPrint(self.allocator, "Indirect modification of {s}::${s} is not allowed", .{ eap_obj.class_name, prop_name });
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -6143,6 +6171,10 @@ pub const VM = struct {
                                     try arr.setCopiedKey(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
                                 }
                             }
+                            // the snapshot takes the object's stack slot; the object's
+                            // reference moves to the snapshot, so it lives as long as the
+                            // loop does, as php's iterated object does
+                            try self.ic.?.foreach_pins.put(self.allocator, arr, self.stack[self.sp - 1]);
                             self.stack[self.sp - 1] = .{ .array = arr };
                             self.push(.{ .int = 0 });
                         } else {
@@ -6223,9 +6255,12 @@ pub const VM = struct {
                         self.push(.{ .int = Value.toInt(idx) + 1 });
                     }
                 },
+                // the end of a foreach is a statement boundary: the iterable
+                // it drops is released here, as php frees it at FE_FREE
                 .iter_end => {
                     _ = self.pop();
                     _ = self.pop();
+                    if (self.hasPendingReleases()) self.drainPendingDestruct();
                 },
                 .iter_end_close => {
                     const iterable = self.stack[self.sp - 2];
@@ -6234,6 +6269,7 @@ pub const VM = struct {
                     }
                     _ = self.pop();
                     _ = self.pop();
+                    if (self.hasPendingReleases()) self.drainPendingDestruct();
                 },
 
                 .silence_begin => {
@@ -6473,7 +6509,7 @@ pub const VM = struct {
                                 return error.RuntimeError;
                             };
                             const msg = try std.fmt.allocPrint(self.allocator, "Indirect modification of {s}::${s} is not allowed", .{ obj_ptr.class_name, prop_name });
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -6554,7 +6590,7 @@ pub const VM = struct {
                                 return error.RuntimeError;
                             };
                             const msg = try std.fmt.allocPrint(self.allocator, "Indirect modification of {s}::${s} is not allowed", .{ obj_ptr.class_name, prop_owned });
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -6771,7 +6807,7 @@ pub const VM = struct {
                             const vr = self.findPropertyVisibility(obj.class_name, prop_name);
                             if (vr.is_readonly and obj.get(prop_name) != .null) {
                                 const msg = try std.fmt.allocPrint(self.allocator, "Cannot unset readonly property {s}::${s}", .{ obj.class_name, prop_name });
-                                try self.strings.append(self.allocator, msg);
+                                defer self.allocator.free(msg);
                                 if (try self.throwBuiltinException("Error", msg)) continue;
                                 return error.RuntimeError;
                             }
@@ -6813,7 +6849,7 @@ pub const VM = struct {
                         const vr = self.findPropertyVisibility(obj.class_name, prop_name);
                         if (vr.is_readonly and obj.get(prop_name) != .null) {
                             const msg = try std.fmt.allocPrint(self.allocator, "Cannot unset readonly property {s}::${s}", .{ obj.class_name, prop_name });
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -7227,7 +7263,7 @@ pub const VM = struct {
                         self.push(val);
                     } else {
                         const msg = try std.fmt.allocPrint(self.allocator, "clone(): Argument #1 ($object) must be of type object, {s} given", .{val.valueName()});
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("TypeError", msg)) continue;
                         return error.RuntimeError;
                     }
@@ -8184,7 +8220,7 @@ pub const VM = struct {
                         const ac_drop: usize = arg_count;
                         self.dropN(ac_drop);
                         const msg = try std.fmt.allocPrint(self.allocator, "Cannot instantiate interface {s}", .{class_name});
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     }
@@ -8192,7 +8228,7 @@ pub const VM = struct {
                         const ac_drop: usize = arg_count;
                         self.dropN(ac_drop);
                         const msg = try std.fmt.allocPrint(self.allocator, "Class \"{s}\" not found", .{class_name});
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     }
@@ -8201,7 +8237,7 @@ pub const VM = struct {
                             const ac_drop: usize = arg_count;
                             self.dropN(ac_drop);
                             const msg = try std.fmt.allocPrint(self.allocator, "Cannot instantiate abstract class {s}", .{class_name});
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -8226,7 +8262,7 @@ pub const VM = struct {
                             self.dropN(ac);
                             const suffix = self.visScopeSuffix();
                             const msg = try std.fmt.allocPrint(self.allocator, "Call to {s} {s}::__construct(){s}", .{ @tagName(mvr.visibility), mvr.defining_class, suffix });
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -8307,7 +8343,7 @@ pub const VM = struct {
                                         ctor_locals[i + 1] = try self.bindFrameArg(self.stack[self.sp - ac + i]);
                                     }
                                     for (@min(ac, fixed)..fixed) |i| {
-                                        if (i < func.defaults.len) ctor_locals[i + 1] = try self.resolveDefault(func.defaults[i]);
+                                        if (i < func.defaults.len) ctor_locals[i + 1] = try self.resolveParamDefault(func, i);
                                     }
                                     const rest_arr = try self.allocArray();
                                     if (ac > fixed) {
@@ -8321,7 +8357,7 @@ pub const VM = struct {
                                         ctor_locals[i + 1] = try self.bindFrameArg(self.stack[self.sp - ac + i]);
                                     }
                                     for (@min(ac, func.arity)..func.arity) |i| {
-                                        if (i < func.defaults.len) ctor_locals[i + 1] = try self.resolveDefault(func.defaults[i]);
+                                        if (i < func.defaults.len) ctor_locals[i + 1] = try self.resolveParamDefault(func, i);
                                     }
                                 }
                                 self.dropN(ac);
@@ -8344,7 +8380,7 @@ pub const VM = struct {
                                         try new_vars.put(self.allocator, func.params[i], try self.bindFrameArg(self.stack[self.sp - ac + i]));
                                     }
                                     for (@min(ac, fixed)..fixed) |i| {
-                                        if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
+                                        if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveParamDefault(func, i));
                                     }
                                     const rest_arr = try self.allocArray();
                                     if (ac > fixed) {
@@ -8371,7 +8407,7 @@ pub const VM = struct {
                                 };
                                 self.dropN(ac);
                                 if (!func.is_variadic and ac < func.arity) for (ac..func.arity) |i| {
-                                    const default = if (i < func.defaults.len) try self.resolveDefault(func.defaults[i]) else Value.null;
+                                    const default = if (i < func.defaults.len) try self.resolveParamDefault(func, i) else Value.null;
                                     try new_vars.put(self.allocator, func.params[i], default);
                                 };
                                 try self.ensureCallRoom();
@@ -8431,7 +8467,7 @@ pub const VM = struct {
                     if (!self.classes.contains(class_name)) {
                         self.dropN(ac + 1);
                         const msg = try std.fmt.allocPrint(self.allocator, "Class \"{s}\" not found", .{class_name});
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     }
@@ -8454,7 +8490,7 @@ pub const VM = struct {
                             self.dropN(ac + 1);
                             const suffix = self.visScopeSuffix();
                             const msg = try std.fmt.allocPrint(self.allocator, "Call to {s} {s}::__construct(){s}", .{ @tagName(mvr.visibility), mvr.defining_class, suffix });
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -8518,7 +8554,7 @@ pub const VM = struct {
                             };
                             self.dropN(ac + 1);
                             for (@min(ac, func.arity)..func.arity) |i| {
-                                const default = if (i < func.defaults.len) try self.resolveDefault(func.defaults[i]) else Value.null;
+                                const default = if (i < func.defaults.len) try self.resolveParamDefault(func, i) else Value.null;
                                 try new_vars.put(self.allocator, func.params[i], default);
                             }
                             try self.ensureCallRoom();
@@ -8663,7 +8699,7 @@ pub const VM = struct {
                             // null can only mean uninitialized)
                             if (val == .null and self.typedPropForbidsNull(vr.type_str)) {
                                 const msg = try std.fmt.allocPrint(self.allocator, "Typed property {s}::${s} must not be accessed before initialization", .{ vr.defining_class, prop_name });
-                                try self.strings.append(self.allocator, msg);
+                                defer self.allocator.free(msg);
                                 if (try self.throwBuiltinException("Error", msg)) continue;
                                 return error.RuntimeError;
                             }
@@ -8685,7 +8721,7 @@ pub const VM = struct {
                             const uvr = self.findPropertyVisibility(obj.class_name, prop_name);
                             if (uvr.type_str.len > 0) {
                                 const msg = try std.fmt.allocPrint(self.allocator, "Typed property {s}::${s} must not be accessed before initialization", .{ uvr.defining_class, prop_name });
-                                try self.strings.append(self.allocator, msg);
+                                defer self.allocator.free(msg);
                                 if (try self.throwBuiltinException("Error", msg)) continue;
                                 return error.RuntimeError;
                             }
@@ -8843,7 +8879,7 @@ pub const VM = struct {
                             };
                             if (!has_default) {
                                 const msg = std.fmt.allocPrint(self.allocator, "Property {s}::${s} is read-only", .{ obj.class_name, prop_name }) catch return error.RuntimeError;
-                                try self.strings.append(self.allocator, msg);
+                                defer self.allocator.free(msg);
                                 if (try self.throwBuiltinException("Error", msg)) continue;
                                 return error.RuntimeError;
                             }
@@ -9043,7 +9079,7 @@ pub const VM = struct {
                             self.push(if (gen.state == .completed) .null else gen.current_value);
                         } else {
                             const msg = try std.fmt.allocPrint(self.allocator, "Call to undefined method Generator::{s}()", .{method_name});
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -9165,7 +9201,7 @@ pub const VM = struct {
                             fiber.suspend_value = .null;
                         } else {
                             const msg = try std.fmt.allocPrint(self.allocator, "Call to undefined method Fiber::{s}()", .{method_name});
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -9224,7 +9260,7 @@ pub const VM = struct {
                         } else {
                             self.dropN(ac + 1);
                             const msg = try std.fmt.allocPrint(self.allocator, "Call to undefined method Closure::{s}()", .{method_name});
-                            try self.strings.append(self.allocator, msg);
+                            defer self.allocator.free(msg);
                             if (try self.throwBuiltinException("Error", msg)) continue;
                             return error.RuntimeError;
                         }
@@ -9233,7 +9269,7 @@ pub const VM = struct {
                     if (obj_val != .object) {
                         self.dropN(ac + 1);
                         const msg = try std.fmt.allocPrint(self.allocator, "Call to a member function {s}() on {s}", .{ method_name, valueTypeName(obj_val) });
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     }
@@ -9465,7 +9501,7 @@ pub const VM = struct {
                                 try new_vars.put(self.allocator, func.params[i], try self.bindFrameArg(self.stack[self.sp - ac + i]));
                             }
                             for (@min(ac, fixed)..fixed) |i| {
-                                if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
+                                if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveParamDefault(func, i));
                             }
                             const rest_arr = try self.allocArray();
                             if (ac > fixed) for (fixed..ac) |i| try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + i]));
@@ -9585,7 +9621,7 @@ pub const VM = struct {
                                     ac = @max(pos, func.required_params);
                                     for (0..ac) |i| {
                                         if (resolved_buf[i] == .null and i < func.defaults.len) {
-                                            resolved_buf[i] = try self.resolveDefault(func.defaults[i]);
+                                            resolved_buf[i] = try self.resolveParamDefault(func, i);
                                         }
                                     }
                                     for (0..ac) |i| {
@@ -9621,7 +9657,7 @@ pub const VM = struct {
                     if (obj_val != .object) {
                         self.dropN(ac + 1);
                         const msg = try std.fmt.allocPrint(self.allocator, "Call to a member function {s}() on {s}", .{ method_name, valueTypeName(obj_val) });
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     }
@@ -9704,7 +9740,7 @@ pub const VM = struct {
                                 try new_vars.put(self.allocator, func.params[i], try self.bindFrameArg(self.stack[self.sp - ac + i]));
                             }
                             for (@min(ac, fixed)..fixed) |i| {
-                                if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
+                                if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveParamDefault(func, i));
                             }
                             const rest_arr = try self.allocArray();
                             if (ac > fixed) for (fixed..ac) |i| try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + i]));
@@ -9714,7 +9750,7 @@ pub const VM = struct {
                                 try new_vars.put(self.allocator, func.params[i], try self.bindFrameArg(self.stack[self.sp - ac + i]));
                             }
                             for (ac..func.arity) |i| {
-                                if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
+                                if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveParamDefault(func, i));
                             }
                         }
                         var method_refs: std.StringHashMapUnmanaged(*Value) = .{};
@@ -9765,7 +9801,7 @@ pub const VM = struct {
                     if (obj_val != .object) {
                         self.dropN(ac + 2);
                         const msg = try std.fmt.allocPrint(self.allocator, "Call to a member function {s}() on {s}", .{ method_name, valueTypeName(obj_val) });
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     }
@@ -9868,7 +9904,7 @@ pub const VM = struct {
                                 try new_vars.put(self.allocator, func.params[ai], try self.bindFrameArg(self.stack[self.sp - ac + ai]));
                             }
                             for (@min(ac, fixed)..fixed) |ai| {
-                                if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveDefault(func.defaults[ai]));
+                                if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveParamDefault(func, ai));
                             }
                             const rest_arr = try self.allocArray();
                             if (ac > fixed) for (fixed..ac) |ai| try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + ai]));
@@ -9879,7 +9915,7 @@ pub const VM = struct {
                             }
                             if (ac < func.arity) {
                                 for (ac..func.arity) |ai| {
-                                    if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveDefault(func.defaults[ai]));
+                                    if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveParamDefault(func, ai));
                                 }
                             }
                         }
@@ -9927,7 +9963,7 @@ pub const VM = struct {
                     }
                     if (obj_val != .object) {
                         const msg = try std.fmt.allocPrint(self.allocator, "Call to a member function {s}() on {s}", .{ method_name_val.string.bytes(), valueTypeName(obj_val) });
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     }
@@ -10052,7 +10088,7 @@ pub const VM = struct {
                                 try new_vars.put(self.allocator, func.params[ai], try self.bindFrameArg(self.stack[self.sp - ac + ai]));
                             }
                             for (@min(ac, fixed)..fixed) |ai| {
-                                if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveDefault(func.defaults[ai]));
+                                if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveParamDefault(func, ai));
                             }
                             const rest_arr = try self.allocArray();
                             if (ac > fixed) for (fixed..ac) |ai| try rest_arr.append(self.allocator, try self.bindFrameArg(self.stack[self.sp - ac + ai]));
@@ -10063,7 +10099,7 @@ pub const VM = struct {
                             }
                             if (ac < func.arity) {
                                 for (ac..func.arity) |ai| {
-                                    if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveDefault(func.defaults[ai]));
+                                    if (ai < func.defaults.len) try new_vars.put(self.allocator, func.params[ai], try self.resolveParamDefault(func, ai));
                                 }
                             }
                         }
@@ -10401,7 +10437,7 @@ pub const VM = struct {
                             continue;
                         }
                         const msg = try std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name });
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     };
@@ -10485,7 +10521,7 @@ pub const VM = struct {
                                             try new_vars.put(self.allocator, func.params[i], try self.bindFrameArg(self.stack[self.sp - resolved_ac + i]));
                                         }
                                         for (resolved_ac..func.arity) |i| {
-                                            if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
+                                            if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveParamDefault(func, i));
                                         }
                                     }
                                     const scs_ac: u8 = @intCast(@min(resolved_ac, 255));
@@ -10501,7 +10537,7 @@ pub const VM = struct {
                                 }
                             } else {
                                 const msg = try std.fmt.allocPrint(self.allocator, "Call to undefined method {s}::{s}()", .{ class_name, method_name });
-                                try self.strings.append(self.allocator, msg);
+                                defer self.allocator.free(msg);
                                 if (try self.throwBuiltinException("Error", msg)) continue;
                                 return error.RuntimeError;
                             }
@@ -10532,7 +10568,7 @@ pub const VM = struct {
                     else {
                         self.dropN(ac + 1);
                         const msg = try std.fmt.allocPrint(self.allocator, "{s}::method() requires a class name string", .{method_name});
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) continue;
                         return error.RuntimeError;
                     };
@@ -11352,7 +11388,7 @@ pub const VM = struct {
             return false;
         }
         const msg = try std.fmt.allocPrint(self.allocator, "Undefined constant {s}::{s}", .{ class_name, const_name });
-        try self.strings.append(self.allocator, msg);
+        defer self.allocator.free(msg);
         if (try self.throwBuiltinException("Error", msg)) return true;
         return error.RuntimeError;
     }
@@ -11433,7 +11469,7 @@ pub const VM = struct {
     fn expireExecution(self: *VM) RuntimeError!void {
         const unit: []const u8 = if (self.execution_limit_seconds == 1) "second" else "seconds";
         const msg = try std.fmt.allocPrint(self.allocator, "Maximum execution time of {d} {s} exceeded", .{ self.execution_limit_seconds, unit });
-        try self.strings.append(self.allocator, msg);
+        defer self.allocator.free(msg);
         try self.setPendingException("Error", msg);
         // PHP makes this fatal uncatchable: even user try/catch around an
         // infinite loop won't keep the script alive past the deadline
@@ -11820,7 +11856,7 @@ pub const VM = struct {
                     } else false;
                     if (!matched and !func.is_variadic) {
                         const msg = try std.fmt.allocPrint(self.allocator, "Unknown named parameter ${s}", .{entry.key.string.bytes()});
-                        try self.strings.append(self.allocator, msg);
+                        defer self.allocator.free(msg);
                         if (try self.throwBuiltinException("Error", msg)) return .thrown;
                         return error.RuntimeError;
                     }
@@ -11833,7 +11869,7 @@ pub const VM = struct {
             const count = @max(pos, func.required_params);
             for (0..count) |i| {
                 if (resolved[i] == .null and i < func.defaults.len) {
-                    resolved[i] = try self.resolveDefault(func.defaults[i]);
+                    resolved[i] = try self.resolveParamDefault(func, i);
                 }
             }
             for (0..count) |i| {
@@ -11890,7 +11926,7 @@ pub const VM = struct {
         const tn_a = Value.typeName(a);
         const tn_b = Value.typeName(b);
         const msg = try std.fmt.allocPrint(self.allocator, "Unsupported operand types: {s} " ++ op ++ " {s}", .{ tn_a, tn_b });
-        try self.strings.append(self.allocator, msg);
+        defer self.allocator.free(msg);
         if (try self.throwBuiltinException("TypeError", msg)) return true;
         return error.RuntimeError;
     }
@@ -12259,7 +12295,7 @@ pub const VM = struct {
 
     pub fn throwUncloneable(self: *VM, class_name: []const u8) !bool {
         const msg = try std.fmt.allocPrint(self.allocator, "Trying to clone an uncloneable object of class {s}", .{class_name});
-        try self.strings.append(self.allocator, msg);
+        defer self.allocator.free(msg);
         return self.throwBuiltinException("Error", msg);
     }
 
@@ -12991,8 +13027,7 @@ pub const VM = struct {
     // the global table, so a write must be visible to every active `global`
     // binding, not just the top-level script frame.
     fn mirrorGlobalsWrite(self: *VM, key: []const u8, val: Value) !void {
-        const dollar_name = std.fmt.allocPrint(self.allocator, "${s}", .{key}) catch return;
-        try self.strings.append(self.allocator, dollar_name);
+        const dollar_name = try self.internVarName(key);
         if (isSuperglobal(dollar_name)) {
             try self.putRequestVar(dollar_name, val);
             return;
@@ -13077,7 +13112,7 @@ pub const VM = struct {
             // try/catch can recover; non-catching code falls through to a
             // runtime error like any other uncaught exception
             const msg = try std.fmt.allocPrint(self.allocator, "Object of class {s} could not be converted to string", .{obj.class_name});
-            try self.strings.append(self.allocator, msg);
+            defer self.allocator.free(msg);
             try self.setPendingException("Error", msg);
             return error.RuntimeError;
         };
@@ -14298,6 +14333,40 @@ pub const VM = struct {
         try arr.setCopiedKey(self.allocator, mangled.items, value);
     }
 
+    // a directive's runtime value; the previous runtime value is freed
+    pub fn setIni(self: *VM, name: []const u8, value: []const u8) ![]const u8 {
+        const key = try self.internName(name);
+        const gop = try self.ic.?.ini_values.getOrPut(self.allocator, key);
+        const owned = self.allocator.dupe(u8, value) catch |err| {
+            if (!gop.found_existing) self.ic.?.ini_values.removeByPtr(gop.key_ptr);
+            return err;
+        };
+        try self.ini_settings.put(self.allocator, key, owned);
+        if (gop.found_existing) self.allocator.free(gop.value_ptr.*);
+        gop.value_ptr.* = owned;
+        return owned;
+    }
+
+    // back to the file's value, or to the built-in default when the file has none
+    pub fn restoreIni(self: *VM, name: []const u8) !void {
+        _ = self.ini_settings.remove(name);
+        if (self.ic.?.ini_values.fetchRemove(name)) |kv| self.allocator.free(kv.value);
+        if (@import("../ini_config.zig").get(name)) |configured| try self.ini_settings.put(self.allocator, try self.internName(name), configured);
+    }
+
+    fn freeIniValues(self: *VM, ic_ptr: *InlineCache) void {
+        var values = ic_ptr.ini_values.valueIterator();
+        while (values.next()) |value| self.allocator.free(value.*);
+        ic_ptr.ini_values.clearRetainingCapacity();
+    }
+
+    // "$name" for a variable a frame's vars map will borrow, interned
+    pub fn internVarName(self: *VM, name: []const u8) ![]const u8 {
+        const dollar = try std.fmt.allocPrint(self.allocator, "${s}", .{name});
+        defer self.allocator.free(dollar);
+        return self.internName(dollar);
+    }
+
     // request-lifetime bytes for a name that recurs across calls, kept once
     pub fn internName(self: *VM, name: []const u8) ![]const u8 {
         if (self.interned_names.getKey(name)) |kept| return kept;
@@ -14718,9 +14787,7 @@ pub const VM = struct {
         for (0..bind_count) |i| {
             locals[i] = try self.bindFrameArg(self.stack[self.sp - ac + i]);
         }
-        for (bind_count..func.arity) |i| {
-            if (i < func.defaults.len) locals[i] = try self.resolveDefault(func.defaults[i]);
-        }
+        if (try self.fillDefaultLocals(func, locals, bind_count, 0)) return;
         self.saveFrameArgs(arg_count);
         self.dropN(ac);
 
@@ -14770,9 +14837,7 @@ pub const VM = struct {
         for (0..@min(ac, func.arity)) |i| {
             locals[i + first] = try self.bindFrameArg(self.stack[self.sp - ac + i]);
         }
-        for (@min(ac, func.arity)..func.arity) |i| {
-            if (i < func.defaults.len) locals[i + first] = try self.resolveDefault(func.defaults[i]);
-        }
+        if (try self.fillDefaultLocals(func, locals, @min(ac, func.arity), first)) return;
         self.saveFrameArgs(arg_count);
         self.dropN(ac + 1);
         try self.ensureCallRoom();
@@ -14806,9 +14871,7 @@ pub const VM = struct {
         for (0..bind_count) |i| {
             locals[i] = try self.bindFrameArg(self.stack[self.sp - ac + i]);
         }
-        for (bind_count..func.arity) |i| {
-            if (i < func.defaults.len) locals[i] = try self.resolveDefault(func.defaults[i]);
-        }
+        if (try self.fillDefaultLocals(func, locals, bind_count, 0)) return;
         self.saveFrameArgs(arg_count);
         self.dropN(ac);
         try self.ensureCallRoom();
@@ -14872,9 +14935,7 @@ pub const VM = struct {
         for (0..bind_count) |i| {
             locals[i] = try self.bindFrameArg(args[i]);
         }
-        for (bind_count..func.arity) |i| {
-            if (i < func.defaults.len) locals[i] = try self.resolveDefault(func.defaults[i]);
-        }
+        try self.fillDefaultLocalsForCaller(func, locals, bind_count, 0);
         const base_handler = self.handler_count;
         const prev_floor = self.handler_floor;
         self.handler_floor = self.handler_count;
@@ -16386,7 +16447,7 @@ pub const VM = struct {
         if (vis == .public) return true;
         if (self.checkVisibility(declaring, vis)) return true;
         const msg = try std.fmt.allocPrint(self.allocator, "Cannot access {s} const {s}::{s}", .{ @tagName(vis), declaring, const_name });
-        try self.strings.append(self.allocator, msg);
+        defer self.allocator.free(msg);
         _ = try self.throwBuiltinException("Error", msg);
         return false;
     }
@@ -16868,7 +16929,7 @@ pub const VM = struct {
                     else => "object",
                 };
                 const msg = try std.fmt.allocPrint(self.allocator, "Lazy proxy factory must return an instance of a class compatible with {s}, {s} returned", .{ obj.class_name, kind });
-                try self.strings.append(self.allocator, msg);
+                defer self.allocator.free(msg);
                 try self.setPendingException("TypeError", msg);
                 return error.RuntimeError;
             }
@@ -16883,7 +16944,7 @@ pub const VM = struct {
                 (self.hasMethod(obj.class_name, "__destruct") and (!self.hasMethod(backing.class_name, "__destruct") or !std.mem.eql(u8, try self.resolveMethod(obj.class_name, "__destruct"), try self.resolveMethod(backing.class_name, "__destruct")))))
             {
                 const msg = try std.fmt.allocPrint(self.allocator, "The real instance class {s} is not compatible with the proxy class {s}. The proxy must be a instance of the same class as the real instance, or a sub-class with no additional properties, and no overrides of the __destructor or __clone methods.", .{ backing.class_name, obj.class_name });
-                try self.strings.append(self.allocator, msg);
+                defer self.allocator.free(msg);
                 try self.setPendingException("TypeError", msg);
                 return error.RuntimeError;
             }
@@ -17787,6 +17848,55 @@ pub const VM = struct {
         try self.fillDefaults(vars, func, args.len);
     }
 
+    // a parameter's default, resolved when a call leaves the argument out; an
+    // error it raises is located at the function, as php locates it
+    pub fn resolveParamDefault(self: *VM, func: *const ObjFunction, index: usize) !Value {
+        const ic = self.ic.?;
+        const saved = ic.default_site;
+        ic.default_site = func;
+        defer ic.default_site = saved;
+        return self.resolveDefault(func.defaults[index]);
+    }
+
+    // the defaults of the parameters a call left out, into a frame's locals
+    // from slot `offset`. when one raises, the locals are given back, since
+    // the frame is never entered, and the error lands in this loop's nearest
+    // catch as a type check's does: true means it did and the call is over
+    fn fillDefaultLocals(self: *VM, func: *const ObjFunction, locals: []Value, bound: usize, offset: usize) RuntimeError!bool {
+        for (bound..func.arity) |i| {
+            if (i >= func.defaults.len) continue;
+            locals[i + offset] = self.resolveParamDefault(func, i) catch |err| {
+                self.freeLocals(locals);
+                const pending = self.pending_exception orelse return err;
+                if (pending != .object) return err;
+                self.pending_exception = null;
+                if (self.throwObject(pending.object)) return true;
+                return error.RuntimeError;
+            };
+        }
+        return false;
+    }
+
+    // as fillDefaultLocals, for a call made on behalf of a native: the error
+    // stays pending for the native's caller
+    fn fillDefaultLocalsForCaller(self: *VM, func: *const ObjFunction, locals: []Value, bound: usize, offset: usize) RuntimeError!void {
+        for (bound..func.arity) |i| {
+            if (i >= func.defaults.len) continue;
+            locals[i + offset] = self.resolveParamDefault(func, i) catch |err| {
+                self.freeLocals(locals);
+                return err;
+            };
+        }
+    }
+
+    fn unresolvedDefault(self: *VM, comptime fmt: []const u8, args: anytype) RuntimeError!Value {
+        const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
+        defer self.allocator.free(msg);
+        const at: ?SourcePosition = if (self.ic.?.default_site) |func| .{ .file = func.file_path, .line = func.start_line } else null;
+        self.pending_exception = .{ .object = try self.newBuiltinException("Error", msg, at) };
+        return error.RuntimeError;
+    }
+
     pub fn resolveDefault(self: *VM, val: Value) !Value {
         if (val.isEmptyArrayDefault()) {
             const arr = try self.allocArray();
@@ -17825,14 +17935,19 @@ pub const VM = struct {
                         if (std.mem.lastIndexOfScalar(u8, const_name, '\\')) |nsep| {
                             if (self.php_constants.get(const_name[nsep + 1 ..])) |v| return v;
                         }
-                        return .null;
+                        return self.unresolvedDefault("Undefined constant \"{s}\"", .{const_name});
                     }
                     if (self.getClassConstant(class_name, const_name)) |v| return v;
+                    if (self.pending_exception != null) return error.RuntimeError;
                     // fall back to class constants (ClassName::CONST_NAME)
                     var buf: [512]u8 = undefined;
-                    const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ class_name, const_name }) catch return .null;
-                    if (self.php_constants.get(full)) |v| return v;
-                    return .null;
+                    if (std.fmt.bufPrint(&buf, "{s}::{s}", .{ class_name, const_name })) |full| {
+                        if (self.php_constants.get(full)) |v| return v;
+                    } else |_| {}
+                    if (!self.classes.contains(class_name) and !self.interfaces.contains(class_name)) {
+                        return self.unresolvedDefault("Class \"{s}\" not found", .{class_name});
+                    }
+                    return self.unresolvedDefault("Undefined constant {s}::{s}", .{ class_name, const_name });
                 }
             }
             // deferred new-expression default: "\x00NW\x00<8 byte ptr>"
@@ -17930,7 +18045,7 @@ pub const VM = struct {
         if (arg_count >= func.arity) return;
         for (arg_count..func.arity) |i| {
             if (i < func.defaults.len) {
-                try vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
+                try vars.put(self.allocator, func.params[i], try self.resolveParamDefault(func, i));
             } else {
                 try vars.put(self.allocator, func.params[i], .null);
             }
@@ -18697,7 +18812,7 @@ pub const VM = struct {
                 try new_vars.put(self.allocator, func.params[i], try self.bindFrameArg(self.stack[self.sp - ac + i]));
             }
             for (@min(ac, fixed)..fixed) |i| {
-                if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveDefault(func.defaults[i]));
+                if (i < func.defaults.len) try new_vars.put(self.allocator, func.params[i], try self.resolveParamDefault(func, i));
             }
             const rest_arr = try self.allocArray();
             if (ac > fixed) {
@@ -19214,9 +19329,7 @@ pub const VM = struct {
         for (0..bind_count) |i| {
             locals[i] = try self.bindFrameArg(args[i]);
         }
-        for (bind_count..func.arity) |i| {
-            if (i < func.defaults.len) locals[i] = try self.resolveDefault(func.defaults[i]);
-        }
+        try self.fillDefaultLocalsForCaller(func, locals, bind_count, 0);
         // bind captures (no ref cells here - ref captures take the slow path)
         if (self.getCaptureRange(name)) |cr| {
             const caps = self.captures.items[cr.start .. cr.start + cr.len];
@@ -20824,6 +20937,9 @@ pub const VM = struct {
     // arrays cascade. clearing prevents any later walk from double-releasing
     fn releaseArrayElements(self: *VM, arr: *PhpArray) void {
         self.clearArgArraySources(arr);
+        if (self.ic.?.foreach_pins.count() > 0) {
+            if (self.ic.?.foreach_pins.fetchRemove(arr)) |pin| self.stackRelease(pin.value);
+        }
         for (arr.entries.items) |*e| {
             if (!arr.weak) self.releaseValue(e.value);
             e.value = .null;

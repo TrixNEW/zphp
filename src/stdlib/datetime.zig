@@ -581,7 +581,7 @@ fn dtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
                 // recognize the format at all - PHP throws
                 // DateMalformedStringException here
                 const msg = try std.fmt.allocPrint(ctx.allocator, "Failed to parse time string ({s}) at position 0", .{s});
-                try ctx.strings.append(ctx.allocator, msg);
+                defer ctx.allocator.free(msg);
                 try ctx.vm.setPendingException("DateMalformedStringException", msg);
                 return error.RuntimeError;
             }
@@ -1929,7 +1929,7 @@ fn dtzConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
                 stored = normalized;
             } else {
                 const msg = try std.fmt.allocPrint(ctx.allocator, "DateTimeZone::__construct(): Unknown or bad timezone ({s})", .{name});
-                try ctx.strings.append(ctx.allocator, msg);
+                defer ctx.allocator.free(msg);
                 try ctx.vm.setPendingException("DateInvalidTimeZoneException", msg);
                 return error.RuntimeError;
             }
@@ -4392,7 +4392,7 @@ fn native_timezone_open(ctx: *NativeContext, args: []const Value) RuntimeError!N
     };
     if (!valid) {
         const msg = std.fmt.allocPrint(ctx.allocator, "timezone_open(): Unknown or bad timezone ({s})", .{name}) catch return NativeResult.scalar(.{ .bool = false });
-        ctx.vm.strings.append(ctx.allocator, msg) catch {};
+        defer ctx.allocator.free(msg);
         try ctx.vm.emitWarning(msg);
         return NativeResult.scalar(.{ .bool = false });
     }

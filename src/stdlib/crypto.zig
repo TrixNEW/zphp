@@ -577,7 +577,7 @@ fn native_hash_hmac(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
 
     const algo = HashAlgo.fromString(algo_name) orelse {
         const msg = try std.fmt.allocPrint(ctx.allocator, "hash_hmac(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm", .{});
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("ValueError", msg);
         return error.RuntimeError;
     };
@@ -668,7 +668,7 @@ fn native_hash_hmac_algos(ctx: *NativeContext, _: []const Value) RuntimeError!Na
 fn readHashInput(ctx: *NativeContext, comptime fn_name: []const u8, path: []const u8) RuntimeError!?Value.String {
     if (try filesystem.readPath(ctx, path)) |content| return content;
     const msg = try std.fmt.allocPrint(ctx.allocator, fn_name ++ "({s}): Failed to open stream: No such file or directory", .{path});
-    try ctx.vm.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.emitWarning(msg);
     return null;
 }
@@ -804,7 +804,7 @@ fn native_hash_pbkdf2(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
     const raw_output = args.len >= 6 and args[5].isTruthy();
     const algo = HashAlgo.fromString(algo_name) orelse {
         const msg = try std.fmt.allocPrint(ctx.allocator, "hash_pbkdf2(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm", .{});
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("ValueError", msg);
         return error.RuntimeError;
     };

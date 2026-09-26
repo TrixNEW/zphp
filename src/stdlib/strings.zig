@@ -345,7 +345,7 @@ fn implode(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
 
     if (arr_val != .array) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "implode(): Argument #{d} ($array) must be of type ?array, {s} given", .{ arr_pos, phpTypeName(arr_val) });
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("TypeError", msg);
         return error.RuntimeError;
     }
@@ -435,7 +435,7 @@ fn strtolower(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
 fn strtoupper(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len != 1) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "strtoupper() expects exactly 1 argument, {d} given", .{args.len});
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("ArgumentCountError", msg);
         return error.RuntimeError;
     }
@@ -1444,7 +1444,7 @@ fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) !V
                                 if (ret == .string) break :blk ret.string.bytes();
                             } else {
                                 const msg = std.fmt.allocPrint(ctx.allocator, "Object of class {s} could not be converted to string", .{arg.object.class_name}) catch "Object could not be converted to string";
-                                try ctx.strings.append(ctx.allocator, msg);
+                                defer ctx.allocator.free(msg);
                                 try ctx.vm.setPendingException("Error", msg);
                                 return error.RuntimeError;
                             }
@@ -5846,7 +5846,7 @@ fn vsprintfArgsTooFew(ctx: *NativeContext, fmt: []const u8, argc: usize) Runtime
     required = @max(positional_max, seq_count);
     if (required > argc) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "The arguments array must contain {d} items, {d} given", .{ required, argc });
-        try ctx.vm.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("ValueError", msg);
         return true;
     }
@@ -6056,7 +6056,7 @@ fn native_sscanf(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
             },
             else => {
                 const msg = try std.fmt.allocPrint(ctx.allocator, "Bad scan conversion character \"{c}\"", .{spec});
-                try ctx.vm.strings.append(ctx.allocator, msg);
+                defer ctx.allocator.free(msg);
                 try ctx.vm.setPendingException("ValueError", msg);
                 return error.RuntimeError;
             },
@@ -6836,7 +6836,7 @@ fn native_mb_preferred_mime_name(ctx: *NativeContext, args: []const Value) Runti
     if (std.mem.eql(u8, l, "utf-16le")) return NativeResult.literal("UTF-16LE");
     if (std.mem.eql(u8, l, "utf-32")) return NativeResult.literal("UTF-32");
     const msg = try std.fmt.allocPrint(ctx.allocator, "mb_preferred_mime_name(): Argument #1 ($encoding) must be a valid encoding, \"{s}\" given", .{enc});
-    try ctx.vm.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException("ValueError", msg);
     return error.RuntimeError;
 }

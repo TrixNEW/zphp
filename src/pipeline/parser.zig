@@ -3434,7 +3434,9 @@ const Parser = struct {
     }
 
     fn addErrorAt(self: *Parser, token: u32, tag: Ast.Error.Tag) Error!void {
-        try self.errors.append(self.allocator, .{ .token = token, .tag = tag });
+        // advance() can step past the eof token; an error there is at eof
+        const last: u32 = @intCast(self.tokens.len - 1);
+        try self.errors.append(self.allocator, .{ .token = @min(token, last), .tag = tag });
     }
 
     fn synchronize(self: *Parser) void {

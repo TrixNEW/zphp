@@ -145,13 +145,13 @@ fn sqliteFuncTrampoline(ctx: *sqlite.Context, argc: c_int, argv: [*]?*sqlite.Val
                 const ptr = sqlite.sqlite3_value_text(v) orelse break :blk .{ .string = Value.String.borrowed("") };
                 const len: usize = @intCast(@max(sqlite.sqlite3_value_bytes(v), 0));
                 const slice = ptr[0..len];
-                const owned = state.vm.allocator.dupe(u8, slice) catch break :blk .{ .string = Value.String.borrowed("") };
-                state.vm.strings.append(state.vm.allocator, owned) catch {};
-                break :blk .{ .string = Value.String.borrowed(owned) };
+                const owned = Value.String.create(state.vm.allocator, slice) catch break :blk .{ .string = Value.String.borrowed("") };
+                break :blk .{ .string = owned };
             },
         };
     }
 
+    defer for (arg_buf[0..n]) |arg| if (arg == .string) arg.string.release();
     var nc = state.vm.makeContext(null);
     const result = nc.invokeCallable(state.callable, arg_buf[0..n]) catch {
         // surface a uniform error to sqlite; the throwing php exception is
@@ -189,13 +189,8 @@ fn sqliteCollationTrampoline(p: ?*anyopaque, alen: c_int, aptr: ?*const anyopaqu
         @as([*]const u8, @ptrCast(x))[0..@intCast(@max(blen, 0))]
     else
         "";
-    const a_owned = state.vm.allocator.dupe(u8, a_slice) catch return 0;
-    state.vm.strings.append(state.vm.allocator, a_owned) catch {};
-    const b_owned = state.vm.allocator.dupe(u8, b_slice) catch return 0;
-    state.vm.strings.append(state.vm.allocator, b_owned) catch {};
-
     var nc = state.vm.makeContext(null);
-    const result = nc.invokeCallable(state.callable, &.{ .{ .string = Value.String.borrowed(a_owned) }, .{ .string = Value.String.borrowed(b_owned) } }) catch return 0;
+    const result = nc.invokeCallable(state.callable, &.{ .{ .string = Value.String.borrowed(a_slice) }, .{ .string = Value.String.borrowed(b_slice) } }) catch return 0;
     return switch (result) {
         .int => |n| if (n < 0) @as(c_int, -1) else if (n > 0) @as(c_int, 1) else @as(c_int, 0),
         else => 0,
@@ -234,11 +229,11 @@ fn stepSqlite(ctx: *NativeContext, stmt: *sqlite.Stmt) RuntimeError!c_int {
 
 // build the SQLSTATE-prefixed message PHP's PDO uses for sqlite errors:
 // "SQLSTATE[HY000]: General error: <sqlite_errcode> <sqlite_errmsg>"
-fn pdoSqlMsg(ctx: *NativeContext, db: *sqlite.Db, raw: []const u8) ![]const u8 {
+fn throwSqlite(ctx: *NativeContext, db: *sqlite.Db, raw: []const u8) RuntimeError!NativeResult {
     const code = sqlite.sqlite3_errcode(db);
     const m = try std.fmt.allocPrint(ctx.allocator, "SQLSTATE[HY000]: General error: {d} {s}", .{ code, raw });
-    try ctx.strings.append(ctx.allocator, m);
-    return m;
+    defer ctx.allocator.free(m);
+    return throwPdo(ctx, m);
 }
 
 pub fn throwPdo(ctx: *NativeContext, msg: []const u8) RuntimeError!NativeResult {
@@ -250,8 +245,7 @@ pub fn throwPdo(ctx: *NativeContext, msg: []const u8) RuntimeError!NativeResult 
         if (this_v == .object) {
             const obj = this_v.object;
             try obj.set(ctx.allocator, "__error_code", .{ .string = Value.String.borrowed("HY000") });
-            const owned = try ctx.createString(msg);
-            try obj.set(ctx.allocator, "__error_message", .{ .string = Value.String.borrowed(owned) });
+            try obj.setCopiedString(ctx.allocator, "__error_message", msg);
             const mode = obj.get("__errmode");
             const m: i64 = if (mode == .int) mode.int else 2;
             if (m != 2) return NativeResult.scalar(.{ .bool = false });
@@ -261,12 +255,9 @@ pub fn throwPdo(ctx: *NativeContext, msg: []const u8) RuntimeError!NativeResult 
     return error.RuntimeError;
 }
 
+// a null-terminated copy for a C call; the caller frees it
 pub fn dupeZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
+    return ctx.allocator.dupeZ(u8, s);
 }
 
 pub fn register(vm: *VM, a: Allocator) !void {
@@ -627,7 +618,7 @@ fn pdoSqliteCreateFunction(ctx: *NativeContext, args: []const Value) RuntimeErro
     const name_buf = try ctx.allocator.alloc(u8, name.len + 1);
     @memcpy(name_buf[0..name.len], name);
     name_buf[name.len] = 0;
-    try ctx.vm.strings.append(ctx.allocator, name_buf);
+    defer ctx.allocator.free(name_buf);
 
     const rc = sqlite.sqlite3_create_function_v2(
         db,
@@ -801,7 +792,7 @@ fn pdoSqliteCreateCollation(ctx: *NativeContext, args: []const Value) RuntimeErr
     const name_buf = try ctx.allocator.alloc(u8, name.len + 1);
     @memcpy(name_buf[0..name.len], name);
     name_buf[name.len] = 0;
-    try ctx.vm.strings.append(ctx.allocator, name_buf);
+    defer ctx.allocator.free(name_buf);
 
     const rc = sqlite.sqlite3_create_collation_v2(db, @ptrCast(name_buf.ptr), sqlite.UTF8, @ptrCast(state), sqliteCollationTrampoline, sqliteFuncDestroy);
     if (rc != 0) {
@@ -822,6 +813,7 @@ fn pdoConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
 
     if (std.mem.eql(u8, driver, "sqlite")) {
         const path_z = try dupeZ(ctx, rest);
+        defer ctx.allocator.free(path_z);
         var db: ?*sqlite.Db = null;
         const rc = sqlite.sqlite3_open(path_z, &db);
         if (rc != sqlite.OK or db == null) return throwPdo(ctx, "Failed to open database");
@@ -866,13 +858,14 @@ fn pdoExec(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (std.mem.eql(u8, drv, "pgsql")) return pdo_pgsql.exec(ctx, obj, args[0].string.bytes());
     const db = getDbPtr(obj) orelse return throwPdo(ctx, "Database not connected");
     const sql_z = try dupeZ(ctx, args[0].string.bytes());
+    defer ctx.allocator.free(sql_z);
     var errmsg: ?[*:0]u8 = null;
     const rc = sqlite.sqlite3_exec(db, sql_z, null, null, @ptrCast(&errmsg));
     defer if (errmsg) |message| sqlite.sqlite3_free(message);
     if (ctx.vm.pending_exception != null) return error.RuntimeError;
     if (rc != sqlite.OK) {
         const raw = if (errmsg) |e| std.mem.span(e) else "SQL execution error";
-        const result = try throwPdo(ctx, try pdoSqlMsg(ctx, db, raw));
+        const result = try throwSqlite(ctx, db, raw);
         if (result.value == .bool and !result.value.bool) return NativeResult.scalar(.{ .bool = false });
         return result;
     }
@@ -888,11 +881,13 @@ fn pdoQuery(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     const db = getDbPtr(obj) orelse return throwPdo(ctx, "Database not connected");
 
     const sql_z = try dupeZ(ctx, args[0].string.bytes());
+
+    defer ctx.allocator.free(sql_z);
     var stmt_ptr: ?*sqlite.Stmt = null;
     const rc = sqlite.sqlite3_prepare_v2(db, sql_z, -1, &stmt_ptr, null);
     if (rc != sqlite.OK or stmt_ptr == null) {
         const msg = std.mem.span(sqlite.sqlite3_errmsg(db));
-        return throwPdo(ctx, try pdoSqlMsg(ctx, db, msg));
+        return throwSqlite(ctx, db, msg);
     }
 
     const stmt_obj = try ctx.createObject("PDOStatement");
@@ -901,7 +896,7 @@ fn pdoQuery(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     // step once to position on first row
     const step_rc = try stepSqlite(ctx, stmt_ptr.?);
     if (step_rc != sqlite.ROW and step_rc != sqlite.DONE)
-        return throwPdo(ctx, try pdoSqlMsg(ctx, db, std.mem.span(sqlite.sqlite3_errmsg(db))));
+        return throwSqlite(ctx, db, std.mem.span(sqlite.sqlite3_errmsg(db)));
     try stmt_obj.set(ctx.allocator, "__has_row", .{ .bool = step_rc == sqlite.ROW });
     try stmt_obj.set(ctx.allocator, "__stepped", .{ .bool = true });
 
@@ -917,11 +912,13 @@ fn pdoPrepare(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
     const db = getDbPtr(obj) orelse return throwPdo(ctx, "Database not connected");
 
     const sql_z = try dupeZ(ctx, args[0].string.bytes());
+
+    defer ctx.allocator.free(sql_z);
     var stmt_ptr: ?*sqlite.Stmt = null;
     const rc = sqlite.sqlite3_prepare_v2(db, sql_z, -1, &stmt_ptr, null);
     if (rc != sqlite.OK or stmt_ptr == null) {
         const msg = std.mem.span(sqlite.sqlite3_errmsg(db));
-        return throwPdo(ctx, try pdoSqlMsg(ctx, db, msg));
+        return throwSqlite(ctx, db, msg);
     }
 
     const stmt_obj = try ctx.createObject("PDOStatement");
@@ -995,7 +992,7 @@ fn pdoErrorInfo(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult
     try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(if (has_err) "HY000" else "00000") });
     if (has_err) {
         try arr.append(ctx.allocator, .{ .int = sqlite.sqlite3_errcode(db) });
-        try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(msg)) });
+        try arr.appendCopiedString(ctx.allocator, msg);
     } else {
         try arr.append(ctx.allocator, .null);
         try arr.append(ctx.allocator, .null);
@@ -1072,7 +1069,7 @@ fn stmtExecute(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     if (rc != sqlite.ROW and rc != sqlite.DONE) {
         if (getDbPtr(obj)) |db| {
             const msg = std.mem.span(sqlite.sqlite3_errmsg(db));
-            return throwPdo(ctx, try pdoSqlMsg(ctx, db, msg));
+            return throwSqlite(ctx, db, msg);
         }
         return NativeResult.scalar(.{ .bool = false });
     }
@@ -1592,7 +1589,7 @@ fn stmtGetColumnMeta(ctx: *NativeContext, args: []const Value) RuntimeError!Nati
     const arr = try ctx.createArray();
     if (sqlite.sqlite3_column_name(stmt, col)) |np| {
         const n = std.mem.span(np);
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed(try ctx.createString(n)) });
+        try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("name") }, n);
     }
     return NativeResult.borrowed(.{ .array = arr });
 }
@@ -1779,6 +1776,7 @@ fn bindParams(ctx: *NativeContext, stmt: *sqlite.Stmt, params: *PhpArray) !void 
                 // add : prefix if not present
                 if (name.len > 0 and name.bytes()[0] == ':') {
                     const z = try dupeZ(ctx, name.bytes());
+                    defer ctx.allocator.free(z);
                     break :blk sqlite.sqlite3_bind_parameter_index(stmt, z);
                 }
                 var buf: [256]u8 = undefined;

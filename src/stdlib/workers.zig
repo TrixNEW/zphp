@@ -1026,7 +1026,7 @@ fn getThis(ctx: *NativeContext) ?*PhpObject {
 
 fn throwNamed(ctx: *NativeContext, class_name: []const u8, comptime fmt: []const u8, args: anytype) RuntimeError {
     const msg = try std.fmt.allocPrint(ctx.allocator, fmt, args);
-    try ctx.vm.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException(class_name, msg);
     return error.RuntimeError;
 }
@@ -1244,12 +1244,12 @@ fn rethrow(ctx: *NativeContext, task: *Task) RuntimeError {
             try ctx.vm.setPendingException(f.class_name, msg);
         } else {
             const msg = try std.fmt.allocPrint(ctx.allocator, "{s}: {s}", .{ f.class_name, f.message });
-            try ctx.vm.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.setPendingException(task_exception, msg);
         }
         const exc = ctx.vm.pending_exception.?.object;
         try exc.set(ctx.allocator, "code", .{ .int = f.code });
-        if (f.file.len > 0) try exc.set(ctx.allocator, "file", .{ .string = Value.String.borrowed(try ctx.createString(f.file)) });
+        if (f.file.len > 0) try exc.setCopiedString(ctx.allocator, "file", f.file);
         try exc.set(ctx.allocator, "line", .{ .int = f.line });
         return error.RuntimeError;
     }

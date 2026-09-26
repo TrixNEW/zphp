@@ -63,12 +63,7 @@ fn coerceForLookup(ctx: *NativeContext, def_backed: anytype, arg: Value) !Value 
 }
 
 fn throwBuiltin(ctx: *NativeContext, class: []const u8, msg: []const u8) RuntimeError!Value {
-    const obj = try ctx.allocator.create(@import("../runtime/value.zig").PhpObject);
-    obj.* = .{ .class_name = class };
-    try obj.set(ctx.allocator, "message", .{ .string = Value.String.borrowed(msg) });
-    try obj.set(ctx.allocator, "code", .{ .int = 0 });
-    try ctx.vm.objects.append(ctx.allocator, obj);
-    ctx.vm.pending_exception = .{ .object = obj };
+    _ = try ctx.vm.throwBuiltinException(class, msg);
     return error.RuntimeError;
 }
 
@@ -113,7 +108,7 @@ fn checkEnumArgType(ctx: *NativeContext, backed: anytype, enum_name: []const u8,
     };
     if (ok) return null;
     const msg = try std.fmt.allocPrint(ctx.allocator, "{s}::{s}(): Argument #1 ($value) must be of type {s}, {s} given", .{ enum_name, fn_name, want, arg.typeName() });
-    try ctx.vm.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     _ = try throwBuiltin(ctx, "TypeError", msg);
     return null;
 }
@@ -133,7 +128,7 @@ pub fn enumFrom(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     }
     const arg_str = try argDisplayString(ctx, lookup);
     const msg = try std.fmt.allocPrint(ctx.allocator, "{s} is not a valid backing value for enum {s}", .{ arg_str, enum_name });
-    try ctx.vm.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     _ = try throwBuiltin(ctx, "ValueError", msg);
     unreachable;
 }

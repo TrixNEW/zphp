@@ -383,8 +383,7 @@ fn curlExec(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     if (result != c.CURLE_OK) {
         const err_msg = c.curl_easy_strerror(result);
         const msg = std.mem.span(err_msg);
-        const owned = try ctx.createString(msg);
-        try obj.set(ctx.allocator, "__error", .{ .string = Value.String.borrowed(owned) });
+        try obj.setCopiedString(ctx.allocator, "__error", msg);
         try obj.set(ctx.allocator, "__errno", .{ .int = @intCast(result) });
         return NativeResult.scalar(.{ .bool = false });
     }
@@ -458,7 +457,7 @@ fn getInfoOption(ctx: *NativeContext, handle: *c.CURL, option: i64) RuntimeError
         const arr = try ctx.createArray();
         var node = list;
         while (node) |item| : (node = item.next) {
-            try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(std.mem.span(item.data))) });
+            try arr.appendCopiedString(ctx.allocator, std.mem.span(item.data));
         }
         return NativeResult.borrowed(.{ .array = arr });
     }
@@ -524,16 +523,14 @@ fn getAllInfo(ctx: *NativeContext, handle: *c.CURL) RuntimeError!NativeResult {
     var url_ptr: [*c]u8 = null;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_EFFECTIVE_URL, &url_ptr) == c.CURLE_OK) {
         if (url_ptr != null) {
-            const s = try ctx.createString(std.mem.span(url_ptr));
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("url") }, .{ .string = Value.String.borrowed(s) });
+            try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("url") }, std.mem.span(url_ptr));
         }
     }
 
     var content_type_ptr: [*c]u8 = null;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_CONTENT_TYPE, &content_type_ptr) == c.CURLE_OK) {
         if (content_type_ptr != null) {
-            const s = try ctx.createString(std.mem.span(content_type_ptr));
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("content_type") }, .{ .string = Value.String.borrowed(s) });
+            try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("content_type") }, std.mem.span(content_type_ptr));
         } else {
             try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("content_type") }, .null);
         }
@@ -582,8 +579,7 @@ fn getAllInfo(ctx: *NativeContext, handle: *c.CURL) RuntimeError!NativeResult {
     var primary_ip_ptr: [*c]u8 = null;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_PRIMARY_IP, &primary_ip_ptr) == c.CURLE_OK) {
         if (primary_ip_ptr != null) {
-            const s = try ctx.createString(std.mem.span(primary_ip_ptr));
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("primary_ip") }, .{ .string = Value.String.borrowed(s) });
+            try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("primary_ip") }, std.mem.span(primary_ip_ptr));
         }
     }
 
@@ -598,16 +594,14 @@ fn getAllInfo(ctx: *NativeContext, handle: *c.CURL) RuntimeError!NativeResult {
     var scheme_ptr: [*c]u8 = null;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_SCHEME, &scheme_ptr) == c.CURLE_OK) {
         if (scheme_ptr != null) {
-            const s = try ctx.createString(std.mem.span(scheme_ptr));
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("scheme") }, .{ .string = Value.String.borrowed(s) });
+            try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("scheme") }, std.mem.span(scheme_ptr));
         }
     }
 
     var redirect_url_ptr: [*c]u8 = null;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_REDIRECT_URL, &redirect_url_ptr) == c.CURLE_OK) {
         if (redirect_url_ptr != null) {
-            const s = try ctx.createString(std.mem.span(redirect_url_ptr));
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("redirect_url") }, .{ .string = Value.String.borrowed(s) });
+            try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("redirect_url") }, std.mem.span(redirect_url_ptr));
         } else {
             try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("redirect_url") }, .{ .string = Value.String.borrowed("") });
         }
@@ -616,8 +610,7 @@ fn getAllInfo(ctx: *NativeContext, handle: *c.CURL) RuntimeError!NativeResult {
     var local_ip_ptr: [*c]u8 = null;
     if (c.curl_easy_getinfo(handle, c.CURLINFO_LOCAL_IP, &local_ip_ptr) == c.CURLE_OK) {
         if (local_ip_ptr != null) {
-            const s = try ctx.createString(std.mem.span(local_ip_ptr));
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("local_ip") }, .{ .string = Value.String.borrowed(s) });
+            try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("local_ip") }, std.mem.span(local_ip_ptr));
         }
     }
 
@@ -1060,20 +1053,16 @@ fn curlVersion(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult 
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("ssl_version_number") }, .{ .int = 0 });
 
     if (info.*.version) |ver| {
-        const s = try ctx.createString(std.mem.span(ver));
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("version") }, .{ .string = Value.String.borrowed(s) });
+        try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("version") }, std.mem.span(ver));
     }
     if (info.*.host) |host| {
-        const s = try ctx.createString(std.mem.span(host));
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("host") }, .{ .string = Value.String.borrowed(s) });
+        try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("host") }, std.mem.span(host));
     }
     if (info.*.ssl_version) |ssl| {
-        const s = try ctx.createString(std.mem.span(ssl));
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("ssl_version") }, .{ .string = Value.String.borrowed(s) });
+        try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("ssl_version") }, std.mem.span(ssl));
     }
     if (info.*.libz_version) |zlib| {
-        const s = try ctx.createString(std.mem.span(zlib));
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("libz_version") }, .{ .string = Value.String.borrowed(s) });
+        try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("libz_version") }, std.mem.span(zlib));
     }
 
     // protocols list - populate from null-terminated list of strings
@@ -1081,8 +1070,7 @@ fn curlVersion(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult 
     if (info.*.protocols) |protos| {
         var i: usize = 0;
         while (protos[i] != null) : (i += 1) {
-            const s = try ctx.createString(std.mem.span(protos[i]));
-            try protocols_arr.set(ctx.allocator, .{ .int = @intCast(i) }, .{ .string = Value.String.borrowed(s) });
+            try protocols_arr.setCopiedString(ctx.allocator, .{ .int = @intCast(i) }, std.mem.span(protos[i]));
         }
     }
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("protocols") }, .{ .array = protocols_arr });

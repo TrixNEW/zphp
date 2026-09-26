@@ -213,7 +213,7 @@ fn native_constant(ctx: *NativeContext, args: []const Value) RuntimeError!Native
         }
     }
     const msg = try std.fmt.allocPrint(ctx.allocator, "Undefined constant \"{s}\"", .{name});
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException("Error", msg);
     return error.RuntimeError;
 }
@@ -265,13 +265,13 @@ fn count(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
                 return NativeResult.share(try ctx.vm.callMethod(obj, "count", &.{}));
             }
             const msg = try std.fmt.allocPrint(ctx.allocator, "count(): Argument #1 ($value) must be of type Countable|array, {s} given", .{phpTypeName(args[0])});
-            try ctx.vm.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.setPendingException("TypeError", msg);
             return error.RuntimeError;
         },
         else => {
             const msg = try std.fmt.allocPrint(ctx.allocator, "count(): Argument #1 ($value) must be of type Countable|array, {s} given", .{phpTypeName(args[0])});
-            try ctx.vm.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.setPendingException("TypeError", msg);
             return error.RuntimeError;
         },
@@ -290,7 +290,7 @@ pub fn phpTypeName(v: Value) []const u8 {
 fn warnObjectToNumber(ctx: *NativeContext, v: Value, comptime target: []const u8) RuntimeError!void {
     if (v != .object or @import("../runtime/value.zig").nativeCast(v.object, .number) != null) return;
     const msg = try std.fmt.allocPrint(ctx.allocator, "Object of class {s} could not be converted to " ++ target, .{v.object.class_name});
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.emitWarning(msg);
 }
 
@@ -485,7 +485,7 @@ fn strlen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
             // as object-class Closure for the TypeError, matching PHP
             if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
                 const msg = try std.fmt.allocPrint(ctx.allocator, "strlen(): Argument #1 ($string) must be of type string, Closure given", .{});
-                try ctx.vm.strings.append(ctx.allocator, msg);
+                defer ctx.allocator.free(msg);
                 try ctx.vm.setPendingException("TypeError", msg);
                 break :blk error.RuntimeError;
             }
@@ -510,7 +510,7 @@ fn strlen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
             }
             // object without __toString: PHP throws TypeError with the class name
             const msg = try std.fmt.allocPrint(ctx.allocator, "strlen(): Argument #1 ($string) must be of type string, {s} given", .{phpTypeName(args[0])});
-            try ctx.vm.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.setPendingException("TypeError", msg);
             break :blk error.RuntimeError;
         },
@@ -1339,7 +1339,7 @@ fn native_spl_object_id(ctx: *NativeContext, args: []const Value) RuntimeError!N
 
 fn throwObjectArg(ctx: *NativeContext, comptime func: []const u8, v: Value) RuntimeError {
     const msg = try std.fmt.allocPrint(ctx.allocator, func ++ "(): Argument #1 ($object) must be of type object, {s} given", .{v.valueName()});
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException("TypeError", msg);
     return error.RuntimeError;
 }
@@ -1623,7 +1623,7 @@ fn native_ini_set(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     try args[1].format(&buf, ctx.allocator);
     if (std.mem.eql(u8, name, "memory_limit") and !try setMemoryLimit(ctx, buf.items)) return NativeResult.scalar(Value{ .bool = false });
     const result = try NativeResult.copyString(ctx.allocator, previous);
-    const new_val = try storeIni(ctx, name, buf.items);
+    const new_val = try ctx.vm.setIni(name, buf.items);
     // a few ini directives map directly to live VM state. mirror them now so
     // userland `ini_set('max_execution_time', '5')` actually arms the deadline
     if (std.mem.eql(u8, name, "max_execution_time")) {
@@ -1633,14 +1633,6 @@ fn native_ini_set(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     return result;
 }
 
-fn storeIni(ctx: *NativeContext, name: []const u8, value: []const u8) ![]const u8 {
-    const new_val = try ctx.allocator.dupe(u8, value);
-    try ctx.vm.strings.append(ctx.allocator, new_val);
-    const owned_name = try ctx.allocator.dupe(u8, name);
-    try ctx.vm.strings.append(ctx.allocator, owned_name);
-    try ctx.vm.ini_settings.put(ctx.allocator, owned_name, new_val);
-    return new_val;
-}
 
 const SUPPORTED_EXTENSIONS = [_][]const u8{
     "Core",      "standard",   "spl",       "json",      "pcre",
@@ -1887,11 +1879,7 @@ fn native_assert_options(ctx: *NativeContext, args: []const Value) RuntimeError!
             var buf: [32]u8 = undefined;
             const v = Value.toInt(args[1]);
             const s = std.fmt.bufPrint(&buf, "{d}", .{v}) catch return result;
-            const owned = try ctx.allocator.dupe(u8, s);
-            try ctx.vm.strings.append(ctx.allocator, owned);
-            const key_owned = try ctx.allocator.dupe(u8, key);
-            try ctx.vm.strings.append(ctx.allocator, key_owned);
-            try ctx.vm.ini_settings.put(ctx.allocator, key_owned, owned);
+            _ = try ctx.vm.setIni(key, s);
         }
     }
     return result;
@@ -1937,13 +1925,8 @@ fn native_ini_get_all(ctx: *NativeContext, _: []const Value) RuntimeError!Native
 fn native_ini_restore(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.null);
     const name = args[0].string.bytes();
-    _ = ctx.vm.ini_settings.remove(name);
+    try ctx.vm.restoreIni(name);
     if (std.mem.eql(u8, name, "memory_limit")) ctx.vm.applyConfiguredMemoryLimit();
-    if (@import("../ini_config.zig").get(name)) |configured| {
-        const owned_name = try ctx.allocator.dupe(u8, name);
-        try ctx.vm.strings.append(ctx.allocator, owned_name);
-        try ctx.vm.ini_settings.put(ctx.allocator, owned_name, configured);
-    }
     return NativeResult.scalar(.null);
 }
 
@@ -2115,7 +2098,7 @@ fn native_set_include_path(ctx: *NativeContext, args: []const Value) RuntimeErro
     try args[0].format(&buf, ctx.allocator);
     if (buf.items.len == 0) return NativeResult.scalar(.{ .bool = false });
     const previous = try NativeResult.copyString(ctx.allocator, includes.includePath(ctx.vm));
-    _ = try storeIni(ctx, "include_path", buf.items);
+    _ = try ctx.vm.setIni("include_path", buf.items);
     return previous;
 }
 
@@ -3299,7 +3282,7 @@ fn resourceArg(ctx: *NativeContext, comptime name: []const u8, args: []const Val
     const v: Value = if (args.len > 0) args[0] else .null;
     if (v == .resource) return v.resource;
     const msg = try std.fmt.allocPrint(ctx.allocator, name ++ "(): Argument #1 ($resource) must be of type resource, {s} given", .{v.typeName()});
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException("TypeError", msg);
     return error.RuntimeError;
 }

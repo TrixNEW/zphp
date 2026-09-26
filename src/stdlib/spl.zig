@@ -24,7 +24,7 @@ fn retainReturned(value: Value) Value {
 fn sosRequireObjectKey(ctx: *NativeContext, fn_name: []const u8, key: Value) !bool {
     if (key == .object) return true;
     const msg = try std.fmt.allocPrint(ctx.allocator, "SplObjectStorage::{s}(): Argument #1 ($object) must be of type object, {s} given", .{ fn_name, phpTypeName(key) });
-    try ctx.vm.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException("TypeError", msg);
     return false;
 }

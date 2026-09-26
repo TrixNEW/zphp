@@ -809,8 +809,7 @@ fn apiCallMethod(call: *Call, target: ?*const Value, name: CStr, args: ?[*]const
 
 fn apiThrow(call: *Call, class_name: CStr, message: CStr) callconv(.c) void {
     const cls = cstr(class_name) orelse "Exception";
-    const msg = call.ctx.createString(cstr(message) orelse "") catch "";
-    _ = call.ctx.vm.throwBuiltinException(cls, msg) catch {};
+    _ = call.ctx.vm.throwBuiltinException(cls, cstr(message) orelse "") catch {};
     call.threw = true;
 }
 

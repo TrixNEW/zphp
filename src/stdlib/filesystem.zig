@@ -438,7 +438,7 @@ pub fn processArg(ctx: *NativeContext, args: []const Value, comptime func: []con
 
 fn throwStreamArg(ctx: *NativeContext, comptime fmt: []const u8, args: anytype) RuntimeError {
     const msg = try std.fmt.allocPrint(ctx.allocator, fmt, args);
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException("TypeError", msg);
     return error.RuntimeError;
 }
@@ -847,14 +847,14 @@ fn native_pathinfo(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     while (path.len > 1 and platform.isSep(path[path.len - 1])) path = path[0 .. path.len - 1];
 
     const dir: []const u8 = if (lastSep(path)) |pos|
-        (if (pos == 0) platform.sep_str else try ctx.createString(path[0..pos]))
+        (if (pos == 0) platform.sep_str else path[0..pos])
     else
         ".";
-    const base: []const u8 = if (lastSep(path)) |pos| try ctx.createString(path[pos + 1 ..]) else path;
+    const base: []const u8 = if (lastSep(path)) |pos| path[pos + 1 ..] else path;
     const has_dot = std.mem.lastIndexOf(u8, base, ".") != null;
     const dot_pos: usize = if (has_dot) std.mem.lastIndexOf(u8, base, ".").? else 0;
-    const ext: []const u8 = if (has_dot) try ctx.createString(base[dot_pos + 1 ..]) else "";
-    const filename: []const u8 = if (has_dot) try ctx.createString(base[0..dot_pos]) else base;
+    const ext: []const u8 = if (has_dot) base[dot_pos + 1 ..] else "";
+    const filename: []const u8 = if (has_dot) base[0..dot_pos] else base;
 
     if (args.len >= 2 and args[1] == .int) {
         const flag = args[1].int;
@@ -868,12 +868,12 @@ fn native_pathinfo(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     }
 
     var arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("dirname") }, .{ .string = Value.String.borrowed(try ctx.createString(dir)) });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("basename") }, .{ .string = Value.String.borrowed(try ctx.createString(base)) });
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("dirname") }, dir);
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("basename") }, base);
     if (has_dot) {
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("extension") }, .{ .string = Value.String.borrowed(try ctx.createString(ext)) });
+        try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("extension") }, ext);
     }
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("filename") }, .{ .string = Value.String.borrowed(try ctx.createString(filename)) });
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("filename") }, filename);
     return NativeResult.borrowed(.{ .array = arr });
 }
 
@@ -952,33 +952,37 @@ fn native_scandir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     defer dir.close();
     transientStreams(ctx, 1);
 
-    var names = std.ArrayListUnmanaged([]const u8){};
+    var names = std.ArrayListUnmanaged(Value.String){};
     defer names.deinit(ctx.allocator);
-    try names.append(ctx.allocator, ".");
-    try names.append(ctx.allocator, "..");
+    defer for (names.items) |name| name.release();
+    try names.append(ctx.allocator, Value.String.borrowed("."));
+    try names.append(ctx.allocator, Value.String.borrowed(".."));
 
     var iter = dir.iterate();
     while (iter.next() catch null) |entry| {
-        const name = try ctx.createString(entry.name);
-        try names.append(ctx.allocator, name);
+        const name = try Value.String.create(ctx.allocator, entry.name);
+        names.append(ctx.allocator, name) catch |err| {
+            name.release();
+            return err;
+        };
     }
 
     if (order == 0 or order == 1) {
         const lessAsc = struct {
-            fn f(_: void, a: []const u8, b: []const u8) bool {
-                return std.mem.order(u8, a, b) == .lt;
+            fn f(_: void, a: Value.String, b: Value.String) bool {
+                return std.mem.order(u8, a.bytes(), b.bytes()) == .lt;
             }
         }.f;
         const lessDesc = struct {
-            fn f(_: void, a: []const u8, b: []const u8) bool {
-                return std.mem.order(u8, a, b) == .gt;
+            fn f(_: void, a: Value.String, b: Value.String) bool {
+                return std.mem.order(u8, a.bytes(), b.bytes()) == .gt;
             }
         }.f;
-        if (order == 0) std.mem.sort([]const u8, names.items, {}, lessAsc) else std.mem.sort([]const u8, names.items, {}, lessDesc);
+        if (order == 0) std.mem.sort(Value.String, names.items, {}, lessAsc) else std.mem.sort(Value.String, names.items, {}, lessDesc);
     }
 
     var result = try ctx.createArray();
-    for (names.items) |n| try result.append(ctx.allocator, .{ .string = Value.String.borrowed(n) });
+    for (names.items) |n| try result.append(ctx.allocator, .{ .string = n });
     return NativeResult.borrowed(.{ .array = result });
 }
 
@@ -1029,8 +1033,7 @@ fn native_opendir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     try names_arr.append(ctx.allocator, .{ .string = Value.String.borrowed("..") });
     var iter = dir.iterate();
     while (iter.next() catch null) |entry| {
-        const name = try ctx.createString(entry.name);
-        try names_arr.append(ctx.allocator, .{ .string = Value.String.borrowed(name) });
+        try names_arr.appendCopiedString(ctx.allocator, entry.name);
     }
     const obj = try ctx.createResource("DirectoryHandle");
     try obj.set(ctx.allocator, "__entries", .{ .array = names_arr });
@@ -1115,7 +1118,7 @@ fn native_glob(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     // a single-element array instead of an empty array
     const GLOB_NOCHECK: i64 = 16;
     if (result.entries.items.len == 0 and (flags & GLOB_NOCHECK) != 0) {
-        try result.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(pattern)) });
+        try result.appendCopiedString(ctx.allocator, pattern);
     }
     _ = GLOB_ONLYDIR;
     return NativeResult.borrowed(.{ .array = result });
@@ -1137,7 +1140,7 @@ fn globAppend(ctx: *NativeContext, result: *PhpArray, pattern: []const u8, flags
         var path_buf: [4096]u8 = undefined;
         const slash: []const u8 = if ((flags & GLOB_MARK) != 0 and entry.kind == .directory) "/" else "";
         const full = std.fmt.bufPrint(&path_buf, "{s}/{s}{s}", .{ dir_path, entry.name, slash }) catch continue;
-        try result.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(full)) });
+        try result.appendCopiedString(ctx.allocator, full);
     }
 }
 
@@ -1375,7 +1378,7 @@ fn statOne(ctx: *NativeContext, args: []const Value, comptime field: StatField, 
     };
     if (value) |v| return NativeResult.scalar(.{ .int = v });
     const msg = try std.fmt.allocPrint(ctx.allocator, fn_name ++ "(): stat failed for {s}", .{path});
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.emitWarning(msg);
     return NativeResult.scalar(.{ .bool = false });
 }
@@ -1592,7 +1595,7 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
         const obj = try ctx.createResource("FileHandle");
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = Value.String.borrowed(mode) });
-        try obj.set(ctx.allocator, "__zlib_path", .{ .string = Value.String.borrowed(try ctx.createString(path)) });
+        try obj.setCopiedString(ctx.allocator, "__zlib_path", path);
         if (is_write) {
             try obj.set(ctx.allocator, "__zlib_writing", .{ .bool = true });
             try obj.set(ctx.allocator, "__buffer", .{ .string = Value.String.borrowed("") });
@@ -1616,7 +1619,7 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
         openWithMode(path, mode) catch |err| {
             const reason = openErrorReason(err);
             const msg = std.fmt.allocPrint(ctx.allocator, "fopen({s}): Failed to open stream: {s}", .{ path, reason }) catch return NativeResult.scalar(.{ .bool = false });
-            ctx.vm.strings.append(ctx.allocator, msg) catch {};
+            defer ctx.allocator.free(msg);
             try ctx.vm.emitWarning(msg);
             return NativeResult.scalar(.{ .bool = false });
         };
@@ -1625,7 +1628,7 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     try obj.set(ctx.allocator, "__fd", .{ .int = platform.fdFromFile(file) });
     try obj.set(ctx.allocator, "__open", .{ .bool = true });
     try obj.set(ctx.allocator, "__mode", .{ .string = Value.String.borrowed(mode) });
-    try obj.set(ctx.allocator, "__path", .{ .string = Value.String.borrowed(try ctx.createString(path)) });
+    try obj.setCopiedString(ctx.allocator, "__path", path);
     if (is_memory_stream) try obj.set(ctx.allocator, "__peek_eof", .{ .bool = true });
     return NativeResult.borrowed(.{ .resource = obj });
 }
@@ -2820,7 +2823,7 @@ fn native_stat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         .found => |st| return NativeResult.borrowed(.{ .array = try wrapperStatArray(ctx, st) }),
         .missing => {
             const msg = try std.fmt.allocPrint(ctx.allocator, "stat(): stat failed for {s}", .{path});
-            try ctx.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.emitWarning(msg);
             return NativeResult.scalar(.{ .bool = false });
         },

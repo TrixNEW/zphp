@@ -1556,12 +1556,12 @@ fn mb_split(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
         const match_start = ovector[0];
         const match_end = ovector[1];
 
-        try result.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(subject[offset..match_start])) });
+        try result.appendCopiedString(ctx.allocator, subject[offset..match_start]);
         splits += 1;
 
         if (match_end == offset) {
             if (offset < subject.len) {
-                try result.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(subject[offset .. offset + 1])) });
+                try result.appendCopiedString(ctx.allocator, subject[offset .. offset + 1]);
             }
             offset += 1;
         } else {
@@ -1570,7 +1570,7 @@ fn mb_split(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     }
 
     if (offset <= subject.len) {
-        try result.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(subject[offset..])) });
+        try result.appendCopiedString(ctx.allocator, subject[offset..]);
     }
 
     return NativeResult.borrowed(.{ .array = result });

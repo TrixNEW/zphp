@@ -912,8 +912,12 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     ic.locals_sp = ci_lbase + ci_lc;
                     const ci_bind = @min(ci_acn, ci_func.arity);
                     for (0..ci_bind) |i| ci_locals[i] = self.stack[sp - ci_acn + i];
-                    for (ci_bind..ci_func.arity) |i| {
-                        if (i < ci_func.defaults.len) ci_locals[i] = try resolveDefault(self, ic, ci_func.defaults[i]);
+                    // a default can autoload (self::CONST), running nested frames on
+                    // the shared operand stack: publish the stack pointer first
+                    self.sp = sp;
+                    if (try fillDefaults(self, ic, ci_func, ci_locals, ci_bind, 0)) {
+                        frame.ip = ip;
+                        return;
                     }
                     self.sp = sp;
                     self.saveFrameArgs(ci_ac);
@@ -1090,8 +1094,10 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                                 for (0..@min(mc_ac, mc_func.arity)) |i| {
                                     mc_locals[i + mc_first] = self.stack[sp - mc_ac + i];
                                 }
-                                for (@min(mc_ac, mc_func.arity)..mc_func.arity) |i| {
-                                    if (i < mc_func.defaults.len) mc_locals[i + mc_first] = try resolveDefault(self, ic, mc_func.defaults[i]);
+                                self.sp = sp;
+                                if (try fillDefaults(self, ic, mc_func, mc_locals, @min(mc_ac, mc_func.arity), mc_first)) {
+                                    frame.ip = ip;
+                                    return;
                                 }
                                 self.sp = sp;
                                 self.dropN(mc_ac + 1);
@@ -1186,8 +1192,10 @@ fn fastLoopImpl(self: *VM) RuntimeError!void {
                     for (0..bind_count) |i| {
                         new_locals[i] = self.stack[sp - ac + i];
                     }
-                    for (bind_count..func.arity) |i| {
-                        if (i < func.defaults.len) new_locals[i] = try resolveDefault(self, ic, func.defaults[i]);
+                    self.sp = sp;
+                    if (try fillDefaults(self, ic, func, new_locals, bind_count, 0)) {
+                        frame.ip = ip;
+                        return;
                     }
                     self.sp = sp;
                     // func_get_args reads the call's arguments from here
@@ -1619,10 +1627,23 @@ inline fn copyValue(self: *VM, ic: *InlineCache, val: Value) RuntimeError!Value 
     return out;
 }
 
-inline fn resolveDefault(self: *VM, ic: *InlineCache, val: Value) RuntimeError!Value {
-    var out: Value = .null;
-    try status(ic.slow.resolve_default(self, val, &out));
-    return out;
+// the defaults of the parameters a call left out. when one raises, the
+// pooled locals are given back, since the frame is never entered, and true
+// means the error landed in a catch and the fast loop must return
+inline fn fillDefaults(self: *VM, ic: *InlineCache, func: *const ObjFunction, locals: []Value, bound: usize, offset: usize) RuntimeError!bool {
+    for (bound..func.arity) |i| {
+        if (i >= func.defaults.len) continue;
+        var dispatched = false;
+        status(ic.slow.resolve_default(self, func, i, &locals[i + offset], &dispatched)) catch |err| {
+            ic.locals_sp -= locals.len;
+            return err;
+        };
+        if (dispatched) {
+            ic.locals_sp -= locals.len;
+            return true;
+        }
+    }
+    return false;
 }
 
 inline fn checkParamTypes(self: *VM, ic: *InlineCache, name: []const u8, arg_count: u8) RuntimeError!bool {

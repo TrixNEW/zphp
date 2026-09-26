@@ -12,6 +12,7 @@ than the watchdog is saved under tests/fuzz/findings/ with its kind. Timeouts
 are only leads: confirm against php before treating one as a bug (the
 program itself may loop, and some natives are quadratic in php too).
 """
+import re
 import glob
 import os
 import random
@@ -84,8 +85,11 @@ def run_case(argv):
     watcher.join()
     if outcome:
         return outcome[0]
-    if proc.returncode in (-6, -11, 134, 139) or b"panic" in stderr or b"Segmentation" in stderr:
-        line = next((l for l in stderr.split(b"\n") if b"panic" in l or b"Segmentation" in l), b"crash")
+    # a real panic line is "panic: ..." or "thread N panic: ..."; a parse
+    # error snippet can quote source text that merely contains the word
+    crash_line = re.compile(rb"^(thread \d+ )?panic: |^Segmentation fault")
+    if proc.returncode in (-6, -11, 134, 139) or any(crash_line.match(l) for l in stderr.split(b"\n")):
+        line = next((l for l in stderr.split(b"\n") if crash_line.match(l)), b"crash")
         return "crash: " + line[:120].decode(errors="replace")
     return None
 

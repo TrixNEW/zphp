@@ -351,7 +351,7 @@ fn valueAsStringForCompare(ctx: *NativeContext, v: Value) RuntimeError!Value.Str
         }
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Object of class {s} could not be converted to string", .{v.object.class_name}) catch "Object could not be converted to string";
-        try ctx.vm.setPendingException("Error", try ctx.createString(msg));
+        try ctx.vm.setPendingException("Error", msg);
         return error.RuntimeError;
     }
     var buf = std.ArrayListUnmanaged(u8){};
@@ -551,7 +551,7 @@ fn natcasesort_impl(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
 
 fn throwArrayTypeError(ctx: *NativeContext, fn_name: []const u8, arg_pos: u8, got: Value) RuntimeError {
     const msg = std.fmt.allocPrint(ctx.allocator, "{s}(): Argument #{d} ($array) must be of type array, {s} given", .{ fn_name, arg_pos, phpTypeName(got) }) catch return error.RuntimeError;
-    ctx.vm.strings.append(ctx.allocator, msg) catch {};
+    defer ctx.allocator.free(msg);
     ctx.vm.setPendingException("TypeError", msg) catch {};
     return error.RuntimeError;
 }
@@ -717,7 +717,7 @@ fn array_map(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
         const cb_name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
         if (!ctx.vm.functionExists(cb_name)) {
             const msg = std.fmt.allocPrint(ctx.allocator, "array_map(): Argument #1 ($callback) must be a valid callback or null, function \"{s}\" not found or invalid function name", .{cb_name}) catch "array_map(): Argument #1 ($callback) must be a valid callback or null";
-            try ctx.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.setPendingException("TypeError", msg);
             return error.RuntimeError;
         }
@@ -1368,7 +1368,7 @@ fn arithmeticOperand(ctx: *NativeContext, v: Value, comptime what: []const u8) R
         .object => |o| {
             if (@import("../runtime/value.zig").nativeCast(o, .number)) |n| return n;
             const msg = try std.fmt.allocPrint(ctx.allocator, what ++ " is not supported on type {s}", .{o.class_name});
-            try ctx.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.emitWarning(msg);
             return null;
         },
@@ -1612,10 +1612,8 @@ fn native_extract(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     for (arr.entries.items) |entry| {
         if (entry.key != .string) continue;
         const key = entry.key.string.bytes();
-        const base = try std.fmt.allocPrint(ctx.allocator, "${s}", .{key});
-        try ctx.strings.append(ctx.allocator, base);
-        const prefixed = try std.fmt.allocPrint(ctx.allocator, "${s}_{s}", .{ prefix, key });
-        try ctx.strings.append(ctx.allocator, prefixed);
+        const base = try ctx.vm.internVarName(key);
+        const prefixed = try internVarName(ctx, "${s}_{s}", .{ prefix, key });
 
         var var_name: []const u8 = base;
         const base_valid = isValidIdent(base);
@@ -1656,6 +1654,14 @@ fn native_extract(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
         count_val += 1;
     }
     return NativeResult.scalar(.{ .int = count_val });
+}
+
+// a variable name a frame's vars map will borrow: interned, so repeated calls
+// reuse one copy
+fn internVarName(ctx: *NativeContext, comptime fmt: []const u8, args: anytype) ![]const u8 {
+    const name = try std.fmt.allocPrint(ctx.allocator, fmt, args);
+    defer ctx.allocator.free(name);
+    return ctx.vm.internName(name);
 }
 
 fn keyLessThan(_: void, a: PhpArray.Entry, b: PhpArray.Entry) bool {

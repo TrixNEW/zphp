@@ -962,11 +962,8 @@ fn native_set_time_limit(ctx: *NativeContext, args: []const Value) RuntimeError!
     if (seconds < 0) seconds = 0;
     ctx.vm.setExecutionLimit(seconds);
     // mirror into the ini directive so subsequent ini_get sees the new value
-    const repr = std.fmt.allocPrint(ctx.allocator, "{d}", .{seconds}) catch return NativeResult.scalar(.{ .bool = false });
-    try ctx.vm.strings.append(ctx.allocator, repr);
-    const owned_name = ctx.allocator.dupe(u8, "max_execution_time") catch return NativeResult.scalar(.{ .bool = false });
-    try ctx.vm.strings.append(ctx.allocator, owned_name);
-    try ctx.vm.ini_settings.put(ctx.allocator, owned_name, repr);
+    var buf: [24]u8 = undefined;
+    _ = try ctx.vm.setIni("max_execution_time", std.fmt.bufPrint(&buf, "{d}", .{seconds}) catch unreachable);
     return NativeResult.scalar(.{ .bool = true });
 }
 

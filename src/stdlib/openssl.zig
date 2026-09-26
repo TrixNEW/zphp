@@ -193,8 +193,9 @@ fn opensslEncrypt(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
         const tag_len: usize = if (args.len > 7 and args[7] == .int and args[7].int > 0) @intCast(@min(args[7].int, 16)) else 16;
         if (c.EVP_CIPHER_CTX_ctrl(evp_ctx, c.EVP_CTRL_AEAD_GET_TAG, @intCast(tag_len), &tag_buf) != 1)
             return NativeResult.scalar(.{ .bool = false });
-        const tag_str = try ctx.createString(tag_buf[0..tag_len]);
-        ctx.setCallerVar(5, args.len, .{ .string = Value.String.borrowed(tag_str) });
+        const tag_str = try Value.String.create(ctx.allocator, tag_buf[0..tag_len]);
+        defer tag_str.release();
+        ctx.setCallerVar(5, args.len, .{ .string = tag_str });
     }
 
     const raw = out_buf[0..total];

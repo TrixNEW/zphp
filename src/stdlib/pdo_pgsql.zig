@@ -57,6 +57,7 @@ pub fn connect(ctx: *NativeContext, obj: *PhpObject, rest: []const u8, args: []c
     // build libpq connection string from DSN params
     // pgsql:host=localhost;port=5432;dbname=test -> "host=localhost port=5432 dbname=test user=X password=Y"
     var conninfo = std.ArrayListUnmanaged(u8){};
+    defer conninfo.deinit(ctx.allocator);
 
     var iter = std.mem.splitScalar(u8, rest, ';');
     while (iter.next()) |param| {
@@ -83,13 +84,11 @@ pub fn connect(ctx: *NativeContext, obj: *PhpObject, rest: []const u8, args: []c
 
     try conninfo.append(ctx.allocator, 0);
     const conninfo_z: [*:0]const u8 = @ptrCast(conninfo.items.ptr);
-    try ctx.strings.append(ctx.allocator, conninfo.items);
 
     const conn = pg.PQconnectdb(conninfo_z) orelse return pdo.throwPdo(ctx, "Failed to connect to PostgreSQL");
     if (pg.PQstatus(conn) != pg.CONNECTION_OK) {
-        const msg = try ctx.createString(std.mem.span(pg.PQerrorMessage(conn)));
-        pg.PQfinish(conn);
-        return pdo.throwPdo(ctx, msg);
+        defer pg.PQfinish(conn);
+        return pdo.throwPdo(ctx, std.mem.span(pg.PQerrorMessage(conn)));
     }
 
     attachConn(obj, conn);
@@ -99,12 +98,12 @@ pub fn connect(ctx: *NativeContext, obj: *PhpObject, rest: []const u8, args: []c
 pub fn exec(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeError!NativeResult {
     const conn = getConn(obj) orelse return pdo.throwPdo(ctx, "Database not connected");
     const sql_z = try pdo.dupeZ(ctx, sql);
+    defer ctx.allocator.free(sql_z);
     const res = pg.PQexec(conn, sql_z) orelse return pdo.throwPdo(ctx, std.mem.span(pg.PQerrorMessage(conn)));
     const status = pg.PQresultStatus(res);
     if (status != pg.PGRES_COMMAND_OK and status != pg.PGRES_TUPLES_OK) {
-        const msg = std.mem.span(pg.PQresultErrorMessage(res));
-        pg.PQclear(res);
-        return pdo.throwPdo(ctx, msg);
+        defer pg.PQclear(res);
+        return pdo.throwPdo(ctx, std.mem.span(pg.PQresultErrorMessage(res)));
     }
     const affected = std.fmt.parseInt(i64, std.mem.span(pg.PQcmdTuples(res)), 10) catch 0;
     pg.PQclear(res);
@@ -114,12 +113,12 @@ pub fn exec(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeError!
 pub fn query(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeError!NativeResult {
     const conn = getConn(obj) orelse return pdo.throwPdo(ctx, "Database not connected");
     const sql_z = try pdo.dupeZ(ctx, sql);
+    defer ctx.allocator.free(sql_z);
     const res = pg.PQexec(conn, sql_z) orelse return pdo.throwPdo(ctx, std.mem.span(pg.PQerrorMessage(conn)));
     const status = pg.PQresultStatus(res);
     if (status != pg.PGRES_TUPLES_OK and status != pg.PGRES_COMMAND_OK) {
-        const msg = std.mem.span(pg.PQresultErrorMessage(res));
-        pg.PQclear(res);
-        return pdo.throwPdo(ctx, msg);
+        defer pg.PQclear(res);
+        return pdo.throwPdo(ctx, std.mem.span(pg.PQresultErrorMessage(res)));
     }
 
     const stmt_obj = try ctx.createObject("PDOStatement");
@@ -135,6 +134,7 @@ pub fn prepare(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeErr
 
     // rewrite ? and :name to $1, $2, ... for postgres
     var rewritten = std.ArrayListUnmanaged(u8){};
+    defer rewritten.deinit(ctx.allocator);
     var param_names = std.ArrayListUnmanaged([]const u8){};
     var param_count: usize = 0;
     var i: usize = 0;
@@ -176,14 +176,12 @@ pub fn prepare(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeErr
     try stmt_obj.set(ctx.allocator, "__stepped", .{ .bool = false });
     try stmt_obj.set(ctx.allocator, "__param_count", .{ .int = @intCast(param_count) });
 
-    const sql_owned = try rewritten.toOwnedSlice(ctx.allocator);
-    try ctx.strings.append(ctx.allocator, sql_owned);
-    try stmt_obj.set(ctx.allocator, "__sql", .{ .string = Value.String.borrowed(sql_owned) });
+    try stmt_obj.setCopiedString(ctx.allocator, "__sql", rewritten.items);
 
     if (param_names.items.len > 0) {
         var map = try ctx.createArray();
         for (param_names.items, 0..) |name, idx| {
-            try map.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, .{ .int = @intCast(idx) });
+            try map.setCopiedKey(ctx.allocator, name, .{ .int = @intCast(idx) });
         }
         try stmt_obj.set(ctx.allocator, "__param_map", .{ .array = map });
     }
@@ -197,6 +195,7 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
     const sql_val = obj.get("__sql");
     if (sql_val != .string) return NativeResult.scalar(.{ .bool = false });
     const sql_z = try pdo.dupeZ(ctx, sql_val.string.bytes());
+    defer ctx.allocator.free(sql_z);
 
     // free previous result
     if (getRes(obj)) |old_res| {
@@ -212,10 +211,12 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
         const param_map_val = obj.get("__param_map");
         const param_map = if (param_map_val == .array) param_map_val.array else null;
 
-        // build param values array
-        var param_values = try ctx.allocator.alloc(?[*:0]const u8, param_count);
+        const param_texts = try ctx.allocator.alloc(?[:0]u8, param_count);
+        defer ctx.allocator.free(param_texts);
+        @memset(param_texts, null);
+        defer for (param_texts) |text| if (text) |owned| ctx.allocator.free(owned);
+        const param_values = try ctx.allocator.alloc(?[*:0]const u8, param_count);
         defer ctx.allocator.free(param_values);
-        @memset(param_values, null);
 
         if (param_map) |pm| {
             // named params
@@ -226,11 +227,8 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
                 if (idx_val == .int) {
                     const idx: usize = @intCast(idx_val.int);
                     if (idx < param_count) {
-                        if (entry.value == .null) {
-                            param_values[idx] = null;
-                        } else {
-                            param_values[idx] = try valueToZ(ctx, entry.value);
-                        }
+                        if (param_texts[idx]) |old| ctx.allocator.free(old);
+                        param_texts[idx] = try paramText(ctx, entry.value);
                     }
                 }
             }
@@ -238,20 +236,16 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
             // positional params
             for (params.entries.items, 0..) |entry, idx| {
                 if (idx >= param_count) break;
-                if (entry.value == .null) {
-                    param_values[idx] = null;
-                } else {
-                    param_values[idx] = try valueToZ(ctx, entry.value);
-                }
+                param_texts[idx] = try paramText(ctx, entry.value);
             }
         }
 
+        for (param_texts, param_values) |text, *value| value.* = if (text) |owned| owned.ptr else null;
         const res = pg.PQexecParams(conn, sql_z, @intCast(param_count), null, param_values.ptr, null, null, 0) orelse return NativeResult.scalar(.{ .bool = false });
         const status = pg.PQresultStatus(res);
         if (status != pg.PGRES_TUPLES_OK and status != pg.PGRES_COMMAND_OK) {
-            const msg = std.mem.span(pg.PQresultErrorMessage(res));
-            pg.PQclear(res);
-            return pdo.throwPdo(ctx, msg);
+            defer pg.PQclear(res);
+            return pdo.throwPdo(ctx, std.mem.span(pg.PQresultErrorMessage(res)));
         }
         setRes(obj, res);
         try obj.set(ctx.allocator, "__current_row", .{ .int = 0 });
@@ -261,9 +255,8 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
         const res = pg.PQexec(conn, sql_z) orelse return NativeResult.scalar(.{ .bool = false });
         const status = pg.PQresultStatus(res);
         if (status != pg.PGRES_TUPLES_OK and status != pg.PGRES_COMMAND_OK) {
-            const msg = std.mem.span(pg.PQresultErrorMessage(res));
-            pg.PQclear(res);
-            return pdo.throwPdo(ctx, msg);
+            defer pg.PQclear(res);
+            return pdo.throwPdo(ctx, std.mem.span(pg.PQresultErrorMessage(res)));
         }
         setRes(obj, res);
         try obj.set(ctx.allocator, "__current_row", .{ .int = 0 });
@@ -274,28 +267,17 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
     return NativeResult.scalar(.{ .bool = true });
 }
 
-fn valueToZ(ctx: *NativeContext, val: Value) !?[*:0]const u8 {
-    switch (val) {
-        .null => return null,
-        .bool => |b| return if (b) "1" else "0",
-        .int => |i| {
-            var buf: [32]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return "0";
-            const z = try pdo.dupeZ(ctx, s);
-            return z.ptr;
-        },
-        .float => |f| {
-            var buf: [64]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "{d}", .{f}) catch return "0";
-            const z = try pdo.dupeZ(ctx, s);
-            return z.ptr;
-        },
-        .string => |s| {
-            const z = try pdo.dupeZ(ctx, s.bytes());
-            return z.ptr;
-        },
+// a parameter's text for PQexecParams, owned by the caller; null is SQL NULL
+fn paramText(ctx: *NativeContext, val: Value) !?[:0]u8 {
+    var buf: [64]u8 = undefined;
+    const text: []const u8 = switch (val) {
+        .bool => |b| if (b) "1" else "0",
+        .int => |i| std.fmt.bufPrint(&buf, "{d}", .{i}) catch unreachable,
+        .float => |f| std.fmt.bufPrint(&buf, "{d}", .{f}) catch "0",
+        .string => |str| str.bytes(),
         else => return null,
-    }
+    };
+    return try pdo.dupeZ(ctx, text);
 }
 
 pub fn stmtFetch(ctx: *NativeContext, obj: *PhpObject, args: []const Value) RuntimeError!NativeResult {
@@ -313,14 +295,15 @@ pub fn stmtFetch(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Runt
     while (col < num_fields) : (col += 1) {
         const val = if (pg.PQgetisnull(res, current_row, col) != 0) Value.null else blk: {
             const s = std.mem.span(pg.PQgetvalue(res, current_row, col));
-            break :blk Value{ .string = Value.String.borrowed(try ctx.createString(s)) };
+            break :blk Value{ .string = try Value.String.create(ctx.allocator, s) };
         };
+        defer if (val == .string) val.string.release();
 
         if (mode == 3 or mode == 4) try row.append(ctx.allocator, val);
         if (mode == 2 or mode == 4) {
             if (pg.PQfname(res, col)) |name_ptr| {
                 const name = std.mem.span(name_ptr);
-                try row.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(name)) }, val);
+                try row.setCopiedKey(ctx.allocator, name, val);
             }
         }
     }
@@ -414,7 +397,7 @@ pub fn errorInfo(ctx: *NativeContext, obj: *PhpObject) RuntimeError!NativeResult
     const msg = std.mem.span(pg.PQerrorMessage(conn));
     try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("00000") });
     try arr.append(ctx.allocator, .null);
-    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(msg)) });
+    try arr.appendCopiedString(ctx.allocator, msg);
     return NativeResult.borrowed(.{ .array = arr });
 }
 

@@ -2129,3 +2129,15 @@ test "class-like bodies reject tokens that start no member" {
     try expectParseErrorAt("<?php trait T { ; }", ";");
     try expectParseErrorAt("<?php interface I { ; }", ";");
 }
+
+test "a parse error past the last token is reported at end of input" {
+    const source = "<?php\nclass Box {\n    public int $n = 1{\n    public Inner $inne#[;";
+    var ast = try parser.parse(std.testing.allocator, source);
+    defer ast.deinit();
+    try std.testing.expect(ast.errors.len > 0);
+    for (ast.errors) |err| try std.testing.expect(err.token < ast.tokens.len);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const text = @import("error_format.zig").formatParseErrors(arena.allocator(), &ast, "box.php");
+    try std.testing.expect(std.mem.indexOf(u8, text, "Parse error") != null);
+}

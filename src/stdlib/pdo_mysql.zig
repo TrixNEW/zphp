@@ -89,16 +89,20 @@ pub fn connect(ctx: *NativeContext, obj: *PhpObject, rest: []const u8, args: []c
 
     const conn = mysql.mysql_init(null) orelse return pdo.throwPdo(ctx, "Failed to initialize MySQL connection");
 
-    const host_z: ?[*:0]const u8 = if (params.host) |h| (try pdo.dupeZ(ctx, h)).ptr else null;
-    const user_z: ?[*:0]const u8 = if (user) |u| (try pdo.dupeZ(ctx, u)).ptr else null;
-    const pass_z: ?[*:0]const u8 = if (pass) |p| (try pdo.dupeZ(ctx, p)).ptr else null;
-    const db_z: ?[*:0]const u8 = if (params.dbname) |d| (try pdo.dupeZ(ctx, d)).ptr else null;
-    const sock_z: ?[*:0]const u8 = if (params.unix_socket) |s| (try pdo.dupeZ(ctx, s)).ptr else null;
+    const host_z = try optionalZ(ctx, params.host);
+    defer if (host_z) |z| ctx.allocator.free(z);
+    const user_z = try optionalZ(ctx, user);
+    defer if (user_z) |z| ctx.allocator.free(z);
+    const pass_z = try optionalZ(ctx, pass);
+    defer if (pass_z) |z| ctx.allocator.free(z);
+    const db_z = try optionalZ(ctx, params.dbname);
+    defer if (db_z) |z| ctx.allocator.free(z);
+    const sock_z = try optionalZ(ctx, params.unix_socket);
+    defer if (sock_z) |z| ctx.allocator.free(z);
 
-    if (mysql.mysql_real_connect(conn, host_z, user_z, pass_z, db_z, params.port, sock_z, 0) == null) {
-        const msg = try ctx.createString(std.mem.span(mysql.mysql_error(conn)));
-        mysql.mysql_close(conn);
-        return pdo.throwPdo(ctx, msg);
+    if (mysql.mysql_real_connect(conn, cPtr(host_z), cPtr(user_z), cPtr(pass_z), cPtr(db_z), params.port, cPtr(sock_z), 0) == null) {
+        defer mysql.mysql_close(conn);
+        return pdo.throwPdo(ctx, std.mem.span(mysql.mysql_error(conn)));
     }
 
     attachConn(obj, conn);
@@ -135,6 +139,7 @@ pub fn prepare(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeErr
 
     // rewrite named params to positional ? and build param map
     var rewritten = std.ArrayListUnmanaged(u8){};
+    defer rewritten.deinit(ctx.allocator);
     var param_names = std.ArrayListUnmanaged([]const u8){};
     var i: usize = 0;
     var in_string = false;
@@ -164,14 +169,12 @@ pub fn prepare(ctx: *NativeContext, obj: *PhpObject, sql: []const u8) RuntimeErr
     try stmt_obj.set(ctx.allocator, "__has_row", .{ .bool = false });
     try stmt_obj.set(ctx.allocator, "__stepped", .{ .bool = false });
 
-    const sql_owned = try rewritten.toOwnedSlice(ctx.allocator);
-    try ctx.strings.append(ctx.allocator, sql_owned);
-    try stmt_obj.set(ctx.allocator, "__sql", .{ .string = Value.String.borrowed(sql_owned) });
+    try stmt_obj.setCopiedString(ctx.allocator, "__sql", rewritten.items);
 
     if (param_names.items.len > 0) {
         var map = try ctx.createArray();
         for (param_names.items, 0..) |name, idx| {
-            try map.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, .{ .int = @intCast(idx) });
+            try map.setCopiedKey(ctx.allocator, name, .{ .int = @intCast(idx) });
         }
         try stmt_obj.set(ctx.allocator, "__param_map", .{ .array = map });
     }
@@ -187,10 +190,13 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
     var sql = sql_val.string.bytes();
 
     // if params provided, escape and interpolate
+    var interpolated: ?[]u8 = null;
+    defer if (interpolated) |text| ctx.allocator.free(text);
     if (args.len >= 1 and args[0] == .array) {
         const params = args[0].array;
         const param_map_val = obj.get("__param_map");
-        sql = try interpolateParams(ctx, conn, sql, params, if (param_map_val == .array) param_map_val.array else null);
+        interpolated = try interpolateParams(ctx, conn, sql, params, if (param_map_val == .array) param_map_val.array else null);
+        sql = interpolated.?;
     }
 
     // free previous result if any
@@ -216,13 +222,21 @@ pub fn stmtExecute(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Ru
     return NativeResult.scalar(.{ .bool = true });
 }
 
-fn interpolateParams(ctx: *NativeContext, conn: *mysql.MYSQL, sql: []const u8, params: *PhpArray, param_map: ?*PhpArray) ![]const u8 {
-    // collect param values in positional order
-    var positional = std.ArrayListUnmanaged([]const u8){};
+fn optionalZ(ctx: *NativeContext, text: ?[]const u8) !?[:0]u8 {
+    return if (text) |t| try pdo.dupeZ(ctx, t) else null;
+}
+
+fn cPtr(z: ?[:0]u8) ?[*:0]const u8 {
+    return if (z) |owned| owned.ptr else null;
+}
+
+// the statement's sql with each ? replaced by its escaped parameter, owned
+// by the caller
+fn interpolateParams(ctx: *NativeContext, conn: *mysql.MYSQL, sql: []const u8, params: *PhpArray, param_map: ?*PhpArray) ![]u8 {
+    var positional = std.ArrayListUnmanaged(Value){};
     defer positional.deinit(ctx.allocator);
 
     if (param_map) |pm| {
-        // named params - resolve to positional
         var max_idx: usize = 0;
         for (pm.entries.items) |entry| {
             if (entry.value == .int) {
@@ -230,67 +244,47 @@ fn interpolateParams(ctx: *NativeContext, conn: *mysql.MYSQL, sql: []const u8, p
                 if (idx >= max_idx) max_idx = idx + 1;
             }
         }
-        try positional.resize(ctx.allocator, max_idx);
-        @memset(positional.items, "");
+        try positional.appendNTimes(ctx.allocator, .null, max_idx);
         for (params.entries.items) |entry| {
             var name = if (entry.key == .string) entry.key.string.bytes() else "";
             if (name.len > 0 and name[0] == ':') name = name[1..];
             const idx_val = pm.get(.{ .string = Value.String.borrowed(name) });
-            if (idx_val == .int) {
-                const idx: usize = @intCast(idx_val.int);
-                positional.items[idx] = try valueToSqlString(ctx, conn, entry.value);
-            }
+            if (idx_val == .int) positional.items[@intCast(idx_val.int)] = entry.value;
         }
     } else {
-        // positional params
-        for (params.entries.items) |entry| {
-            try positional.append(ctx.allocator, try valueToSqlString(ctx, conn, entry.value));
-        }
+        for (params.entries.items) |entry| try positional.append(ctx.allocator, entry.value);
     }
 
-    // replace ? placeholders with escaped values
     var result = std.ArrayListUnmanaged(u8){};
+    errdefer result.deinit(ctx.allocator);
     var param_idx: usize = 0;
-    for (sql) |c| {
-        if (c == '?' and param_idx < positional.items.len) {
-            try result.appendSlice(ctx.allocator, positional.items[param_idx]);
+    for (sql) |ch| {
+        if (ch == '?' and param_idx < positional.items.len) {
+            try appendSqlValue(ctx, conn, &result, positional.items[param_idx]);
             param_idx += 1;
         } else {
-            try result.append(ctx.allocator, c);
+            try result.append(ctx.allocator, ch);
         }
     }
-    const owned = try result.toOwnedSlice(ctx.allocator);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
+    return result.toOwnedSlice(ctx.allocator);
 }
 
-fn valueToSqlString(ctx: *NativeContext, conn: *mysql.MYSQL, val: Value) ![]const u8 {
+fn appendSqlValue(ctx: *NativeContext, conn: *mysql.MYSQL, out: *std.ArrayListUnmanaged(u8), val: Value) !void {
+    const w = out.writer(ctx.allocator);
     switch (val) {
-        .null => return "NULL",
-        .bool => |b| return if (b) "1" else "0",
-        .int => |i| {
-            var buf: [32]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return "0";
-            return try ctx.createString(s);
-        },
-        .float => |f| {
-            var buf: [64]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "{d}", .{f}) catch return "0";
-            return try ctx.createString(s);
-        },
+        .bool => |b| try w.writeAll(if (b) "1" else "0"),
+        .int => |i| try w.print("{d}", .{i}),
+        .float => |f| try w.print("{d}", .{f}),
         .string => |php_s| {
-            // escape and quote
             const s = php_s.bytes();
-            const escaped = try ctx.allocator.alloc(u8, s.len * 2 + 3);
-            escaped[0] = '\'';
-            const elen = mysql.mysql_real_escape_string(conn, escaped[1..].ptr, s.ptr, @intCast(s.len));
-            escaped[1 + elen] = '\'';
-            escaped[2 + elen] = 0;
-            const result = escaped[0 .. 2 + elen];
-            try ctx.strings.append(ctx.allocator, escaped);
-            return result;
+            try out.ensureUnusedCapacity(ctx.allocator, s.len * 2 + 3);
+            out.appendAssumeCapacity('\'');
+            const dest = out.unusedCapacitySlice();
+            const elen = mysql.mysql_real_escape_string(conn, dest.ptr, s.ptr, @intCast(s.len));
+            out.items.len += elen;
+            out.appendAssumeCapacity('\'');
         },
-        else => return "NULL",
+        else => try w.writeAll("NULL"),
     }
 }
 
@@ -321,13 +315,13 @@ pub fn stmtFetch(ctx: *NativeContext, obj: *PhpObject, args: []const Value) Runt
     while (col < num_fields) : (col += 1) {
         const val = if (row_ptrs[col]) |ptr| blk: {
             const len = lengths[col];
-            const s = try ctx.createString(ptr[0..len]);
-            break :blk Value{ .string = Value.String.borrowed(s) };
+            break :blk Value{ .string = try Value.String.create(ctx.allocator, ptr[0..len]) };
         } else Value.null;
+        defer if (val == .string) val.string.release();
 
         if (mode == 3 or mode == 4) try row.append(ctx.allocator, val);
         if (mode == 2 or mode == 4) {
-            try row.set(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(field_names[col])) }, val);
+            try row.setCopiedKey(ctx.allocator, field_names[col], val);
         }
     }
 
@@ -411,7 +405,7 @@ pub fn errorInfo(ctx: *NativeContext, obj: *PhpObject) RuntimeError!NativeResult
     const msg = std.mem.span(mysql.mysql_error(conn));
     try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("00000") });
     try arr.append(ctx.allocator, .null);
-    try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(try ctx.createString(msg)) });
+    try arr.appendCopiedString(ctx.allocator, msg);
     return NativeResult.borrowed(.{ .array = arr });
 }
 

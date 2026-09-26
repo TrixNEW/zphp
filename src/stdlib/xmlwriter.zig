@@ -15,10 +15,6 @@ const c = @cImport({
     @cInclude("libxml/tree.h");
 });
 
-fn dupString(ctx: *NativeContext, s: []const u8) !Value.String {
-    return Value.String.borrowed(try ctx.createString(s));
-}
-
 fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
     return ctx.allocator.dupeZ(u8, s);
 }

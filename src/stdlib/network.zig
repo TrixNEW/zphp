@@ -331,7 +331,7 @@ fn contextArg(ctx: *NativeContext, args: []const Value, comptime func: []const u
 
 fn throwContext(ctx: *NativeContext, comptime fmt: []const u8, args: anytype) RuntimeError {
     const msg = try std.fmt.allocPrint(ctx.allocator, fmt, args);
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException("TypeError", msg);
     return error.RuntimeError;
 }
@@ -587,8 +587,9 @@ fn defaultSocketTimeout(ctx: *NativeContext) f64 {
 fn reportSocketError(ctx: *NativeContext, args: []const Value, code_index: usize, err: ?SocketError) !void {
     const e = err orelse SocketError{ .code = 0, .message = "" };
     ctx.setCallerVar(code_index, args.len, .{ .int = e.code });
-    const message = try ctx.createString(e.message);
-    ctx.setCallerVar(code_index + 1, args.len, .{ .string = Value.String.borrowed(message) });
+    const message = try Value.String.create(ctx.allocator, e.message);
+    defer message.release();
+    ctx.setCallerVar(code_index + 1, args.len, .{ .string = message });
 }
 
 fn failConnect(ctx: *NativeContext, args: []const Value, code_index: usize, comptime func: []const u8, target: []const u8, err: anyerror) RuntimeError!NativeResult {
@@ -604,7 +605,7 @@ fn failConnect(ctx: *NativeContext, args: []const Value, code_index: usize, comp
 
 fn endpointStream(ctx: *NativeContext, sock: std.posix.socket_t, endpoint: Endpoint, blocking: bool, uri: ?[]const u8) !*PhpObject {
     const obj = try socketStream(ctx, sock);
-    if (uri) |u| try obj.set(ctx.allocator, "__path", .{ .string = Value.String.borrowed(try ctx.createString(u)) });
+    if (uri) |u| try obj.setCopiedString(ctx.allocator, "__path", u);
     try obj.set(ctx.allocator, "__sock_type", .{ .string = Value.String.borrowed(if (endpoint == .unix) "unix_socket" else "tcp_socket/ssl") });
     if (!blocking) try obj.set(ctx.allocator, "__blocking", .{ .bool = false });
     return obj;
@@ -701,8 +702,10 @@ fn native_stream_socket_accept(ctx: *NativeContext, args: []const Value) Runtime
     const is_unix = peer.any.family == std.posix.AF.UNIX;
     const obj = try endpointStream(ctx, sock, if (is_unix) .{ .unix = "" } else .{ .tcp = peer }, platform.isBlocking(sock, listener_blocks), null);
     if (args.len > 2) {
-        const name = try addressName(ctx, peer, len);
-        ctx.setCallerVar(2, args.len, .{ .string = Value.String.borrowed(name) });
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const name = try Value.String.create(ctx.allocator, addressName(&buf, peer, len));
+        defer name.release();
+        ctx.setCallerVar(2, args.len, .{ .string = name });
     }
     return NativeResult.borrowed(.{ .resource = obj });
 }
@@ -718,19 +721,16 @@ fn native_stream_socket_get_name(ctx: *NativeContext, args: []const Value) Runti
     // not connected (a listener asked for its peer) is an answer, not a fault
     const rc = if (remote) std.c.getpeername(sock, &addr.any, &len) else std.c.getsockname(sock, &addr.any, &len);
     if (rc != 0) return NativeResult.scalar(.{ .bool = false });
-    const name = try addressName(ctx, addr, len);
-    return NativeResult.copyString(ctx.allocator, name);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    return NativeResult.copyString(ctx.allocator, addressName(&buf, addr, len));
 }
 
-fn addressName(ctx: *NativeContext, addr: std.net.Address, len: std.posix.socklen_t) ![]const u8 {
+fn addressName(buf: []u8, addr: std.net.Address, len: std.posix.socklen_t) []const u8 {
     if (addr.any.family == std.posix.AF.UNIX) {
         const path_len = @as(usize, len) -| @offsetOf(std.posix.sockaddr.un, "path");
-        const path = std.mem.sliceTo(addr.un.path[0..@min(path_len, addr.un.path.len)], 0);
-        return ctx.createString(path);
+        return std.mem.sliceTo(addr.un.path[0..@min(path_len, addr.un.path.len)], 0);
     }
-    const text = try std.fmt.allocPrint(ctx.allocator, "{f}", .{addr});
-    try ctx.strings.append(ctx.allocator, text);
-    return text;
+    return std.fmt.bufPrint(buf, "{f}", .{addr}) catch "";
 }
 
 // stream_socket_shutdown($stream, int $mode): STREAM_SHUT_RD, _WR or _RDWR

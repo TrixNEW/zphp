@@ -222,20 +222,10 @@ pub fn serializeToString(ctx: *NativeContext, val: Value) RuntimeError!NativeRes
 }
 
 // a string result carries one reference the caller must release or store
-// the object keeps its class name, so it must outlive this call: the class
-// table's own key does, and only an unknown class needs a copy. a script that
-// unserializes objects in a loop would otherwise grow the request arena by a
-// class name per object
+// the object keeps its class name, so it must outlive this call
 fn keptClassName(ctx: *NativeContext, class_allowed: bool, orig_class: []const u8) ![]const u8 {
     if (!class_allowed) return "__PHP_Incomplete_Class";
-    return ctx.vm.classes.getKey(orig_class) orelse try ctx.createString(orig_class);
-}
-
-// a declared property is stored by slot and the name is not kept; a dynamic
-// one is stored by name and needs request-lifetime bytes
-fn keptPropertyName(ctx: *NativeContext, obj: *PhpObject, name: []const u8) ![]const u8 {
-    if (obj.getSlotIndex(name) != null) return name;
-    return ctx.createString(name);
+    return ctx.vm.stableClassName(orig_class);
 }
 
 pub fn unserializeFromString(ctx: *NativeContext, s: []const u8) ?Value {
@@ -609,11 +599,11 @@ fn native_unserialize(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
         // get 'Error at offset N of M bytes'
         if (uctx.depth_exceeded) {
             const msg = std.fmt.allocPrint(ctx.allocator, "unserialize(): Maximum depth of {d} exceeded. The depth limit can be changed using the max_depth unserialize() option or the unserialize_max_depth ini setting", .{uctx.max_depth}) catch return NativeResult.scalar(.{ .bool = false });
-            ctx.vm.strings.append(ctx.allocator, msg) catch {};
+            defer ctx.allocator.free(msg);
             try ctx.vm.emitWarning(msg);
         }
         const msg2 = std.fmt.allocPrint(ctx.allocator, "unserialize(): Error at offset {d} of {d} bytes", .{ uctx.err_pos, s.len }) catch return NativeResult.scalar(.{ .bool = false });
-        ctx.vm.strings.append(ctx.allocator, msg2) catch {};
+        defer ctx.allocator.free(msg2);
         try ctx.vm.emitWarning(msg2);
         return NativeResult.scalar(.{ .bool = false });
     };
@@ -797,7 +787,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             }
             const obj = try ctx.createObject(class_name);
             if (!class_allowed) {
-                try obj.set(ctx.allocator, "__PHP_Incomplete_Class_Name", .{ .string = Value.String.borrowed(try ctx.createString(orig_class)) });
+                try obj.setCopiedString(ctx.allocator, "__PHP_Incomplete_Class_Name", orig_class);
             }
             if (obj.slots == null) {
                 if (ctx.vm.classes.get(class_name)) |cls| {
@@ -847,7 +837,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
                 } else if (fixed_data) |arr| {
                     if (key_result.value == .int) try arr.set(ctx.allocator, .{ .int = key_result.value.int }, val_result.value);
                 } else if (key_result.value == .string) {
-                    const stripped = try keptPropertyName(ctx, obj, stripVisibilityPrefix(key_result.value.string.bytes()));
+                    const stripped = stripVisibilityPrefix(key_result.value.string.bytes());
                     // when restoring into a kept class, assigning an
                     // __PHP_Incomplete_Class value to a typed property whose
                     // declared type isn't compatible is a TypeError in PHP
@@ -855,7 +845,7 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
                         const ptype = findPropertyType(ctx.vm, class_name, stripped);
                         if (ptype.len > 0 and !ctx.vm.checkTypeMatch(val_result.value, ptype)) {
                             const msg = try std.fmt.allocPrint(ctx.allocator, "Cannot assign __PHP_Incomplete_Class to property {s}::${s} of type {s}", .{ class_name, stripped, ptype });
-                            try ctx.strings.append(ctx.allocator, msg);
+                            defer ctx.allocator.free(msg);
                             uctx.threw = true;
                             _ = try ctx.vm.throwBuiltinException("TypeError", msg);
                             return error.RuntimeError;
@@ -914,11 +904,10 @@ fn unserializeValue(ctx: *NativeContext, uctx: *UnserCtx, s: []const u8, pos: us
             uctx.store(slot_idx, .{ .object = obj });
 
             if (class_allowed and ctx.vm.hasMethod(class_name, "unserialize")) {
-                const payload_str = try ctx.createString(payload);
-                _ = try ctx.vm.callMethod(obj, "unserialize", &.{.{ .string = Value.String.borrowed(payload_str) }});
+                _ = try ctx.vm.callMethod(obj, "unserialize", &.{.{ .string = Value.String.borrowed(payload) }});
             } else if (!class_allowed) {
-                try obj.set(ctx.allocator, "__PHP_Incomplete_Class_Name", .{ .string = Value.String.borrowed(try ctx.createString(orig_class)) });
-                try obj.set(ctx.allocator, "__serialized_data", .{ .string = Value.String.borrowed(try ctx.createString(payload)) });
+                try obj.setCopiedString(ctx.allocator, "__PHP_Incomplete_Class_Name", orig_class);
+                try obj.setCopiedString(ctx.allocator, "__serialized_data", payload);
             }
             return .{ .value = .{ .object = obj }, .pos = p };
         },
@@ -1015,7 +1004,7 @@ pub fn unserializeSplArray(ctx: *NativeContext, obj: *PhpObject, s: []const u8) 
         if (err == error.OutOfMemory) return error.OutOfMemory;
         if (refs.threw or ctx.vm.pending_exception != null) return error.RuntimeError;
         const msg = try std.fmt.allocPrint(ctx.allocator, "Error at offset {d} of {d} bytes", .{ @max(pos, refs.err_pos), s.len });
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("UnexpectedValueException", msg);
         return error.RuntimeError;
     };
@@ -1082,7 +1071,7 @@ pub fn restoreSplArrayState(ctx: *NativeContext, obj: *PhpObject, state: Value) 
     }
     if (iterator == .string and !ctx.vm.isInstanceOf(iterator.string.bytes(), "Iterator")) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "Cannot deserialize ArrayObject with iterator class '{s}'; this class does not implement the Iterator interface", .{iterator.string.bytes()});
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("UnexpectedValueException", msg);
         return error.RuntimeError;
     }

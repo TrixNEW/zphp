@@ -251,7 +251,7 @@ fn native_rand(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
             return NativeResult.scalar(.{ .int = ctx.vm.mt19937.nextRange(hi, lo) });
         }
         const msg = try std.fmt.allocPrint(ctx.allocator, "{s}(): Argument #2 ($max) must be greater than or equal to argument #1 ($min)", .{fn_name});
-        try ctx.vm.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("ValueError", msg);
         return error.RuntimeError;
     }

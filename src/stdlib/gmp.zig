@@ -614,7 +614,7 @@ fn gmpUnserialize(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
 // which must unwind before anything is dispatched
 fn throwOperand(ctx: *NativeContext, class_name: []const u8, comptime fmt: []const u8, args: anytype) RuntimeError {
     const msg = try std.fmt.allocPrint(ctx.allocator, fmt, args);
-    try ctx.vm.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException(class_name, msg);
     return error.RuntimeError;
 }

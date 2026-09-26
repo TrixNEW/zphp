@@ -117,7 +117,7 @@ fn sfoConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     const fh = try ctx.vm.callByName("fopen", &.{ args[0], mode });
     if (fh != .resource) {
         const msg = try std.fmt.allocPrint(ctx.allocator, "SplFileObject::__construct(): Failed to open stream: {s}", .{args[0].string.bytes()});
-        try ctx.vm.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         if (try ctx.vm.throwBuiltinException("RuntimeException", msg)) return NativeResult.scalar(.null);
         return error.RuntimeError;
     }

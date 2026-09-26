@@ -192,6 +192,19 @@ pub const PhpArray = struct {
         self.has_int_keys = true;
     }
 
+    // an element holding its own counted copy of bytes the caller keeps
+    pub fn appendCopiedString(self: *PhpArray, allocator: std.mem.Allocator, bytes: []const u8) !void {
+        const owned = try PhpString.create(allocator, bytes);
+        defer owned.release();
+        try self.append(allocator, .{ .string = owned });
+    }
+
+    pub fn setCopiedString(self: *PhpArray, allocator: std.mem.Allocator, key: Key, bytes: []const u8) !void {
+        const owned = try PhpString.create(allocator, bytes);
+        defer owned.release();
+        try self.set(allocator, key, .{ .string = owned });
+    }
+
     // a string key from bytes the array does not own (an object's property
     // name, a buffer), stored as its own counted copy
     pub fn setCopiedKey(self: *PhpArray, allocator: std.mem.Allocator, key: []const u8, value: Value) !void {
@@ -1043,6 +1056,13 @@ pub const PhpObject = struct {
         if (self.unset_slots.count() == 0) return;
         const removed = self.unset_slots.fetchRemove(name) orelse return;
         allocator.free(removed.key);
+    }
+
+    // a property holding its own counted copy of bytes the caller keeps
+    pub fn setCopiedString(self: *PhpObject, allocator: std.mem.Allocator, name: []const u8, bytes: []const u8) !void {
+        const owned = try PhpString.create(allocator, bytes);
+        defer owned.release();
+        try self.set(allocator, name, .{ .string = owned });
     }
 
     // stores an already-counted value; a new property's name is copied, so
