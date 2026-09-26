@@ -1,5 +1,7 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
+const bundle = @import("../bundle.zig");
+const filesystem = @import("filesystem.zig");
 const platform = @import("../platform.zig");
 const net = std.net;
 const posix = std.posix;
@@ -416,6 +418,7 @@ fn native_ftp_get(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     defer ctx.allocator.free(line);
     const data = dataTransfer(ctx, fd, line, tcmd) catch return NativeResult.scalar(.{ .bool = false });
     defer ctx.allocator.free(data);
+    bundle.prepareWrite(args[1].string.bytes(), .create);
     var f = std.fs.cwd().createFile(args[1].string.bytes(), .{ .truncate = true }) catch return NativeResult.scalar(.{ .bool = false });
     defer f.close();
     f.writeAll(data) catch return NativeResult.scalar(.{ .bool = false });
@@ -439,7 +442,7 @@ fn native_ftp_put(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     defer ctx.allocator.free(r1.body);
     if (r1.code != 150 and r1.code != 125) return NativeResult.scalar(.{ .bool = false });
 
-    var f = std.fs.cwd().openFile(args[2].string.bytes(), .{}) catch return NativeResult.scalar(.{ .bool = false });
+    var f = filesystem.openWithMode(args[2].string.bytes(), "r") catch return NativeResult.scalar(.{ .bool = false });
     defer f.close();
     var buf: [8192]u8 = undefined;
     while (true) {

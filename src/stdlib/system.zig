@@ -1,4 +1,5 @@
 const std = @import("std");
+const bundle = @import("../bundle.zig");
 const platform = @import("../platform.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
@@ -665,7 +666,7 @@ fn native_php_strip_whitespace(ctx: *NativeContext, args: []const Value) Runtime
     // emits only the non-whitespace tokens; without a real tokenizer we return
     // the original source so callers that use the result still see valid PHP
     if (args.len == 0 or args[0] != .string) return NativeResult.literal("");
-    const content = std.fs.cwd().readFileAlloc(ctx.allocator, args[0].string.bytes(), 1024 * 1024 * 64) catch return NativeResult.literal("");
+    const content = bundle.readFileAlloc(ctx.allocator, args[0].string.bytes(), 1024 * 1024 * 64) catch return NativeResult.literal("");
     return NativeResult.takeString(try Value.String.adopt(ctx.allocator, content));
 }
 
@@ -689,6 +690,7 @@ fn native_move_uploaded_file(_: *NativeContext, args: []const Value) RuntimeErro
     const from = args[0].string.bytes();
     const to = args[1].string.bytes();
     if (!std.mem.startsWith(u8, from, "/tmp/zphp_upload_")) return NativeResult.scalar(.{ .bool = false });
+    bundle.prepareWrite(to, .create);
     std.fs.cwd().rename(from, to) catch {
         const data = std.fs.cwd().readFileAlloc(std.heap.page_allocator, from, 1024 * 1024 * 64) catch return NativeResult.scalar(.{ .bool = false });
         defer std.heap.page_allocator.free(data);
@@ -723,7 +725,11 @@ fn native_sys_get_temp_dir(ctx: *NativeContext, _: []const Value) RuntimeError!N
 fn native_tempnam(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     // php falls back to the system temp dir when the requested one is unusable
     const requested = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else platform.tempDir();
-    const dir = if (std.fs.cwd().access(requested, .{})) |_| requested else |_| platform.tempDir();
+    bundle.ensureDir(requested);
+    const dir = if (std.fs.cwd().access(requested, .{})) |_| requested else |_| blk: {
+        try ctx.vm.raiseError(8, "tempnam(): file created in the system's temporary directory");
+        break :blk platform.tempDir();
+    };
     const prefix = if (args.len >= 2 and args[1] == .string) args[1].string.bytes() else "tmp";
     var seed_bytes: [8]u8 = undefined;
     std.crypto.random.bytes(&seed_bytes);

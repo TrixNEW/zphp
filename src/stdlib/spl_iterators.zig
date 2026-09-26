@@ -1,4 +1,6 @@
 const std = @import("std");
+const bundle = @import("../bundle.zig");
+const filesystem = @import("filesystem.zig");
 const platform = @import("../platform.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
@@ -504,7 +506,10 @@ fn dirname(path: []const u8) []const u8 {
     return ".";
 }
 
-fn statPath(path: []const u8) ?std.fs.File.Stat {
+fn statPath(spelled: []const u8) ?std.fs.File.Stat {
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, spelled);
+    if (bundle.find(path)) |hit| return packedStat(hit);
     if (!std.fs.path.isAbsolute(path)) return std.fs.cwd().statFile(path) catch null;
     const file = std.fs.openFileAbsolute(path, .{}) catch {
         var dir = std.fs.openDirAbsolute(path, .{}) catch return null;
@@ -513,6 +518,26 @@ fn statPath(path: []const u8) ?std.fs.File.Stat {
     };
     defer file.close();
     return file.stat() catch null;
+}
+
+// a file or directory of the executable's packed application, read-only
+fn packedStat(hit: bundle.Hit) std.fs.File.Stat {
+    const mtime: i128 = switch (hit) {
+        .file => |entry| @as(i128, entry.mtime) * std.time.ns_per_s,
+        .dir => 0,
+    };
+    return .{
+        .inode = 0,
+        .size = switch (hit) {
+            .file => |entry| entry.source.len,
+            .dir => 0,
+        },
+        .mode = if (hit == .file) 0o100444 else 0o040555,
+        .kind = if (hit == .file) .file else .directory,
+        .atime = mtime,
+        .mtime = mtime,
+        .ctime = mtime,
+    };
 }
 
 // ==========================================
@@ -567,6 +592,7 @@ fn fiGetRealPath(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     const path = objGetStr(obj, "__pathname");
     var buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (bundle.canonicalPath(&buf, path)) |packed_path| return NativeResult.copyString(ctx.allocator, packed_path);
     const real = std.fs.cwd().realpath(path, &buf) catch return NativeResult.scalar(.{ .bool = false });
     return NativeResult.copyString(ctx.allocator, real);
 }
@@ -671,43 +697,46 @@ const SKIP_DOTS: i64 = 0x1000;
 fn loadDirectoryEntries(ctx: *NativeContext, path: []const u8, flags: i64) RuntimeError!*PhpArray {
     const arr = try ctx.createArray();
 
-    var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch return arr;
-    defer dir.close();
+    // the disk and the executable's packed application both contribute, a
+    // name once
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_path = bundle.osPath(&os_buf, path);
+    var listing = bundle.listDir(dir_path);
+    var dir_opt: ?std.fs.Dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch null;
+    defer if (dir_opt) |*d| d.close();
+    if (listing == null and dir_opt == null) return arr;
 
     const skip_dots = (flags & SKIP_DOTS) != 0;
     if (!skip_dots) {
-        inline for (.{ ".", ".." }) |dot_name| {
-            const dot_full = try std.fmt.allocPrint(ctx.allocator, "{s}{s}{s}", .{ path, platform.sep_str, dot_name });
-            const dot_full_owned = try Value.String.adopt(ctx.allocator, dot_full);
-            defer dot_full_owned.release();
-            const dot_entry = try ctx.createArray();
-            try dot_entry.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed(dot_name) });
-            try dot_entry.set(ctx.allocator, .{ .string = Value.String.borrowed("path") }, .{ .string = dot_full_owned });
-            try dot_entry.set(ctx.allocator, .{ .string = Value.String.borrowed("is_dir") }, .{ .bool = true });
-            try arr.append(ctx.allocator, .{ .array = dot_entry });
+        inline for (.{ ".", ".." }) |dot_name| try appendDirectoryEntry(ctx, arr, .{ .dir = path, .name = dot_name, .is_dir = true });
+    }
+    if (dir_opt) |*dir| {
+        var iter = dir.iterate();
+        while (iter.next() catch null) |entry| {
+            if (skip_dots and (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, ".."))) continue;
+            try appendDirectoryEntry(ctx, arr, .{ .dir = path, .name = entry.name, .is_dir = entry.kind == .directory });
         }
     }
-
-    var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
-        if (skip_dots and (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, ".."))) continue;
-
-        const full = try std.fmt.allocPrint(ctx.allocator, "{s}{s}{s}", .{ path, platform.sep_str, entry.name });
-        const full_owned = try Value.String.adopt(ctx.allocator, full);
-        defer full_owned.release();
-
-        const is_dir: bool = entry.kind == .directory;
-        const entry_arr = try ctx.createArray();
-        const name = try Value.String.create(ctx.allocator, entry.name);
-        defer name.release();
-        try entry_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = name });
-        try entry_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("path") }, .{ .string = full_owned });
-        try entry_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("is_dir") }, .{ .bool = is_dir });
-
-        try arr.append(ctx.allocator, .{ .array = entry_arr });
-    }
+    if (listing) |*packed_names| while (packed_names.next()) |child| {
+        if (dir_opt) |dir| if (filesystem.dirHas(dir, child.name)) continue;
+        try appendDirectoryEntry(ctx, arr, .{ .dir = path, .name = child.name, .is_dir = child.kind == .dir });
+    };
     return arr;
 }
+
+const DirectoryEntry = struct { dir: []const u8, name: []const u8, is_dir: bool };
+
+fn appendDirectoryEntry(ctx: *NativeContext, arr: *PhpArray, entry: DirectoryEntry) RuntimeError!void {
+    const full = try std.fmt.allocPrint(ctx.allocator, "{s}{s}{s}", .{ entry.dir, platform.sep_str, entry.name });
+    const full_owned = try Value.String.adopt(ctx.allocator, full);
+    defer full_owned.release();
+    const entry_arr = try ctx.createArray();
+    try entry_arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("name") }, entry.name);
+    try entry_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("path") }, .{ .string = full_owned });
+    try entry_arr.set(ctx.allocator, .{ .string = Value.String.borrowed("is_dir") }, .{ .bool = entry.is_dir });
+    try arr.append(ctx.allocator, .{ .array = entry_arr });
+}
+
 
 fn syncCurrentEntry(ctx: *NativeContext, obj: *PhpObject) !void {
     const entries = if (obj.get("__di_entries") == .array) obj.get("__di_entries").array else return;

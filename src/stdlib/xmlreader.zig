@@ -1,4 +1,6 @@
 const std = @import("std");
+const paths = @import("../paths.zig");
+const bundle = @import("../bundle.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
 const NativeHandle = @import("../runtime/value.zig").NativeHandle;
@@ -15,6 +17,12 @@ const c = @cImport({
     @cInclude("libxml/xmlreader.h");
 });
 
+// a packed file is read in place: its bytes outlive every reader
+fn readerForFile(path_z: [:0]const u8, enc: [*c]const u8, opts: c_int) ?*c.xmlTextReader {
+    if (bundle.packedSource(path_z)) |src| return c.xmlReaderForMemory(src.ptr, @intCast(src.len), path_z.ptr, enc, opts);
+    return c.xmlReaderForFile(path_z.ptr, enc, opts);
+}
+
 fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
     const owned = try ctx.allocator.dupe(u8, s);
     try ctx.strings.append(ctx.allocator, owned);
@@ -27,6 +35,12 @@ fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
     z[s.len] = 0;
     try ctx.strings.append(ctx.allocator, z);
     return z[0..s.len :0];
+}
+
+// a file path as php's stream layer opens it, null-terminated for libxml
+fn filePathZ(ctx: *NativeContext, path: []const u8) ![:0]u8 {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    return dupZ(ctx, paths.streamPath(&buf, path));
 }
 
 fn cstrLen(p: [*c]const u8) usize {
@@ -64,7 +78,7 @@ fn xrOpen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     closeExisting(obj);
 
-    const path_z = try dupZ(ctx, args[0].string.bytes());
+    const path_z = try filePathZ(ctx, args[0].string.bytes());
     const enc_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
         try dupZ(ctx, args[1].string.bytes())
     else
@@ -72,7 +86,7 @@ fn xrOpen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const enc_ptr: [*c]const u8 = if (enc_z) |e| @ptrCast(e.ptr) else null;
     const opts: c_int = if (args.len > 2 and args[2] == .int) @intCast(args[2].int) else 0;
 
-    const reader = c.xmlReaderForFile(path_z.ptr, enc_ptr, opts);
+    const reader = readerForFile(path_z, enc_ptr, opts);
     if (reader == null) return NativeResult.scalar(.{ .bool = false });
     setReader(obj, reader);
     return NativeResult.scalar(.{ .bool = true });
@@ -126,14 +140,14 @@ fn xrFromString(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
 fn xrFromUri(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const obj = try ctx.createObject("XMLReader");
-    const path_z = try dupZ(ctx, args[0].string.bytes());
+    const path_z = try filePathZ(ctx, args[0].string.bytes());
     const enc_z: ?[:0]u8 = if (args.len > 1 and args[1] == .string and args[1].string.bytes().len > 0)
         try dupZ(ctx, args[1].string.bytes())
     else
         null;
     const enc_ptr: [*c]const u8 = if (enc_z) |e| @ptrCast(e.ptr) else null;
     const opts: c_int = if (args.len > 2 and args[2] == .int) @intCast(args[2].int) else 0;
-    const reader = c.xmlReaderForFile(path_z.ptr, enc_ptr, opts);
+    const reader = readerForFile(path_z, enc_ptr, opts);
     if (reader == null) return NativeResult.scalar(.{ .bool = false });
     setReader(obj, reader);
     return NativeResult.borrowed(.{ .object = obj });

@@ -1,4 +1,6 @@
 const std = @import("std");
+const paths = @import("../paths.zig");
+const bundle = @import("../bundle.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
@@ -182,6 +184,12 @@ fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
     return z[0..s.len :0];
 }
 
+// a file path as php's stream layer opens it, null-terminated for libxml
+fn filePathZ(ctx: *NativeContext, path: []const u8) ![:0]u8 {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    return dupZ(ctx, paths.streamPath(&buf, path));
+}
+
 fn cstrLen(p: [*c]const u8) usize {
     return std.mem.len(p);
 }
@@ -298,7 +306,7 @@ fn domDocSchemaValidateSource(ctx: *NativeContext, args: []const Value) RuntimeE
 fn domDocLoad(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
-    const path_z = try dupZ(ctx, args[0].string.bytes());
+    const path_z = try filePathZ(ctx, args[0].string.bytes());
     const opts = parseOptions(args, 1);
 
     if (getDocPtr(obj)) |old| {
@@ -306,7 +314,7 @@ fn domDocLoad(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
         obj.native.ptr = 0;
     }
 
-    const doc = c.xmlReadFile(path_z.ptr, null, opts);
+    const doc = if (bundle.packedSource(path_z)) |src| c.xmlReadMemory(src.ptr, @intCast(src.len), path_z.ptr, null, opts) else c.xmlReadFile(path_z.ptr, null, opts);
     if (doc == null) return NativeResult.scalar(.{ .bool = false });
     setDocPtr(obj, doc);
     return NativeResult.scalar(.{ .bool = true });
@@ -332,7 +340,7 @@ fn domDocLoadHTML(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
 fn domDocLoadHTMLFile(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
-    const path_z = try dupZ(ctx, args[0].string.bytes());
+    const path_z = try filePathZ(ctx, args[0].string.bytes());
     const opts = parseOptions(args, 1);
 
     if (getDocPtr(obj)) |old| {
@@ -340,7 +348,7 @@ fn domDocLoadHTMLFile(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
         obj.native.ptr = 0;
     }
 
-    const doc = c.htmlReadFile(path_z.ptr, null, opts);
+    const doc = if (bundle.packedSource(path_z)) |src| c.htmlReadMemory(src.ptr, @intCast(src.len), path_z.ptr, null, opts) else c.htmlReadFile(path_z.ptr, null, opts);
     if (doc == null) return NativeResult.scalar(.{ .bool = false });
     setDocPtr(obj, doc);
     return NativeResult.scalar(.{ .bool = true });
@@ -412,8 +420,9 @@ fn domDocSave(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const obj = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
-    const path_z = try dupZ(ctx, args[0].string.bytes());
+    const path_z = try filePathZ(ctx, args[0].string.bytes());
     const fmt: c_int = if (formatOutputOn(obj)) 1 else 0;
+    bundle.prepareWrite(path_z, .create);
     const written = c.xmlSaveFormatFile(path_z.ptr, doc, fmt);
     if (written < 0) return NativeResult.scalar(.{ .bool = false });
     return NativeResult.scalar(.{ .int = @intCast(written) });

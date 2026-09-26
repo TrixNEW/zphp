@@ -81,7 +81,7 @@ zphp serve public/index.php --workers 8 --tls-cert cert.pem --tls-key key.pem
 
 ## Standalone executables
 
-`zphp build --compile app.php` turns a script into an executable that runs on machines without PHP installed.
+`zphp build --compile app.php` turns an application into an executable that runs on machines without PHP installed. It packs every file under the project root, so the scripts the entry point requires and the assets it reads travel with it.
 
 ## Extensions
 

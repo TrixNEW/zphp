@@ -1,4 +1,6 @@
 const std = @import("std");
+const paths = @import("../paths.zig");
+const bundle = @import("../bundle.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
 const NativeHandle = @import("../runtime/value.zig").NativeHandle;
@@ -99,7 +101,7 @@ fn imgDestroy(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
 
 // the whole file, read here rather than by gd
 fn readImageFile(ctx: *NativeContext, path: []const u8) ?[]u8 {
-    return std.fs.cwd().readFileAlloc(ctx.allocator, path, 256 << 20) catch null;
+    return bundle.readFileAlloc(ctx.allocator, path, 256 << 20) catch null;
 }
 
 fn imgCreateFromPng(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -160,7 +162,10 @@ fn writeImageTo(ctx: *NativeContext, im: *c.gdImageStruct, args: []const Value, 
     // library, whose c runtime can differ from ours (it does on windows)
     if (args.len > 1 and args[1] == .string) {
         const bytes: [*]const u8 = @ptrCast(buf.?);
-        std.fs.cwd().writeFile(.{ .sub_path = args[1].string.bytes(), .data = bytes[0..@intCast(size)] }) catch return NativeResult.scalar(.{ .bool = false });
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const path = paths.streamPath(&path_buf, args[1].string.bytes());
+        bundle.prepareWrite(path, .create);
+        std.fs.cwd().writeFile(.{ .sub_path = path, .data = bytes[0..@intCast(size)] }) catch return NativeResult.scalar(.{ .bool = false });
         return NativeResult.scalar(.{ .bool = true });
     }
     // when filename is null, PHP writes to the script's output channel - which

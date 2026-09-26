@@ -5,6 +5,8 @@ const compiler = @import("pipeline/compiler.zig");
 const runtime_value = @import("runtime/value.zig");
 const VM = @import("runtime/vm.zig").VM;
 const includes = @import("runtime/includes.zig");
+const bundle = @import("bundle.zig");
+const pack = @import("pack.zig");
 const Value = runtime_value.Value;
 const CompileResult = @import("pipeline/compiler.zig").CompileResult;
 const extension = @import("extension.zig");
@@ -43,9 +45,13 @@ pub fn main() !void {
 
     extension.loadStatic();
 
-    if (bytecode_format.detectEmbeddedBytecode(allocator)) |bc| {
-        defer allocator.free(bc);
-        try runBytecode(allocator, bc, raw_args[0], if (raw_args.len > 1) raw_args[1..] else &.{});
+    if (try mountBundle(allocator)) |packed_app| {
+        bundle.active = packed_app;
+        defer {
+            bundle.active = null;
+            packed_app.deinit();
+        }
+        try runBundled(allocator, packed_app, raw_args[0], if (raw_args.len > 1) raw_args[1..] else &.{});
         return;
     }
 
@@ -408,6 +414,13 @@ fn loadFile(path: []const u8, allocator: std.mem.Allocator, vm: *@import("runtim
             allocator.free(payload);
             return null;
         };
+    } else if (bundledEntry(path)) |entry| {
+        if (entry.bytecode.len > 0) return loadBundledBytecode(allocator, entry);
+        source = allocator.dupe(u8, entry.source) catch return null;
+        abs_path = allocator.dupe(u8, path) catch {
+            allocator.free(source);
+            return null;
+        };
     } else {
         const resolved = resolveSource(allocator, vm, path) orelse return null;
         abs_path = resolved.abs_path;
@@ -490,6 +503,26 @@ fn loadFile(path: []const u8, allocator: std.mem.Allocator, vm: *@import("runtim
 
     if (source_stat) |stat| saveCompileCache(allocator, abs_path, stat, closure_counter, heap_result);
 
+    return heap_result;
+}
+
+fn bundledEntry(path: []const u8) ?bundle.Entry {
+    const hit = bundle.find(path) orelse return null;
+    return switch (hit) {
+        .file => |entry| entry,
+        .dir => null,
+    };
+}
+
+fn loadBundledBytecode(allocator: std.mem.Allocator, entry: bundle.Entry) ?*CompileResult {
+    const packed_app = bundle.active.?;
+    const result = bytecode_format.deserializeRelocated(allocator, entry.bytecode, .{ .from = packed_app.build_root, .to = packed_app.mount }) catch return null;
+    const heap_result = allocator.create(CompileResult) catch {
+        var owned = result;
+        owned.deinit();
+        return null;
+    };
+    heap_result.* = result;
     return heap_result;
 }
 
@@ -689,20 +722,38 @@ fn reportRuntimeError(allocator: std.mem.Allocator, vm: *VM) !void {
 }
 
 fn buildFile(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    const usage = "usage: zphp build [--compile [--root DIR] [--exclude PATH]... [--out FILE]] <file>\n";
     var compile_exe = false;
     var file_path: ?[]const u8 = null;
-    for (args) |arg| {
+    var root: ?[]const u8 = null;
+    var out: ?[]const u8 = null;
+    var excludes = std.ArrayListUnmanaged([]const u8){};
+    defer excludes.deinit(allocator);
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
         if (std.mem.eql(u8, arg, "--compile")) {
             compile_exe = true;
+        } else if (std.mem.eql(u8, arg, "--root")) {
+            i += 1;
+            root = try flagValue(args, i, usage);
+        } else if (std.mem.eql(u8, arg, "--exclude")) {
+            i += 1;
+            try excludes.append(allocator, try flagValue(args, i, usage));
+        } else if (std.mem.eql(u8, arg, "--out") or std.mem.eql(u8, arg, "-o")) {
+            i += 1;
+            out = try flagValue(args, i, usage);
         } else {
             file_path = arg;
         }
     }
 
     const path = file_path orelse {
-        try writeStderr("usage: zphp build [--compile] <file>\n");
+        try writeStderr(usage);
         std.process.exit(1);
     };
+
+    if (compile_exe) return buildExecutable(allocator, .{ .entry = path, .root = root, .excludes = excludes.items, .out = out });
 
     const source = try readSource(allocator, path);
     defer allocator.free(source);
@@ -719,32 +770,75 @@ fn buildFile(allocator: std.mem.Allocator, args: []const []const u8) !void {
     };
     defer allocator.free(bc);
 
-    if (compile_exe) {
-        const exe_path = std.fs.selfExePathAlloc(allocator) catch {
-            try writeStderr("error: could not determine self exe path\n");
-            std.process.exit(1);
+    const base_name = if (std.mem.endsWith(u8, path, ".php")) path[0 .. path.len - 4] else path;
+    const out_path = std.fmt.allocPrint(allocator, "{s}.zphpc", .{base_name}) catch std.process.exit(1);
+    defer allocator.free(out_path);
+    std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = bc }) catch {
+        try writeStderr("error: could not write bytecode file\n");
+        std.process.exit(1);
+    };
+    try writeStdout("created: ");
+    try writeStdout(out_path);
+    try writeStdout("\n");
+}
+
+fn buildExecutable(allocator: std.mem.Allocator, options: pack.Options) !void {
+    const summary = pack.build(allocator, options) catch |err| {
+        const msg = switch (err) {
+            error.EntryOutsideRoot => "error: the entry script is not inside the packed root\n",
+            error.FileNotFound => "error: the entry script or root does not exist\n",
+            error.OutputShadowsPack => "error: the executable's name matches a top-level file or directory it packs, which it would hide; choose another name with --out\n",
+            else => "error: could not create executable\n",
         };
-        defer allocator.free(exe_path);
-        const base = std.fs.path.stem(path);
-        bytecode_format.appendToExecutable(allocator, exe_path, bc, base) catch {
-            try writeStderr("error: could not create executable\n");
+        try writeStderr(msg);
+        std.process.exit(1);
+    };
+    defer allocator.free(summary.out);
+    defer allocator.free(summary.root);
+    var buf: [std.fs.max_path_bytes * 2 + 128]u8 = undefined;
+    const line = std.fmt.bufPrint(&buf, "created: {s} ({d} files from {s}, {d} compiled, {d} KB)\n", .{ summary.out, summary.files, summary.root, summary.compiled, summary.bytes / 1024 }) catch "created\n";
+    try writeStdout(line);
+}
+
+// the pack appended to this executable, mounted over the directory the
+// executable is in; null for a plain zphp
+fn mountBundle(allocator: std.mem.Allocator) !?*bundle.Bundle {
+    const exe = std.fs.selfExePathAlloc(allocator) catch return null;
+    defer allocator.free(exe);
+    const mount = std.fs.path.dirname(exe) orelse return null;
+    return bundle.load(allocator, exe, mount) catch {
+        try writeStderr("error: the packed application in this executable is damaged\n");
+        std.process.exit(1);
+    };
+}
+
+fn runBundled(allocator: std.mem.Allocator, packed_app: *bundle.Bundle, exe_arg: []const u8, script_args: []const []const u8) !void {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const entry = packed_app.mounted(&buf, packed_app.entry) orelse return error.NameTooLong;
+    var result = if (bundle.find(entry)) |hit| switch (hit) {
+        .file => |found| try packedResult(allocator, packed_app, found, entry),
+        .dir => {
+            try writeStderr("error: the packed application has no entry script\n");
             std.process.exit(1);
-        };
-        try writeStdout("created: ");
-        try writeStdout(base);
-        try writeStdout("\n");
-    } else {
-        const base_name = if (std.mem.endsWith(u8, path, ".php")) path[0 .. path.len - 4] else path;
-        const out_path = std.fmt.allocPrint(allocator, "{s}.zphpc", .{base_name}) catch std.process.exit(1);
-        defer allocator.free(out_path);
-        std.fs.cwd().writeFile(.{ .sub_path = out_path, .data = bc }) catch {
-            try writeStderr("error: could not write bytecode file\n");
-            std.process.exit(1);
-        };
-        try writeStdout("created: ");
-        try writeStdout(out_path);
-        try writeStdout("\n");
-    }
+        },
+    } else try compileDiskEntry(allocator, entry);
+    defer result.deinit();
+    try runWithVM(allocator, &result, exe_arg, script_args);
+}
+
+fn packedResult(allocator: std.mem.Allocator, packed_app: *const bundle.Bundle, found: bundle.Entry, entry: []const u8) !CompileResult {
+    if (found.bytecode.len == 0) return compileSource(allocator, found.source, entry);
+    return bytecode_format.deserializeRelocated(allocator, found.bytecode, .{ .from = packed_app.build_root, .to = packed_app.mount }) catch {
+        try writeStderr("error: the packed application in this executable is damaged\n");
+        std.process.exit(1);
+    };
+}
+
+// the disk copy next to the executable shadows the packed entry script
+fn compileDiskEntry(allocator: std.mem.Allocator, entry: []const u8) !CompileResult {
+    const source = try readSource(allocator, entry);
+    defer allocator.free(source);
+    return compileSource(allocator, source, entry);
 }
 
 fn writeStdout(msg: []const u8) !void {
@@ -767,6 +861,8 @@ test {
     _ = @import("stdlib/tokenizer.zig");
     _ = @import("runtime/native_result.zig");
     _ = @import("runtime/region.zig");
+    _ = @import("bundle.zig");
+    _ = @import("pack.zig");
     _ = @import("runtime/memory.zig");
     _ = @import("runtime/vm.zig");
     _ = @import("stdlib/exceptions.zig");

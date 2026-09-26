@@ -1,5 +1,7 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
+const paths = @import("../paths.zig");
+const bundle = @import("../bundle.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
@@ -98,7 +100,7 @@ fn loadSessionData(ctx: *NativeContext, sid: []const u8) !*PhpArray {
     const path = try sessionPath(ctx, sid);
     defer ctx.allocator.free(path);
 
-    const data = std.fs.cwd().readFileAlloc(ctx.allocator, path, 1024 * 1024) catch {
+    const data = bundle.readFileAlloc(ctx.allocator, path, 1024 * 1024) catch {
         return try ctx.createArray();
     };
     defer ctx.allocator.free(data);
@@ -125,7 +127,10 @@ fn saveSessionData(ctx: *NativeContext, sid: []const u8) !void {
 
     const path = try sessionPath(ctx, sid);
     defer ctx.allocator.free(path);
-    std.fs.cwd().writeFile(.{ .sub_path = path, .data = serialized.string.bytes() }) catch return;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target = paths.streamPath(&path_buf, path);
+    bundle.prepareWrite(target, .create);
+    std.fs.cwd().writeFile(.{ .sub_path = target, .data = serialized.string.bytes() }) catch return;
 }
 
 fn getCookieSessionId(ctx: *NativeContext) ?[]const u8 {

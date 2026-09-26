@@ -10,33 +10,54 @@ if [ ! -f "$ZPHP" ]; then
 fi
 
 TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+
+# a source tree moves aside while its executable runs, so a read that misses
+# the pack fails instead of finding the source
+hidden=""
+hide_tree() { mv "$1" "$1.moved"; hidden="$1"; }
+restore_tree() { if [ -n "$hidden" ]; then mv "$hidden.moved" "$hidden"; hidden=""; fi; }
+cleanup() { restore_tree; rm -rf "$TMPDIR"; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 passed=0
 failed=0
 errors=""
 
+# builds php_file into a standalone executable (extra arguments go to
+# `zphp build --compile`), runs it from an empty directory, and compares its
+# output with `zphp run`. PREPARE names a function that gets the directory
+# first, for an application that writes next to itself; BUILT names one that
+# runs between the build and the executable, and AFTER one that runs after it
 run_test() {
     local name="$1"
     local php_file="$2"
+    shift 2
 
     local run_out
     run_out="$("$ZPHP" run "$php_file" 2>&1)" || true
 
-    "$ZPHP" build --compile "$php_file" 2>/dev/null
+    local dir="$TMPDIR/run-${name//[^a-zA-Z0-9]/_}"
+    rm -rf "$dir"
+    mkdir -p "$dir"
+    if [ -n "${PREPARE:-}" ]; then "$PREPARE" "$dir"; fi
     local bin_name
     bin_name="$(basename "$php_file" .php)"
 
-    if [ ! -f "$bin_name" ]; then
+    local build_out
+    if ! build_out="$("$ZPHP" build --compile "$php_file" --out "$dir/$bin_name" "$@" 2>&1)" || [ ! -f "$dir/$bin_name" ]; then
         failed=$((failed + 1))
         echo "  FAIL  $name (binary not created)"
-        errors="$errors\n--- $name ---\nbinary not created\n"
+        errors="$errors\n--- $name ---\nbinary not created\n$build_out\n"
+        rm -rf "$dir"
         return
     fi
 
+    if [ -n "${BUILT:-}" ]; then "$BUILT"; fi
     local bin_out
-    bin_out="$(./"$bin_name" 2>&1)" || true
-    rm -f "$bin_name"
+    bin_out="$(cd "$dir" && ./"$bin_name" 2>&1)" || true
+    if [ -n "${AFTER:-}" ]; then "$AFTER"; fi
+    rm -rf "$dir"
 
     if [ "$run_out" = "$bin_out" ]; then
         passed=$((passed + 1))
@@ -155,15 +176,113 @@ echo implode("-", $parts) . "\n";
 EOF
 run_test "strings" "$TMPDIR/strings.php"
 
-# test laravel harness if available
+# a project of several files: every require, autoloaded class, template and
+# data file has to come from the executable, which runs away from the tree
+APP="$TMPDIR/project"
+mkdir -p "$APP/bin" "$APP/src/Model" "$APP/templates" "$APP/data"
+echo '{}' > "$APP/composer.json"
+cat > "$APP/bin/main.php" << 'EOF'
+<?php
+require __DIR__ . '/../src/boot.php';
+use App\Model\User;
+$root = dirname(__DIR__);
+echo (new User('ada'))->greet(), "\n";
+$h = fopen("$root/data/msg.txt", 'r');
+echo trim(fgets($h)), ' ', var_export(feof($h), true), "\n";
+fclose($h);
+echo implode(',', scandir("$root/src")), "\n";
+echo implode(',', array_map('basename', glob("$root/templates/*.tpl"))), "\n";
+$items = [];
+foreach (new DirectoryIterator("$root/src/Model") as $f) if (!$f->isDot()) $items[] = $f->getFilename() . ($f->isFile() ? ':file' : ':dir');
+echo implode(',', $items), "\n";
+echo str_replace($root, '', realpath("$root/src/../data/msg.txt")), ' ', filesize("$root/data/msg.txt"), "\n";
+var_dump(file_exists("$root/data/msg.txt"), is_dir("$root/src"), is_file("$root/missing.php"));
+echo include "$root/templates/page.inc", "\n";
+echo count(get_included_files()), ' ', basename(__FILE__), "\n";
+require "$root/src/overlay.php";
+EOF
+# writes land on disk next to the executable and shadow the packed copies;
+# the script puts the tree back so `zphp run` leaves the source as it was
+cat > "$APP/src/overlay.php" << 'EOF'
+<?php
+$data = "$root/data";
+file_put_contents("$data/log.txt", "more\n", FILE_APPEND);
+echo file_get_contents("$data/log.txt");
+var_dump(is_writable("$data/log.txt"));
+file_put_contents("$data/log.txt", "packed\n");
+
+file_put_contents("$data/view.php", '<?php return "newer";');
+echo include "$data/view.php", "\n";
+file_put_contents("$data/view.php", '<?php return "old";');
+
+mkdir("$data/sub");
+file_put_contents("$data/sub/x.txt", "x");
+echo implode(',', scandir($data)), "\n";
+echo implode(',', array_map('basename', glob("$data/*"))), "\n";
+unlink("$data/sub/x.txt");
+rmdir("$data/sub");
+
+rename("$data/msg.txt", "$data/moved.txt");
+var_dump(file_exists("$data/msg.txt"), trim(file_get_contents("$data/moved.txt")));
+rename("$data/moved.txt", "$data/msg.txt");
+
+unlink("$data/log.txt");
+var_dump(file_exists("$data/log.txt"), in_array('log.txt', scandir($data)));
+file_put_contents("$data/log.txt", "packed\n");
+
+$db = new PDO("sqlite:$data/seed.sqlite");
+$db->exec("INSERT INTO items (name) VALUES ('added')");
+echo implode(',', $db->query('SELECT name FROM items ORDER BY id')->fetchAll(PDO::FETCH_COLUMN)), "\n";
+$db->exec("DELETE FROM items WHERE name = 'added'");
+EOF
+echo packed > "$APP/data/log.txt"
+echo '<?php return "old";' > "$APP/data/view.php"
+"$ZPHP" -r '$db = new PDO("sqlite:" . $argv[1]); $db->exec("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)"); $db->exec("INSERT INTO items (name) VALUES (\x27seeded\x27)");' "$APP/data/seed.sqlite"
+cat > "$APP/src/boot.php" << 'EOF'
+<?php
+spl_autoload_register(function ($class) {
+    $file = __DIR__ . '/' . str_replace(['App\\', '\\'], ['', '/'], $class) . '.php';
+    if (is_file($file)) require $file;
+});
+require_once 'helpers.php';
+EOF
+cat > "$APP/src/helpers.php" << 'EOF'
+<?php
+function shout(string $s): string { return strtoupper($s) . '!'; }
+EOF
+cat > "$APP/src/Model/User.php" << 'EOF'
+<?php
+namespace App\Model;
+class User {
+    public function __construct(private string $name) {}
+    public function greet(): string { return shout("hello {$this->name}"); }
+}
+EOF
+echo '<?php return "included template";' > "$APP/templates/page.inc"
+echo one > "$APP/templates/one.tpl"
+echo two > "$APP/templates/two.tpl"
+echo "packed message" > "$APP/data/msg.txt"
+hide_project() { hide_tree "$APP"; }
+BUILT=hide_project AFTER=restore_tree run_test "project" "$APP/bin/main.php"
+
+# test laravel harness if available: the executable carries the whole
+# application and vendor tree, and writes its caches and its sqlite database
+# next to itself
+laravel_dirs() {
+    mkdir -p "$1/app/storage/framework/views" "$1/app/storage/framework/cache/data" "$1/app/storage/framework/sessions" "$1/app/storage/logs" "$1/app/bootstrap/cache" "$1/app/database"
+}
+hide_laravel() { hide_tree "$SCRIPT_DIR/laravel"; }
 if [ -d "$SCRIPT_DIR/laravel/app/vendor" ]; then
     echo ""
     echo "laravel compilation tests"
     echo ""
     for f in "$SCRIPT_DIR"/laravel/harness/test-*.php; do
         name="$(basename "$f" .php)"
-        run_test "laravel:$name" "$f"
+        PREPARE=laravel_dirs BUILT=hide_laravel AFTER=restore_tree run_test "laravel:$name" "$f" --root "$SCRIPT_DIR/laravel" --exclude app/storage --exclude app/database/database.sqlite
     done
+    # nothing excluded or prepared: storage and the database are packed, and
+    # the executable copies each one out as the application first writes it
+    BUILT=hide_laravel AFTER=restore_tree run_test "laravel:unprepared-eloquent" "$SCRIPT_DIR/laravel/harness/test-eloquent.php" --root "$SCRIPT_DIR/laravel"
 fi
 
 echo ""

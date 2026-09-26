@@ -1,5 +1,6 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
+const bundle = @import("../bundle.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
@@ -23,7 +24,7 @@ fn native_parse_ini_string(ctx: *NativeContext, args: []const Value) RuntimeErro
 fn native_parse_ini_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const path = args[0].string.bytes();
-    const content = std.fs.cwd().readFileAlloc(ctx.allocator, path, 1024 * 1024 * 64) catch return NativeResult.scalar(Value{ .bool = false });
+    const content = bundle.readFileAlloc(ctx.allocator, path, 1024 * 1024 * 64) catch return NativeResult.scalar(Value{ .bool = false });
     defer ctx.allocator.free(content);
     const process_sections = if (args.len >= 2) Value.isTruthy(args[1]) else false;
     const mode = parseMode(if (args.len >= 3) args[2] else .{ .int = 0 });

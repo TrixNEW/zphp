@@ -1,5 +1,6 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
+const paths = @import("../paths.zig");
 const platform = @import("../platform.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
@@ -13,6 +14,7 @@ const ClassDef = vm_mod.ClassDef;
 const phar = @import("phar.zig");
 const phar_path = @import("phar_path.zig");
 const includes = @import("../runtime/includes.zig");
+const bundle = @import("../bundle.zig");
 const zlib = @cImport(@cInclude("zlib.h"));
 
 const Allocator = std.mem.Allocator;
@@ -140,7 +142,6 @@ const common_entries = .{
     .{ "stream_set_read_buffer", native_stream_set_buffer },
     .{ "stream_set_write_buffer", native_stream_set_buffer },
     .{ "clearstatcache", native_clearstatcache },
-    .{ "tempnam", native_tempnam },
     .{ "tmpfile", native_tmpfile },
     .{ "fileperms", native_fileperms },
     .{ "readlink", native_readlink },
@@ -332,7 +333,7 @@ const PharLoaded = struct {
 };
 
 fn loadPhar(a: Allocator, archive_path: []const u8) !PharLoaded {
-    const bytes = try std.fs.cwd().readFileAlloc(a, archive_path, 256 * 1024 * 1024);
+    const bytes = try bundle.readFileAlloc(a, archive_path, 256 * 1024 * 1024);
     errdefer a.free(bytes);
     const parsed = try phar.parse(a, bytes);
     return .{ .bytes = bytes, .parsed = parsed };
@@ -634,7 +635,10 @@ pub fn readPath(ctx: *NativeContext, raw_path: []const u8) RuntimeError!?Value.S
         const fetched = try fetchUrl(ctx, path);
         return if (fetched.value == .string) fetched.value.string else null;
     }
-    const content = std.fs.cwd().readFileAlloc(ctx.allocator, path, std.math.maxInt(usize)) catch return null;
+    const content = bundle.readFileAlloc(ctx.allocator, path, std.math.maxInt(usize)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
     return Value.String.adopt(ctx.allocator, content) catch |err| {
         ctx.allocator.free(content);
         return err;
@@ -650,7 +654,7 @@ fn native_file_put_contents(ctx: *NativeContext, args: []const Value) RuntimeErr
 }
 
 fn putContents(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    const path = args[0].string.bytes();
+    const spelled_path = args[0].string.bytes();
     const data = if (args[1] == .string) args[1].string.bytes() else if (args[1] == .array) blk: {
         // PHP writes an array argument as its elements concatenated, like
         // implode('', $array) - each element coerced to string
@@ -668,8 +672,8 @@ fn putContents(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         try ctx.strings.append(ctx.allocator, s);
         break :blk s;
     };
-    if (userWrapperFor(ctx.vm, path)) |class_name| {
-        const opened = (try dispatchUserOpen(ctx, class_name, path, "wb")) orelse return NativeResult.scalar(.{ .bool = false });
+    if (userWrapperFor(ctx.vm, spelled_path)) |class_name| {
+        const opened = (try dispatchUserOpen(ctx, class_name, spelled_path, "wb")) orelse return NativeResult.scalar(.{ .bool = false });
         const wrapper = fileHandleWrapper(opened.resource) orelse return NativeResult.scalar(.{ .bool = false });
         const written = try ctx.callMethod(wrapper, "stream_write", &[_]Value{.{ .string = Value.String.borrowed(data) }});
         if (ctx.vm.hasMethod(wrapper.class_name, "stream_close")) {
@@ -678,25 +682,28 @@ fn putContents(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
         if (written != .int) return NativeResult.scalar(.{ .bool = false });
         return NativeResult.scalar(.{ .int = written.int });
     }
-    if (extractScheme(path)) |s| {
+    if (extractScheme(spelled_path)) |s| {
         if (isBuiltinWrapper(s) and isWrapperUnregistered(ctx.vm, s)) return NativeResult.scalar(.{ .bool = false });
     }
-    if (std.mem.eql(u8, path, "php://stdout") or std.mem.eql(u8, path, "php://output")) {
+    if (std.mem.eql(u8, spelled_path, "php://stdout") or std.mem.eql(u8, spelled_path, "php://output")) {
         try ctx.vm.output.appendSlice(ctx.allocator, data);
         return NativeResult.scalar(.{ .int = @intCast(data.len) });
     }
-    if (std.mem.eql(u8, path, "php://stderr")) {
+    if (std.mem.eql(u8, spelled_path, "php://stderr")) {
         ctx.vm.flushOutputToStdout();
         const stderr = std.fs.File.stderr();
         const n = stderr.write(data) catch return NativeResult.scalar(.{ .bool = false });
         return NativeResult.scalar(.{ .int = @intCast(n) });
     }
-    if (std.mem.startsWith(u8, path, ZLIB_PREFIX)) {
-        writeZlibFile(ctx.allocator, path, data) catch return NativeResult.scalar(.{ .bool = false });
+    if (std.mem.startsWith(u8, spelled_path, ZLIB_PREFIX)) {
+        writeZlibFile(ctx.allocator, spelled_path, data) catch return NativeResult.scalar(.{ .bool = false });
         return NativeResult.scalar(.{ .int = @intCast(data.len) });
     }
     const flags: i64 = if (args.len >= 3) Value.toInt(args[2]) else 0;
     const append = (flags & 8) != 0; // FILE_APPEND = 8
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = paths.streamPath(&path_buf, spelled_path);
+    bundle.prepareWrite(path, if (append) .edit else .create);
     if (append) {
         const file = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch {
             std.fs.cwd().writeFile(.{ .sub_path = path, .data = data }) catch return NativeResult.scalar(.{ .bool = false });
@@ -713,7 +720,8 @@ fn putContents(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 
 fn native_file_exists(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
     if (userWrapperFor(ctx.vm, path)) |class_name| {
         const arr = try dispatchUserStat(ctx, class_name, path, 0);
         return NativeResult.scalar(.{ .bool = arr != null });
@@ -735,13 +743,16 @@ fn native_file_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
         std.fs.cwd().access(path[ZLIB_PREFIX.len..], .{}) catch return NativeResult.scalar(Value{ .bool = false });
         return NativeResult.scalar(.{ .bool = true });
     }
+    if (bundle.find(path) != null) return NativeResult.scalar(.{ .bool = true });
     std.fs.cwd().access(path, .{}) catch return NativeResult.scalar(Value{ .bool = false });
     return NativeResult.scalar(.{ .bool = true });
 }
 
 fn native_is_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0) return NativeResult.scalar(.{ .bool = false });
-    const path = if (args[0] == .string) args[0].string.bytes() else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return NativeResult.scalar(.{ .bool = false });
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const spelled = if (args[0] == .string) args[0].string.bytes() else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return NativeResult.scalar(.{ .bool = false });
+    const path = bundle.osPath(&os_buf, spelled);
     if (userWrapperFor(ctx.vm, path)) |class_name| {
         const arr = (try dispatchUserStat(ctx, class_name, path, 0)) orelse return NativeResult.scalar(.{ .bool = false });
         const mode_v = arr.get(.{ .string = Value.String.borrowed("mode") });
@@ -764,13 +775,16 @@ fn native_is_file(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
         const stat = std.fs.cwd().statFile(path[ZLIB_PREFIX.len..]) catch return NativeResult.scalar(Value{ .bool = false });
         return NativeResult.scalar(.{ .bool = stat.kind == .file });
     }
+    if (bundle.find(path)) |hit| return NativeResult.scalar(.{ .bool = hit == .file });
     const stat = std.fs.cwd().statFile(path) catch return NativeResult.scalar(Value{ .bool = false });
     return NativeResult.scalar(.{ .bool = stat.kind == .file });
 }
 
 fn native_is_dir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0) return NativeResult.scalar(.{ .bool = false });
-    const path = if (args[0] == .string) args[0].string.bytes() else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return NativeResult.scalar(.{ .bool = false });
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const spelled = if (args[0] == .string) args[0].string.bytes() else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return NativeResult.scalar(.{ .bool = false });
+    const path = bundle.osPath(&os_buf, spelled);
     if (userWrapperFor(ctx.vm, path)) |class_name| {
         const arr = (try dispatchUserStat(ctx, class_name, path, 0)) orelse return NativeResult.scalar(.{ .bool = false });
         const mode_v = arr.get(.{ .string = Value.String.borrowed("mode") });
@@ -789,6 +803,7 @@ fn native_is_dir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         defer ctx.allocator.free(normalized);
         return NativeResult.scalar(.{ .bool = loaded.parsed.isDir(normalized) });
     }
+    if (bundle.find(path)) |hit| if (hit == .dir) return NativeResult.scalar(.{ .bool = true });
     var dir = std.fs.cwd().openDir(path, .{}) catch return NativeResult.scalar(Value{ .bool = false });
     dir.close();
     return NativeResult.scalar(.{ .bool = true });
@@ -880,6 +895,9 @@ fn native_pathinfo(ctx: *NativeContext, args: []const Value) RuntimeError!Native
 fn native_realpath(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     var buf: [std.fs.max_path_bytes]u8 = undefined;
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
+    if (bundle.canonicalPath(&buf, path)) |packed_path| return NativeResult.copyString(ctx.allocator, packed_path);
     const resolved = std.fs.cwd().realpath(args[0].string.bytes(), &buf) catch return NativeResult.scalar(Value{ .bool = false });
     return NativeResult.copyString(ctx.allocator, resolved);
 }
@@ -889,8 +907,11 @@ fn native_realpath(ctx: *NativeContext, args: []const Value) RuntimeError!Native
 fn native_mkdir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     try useContext(ctx, args, 3);
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
     const recursive = args.len >= 3 and args[2].isTruthy();
+    if (bundle.find(path) != null) return NativeResult.scalar(.{ .bool = false });
+    bundle.prepareWrite(path, .create);
     if (recursive) {
         std.fs.cwd().makePath(path) catch return NativeResult.scalar(Value{ .bool = false });
     } else {
@@ -902,14 +923,25 @@ fn native_mkdir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
 fn native_rmdir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     try useContext(ctx, args, 1);
-    std.fs.cwd().deleteDir(args[0].string.bytes()) catch return NativeResult.scalar(Value{ .bool = false });
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
+    if (bundle.listDir(path)) |listing| {
+        var packed_names = listing;
+        if (packed_names.next() != null) return NativeResult.scalar(.{ .bool = false });
+    }
+    std.fs.cwd().deleteDir(path) catch |err| {
+        if (err == error.FileNotFound and bundle.find(path) != null and bundle.remove(path)) return NativeResult.scalar(.{ .bool = true });
+        return NativeResult.scalar(.{ .bool = false });
+    };
+    _ = bundle.remove(path);
     return NativeResult.scalar(.{ .bool = true });
 }
 
 fn native_unlink(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     try useContext(ctx, args, 1);
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
     if (userWrapperFor(ctx.vm, path)) |class_name| {
         if (!ctx.vm.hasMethod(class_name, "unlink")) return NativeResult.scalar(.{ .bool = false });
         const wrapper = try ctx.createObject(class_name);
@@ -922,15 +954,37 @@ fn native_unlink(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     if (extractScheme(path)) |s| {
         if (isBuiltinWrapper(s) and isWrapperUnregistered(ctx.vm, s)) return NativeResult.scalar(.{ .bool = false });
     }
-    std.fs.cwd().deleteFile(path) catch return NativeResult.scalar(Value{ .bool = false });
+    return unlinkPath(path);
+}
+
+// deletes a file, hiding a packed copy the executable's application holds
+pub fn unlinkPath(path: []const u8) NativeResult {
+    std.fs.cwd().deleteFile(path) catch |err| {
+        if (err == error.FileNotFound and packedFileAt(path) and bundle.remove(path)) return NativeResult.scalar(.{ .bool = true });
+        return NativeResult.scalar(.{ .bool = false });
+    };
+    _ = bundle.remove(path);
     return NativeResult.scalar(.{ .bool = true });
+}
+
+fn packedFileAt(path: []const u8) bool {
+    const hit = bundle.find(path) orelse return false;
+    return hit == .file;
 }
 
 fn native_copy(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
-    const source = if (args[0] == .string) args[0].string.bytes() else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return NativeResult.scalar(.{ .bool = false });
+    const spelled_source = if (args[0] == .string) args[0].string.bytes() else if (args[0] == .object and ctx.vm.hasMethod(args[0].object.class_name, "__toString")) try ctx.vm.objectToString(args[0].object) else return NativeResult.scalar(.{ .bool = false });
     try useContext(ctx, args, 2);
-    std.fs.cwd().copyFile(source, std.fs.cwd(), args[1].string.bytes(), .{}) catch return NativeResult.scalar(Value{ .bool = false });
+    var source_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const source = paths.streamPath(&source_buf, spelled_source);
+    const dest = paths.streamPath(&dest_buf, args[1].string.bytes());
+    bundle.prepareWrite(dest, .create);
+    if (bundle.find(source)) |hit| switch (hit) {
+        .file => |entry| std.fs.cwd().writeFile(.{ .sub_path = dest, .data = entry.source }) catch return NativeResult.scalar(.{ .bool = false }),
+        .dir => return NativeResult.scalar(.{ .bool = false }),
+    } else std.fs.cwd().copyFile(source, std.fs.cwd(), dest, .{}) catch return NativeResult.scalar(Value{ .bool = false });
     transientStreams(ctx, 2);
     return NativeResult.scalar(.{ .bool = true });
 }
@@ -938,7 +992,14 @@ fn native_copy(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 fn native_rename(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .string or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
     try useContext(ctx, args, 2);
-    std.fs.cwd().rename(args[0].string.bytes(), args[1].string.bytes()) catch return NativeResult.scalar(.{ .bool = false });
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var to_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const from = bundle.osPath(&os_buf, args[0].string.bytes());
+    const to = bundle.osPath(&to_buf, args[1].string.bytes());
+    bundle.prepareWrite(to, .create);
+    bundle.prepareWrite(from, .edit);
+    std.fs.cwd().rename(from, to) catch return NativeResult.scalar(.{ .bool = false });
+    _ = bundle.remove(from);
     return NativeResult.scalar(.{ .bool = true });
 }
 
@@ -948,24 +1009,11 @@ fn native_scandir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     // SCANDIR_SORT_ASCENDING=0, _DESCENDING=1, _NONE=2
     const order: i64 = if (args.len >= 2 and args[1] == .int) args[1].int else 0;
-    var dir = std.fs.cwd().openDir(args[0].string.bytes(), .{ .iterate = true }) catch return NativeResult.scalar(.{ .bool = false });
-    defer dir.close();
-    transientStreams(ctx, 1);
-
     var names = std.ArrayListUnmanaged(Value.String){};
     defer names.deinit(ctx.allocator);
     defer for (names.items) |name| name.release();
-    try names.append(ctx.allocator, Value.String.borrowed("."));
-    try names.append(ctx.allocator, Value.String.borrowed(".."));
-
-    var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
-        const name = try Value.String.create(ctx.allocator, entry.name);
-        names.append(ctx.allocator, name) catch |err| {
-            name.release();
-            return err;
-        };
-    }
+    if (!try directoryNames(ctx, args[0].string.bytes(), &names)) return NativeResult.scalar(.{ .bool = false });
+    transientStreams(ctx, 1);
 
     if (order == 0 or order == 1) {
         const lessAsc = struct {
@@ -985,6 +1033,43 @@ fn native_scandir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     for (names.items) |n| try result.append(ctx.allocator, .{ .string = n });
     return NativeResult.borrowed(.{ .array = result });
 }
+
+// the names in a directory, `.` and `..` first: the disk and the executable's
+// packed application both contribute, a name once; false when neither has the
+// directory
+fn directoryNames(ctx: *NativeContext, path: []const u8, names: *std.ArrayListUnmanaged(Value.String)) RuntimeError!bool {
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_path = bundle.osPath(&os_buf, path);
+    var listing = bundle.listDir(dir_path);
+    var dir_opt: ?std.fs.Dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch null;
+    defer if (dir_opt) |*d| d.close();
+    if (listing == null and dir_opt == null) return false;
+    try names.append(ctx.allocator, Value.String.borrowed("."));
+    try names.append(ctx.allocator, Value.String.borrowed(".."));
+    if (dir_opt) |*dir| {
+        var iter = dir.iterate();
+        while (iter.next() catch null) |entry| try appendName(ctx, names, entry.name);
+    }
+    if (listing) |*packed_names| while (packed_names.next()) |child| {
+        if (dir_opt) |dir| if (dirHas(dir, child.name)) continue;
+        try appendName(ctx, names, child.name);
+    };
+    return true;
+}
+
+pub fn dirHas(dir: std.fs.Dir, name: []const u8) bool {
+    dir.access(name, .{}) catch |err| return err != error.FileNotFound;
+    return true;
+}
+
+fn appendName(ctx: *NativeContext, names: *std.ArrayListUnmanaged(Value.String), bytes: []const u8) RuntimeError!void {
+    const name = try Value.String.create(ctx.allocator, bytes);
+    names.append(ctx.allocator, name) catch |err| {
+        name.release();
+        return err;
+    };
+}
+
 
 // dir($path) returns a Directory object with path, handle, and read/rewind/
 // close methods that delegate to the underlying DirectoryHandle. PHP's
@@ -1026,15 +1111,12 @@ fn directoryClose(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResu
 fn native_opendir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     try useContext(ctx, args, 1);
-    var dir = std.fs.cwd().openDir(args[0].string.bytes(), .{ .iterate = true }) catch return NativeResult.scalar(.{ .bool = false });
-    defer dir.close();
+    var names = std.ArrayListUnmanaged(Value.String){};
+    defer names.deinit(ctx.allocator);
+    defer for (names.items) |name| name.release();
+    if (!try directoryNames(ctx, args[0].string.bytes(), &names)) return NativeResult.scalar(.{ .bool = false });
     const names_arr = try ctx.vm.allocArray();
-    try names_arr.append(ctx.allocator, .{ .string = Value.String.borrowed(".") });
-    try names_arr.append(ctx.allocator, .{ .string = Value.String.borrowed("..") });
-    var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
-        try names_arr.appendCopiedString(ctx.allocator, entry.name);
-    }
+    for (names.items) |name| try names_arr.append(ctx.allocator, .{ .string = name });
     const obj = try ctx.createResource("DirectoryHandle");
     try obj.set(ctx.allocator, "__entries", .{ .array = names_arr });
     try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
@@ -1125,23 +1207,39 @@ fn native_glob(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 }
 
 fn globAppend(ctx: *NativeContext, result: *PhpArray, pattern: []const u8, flags: i64) !void {
+    const dir_path = if (std.mem.lastIndexOf(u8, pattern, "/")) |pos| pattern[0..pos] else ".";
+    const file_pattern = if (std.mem.lastIndexOf(u8, pattern, "/")) |pos| pattern[pos + 1 ..] else pattern;
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const os_dir = bundle.osPath(&os_buf, dir_path);
+    var dir_opt: ?std.fs.Dir = std.fs.cwd().openDir(os_dir, .{ .iterate = true }) catch null;
+    defer if (dir_opt) |*d| d.close();
+    if (dir_opt) |*dir| {
+        var iter = dir.iterate();
+        while (iter.next() catch null) |entry| {
+            try globAppendEntry(ctx, result, .{ .dir_path = dir_path, .pattern = file_pattern, .name = entry.name, .is_dir = entry.kind == .directory, .flags = flags });
+        }
+    }
+    // the executable's packed application contributes what the disk lacks
+    var listing = bundle.listDir(os_dir) orelse return;
+    while (listing.next()) |child| {
+        if (dir_opt) |dir| if (dirHas(dir, child.name)) continue;
+        try globAppendEntry(ctx, result, .{ .dir_path = dir_path, .pattern = file_pattern, .name = child.name, .is_dir = child.kind == .dir, .flags = flags });
+    }
+}
+
+const GlobEntry = struct { dir_path: []const u8, pattern: []const u8, name: []const u8, is_dir: bool, flags: i64 };
+
+fn globAppendEntry(ctx: *NativeContext, result: *PhpArray, entry: GlobEntry) !void {
     const GLOB_ONLYDIR: i64 = 1073741824;
     const GLOB_MARK: i64 = 8;
     const FNM_PERIOD: i64 = 4;
-    const dir_path = if (std.mem.lastIndexOf(u8, pattern, "/")) |pos| pattern[0..pos] else ".";
-    const file_pattern = if (std.mem.lastIndexOf(u8, pattern, "/")) |pos| pattern[pos + 1 ..] else pattern;
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
-    defer dir.close();
-    var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
-        // glob excludes dotfiles unless the pattern explicitly starts with '.'
-        if (!globMatchFlags(file_pattern, entry.name, FNM_PERIOD)) continue;
-        if ((flags & GLOB_ONLYDIR) != 0 and entry.kind != .directory) continue;
-        var path_buf: [4096]u8 = undefined;
-        const slash: []const u8 = if ((flags & GLOB_MARK) != 0 and entry.kind == .directory) "/" else "";
-        const full = std.fmt.bufPrint(&path_buf, "{s}/{s}{s}", .{ dir_path, entry.name, slash }) catch continue;
-        try result.appendCopiedString(ctx.allocator, full);
-    }
+    // glob excludes dotfiles unless the pattern explicitly starts with '.'
+    if (!globMatchFlags(entry.pattern, entry.name, FNM_PERIOD)) return;
+    if ((entry.flags & GLOB_ONLYDIR) != 0 and !entry.is_dir) return;
+    var path_buf: [4096]u8 = undefined;
+    const slash: []const u8 = if ((entry.flags & GLOB_MARK) != 0 and entry.is_dir) "/" else "";
+    const full = std.fmt.bufPrint(&path_buf, "{s}/{s}{s}", .{ entry.dir_path, entry.name, slash }) catch return;
+    try result.appendCopiedString(ctx.allocator, full);
 }
 
 fn sortArrayValues(arr: *PhpArray) void {
@@ -1254,15 +1352,34 @@ fn globMatchFlags(pattern: []const u8, name: []const u8, flags: i64) bool {
 fn native_is_readable(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     if (std.mem.startsWith(u8, args[0].string.bytes(), "phar://")) return native_is_file(ctx, args);
-    std.fs.cwd().access(args[0].string.bytes(), .{ .mode = .read_only }) catch return NativeResult.scalar(.{ .bool = false });
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
+    if (bundle.find(path) != null) return NativeResult.scalar(.{ .bool = true });
+    std.fs.cwd().access(path, .{ .mode = .read_only }) catch return NativeResult.scalar(.{ .bool = false });
     return NativeResult.scalar(.{ .bool = true });
 }
 
 fn native_is_writable(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
+    if (bundle.find(path) != null) return NativeResult.scalar(.{ .bool = writableAncestor(path) });
     std.fs.cwd().access(path, .{ .mode = .write_only }) catch return NativeResult.scalar(.{ .bool = false });
     return NativeResult.scalar(.{ .bool = !platform.isReadOnly(path) });
+}
+
+// a packed path is writable where its copy would go: the nearest directory
+// above it that the disk holds
+fn writableAncestor(path: []const u8) bool {
+    var dir = std.fs.path.dirname(path) orelse ".";
+    while (true) {
+        std.fs.cwd().access(dir, .{ .mode = .write_only }) catch |err| {
+            if (err != error.FileNotFound) return false;
+            dir = std.fs.path.dirname(dir) orelse return false;
+            continue;
+        };
+        return !platform.isReadOnly(dir);
+    }
 }
 
 fn native_is_executable(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -1307,7 +1424,16 @@ fn statField(arr: *PhpArray, comptime name: []const u8, index: i64) i64 {
 // null when the path does not use one, `missing` when it does not exist
 const StatLookup = union(enum) { not_wrapped, missing, found: WrapperStat };
 
+// packed files are read-only, their writes going to a copy on disk
+fn packedStat(hit: bundle.Hit) WrapperStat {
+    return switch (hit) {
+        .file => |entry| .{ .mode = 0o100444, .size = @intCast(entry.source.len), .atime = entry.mtime, .mtime = entry.mtime, .ctime = entry.mtime },
+        .dir => .{ .mode = 0o040555, .size = 0, .atime = 0, .mtime = 0, .ctime = 0 },
+    };
+}
+
 fn statWrapped(ctx: *NativeContext, path: []const u8) RuntimeError!StatLookup {
+    if (bundle.find(path)) |hit| return .{ .found = packedStat(hit) };
     if (userWrapperFor(ctx.vm, path)) |class_name| {
         const arr = (try dispatchUserStat(ctx, class_name, path, 0)) orelse return .missing;
         return .{ .found = .{
@@ -1362,7 +1488,9 @@ const StatField = enum { size, atime, mtime, ctime };
 // php's warning when the path cannot be stat'ed
 fn statOne(ctx: *NativeContext, args: []const Value, comptime field: StatField, comptime fn_name: []const u8) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    const spelled = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, spelled);
     const value: ?i64 = switch (try statWrapped(ctx, path)) {
         .found => |st| @field(st, @tagName(field)),
         .missing => null,
@@ -1377,7 +1505,7 @@ fn statOne(ctx: *NativeContext, args: []const Value, comptime field: StatField, 
         },
     };
     if (value) |v| return NativeResult.scalar(.{ .int = v });
-    const msg = try std.fmt.allocPrint(ctx.allocator, fn_name ++ "(): stat failed for {s}", .{path});
+    const msg = try std.fmt.allocPrint(ctx.allocator, fn_name ++ "(): stat failed for {s}", .{spelled});
     defer ctx.allocator.free(msg);
     try ctx.vm.emitWarning(msg);
     return NativeResult.scalar(.{ .bool = false });
@@ -1614,7 +1742,7 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
 
     const is_memory_stream = std.mem.startsWith(u8, path, "php://temp") or std.mem.startsWith(u8, path, "php://memory");
     const file = if (is_memory_stream)
-        (try anonymousFile(ctx)) orelse return NativeResult.scalar(.{ .bool = false })
+        anonymousFile() orelse return NativeResult.scalar(.{ .bool = false })
     else
         openWithMode(path, mode) catch |err| {
             const reason = openErrorReason(err);
@@ -1648,9 +1776,20 @@ fn openErrorReason(err: anyerror) []const u8 {
     };
 }
 
-pub fn openWithMode(path: []const u8, mode: []const u8) !std.fs.File {
+pub fn openWithMode(spelled: []const u8, mode: []const u8) !std.fs.File {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = paths.streamPath(&path_buf, spelled);
     if (mode.len == 0) return error.RuntimeError;
     const has_plus = mode.len > 1 and (mode[1] == '+' or (mode.len > 2 and mode[2] == '+'));
+    if (mode[0] == 'r' and !has_plus) {
+        if (bundle.find(path)) |hit| return switch (hit) {
+            .file => |entry| packedFile(entry.source) orelse error.SystemResources,
+            .dir => error.IsDir,
+        };
+    } else {
+        if (mode[0] == 'x' and bundle.find(path) != null) return error.PathAlreadyExists;
+        bundle.prepareWrite(path, if (mode[0] == 'w' or mode[0] == 'x') .create else .edit);
+    }
     return switch (mode[0]) {
         'r' => std.fs.cwd().openFile(path, .{ .mode = if (has_plus) .read_write else .read_only }),
         'w' => blk: {
@@ -2341,7 +2480,7 @@ fn gzipEncode(a: Allocator, input: []const u8) ![]u8 {
 // owned bytes on success. caller registers them with vm.strings if needed
 fn readZlibFile(a: Allocator, path: []const u8) ![]u8 {
     const inner = path[ZLIB_PREFIX.len..];
-    const raw = try std.fs.cwd().readFileAlloc(a, inner, 1024 * 1024 * 256);
+    const raw = try bundle.readFileAlloc(a, inner, 1024 * 1024 * 256);
     defer a.free(raw);
     return try gzipDecode(a, raw);
 }
@@ -2714,7 +2853,9 @@ fn native_fputcsv(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
 
 fn native_touch(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
+    bundle.prepareWrite(path, .edit);
 
     // create the file if it doesn't already exist, then fall through to the
     // timestamp-application path so explicit mtime/atime args take effect
@@ -2741,6 +2882,7 @@ fn native_touch(_: *NativeContext, args: []const Value) RuntimeError!NativeResul
 }
 
 fn native_chmod(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len > 0 and args[0] == .string) bundle.prepareWrite(args[0].string.bytes(), .edit);
     // windows keeps only a read-only bit: no write permission sets it
     if (platform.is_windows) return windowsChmod(args);
     return posixChmod(ctx, args);
@@ -2749,12 +2891,14 @@ fn native_chmod(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
 fn windowsChmod(args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const mode = Value.toInt(args[1]);
-    return NativeResult.scalar(.{ .bool = platform.setReadOnly(args[0].string.bytes(), (mode & 0o222) == 0) });
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    return NativeResult.scalar(.{ .bool = platform.setReadOnly(bundle.osPath(&os_buf, args[0].string.bytes()), (mode & 0o222) == 0) });
 }
 
 fn posixChmod(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
     const mode_val = Value.toInt(args[1]);
     if (mode_val < 0) return NativeResult.scalar(.{ .bool = false });
     const mode: std.posix.mode_t = @intCast(mode_val);
@@ -2771,7 +2915,9 @@ fn posixChmod(_: *NativeContext, args: []const Value) RuntimeError!NativeResult 
 // are EPERM when not root)
 fn native_chown(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
+    bundle.prepareWrite(path, .edit);
     var path_z: [std.fs.max_path_bytes:0]u8 = undefined;
     if (path.len >= path_z.len) return NativeResult.scalar(.{ .bool = false });
     @memcpy(path_z[0..path.len], path);
@@ -2788,7 +2934,9 @@ fn native_chown(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
 
 fn native_chgrp(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
+    bundle.prepareWrite(path, .edit);
     var path_z: [std.fs.max_path_bytes:0]u8 = undefined;
     if (path.len >= path_z.len) return NativeResult.scalar(.{ .bool = false });
     @memcpy(path_z[0..path.len], path);
@@ -2818,11 +2966,13 @@ fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
 
 fn native_stat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    const spelled = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, spelled);
     switch (try statWrapped(ctx, path)) {
         .found => |st| return NativeResult.borrowed(.{ .array = try wrapperStatArray(ctx, st) }),
         .missing => {
-            const msg = try std.fmt.allocPrint(ctx.allocator, "stat(): stat failed for {s}", .{path});
+            const msg = try std.fmt.allocPrint(ctx.allocator, "stat(): stat failed for {s}", .{spelled});
             defer ctx.allocator.free(msg);
             try ctx.vm.emitWarning(msg);
             return NativeResult.scalar(.{ .bool = false });
@@ -2840,7 +2990,9 @@ fn native_stat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 
 fn native_chdir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
+    bundle.ensureDir(path);
     var dir = std.fs.cwd().openDir(path, .{}) catch return NativeResult.scalar(.{ .bool = false });
     defer dir.close();
     dir.setAsCwd() catch return NativeResult.scalar(.{ .bool = false });
@@ -2958,8 +3110,10 @@ fn native_symlink(_: *NativeContext, args: []const Value) RuntimeError!NativeRes
     var t: [std.fs.max_path_bytes:0]u8 = undefined;
     var l: [std.fs.max_path_bytes:0]u8 = undefined;
     const target = args[0].string.bytes();
-    const linkpath = args[1].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const linkpath = bundle.osPath(&os_buf, args[1].string.bytes());
     if (target.len >= t.len or linkpath.len >= l.len) return NativeResult.scalar(.{ .bool = false });
+    bundle.prepareWrite(linkpath, .create);
     @memcpy(t[0..target.len], target);
     t[target.len] = 0;
     @memcpy(l[0..linkpath.len], linkpath);
@@ -2971,9 +3125,13 @@ fn native_link(_: *NativeContext, args: []const Value) RuntimeError!NativeResult
     if (args.len < 2 or args[0] != .string or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
     var t: [std.fs.max_path_bytes:0]u8 = undefined;
     var l: [std.fs.max_path_bytes:0]u8 = undefined;
-    const target = args[0].string.bytes();
-    const linkpath = args[1].string.bytes();
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target = bundle.osPath(&target_buf, args[0].string.bytes());
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const linkpath = bundle.osPath(&os_buf, args[1].string.bytes());
     if (target.len >= t.len or linkpath.len >= l.len) return NativeResult.scalar(.{ .bool = false });
+    bundle.prepareWrite(target, .edit);
+    bundle.prepareWrite(linkpath, .create);
     @memcpy(t[0..target.len], target);
     t[target.len] = 0;
     @memcpy(l[0..linkpath.len], linkpath);
@@ -3021,7 +3179,9 @@ fn buildStatArray(ctx: *NativeContext, st: *const std.c.Stat) !*PhpArray {
 
 fn native_lstat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path = args[0].string.bytes();
+    var os_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = bundle.osPath(&os_buf, args[0].string.bytes());
+    if (bundle.find(path)) |hit| return NativeResult.borrowed(.{ .array = try wrapperStatArray(ctx, packedStat(hit)) });
     var pbuf: [std.fs.max_path_bytes:0]u8 = undefined;
     if (path.len >= pbuf.len) return NativeResult.scalar(.{ .bool = false });
     @memcpy(pbuf[0..path.len], path);
@@ -3039,7 +3199,7 @@ fn native_readlink(ctx: *NativeContext, args: []const Value) RuntimeError!Native
 }
 
 fn native_tmpfile(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    const file = (try anonymousFile(ctx)) orelse return NativeResult.scalar(.{ .bool = false });
+    const file = anonymousFile() orelse return NativeResult.scalar(.{ .bool = false });
     const obj = try ctx.createResource("FileHandle");
     try obj.set(ctx.allocator, "__fd", .{ .int = platform.fdFromFile(file) });
     try obj.set(ctx.allocator, "__open", .{ .bool = true });
@@ -3047,35 +3207,29 @@ fn native_tmpfile(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResu
     return NativeResult.borrowed(.{ .resource = obj });
 }
 
-// a read-write file with no name left on disk, so it vanishes with its fd;
-// backs tmpfile() and php://memory and php://temp
-fn anonymousFile(ctx: *NativeContext) RuntimeError!?std.fs.File {
-    const tmp = try std.fmt.allocPrint(ctx.allocator, "{s}{c}zphp_{d}_{d}", .{ platform.tempDir(), std.fs.path.sep, @as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))), std.crypto.random.int(u32) });
-    defer ctx.allocator.free(tmp);
-    const file = std.fs.cwd().createFile(tmp, .{ .read = true, .truncate = true, .exclusive = true }) catch return null;
-    std.fs.cwd().deleteFile(tmp) catch {};
+// a file of the executable's packed application, opened for reading: an
+// anonymous file holding its bytes, so every stream function works on it
+fn packedFile(bytes: []const u8) ?std.fs.File {
+    const file = anonymousFile() orelse return null;
+    file.writeAll(bytes) catch {
+        file.close();
+        return null;
+    };
+    file.seekTo(0) catch {
+        file.close();
+        return null;
+    };
     return file;
 }
 
-fn native_tempnam(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    const dir = if (args.len > 0 and args[0] == .string) args[0].string.bytes() else platform.tempDir();
-    const prefix = if (args.len > 1 and args[1] == .string) args[1].string.bytes() else "tmp";
-    var rng = std.Random.DefaultPrng.init(@intCast(std.time.nanoTimestamp() & 0x7fff_ffff_ffff_ffff));
-    const r = rng.random();
-    var attempt: u8 = 0;
-    while (attempt < 16) : (attempt += 1) {
-        var buf: [16]u8 = undefined;
-        const hex = "0123456789abcdef";
-        for (&buf) |*b| b.* = hex[r.uintLessThan(u8, 16)];
-        const candidate = std.fmt.allocPrint(ctx.vm.allocator, "{s}/{s}{s}", .{ dir, prefix, &buf }) catch continue;
-        if (std.fs.cwd().createFile(candidate, .{ .exclusive = true, .mode = 0o600 })) |file| {
-            file.close();
-            return NativeResult.takeString(try Value.String.adopt(ctx.vm.allocator, candidate));
-        } else |_| {
-            ctx.vm.allocator.free(candidate);
-        }
-    }
-    return NativeResult.scalar(.{ .bool = false });
+// a read-write file with no name left on disk, so it vanishes with its fd;
+// backs tmpfile() and php://memory and php://temp
+fn anonymousFile() ?std.fs.File {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp = std.fmt.bufPrint(&buf, "{s}{c}zphp_{d}_{d}", .{ platform.tempDir(), std.fs.path.sep, @as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))), std.crypto.random.int(u32) }) catch return null;
+    const file = std.fs.cwd().createFile(tmp, .{ .read = true, .truncate = true, .exclusive = true }) catch return null;
+    std.fs.cwd().deleteFile(tmp) catch {};
+    return file;
 }
 
 const StdioBehavior = enum { capture, inherit };
@@ -3757,7 +3911,7 @@ fn detectMimeFromBytes(data: []const u8) ?[]const u8 {
 fn native_mime_content_type(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const path = args[0].string.bytes();
-    const file = std.fs.cwd().openFile(path, .{}) catch {
+    const file = openWithMode(path, "r") catch {
         return try NativeResult.copyString(ctx.allocator, mimeFromExt(path));
     };
     defer file.close();

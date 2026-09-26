@@ -1,6 +1,8 @@
 const std = @import("std");
+const paths = @import("../paths.zig");
 const platform = @import("../platform.zig");
 const VM = @import("vm.zig").VM;
+const bundle = @import("../bundle.zig");
 
 pub const default_include_path = if (platform.is_windows) ".;C:\\php\\pear" else ".:/usr/local/lib/php";
 const list_separator: u8 = if (platform.is_windows) ';' else ':';
@@ -31,6 +33,17 @@ pub fn resolve(vm: *VM, path: []const u8) error{OutOfMemory}!?[]const u8 {
 // per-VM realpath cache plus one lstat, or a full realpath when the file is
 // itself a symlink
 pub fn canonical(vm: *VM, path: []const u8) error{OutOfMemory}!?[]const u8 {
+    if (try existing(vm, path)) |found| return found;
+    // php opens the candidate with its dots folded by name when the os cannot
+    // walk it, so a missing directory before a `..` does not hide the file
+    if (!paths.hasDotSegment(path)) return null;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    return existing(vm, paths.expand(&buf, path) orelse return null);
+}
+
+fn existing(vm: *VM, path: []const u8) error{OutOfMemory}!?[]const u8 {
+    var packed_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (bundle.filePath(&packed_buf, path)) |packed_path| return try intern(vm, packed_path);
     const base = std.fs.path.basename(path);
     if (base.len > 0 and !std.mem.eql(u8, base, ".") and !std.mem.eql(u8, base, "..")) {
         const real_dir = realDir(vm, std.fs.path.dirname(path) orelse ".") orelse return null;
@@ -108,11 +121,11 @@ pub fn realDir(vm: *VM, dir: []const u8) ?[]const u8 {
 }
 
 pub fn intern(vm: *VM, path: []const u8) error{OutOfMemory}![]const u8 {
-    const paths = &vm.ic.?.include_paths;
-    const gop = try paths.getOrPut(vm.allocator, path);
+    const interned = &vm.ic.?.include_paths;
+    const gop = try interned.getOrPut(vm.allocator, path);
     if (!gop.found_existing) {
         gop.key_ptr.* = vm.allocator.dupe(u8, path) catch |err| {
-            paths.removeByPtr(gop.key_ptr);
+            interned.removeByPtr(gop.key_ptr);
             return err;
         };
     }

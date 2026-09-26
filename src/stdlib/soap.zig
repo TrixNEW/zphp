@@ -1,4 +1,5 @@
 const std = @import("std");
+const bundle = @import("../bundle.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
@@ -122,8 +123,8 @@ fn getOpt(opts: ?*PhpArray, key: []const u8) Value {
 }
 
 fn loadText(allocator: Allocator, source: []const u8) ![]u8 {
-    if (std.mem.startsWith(u8, source, "file://")) return std.fs.cwd().readFileAlloc(allocator, source[7..], 16 * 1024 * 1024);
-    return std.fs.cwd().readFileAlloc(allocator, source, 16 * 1024 * 1024);
+    if (std.mem.startsWith(u8, source, "file://")) return bundle.readFileAlloc(allocator, source[7..], 16 * 1024 * 1024);
+    return bundle.readFileAlloc(allocator, source, 16 * 1024 * 1024);
 }
 
 fn localName(name: []const u8) []const u8 {

@@ -1,5 +1,7 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
+const paths = @import("../paths.zig");
+const bundle = @import("../bundle.zig");
 const platform = @import("../platform.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
@@ -2156,7 +2158,9 @@ fn native_error_log(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
         3 => {
             // append to the file named by arg #3
             if (args.len < 3 or args[2] != .string) return NativeResult.scalar(.{ .bool = false });
-            const path = args[2].string.bytes();
+            var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const path = paths.streamPath(&path_buf, args[2].string.bytes());
+            bundle.prepareWrite(path, .edit);
             const f = std.fs.cwd().createFile(path, .{ .truncate = false }) catch return NativeResult.scalar(.{ .bool = false });
             defer f.close();
             f.seekFromEnd(0) catch {};

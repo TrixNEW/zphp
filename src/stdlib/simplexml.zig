@@ -1,4 +1,6 @@
 const std = @import("std");
+const paths = @import("../paths.zig");
+const bundle = @import("../bundle.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
@@ -52,6 +54,12 @@ fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
     z[s.len] = 0;
     try ctx.strings.append(ctx.allocator, z);
     return z[0..s.len :0];
+}
+
+// a file path as php's stream layer opens it, null-terminated for libxml
+fn filePathZ(ctx: *NativeContext, path: []const u8) ![:0]u8 {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    return dupZ(ctx, paths.streamPath(&buf, path));
 }
 
 fn cstrLen(p: [*c]const u8) usize {
@@ -314,12 +322,17 @@ fn sxmlLoadString(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     return NativeResult.borrowed(.{ .object = wrapper });
 }
 
+fn readFile(path_z: [:0]const u8, opts: c_int) ?*c.xmlDoc {
+    if (bundle.packedSource(path_z)) |src| return c.xmlReadMemory(src.ptr, @intCast(src.len), path_z.ptr, null, opts);
+    return c.xmlReadFile(path_z.ptr, null, opts);
+}
+
 fn sxmlLoadFile(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const path_z = try dupZ(ctx, args[0].string.bytes());
+    const path_z = try filePathZ(ctx, args[0].string.bytes());
     var opts: c_int = 0;
     if (args.len > 2 and args[2] == .int) opts = @intCast(args[2].int);
-    const doc = c.xmlReadFile(path_z.ptr, null, opts) orelse return NativeResult.scalar(.{ .bool = false });
+    const doc = readFile(path_z, opts) orelse return NativeResult.scalar(.{ .bool = false });
     const root = c.xmlDocGetRootElement(doc) orelse {
         c.xmlFreeDoc(doc);
         return NativeResult.scalar(.{ .bool = false });
@@ -354,8 +367,8 @@ fn sxmlConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     if (args.len > 2 and args[2] == .bool) is_url = args[2].bool;
 
     const doc = if (is_url) blk: {
-        const path_z = try dupZ(ctx, src);
-        break :blk c.xmlReadFile(path_z.ptr, null, opts);
+        const path_z = try filePathZ(ctx, src);
+        break :blk readFile(path_z, opts);
     } else c.xmlReadMemory(src.ptr, @intCast(src.len), null, null, opts);
     if (doc == null) return NativeResult.scalar(.null);
 
@@ -389,7 +402,8 @@ fn sxmlAsXML(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
     const doc = getDocPtr(obj) orelse return NativeResult.scalar(.{ .bool = false });
 
     if (args.len > 0 and args[0] == .string) {
-        const path_z = try dupZ(ctx, args[0].string.bytes());
+        const path_z = try filePathZ(ctx, args[0].string.bytes());
+        bundle.prepareWrite(path_z, .create);
         const written = c.xmlSaveFormatFile(path_z.ptr, doc, 0);
         return NativeResult.scalar(.{ .bool = written >= 0 });
     }

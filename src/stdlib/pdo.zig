@@ -1,4 +1,6 @@
 const std = @import("std");
+const paths = @import("../paths.zig");
+const bundle = @import("../bundle.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
@@ -812,7 +814,10 @@ fn pdoConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     const rest = dsn[colon + 1 ..];
 
     if (std.mem.eql(u8, driver, "sqlite")) {
-        const path_z = try dupeZ(ctx, rest);
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const db_path = paths.streamPath(&path_buf, rest);
+        bundle.prepareWrite(db_path, .edit);
+        const path_z = try dupeZ(ctx, db_path);
         defer ctx.allocator.free(path_z);
         var db: ?*sqlite.Db = null;
         const rc = sqlite.sqlite3_open(path_z, &db);

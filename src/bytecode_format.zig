@@ -411,6 +411,13 @@ const Reader = struct {
 
 const DeserializeError = error{ InvalidFormat, UnexpectedEof, OutOfMemory };
 
+fn relocate(allocator: Allocator, raw: []const u8, move: Relocation) ![]u8 {
+    const under = std.mem.startsWith(u8, raw, move.from) and
+        (raw.len == move.from.len or raw[move.from.len] == '/' or raw[move.from.len] == '\\');
+    if (!under) return allocator.dupe(u8, raw);
+    return std.mem.concat(allocator, u8, &.{ move.to, raw[move.from.len..] });
+}
+
 const DeserCtx = struct {
     allocator: Allocator,
     strings: []const []const u8,
@@ -420,6 +427,15 @@ const DeserCtx = struct {
 };
 
 pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!CompileResult {
+    return deserializeRelocated(allocator, data, null);
+}
+
+// code compiled under one directory and run from another: every string the
+// code carries that names a path under `from` (its file, __FILE__, __DIR__,
+// paths built from them at compile time) is moved under `to`
+pub const Relocation = struct { from: []const u8, to: []const u8 };
+
+pub fn deserializeRelocated(allocator: Allocator, data: []const u8, relocation: ?Relocation) DeserializeError!CompileResult {
     var r = Reader{ .data = data };
 
     // header
@@ -441,7 +457,7 @@ pub fn deserialize(allocator: Allocator, data: []const u8) DeserializeError!Comp
     for (0..str_count) |i| {
         const slen = r.readU32() catch return error.InvalidFormat;
         const raw = r.readSlice(slen) catch return error.InvalidFormat;
-        const owned = try allocator.dupe(u8, raw);
+        const owned = if (relocation) |move| try relocate(allocator, raw, move) else try allocator.dupe(u8, raw);
         try string_allocs.append(allocator, owned);
         strings[i] = owned;
     }
@@ -722,74 +738,6 @@ fn deserializeValue(r: *Reader, ctx: *DeserCtx) !Value {
         },
         else => return error.InvalidFormat,
     };
-}
-
-// =========================================================
-// standalone executable support
-// =========================================================
-
-const TRAILER_MAGIC = "ZPHPEXE\x00";
-const TRAILER_SIZE = 16; // 8 bytes magic + 4 bytes offset + 4 bytes length
-
-pub fn appendToExecutable(allocator: Allocator, exe_path: []const u8, bc_data: []const u8, out_path: []const u8) !void {
-    const exe_data = try std.fs.cwd().readFileAlloc(allocator, exe_path, 256 * 1024 * 1024);
-    defer allocator.free(exe_data);
-
-    const file = try std.fs.cwd().createFile(out_path, .{});
-    defer file.close();
-
-    try file.writeAll(exe_data);
-    const bc_offset: u32 = @intCast(exe_data.len);
-    const bc_length: u32 = @intCast(bc_data.len);
-    try file.writeAll(bc_data);
-
-    // trailer: magic + offset + length
-    try file.writeAll(TRAILER_MAGIC);
-    const off_bytes: [4]u8 = @bitCast(bc_offset);
-    try file.writeAll(&off_bytes);
-    const len_bytes: [4]u8 = @bitCast(bc_length);
-    try file.writeAll(&len_bytes);
-
-    // make executable
-    const out_z = try allocator.dupeZ(u8, out_path);
-    defer allocator.free(out_z);
-    if (!@import("platform.zig").is_windows) _ = std.c.chmod(out_z.ptr, 0o755);
-}
-
-pub fn detectEmbeddedBytecode(allocator: Allocator) ?[]const u8 {
-    const exe_path = std.fs.selfExePathAlloc(allocator) catch return null;
-    defer allocator.free(exe_path);
-
-    const file = std.fs.cwd().openFile(exe_path, .{}) catch return null;
-    defer file.close();
-
-    const file_size = file.getEndPos() catch return null;
-    if (file_size < TRAILER_SIZE) return null;
-
-    // read trailer from end of file
-    file.seekTo(file_size - TRAILER_SIZE) catch return null;
-    var trailer: [TRAILER_SIZE]u8 = undefined;
-    const n = file.readAll(&trailer) catch return null;
-    if (n != TRAILER_SIZE) return null;
-
-    if (!std.mem.eql(u8, trailer[0..8], TRAILER_MAGIC)) return null;
-
-    const bc_offset: u32 = @bitCast(trailer[8..12].*);
-    const bc_length: u32 = @bitCast(trailer[12..16].*);
-
-    if (@as(u64, bc_offset) + bc_length + TRAILER_SIZE > file_size) return null;
-
-    file.seekTo(bc_offset) catch return null;
-    const bc = allocator.alloc(u8, bc_length) catch return null;
-    const read = file.readAll(bc) catch {
-        allocator.free(bc);
-        return null;
-    };
-    if (read != bc_length) {
-        allocator.free(bc);
-        return null;
-    }
-    return bc;
 }
 
 test "property hook interface bytecode rejects pre-hook format" {

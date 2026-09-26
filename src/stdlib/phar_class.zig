@@ -1,4 +1,6 @@
 const std = @import("std");
+const bundle = @import("../bundle.zig");
+const filesystem = @import("filesystem.zig");
 const phar = @import("phar.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
@@ -436,8 +438,7 @@ fn phMungServer(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
 
 fn phUnlinkArchive(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    std.fs.cwd().deleteFile(args[0].string.bytes()) catch return NativeResult.scalar(.{ .bool = false });
-    return NativeResult.scalar(.{ .bool = true });
+    return filesystem.unlinkPath(args[0].string.bytes());
 }
 
 fn phInterceptFileFuncs(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -495,6 +496,7 @@ fn saveAll(ctx: *NativeContext, obj: *PhpObject) !void {
     defer ctx.allocator.free(bytes);
 
     const cwd = std.fs.cwd();
+    bundle.prepareWrite(filename_v.string.bytes(), .create);
     const file = cwd.createFile(filename_v.string.bytes(), .{ .truncate = true }) catch return;
     defer file.close();
     file.writeAll(bytes) catch return;
