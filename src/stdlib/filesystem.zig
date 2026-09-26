@@ -2758,7 +2758,7 @@ fn native_fgetcsv(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     if (!got_any) return NativeResult.scalar(.{ .bool = false });
 
     const line_owned = try line.toOwnedSlice(ctx.allocator);
-    try ctx.strings.append(ctx.allocator, line_owned);
+    defer ctx.allocator.free(line_owned);
 
     var raw = line_owned;
     if (raw.len > 0 and raw[raw.len - 1] == '\n') raw = raw[0 .. raw.len - 1];
@@ -2769,7 +2769,9 @@ fn native_fgetcsv(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
 
 fn parseCsvRecord(ctx: *NativeContext, raw: []const u8, delimiter: u8, enclosure: u8) !NativeResult {
     var result = try ctx.createArray();
+    errdefer ctx.vm.discardOrphan(.{ .array = result });
     var field = std.ArrayListUnmanaged(u8){};
+    defer field.deinit(ctx.allocator);
     var in_quotes = false;
     var at_field_start = true;
     var i: usize = 0;
@@ -2791,9 +2793,8 @@ fn parseCsvRecord(ctx: *NativeContext, raw: []const u8, delimiter: u8, enclosure
                 in_quotes = true;
                 at_field_start = false;
             } else if (c == delimiter) {
-                const s = try field.toOwnedSlice(ctx.allocator);
-                try ctx.strings.append(ctx.allocator, s);
-                try result.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
+                try result.appendCopiedString(ctx.allocator, field.items);
+                field.clearRetainingCapacity();
                 at_field_start = true;
             } else {
                 try field.append(ctx.allocator, c);
@@ -2801,9 +2802,7 @@ fn parseCsvRecord(ctx: *NativeContext, raw: []const u8, delimiter: u8, enclosure
             }
         }
     }
-    const s = try field.toOwnedSlice(ctx.allocator);
-    try ctx.strings.append(ctx.allocator, s);
-    try result.append(ctx.allocator, .{ .string = Value.String.borrowed(s) });
+    try result.appendCopiedString(ctx.allocator, field.items);
     return NativeResult.borrowed(.{ .array = result });
 }
 

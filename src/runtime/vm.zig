@@ -13127,18 +13127,23 @@ pub const VM = struct {
         }
     }
 
+    // a value's string form for use right away: the bytes last until the next
+    // statement boundary
     fn valueToString(self: *VM, v: Value) RuntimeError![]const u8 {
         if (v == .string) return v.string.bytes();
         if (v == .object) return self.objectToString(v.object);
         if (v == .array) try self.emitWarning("Array to string conversion");
-        var buf = std.ArrayListUnmanaged(u8){};
-        try v.format(&buf, self.allocator);
-        const str = try buf.toOwnedSlice(self.allocator);
-        try self.strings.append(self.allocator, str);
-        return str;
+        return (try self.transientFormatted(v)).bytes();
     }
 
+    // an object's string form for use right away: the bytes last until the
+    // next statement boundary
     pub fn objectToString(self: *VM, obj: *PhpObject) RuntimeError![]const u8 {
+        return self.transientOwned(try self.objectString(obj)).bytes();
+    }
+
+    // what an object's __toString returns, as a reference the caller owns
+    pub fn objectString(self: *VM, obj: *PhpObject) RuntimeError!Value.String {
         const method_name = self.resolveMethod(obj.class_name, "__toString") catch {
             // PHP: 'Object of class X could not be converted to string'.
             // throw a catchable Error so user code wrapping the access in
@@ -13156,22 +13161,16 @@ pub const VM = struct {
             self.frames[self.frame_count] = .{ .chunk = &func.chunk, .ip = 0, .vars = new_vars, .locals = try self.allocLocals(func, &new_vars), .func = func };
             self.frames[self.frame_count].entry_sp = self.sp;
             self.saveFrameArgs(0);
-            self.frame_count += 1;
             self.setFrameArgCount(0);
+            self.frame_count += 1;
             self.retainFrameObjects(self.frame_count - 1);
             if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
             try self.runLoop(self.frame_count - 1);
-            const result = self.pop();
-            if (result == .string) return result.string.bytes();
-            var buf = std.ArrayListUnmanaged(u8){};
-            try result.format(&buf, self.allocator);
-            const s = try buf.toOwnedSlice(self.allocator);
-            try self.strings.append(self.allocator, s);
-            return s;
+            return self.ownedString(self.popTransfer());
         }
         if (self.native_fns.get(method_name)) |native| {
             const prev_this = self.currentFrame().vars.get("$this");
-            self.putFrameVar(&self.currentFrame().vars, "$this", .{ .object = obj }) catch return "Object";
+            try self.putFrameVar(&self.currentFrame().vars, "$this", .{ .object = obj });
             defer {
                 if (prev_this) |pt| {
                     self.putFrameVar(&self.currentFrame().vars, "$this", pt) catch {};
@@ -13180,22 +13179,35 @@ pub const VM = struct {
                 }
             }
             var ctx = self.makeContext(null);
-            const result = self.invokeNative(native, &ctx, .{ .args = &.{}, .label = method_name, .instance = true }) catch return "Object";
-            if (result == .string) {
-                const owner = result.string.owner orelse return result.string.bytes();
-                defer result.string.release();
-                if (owner.refcount > 1) return result.string.bytes();
-                const copy = self.allocator.dupe(u8, result.string.bytes()) catch return "Object";
-                self.strings.append(self.allocator, copy) catch return "Object";
-                return copy;
-            }
-            var buf = std.ArrayListUnmanaged(u8){};
-            result.format(&buf, self.allocator) catch return "Object";
-            const s = buf.toOwnedSlice(self.allocator) catch return "Object";
-            self.strings.append(self.allocator, s) catch return "Object";
-            return s;
+            return self.ownedString(try self.invokeNative(native, &ctx, .{ .args = &.{}, .label = method_name, .instance = true }));
         }
-        return "Object";
+        return Value.String.borrowed("Object");
+    }
+
+    // an owned value as an owned string: a string is handed over, anything
+    // else is formatted and released
+    fn ownedString(self: *VM, v: Value) RuntimeError!Value.String {
+        if (v == .string) return v.string;
+        defer self.stackRelease(v);
+        var buf = std.ArrayListUnmanaged(u8){};
+        errdefer buf.deinit(self.allocator);
+        try v.format(&buf, self.allocator);
+        return Value.String.adopt(self.allocator, try buf.toOwnedSlice(self.allocator));
+    }
+
+    // gives up an owned string's reference to the statement-boundary drain:
+    // the bytes stay valid until then, and whatever stores the string first
+    // keeps it alive
+    fn transientOwned(self: *VM, str: Value.String) Value.String {
+        if (str.releaseDeferred()) |owner| self.queueStringRelease(owner);
+        return str;
+    }
+
+    fn transientFormatted(self: *VM, v: Value) RuntimeError!Value.String {
+        var buf = std.ArrayListUnmanaged(u8){};
+        errdefer buf.deinit(self.allocator);
+        try v.format(&buf, self.allocator);
+        return self.transientOwned(try Value.String.adopt(self.allocator, try buf.toOwnedSlice(self.allocator)));
     }
 
     // opcode handlers (extracted from runLoop for readability)
@@ -18230,13 +18242,10 @@ pub const VM = struct {
         return null;
     }
 
+    // a scalar's string form as a transient: a slot that keeps it takes a
+    // reference, anything else reads it before the next statement boundary
     fn coerceToStringValue(self: *VM, val: Value) RuntimeError!Value {
-        var buf: std.ArrayListUnmanaged(u8) = .{};
-        errdefer buf.deinit(self.allocator);
-        try val.format(&buf, self.allocator);
-        const s = try buf.toOwnedSlice(self.allocator);
-        try self.strings.append(self.allocator, s);
-        return Value{ .string = Value.String.borrowed(s) };
+        return .{ .string = try self.transientFormatted(val) };
     }
 
     // PHP weak-mode union resolution. for a value V against `int|float|string|bool`,
@@ -18518,8 +18527,21 @@ pub const VM = struct {
         stack_owned: bool = false,
     };
 
+    // replacement is transient or unowned; an operand-stack slot keeps a
+    // reference of its own and gives back the one the old value held
     fn replaceArg(self: *VM, slot: *Value, replacement: Value, caller: ArgCaller) void {
-        if (caller.stack_owned) self.stackRelease(slot.*);
+        if (caller.stack_owned) {
+            stackRetain(replacement);
+            self.stackRelease(slot.*);
+        }
+        slot.* = replacement;
+    }
+
+    // the same for a slot that always owns its value, like a return value in
+    // transit
+    fn replaceOwned(self: *VM, slot: *Value, replacement: Value) void {
+        stackRetain(replacement);
+        self.stackRelease(slot.*);
         slot.* = replacement;
     }
 
@@ -18544,8 +18566,8 @@ pub const VM = struct {
                 return try self.argTypeError(name, func, .{ .args = args, .index = i, .type_str = type_str, .variadic = variadic and type_index == ti.param_types.len - 1, .internal_caller = caller.internal });
             }
             if (val == .object and self.typeStrAllowsString(type_str) and self.hasMethod(val.object.class_name, "__toString")) {
-                const text = try self.objectToString(val.object);
-                self.replaceArg(slot, .{ .string = Value.String.borrowed(text) }, caller);
+                const text = self.transientOwned(try self.objectString(val.object));
+                self.replaceArg(slot, .{ .string = text }, caller);
             } else if (!strict) {
                 // a value that passes still takes the declared scalar type in
                 // weak mode (int 5 into a float parameter is float(5))
@@ -18632,7 +18654,7 @@ pub const VM = struct {
             const fn_strict = if (frame.func) |f| f.strict_types else self.script_strict_types;
             if (!fn_strict) {
                 if (try self.tryWeakCoerce(val.*, ti.return_type)) |coerced| {
-                    val.* = coerced;
+                    self.replaceOwned(val, coerced);
                     return false;
                 }
             }
@@ -18646,15 +18668,14 @@ pub const VM = struct {
         }
         // coerce Stringable -> string when return type allows string
         if (val.* == .object and self.typeStrAllowsString(ti.return_type) and self.hasMethod(val.object.class_name, "__toString")) {
-            const s = try self.objectToString(val.object);
-            val.* = .{ .string = Value.String.borrowed(s) };
+            self.replaceOwned(val, .{ .string = self.transientOwned(try self.objectString(val.object)) });
         } else {
             // non-strict return coercion: `function f(): int { return "100"; }`
             // returns int(100). gated on the function's own strict_types
             const fn_strict = if (frame.func) |f| f.strict_types else self.script_strict_types;
             if (!fn_strict) {
                 if (try self.coerceToDeclaredScalar(val.*, ti.return_type)) |coerced| {
-                    val.* = coerced;
+                    self.replaceOwned(val, coerced);
                 }
             }
         }
@@ -18728,8 +18749,8 @@ pub const VM = struct {
         // value satisfies the type; non-strict still coerces it to the exact
         // declared scalar (a numeric string into an int property, etc.)
         if (val.* == .object and self.typeStrAllowsString(type_str) and self.hasMethod(val.object.class_name, "__toString")) {
-            const s = try self.objectToString(val.object);
-            val.* = .{ .string = Value.String.borrowed(s) };
+            const text = self.transientOwned(try self.objectString(val.object));
+            val.* = .{ .string = text };
         } else if (val.* == .int and blk: {
             var t = type_str;
             if (t.len > 0 and t[0] == '?') t = t[1..];
@@ -20016,6 +20037,16 @@ pub const VM = struct {
     // drainPendingDestruct runs the destructor at the next safe point. if the
     // object is retained again before the drain it is rescued - the drain
     // re-checks refcount, so a transient dip to 0 never mis-fires __destruct
+    // a container made for a result that will not be returned (a decoder that
+    // failed half way): nothing references it, so it goes to the drain
+    pub fn discardOrphan(self: *VM, v: Value) void {
+        switch (v) {
+            .array => |arr| if (arr.refcount == 0) self.queueArrayRelease(arr),
+            .object => |obj| if (obj.refcount == 0 and !obj.destructed) self.pending_destruct.append(self.allocator, obj) catch {},
+            else => {},
+        }
+    }
+
     pub fn objRelease(self: *VM, obj: *PhpObject) void {
         if (obj.refcount == 0) return;
         obj.refcount -= 1;

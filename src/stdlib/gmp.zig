@@ -65,18 +65,9 @@ extern fn zphp_mpz_perfect_square_p(a: *const ZphpMpz) c_int;
 
 // ---------------- helpers ----------------
 
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
-}
-
+// a null-terminated copy for gmp; the caller frees it
 fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
+    return ctx.allocator.dupeZ(u8, s);
 }
 
 fn cstrLen(p: [*c]const u8) usize {
@@ -108,6 +99,7 @@ fn coerceArgToMpz(ctx: *NativeContext, v: Value) !?*ZphpMpz {
         },
         .string => |s| {
             const z = try dupZ(ctx, s.bytes());
+            defer ctx.allocator.free(z);
             const rc = zphp_mpz_set_str(p, z.ptr, 0);
             if (rc != 0) {
                 zphp_mpz_destroy(p);
@@ -152,6 +144,7 @@ fn gmpInit(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args[0] == .string and args.len >= 2 and args[1] == .int) {
         const base: c_int = @intCast(args[1].int);
         const z = try dupZ(ctx, args[0].string.bytes());
+        defer ctx.allocator.free(z);
         if (zphp_mpz_set_str(dst, z.ptr, base) != 0) return NativeResult.scalar(.{ .bool = false });
         return NativeResult.borrowed(.{ .object = obj });
     }
@@ -641,6 +634,7 @@ fn operandMpz(ctx: *NativeContext, v: Value) RuntimeError!*ZphpMpz {
         .float => |f| _ = zphp_mpz_set_si(p, Value.toInt(.{ .float = f })),
         .string => |str| {
             const z = try dupZ(ctx, str.bytes());
+            defer ctx.allocator.free(z);
             if (zphp_mpz_set_str(p, z.ptr, 0) != 0) return throwOperand(ctx, "ValueError", "Number is not an integer string", .{});
         },
         .object => |o| {

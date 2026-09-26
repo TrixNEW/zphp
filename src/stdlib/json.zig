@@ -516,6 +516,7 @@ fn json_decode(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     defer if (result == .string) result.string.release();
     skipWhitespace(s, &pos);
     if (pos < s.len) {
+        ctx.vm.discardOrphan(result);
         last_error = 4;
         last_error_msg = "Syntax error";
         if ((flags & JSON_THROW_ON_ERROR) != 0) {
@@ -722,6 +723,7 @@ fn parseArray(ctx: *NativeContext, s: []const u8, pos: *usize, assoc: bool, max_
     }
     pos.* += 1;
     var arr = try ctx.createArray();
+    errdefer ctx.vm.discardOrphan(.{ .array = arr });
     skipWhitespace(s, pos);
     if (pos.* < s.len and s[pos.*] == ']') {
         pos.* += 1;
@@ -761,6 +763,7 @@ fn parseObject(ctx: *NativeContext, s: []const u8, pos: *usize, assoc: bool, max
 
     if (assoc) {
         const arr = try ctx.createArray();
+        errdefer ctx.vm.discardOrphan(.{ .array = arr });
         if (pos.* < s.len and s[pos.*] == '}') {
             pos.* += 1;
             return .{ .array = arr };
@@ -801,6 +804,7 @@ fn parseObject(ctx: *NativeContext, s: []const u8, pos: *usize, assoc: bool, max
 
     const obj = try ctx.vm.allocObjectShell();
     obj.* = .{ .class_name = "stdClass" };
+    errdefer ctx.vm.discardOrphan(.{ .object = obj });
     if (pos.* < s.len and s[pos.*] == '}') {
         pos.* += 1;
         return .{ .object = obj };
