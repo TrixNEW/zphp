@@ -2118,3 +2118,14 @@ test "increment and decrement take only variables" {
     try expectCompileFatal("<?php $a?->b->c++;", "Can't use nullsafe operator in write context");
     try expectOutput("<?php class K { public $p = 1; } function g() { static $o; return $o ??= new K; } g()->p++; ++g()->p; echo g()->p;", "3");
 }
+
+test "class-like bodies reject tokens that start no member" {
+    try expectParseErrorAt("<?php class K { ; }", ";");
+    try expectParseErrorAt("<?php class K { public function f() {} ; }", ";");
+    try expectParseErrorAt("<?php class K { public int; }", ";");
+    try expectParseErrorAt("<?php $o = new class { ; };", ";");
+    try expectParseErrorAt("<?php enum E { case A;; }", ";");
+    try expectParseErrorAt("<?php trait T { pubic const P = 1; }", "const");
+    try expectParseErrorAt("<?php trait T { ; }", ";");
+    try expectParseErrorAt("<?php interface I { ; }", ";");
+}

@@ -1456,10 +1456,12 @@ const Parser = struct {
                     self.nodes.items[prop].data.rhs = rhs;
                     try members.append(self.allocator, prop);
                 } else {
-                    _ = self.advance();
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
                 }
             } else {
-                _ = self.advance();
+                try self.addError(.unexpected_token);
+                return error.ParseError;
             }
         }
         _ = try self.expect(.r_brace);
@@ -1656,10 +1658,12 @@ const Parser = struct {
                     self.nodes.items[prop].data.rhs = rhs;
                     try members.append(self.allocator, prop);
                 } else {
-                    _ = self.advance();
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
                 }
             } else {
-                _ = self.advance();
+                try self.addError(.unexpected_token);
+                return error.ParseError;
             }
         }
         _ = try self.expect(.r_brace);
@@ -1713,9 +1717,16 @@ const Parser = struct {
                 try self.parseConstMembers(&methods, 0);
             } else {
                 const tr = self.collectTypeHint();
-                if (self.peek() != .variable) return error.ParseError;
+                if (self.peek() != .variable) {
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
+                }
+                const prop_token = self.pos;
                 const prop = try self.parseClassProperty();
-                if (self.nodes.items[prop].tag != .class_property_hooks) return error.ParseError;
+                if (self.nodes.items[prop].tag != .class_property_hooks) {
+                    try self.addErrorAt(prop_token, .unexpected_token);
+                    return error.ParseError;
+                }
                 if (tr[0] != tr[1]) {
                     const ext = try self.addExtra(&tr);
                     self.nodes.items[prop].data.rhs = (ext + 1) << 16;
@@ -1906,14 +1917,16 @@ const Parser = struct {
                     self.nodes.items[prop].data.rhs = rhs;
                     try members.append(self.allocator, prop);
                 } else {
-                    _ = self.advance();
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
                 }
             } else if (self.peek() == .kw_const) {
                 try self.parseConstMembers(&members, 0);
             } else if (self.peek() == .kw_use) {
                 try members.append(self.allocator, try self.parseTraitUse());
             } else {
-                _ = self.advance();
+                try self.addError(.unexpected_token);
+                return error.ParseError;
             }
         }
 
@@ -1997,7 +2010,8 @@ const Parser = struct {
                 } else if (self.peek() == .kw_const) {
                     try self.parseConstMembers(&members, 0);
                 } else {
-                    _ = self.advance();
+                    try self.addError(.unexpected_token);
+                    return error.ParseError;
                 }
             }
         }
