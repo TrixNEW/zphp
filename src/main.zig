@@ -6,6 +6,7 @@ const runtime_value = @import("runtime/value.zig");
 const VM = @import("runtime/vm.zig").VM;
 const includes = @import("runtime/includes.zig");
 const bundle = @import("bundle.zig");
+const exceptions = @import("stdlib/exceptions.zig");
 const pack = @import("pack.zig");
 const Value = runtime_value.Value;
 const CompileResult = @import("pipeline/compiler.zig").CompileResult;
@@ -663,13 +664,10 @@ fn runWithVM(allocator: std.mem.Allocator, result: *CompileResult, script_path: 
         // dispatch to user exception handler if one is installed and we have
         // an uncaught exception. handler runs, then we exit 0 unless it
         // threw or the script set a different exit code
-        if (vm.pending_exception) |exc| {
-            if (vm.user_exception_handler) |handler| {
-                vm.user_exception_handler = null; // prevent recursion
-                vm.pending_exception = null;
-                var ctx = vm.makeContext(null);
-                _ = ctx.invokeCallable(handler, &.{exc}) catch {};
-                vm.releaseValue(handler);
+        if (vm.pending_exception != null) {
+            const has_handler = vm.user_exception_handler != null;
+            vm.dispatchUncaught();
+            if (has_handler) {
                 // an exception the handler threw is reported before shutdown
                 // functions run, as php does
                 const handler_failed = vm.pending_exception != null and !vm.exit_requested;
@@ -704,19 +702,21 @@ fn reportRuntimeError(allocator: std.mem.Allocator, vm: *VM) !void {
         try writeStderr(if (msg.len > 0) msg else vm.error_msg orelse "runtime error\n");
         return;
     }
+    const description = exceptions.uncaughtDescription(vm, allocator);
+    defer if (description) |text| allocator.free(text);
     if (vm.logErrorsEnabled()) {
         vm.flushOutputToStdout();
-        vm.writeLog(error_format.formatUncaught(allocator, vm, .log));
+        vm.writeLog(error_format.formatUncaught(allocator, vm, .log, description));
     }
     switch (vm.displayTarget()) {
         .none => {},
         .stdout => {
             try vm.output.append(vm.allocator, '\n');
-            try vm.output.appendSlice(vm.allocator, error_format.formatUncaught(allocator, vm, .display));
+            try vm.output.appendSlice(vm.allocator, error_format.formatUncaught(allocator, vm, .display, description));
         },
         .stderr => {
             vm.flushOutputToStdout();
-            try writeStderr(error_format.formatUncaught(allocator, vm, .display));
+            try writeStderr(error_format.formatUncaught(allocator, vm, .display, description));
         },
     }
 }

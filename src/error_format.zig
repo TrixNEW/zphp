@@ -171,9 +171,7 @@ fn errorTagMessage(tag: Ast.Error.Tag) []const u8 {
 pub fn formatRuntimeError(alloc: std.mem.Allocator, vm: *const VM) []const u8 {
     var buf: Writer = .{};
 
-    if (vm.pending_exception) |exc| {
-        formatUncaughtException(&buf, alloc, vm, exc, .log);
-    } else if (vm.error_msg) |msg| {
+    if (vm.error_msg) |msg| {
         // some error_msg values already have a leading 'Fatal error:' or
         // similar prefix (set via setErrorMsg("Fatal error: ..."). detect
         // and pass through; otherwise treat as a bare message and add PHP's
@@ -216,14 +214,19 @@ pub const Copy = enum { log, display };
 
 // one copy of php's report for the pending uncaught exception: the log copy
 // ("PHP Fatal error:  ...") or the display copy ("Fatal error: ..."); the
-// caller routes each per log_errors and display_errors. the caller owns it
-pub fn formatUncaught(alloc: std.mem.Allocator, vm: *const VM, copy: Copy) []const u8 {
+// caller routes each per log_errors and display_errors. description is the
+// throwable's __toString (exceptions.uncaughtDescription), which runs php and
+// so is computed by the caller. the caller owns the result
+pub fn formatUncaught(alloc: std.mem.Allocator, vm: *const VM, copy: Copy, description: ?[]const u8) []const u8 {
     var buf: Writer = .{};
-    if (vm.pending_exception) |exc| formatUncaughtException(&buf, alloc, vm, exc, copy);
+    if (vm.pending_exception) |exc| formatUncaughtException(&buf, alloc, vm, exc, .{ .copy = copy, .description = description });
     return buf.toOwnedSlice(alloc) catch "";
 }
 
-fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM, exc: Value, copy: Copy) void {
+const UncaughtReport = struct { copy: Copy, description: ?[]const u8 };
+
+fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM, exc: Value, report: UncaughtReport) void {
+    const copy = report.copy;
     var class_name: []const u8 = "Exception";
     var message: []const u8 = "";
 
@@ -267,6 +270,17 @@ fn formatUncaughtException(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM
         } else {
             writeFmt(buf, alloc, "{s}Fatal error{s}{s} in {s}\n", .{ lead, gap, message, path });
         }
+        return;
+    }
+
+    // php prints the throwable's own string form and where it was thrown, both
+    // taken from the object: the frames that threw it may be long gone
+    if (exc == .object) {
+        const file_v = exc.object.get("file");
+        const line_v = exc.object.get("line");
+        const where = displayPath(if (file_v == .string) file_v.string.bytes() else "");
+        const line: i64 = if (line_v == .int) line_v.int else 0;
+        writeFmt(buf, alloc, "{s}Fatal error{s}Uncaught {s}\n  thrown in {s} on line {d}\n", .{ lead, gap, report.description orelse "", where, line });
         return;
     }
 
@@ -316,39 +330,6 @@ fn writeStackTrace(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM) void {
 
 
     var depth: u32 = 0;
-    // synthetic depth-0 frame for the throwing native (e.g. random_bytes(-1))
-    // when an uncaught exception originated from a native call. matches PHP
-    // which always includes the native in the stack trace at #0
-    if (vm.pending_native_name) |nname| {
-        const top = &vm.frames[vm.frame_count - 1];
-        const top_ip = if (top.ip > 0) top.ip - 1 else 0;
-        const top_path = framePath(top, vm);
-        const top_display = displayPath(top_path);
-        write(buf, alloc, "#");
-        writeFmt(buf, alloc, "{d} ", .{depth});
-        if (vm.sourceLocation(top.chunk, top_ip)) |loc| {
-            writeFmt(buf, alloc, "{s}({d}): ", .{ top_display, loc.line });
-        } else {
-            writeFmt(buf, alloc, "{s}: ", .{top_display});
-        }
-        // instance-method natives render 'Class->method'; static / plain
-        // functions keep the stored 'Class::method' / 'func' form
-        if (vm.pending_native_is_instance) {
-            if (std.mem.indexOf(u8, nname, "::")) |sep| {
-                writeFmt(buf, alloc, "{s}->{s}(", .{ nname[0..sep], nname[sep + 2 ..] });
-            } else {
-                writeFmt(buf, alloc, "{s}(", .{nname});
-            }
-        } else {
-            writeFmt(buf, alloc, "{s}(", .{nname});
-        }
-        for (vm.pending_native_args, 0..) |a, ai| {
-            if (ai > 0) write(buf, alloc, ", ");
-            writeTraceArg(buf, alloc, a);
-        }
-        write(buf, alloc, ")\n");
-        depth += 1;
-    }
 
     var i: usize = vm.frame_count - 1;
     while (i >= 1) : ({

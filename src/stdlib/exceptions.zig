@@ -179,18 +179,62 @@ fn exceptionGetMessage(ctx: *NativeContext, _: []const Value) RuntimeError!Nativ
     return if (message == .string) NativeResult.shareString(message.string) else NativeResult.borrowed(message);
 }
 
+// php's Exception::__toString: the throwable and each previous one, the
+// innermost first and every later one after "Next"
 fn exceptionToString(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return NativeResult.literal("");
     if (this_val != .object) return NativeResult.literal("");
-    const obj = this_val.object;
-    const msg = obj.get("message");
-    const msg_str = if (msg == .string) msg.string.bytes() else "";
-    const file = obj.get("file");
-    const file_str = if (file == .string) file.string.bytes() else "";
-    const line = obj.get("line");
-    const line_int = if (line == .int) line.int else 0;
-    const s = try std.fmt.allocPrint(ctx.allocator, "{s}: {s} in {s}:{d}\nStack trace:\n#0 {{main}}", .{ obj.class_name, msg_str, file_str, line_int });
-    return NativeResult.takeString(try Value.String.adopt(ctx.allocator, s));
+    return NativeResult.takeString(try Value.String.adopt(ctx.allocator, try describe(ctx, this_val.object)));
+}
+
+// what php prints after "Uncaught ": the pending throwable's __toString, a
+// user override included. when __toString throws, what it threw becomes the
+// pending throwable and is described instead. null when nothing is pending
+// or __toString returns no string. the caller owns the text
+pub fn uncaughtDescription(vm: *VM, allocator: std.mem.Allocator) ?[]u8 {
+    var engine = vm.engineCall();
+    vm.native_call = &engine;
+    defer vm.native_call = engine.outer;
+    var attempts: usize = 0;
+    while (attempts < 8) : (attempts += 1) {
+        const exc = vm.pending_exception orelse return null;
+        if (exc != .object) return null;
+        vm.pending_exception = null;
+        const result = vm.callMethod(exc.object, "__toString", &.{}) catch {
+            if (vm.pending_exception != null) continue;
+            vm.pending_exception = exc;
+            return null;
+        };
+        vm.pending_exception = exc;
+        if (result != .string) return null;
+        return allocator.dupe(u8, result.string.bytes()) catch null;
+    }
+    return null;
+}
+
+pub fn describe(ctx: *NativeContext, throwable: *PhpObject) RuntimeError![]u8 {
+    var text: []u8 = try ctx.allocator.alloc(u8, 0);
+    errdefer ctx.allocator.free(text);
+    var current: Value = .{ .object = throwable };
+    while (current == .object and ctx.vm.isInstanceOf(current.object.class_name, "Throwable")) {
+        const e = current.object;
+        const trace = try traceString(ctx, e);
+        defer ctx.allocator.free(trace);
+        const message = e.get("message");
+        const message_text = if (message == .string) message.string.bytes() else "";
+        const file = e.get("file");
+        const line = e.get("line");
+        const where = .{ if (file == .string) file.string.bytes() else "", if (line == .int) line.int else 0 };
+        const next: []const u8 = if (text.len > 0) "\n\nNext " else "";
+        const described = if (message_text.len > 0)
+            try std.fmt.allocPrint(ctx.allocator, "{s}: {s} in {s}:{d}\nStack trace:\n{s}{s}{s}", .{ e.class_name, message_text, where[0], where[1], trace, next, text })
+        else
+            try std.fmt.allocPrint(ctx.allocator, "{s} in {s}:{d}\nStack trace:\n{s}{s}{s}", .{ e.class_name, where[0], where[1], trace, next, text });
+        ctx.allocator.free(text);
+        text = described;
+        current = e.get("previous");
+    }
+    return text;
 }
 
 fn exceptionGetCode(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -236,9 +280,13 @@ fn exceptionGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!NativeR
 fn exceptionGetTraceAsString(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return NativeResult.literal("");
     if (this_val != .object) return NativeResult.literal("");
-    const t = this_val.object.getForScope("trace", ctx.vm.exceptionTraceScope(this_val.object));
+    return NativeResult.takeString(try Value.String.adopt(ctx.allocator, try traceString(ctx, this_val.object)));
+}
+
+fn traceString(ctx: *NativeContext, throwable: *PhpObject) RuntimeError![]u8 {
+    const t = throwable.getForScope("trace", ctx.vm.exceptionTraceScope(throwable));
     var buf: std.ArrayListUnmanaged(u8) = .{};
-    defer buf.deinit(ctx.allocator);
+    errdefer buf.deinit(ctx.allocator);
     if (t == .array) {
         for (t.array.entries.items, 0..) |entry, i| {
             if (entry.value != .array) continue;
@@ -275,5 +323,5 @@ fn exceptionGetTraceAsString(ctx: *NativeContext, _: []const Value) RuntimeError
     } else {
         try buf.appendSlice(ctx.allocator, "#0 {main}");
     }
-    return NativeResult.takeString(try Value.String.adopt(ctx.allocator, try buf.toOwnedSlice(ctx.allocator)));
+    return buf.toOwnedSlice(ctx.allocator);
 }

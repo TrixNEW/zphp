@@ -496,6 +496,28 @@ pub const InterfaceDef = struct {
     }
 };
 
+// a native function or method while it runs, linked through the zig stack
+// from the innermost call outward; traces show each one where php's frame
+// chain would
+pub const NativeCall = struct {
+    // "name" or "Class::method"
+    label: []const u8,
+    args: []const Value,
+    // the frame count when the call started, its caller being the frame below
+    depth: usize,
+    instance: bool,
+    outer: ?*const NativeCall,
+};
+
+pub const NativeInvocation = struct {
+    args: []const Value,
+    // what natives and by-reference bindings key off; null skips them
+    name: ?[]const u8 = null,
+    // how a trace names the call when name is null
+    label: ?[]const u8 = null,
+    instance: bool = false,
+};
+
 pub const VM = struct {
     // frames and the operand stack live in reserved regions that commit as
     // calls go deeper (ensureCallRoom), so their addresses never move
@@ -527,9 +549,9 @@ pub const VM = struct {
     free_objects: std.ArrayListUnmanaged(*PhpObject) = .{},
     released_objects: std.ArrayListUnmanaged(*PhpObject) = .{},
     next_object_id: u32 = 0,
-    // the frame depth the innermost running native started at; a user call
-    // made at exactly that depth comes from the native itself
-    native_frame_depth: usize = std.math.maxInt(usize),
+    // the innermost running native call; a user call made at its depth comes
+    // from the native itself
+    native_call: ?*const NativeCall = null,
     // php resource ids: STDIN, STDOUT and STDERR take 1-3 at init
     next_resource_id: u32 = 0,
     // php's default stream context, made on first use; it takes the next
@@ -669,19 +691,6 @@ pub const VM = struct {
     // resolves to the object's runtime class, not the method's defining class.
     // consumed (and cleared) by the executeFunction* frame setup
     pending_called_class: ?[]const u8 = null,
-    // captures the most recent native function name + args when a native
-    // throws an uncaught exception, so writeStackTrace can synthesize the
-    // depth-0 frame ('#0 file(N): native_func(args)') that PHP includes
-    pending_native_name: ?[]const u8 = null,
-    pending_native_args: []const Value = &.{},
-    // heap-allocated (lazy) so this 16-wide Value array is NOT inlined into the
-    // hot VM struct - an inline [16]Value perturbed fastLoop codegen and
-    // regressed fibonacci ~8% (struct-layout sensitivity, same class as the IC).
-    // only touched on the rare native-throws-uncaught path
-    pending_native_args_buf: ?*[16]Value = null,
-    // true when pending_native_name is a 'Class::method' reached as an
-    // instance method - the trace renders it with '->' instead of '::'
-    pending_native_is_instance: bool = false,
     // args slice for invocations driven from native code (callByName-style).
     // executeFunction consumes this to seed fga_buf so func_get_args inside
     // the called function sees the real args, not stale data from whatever
@@ -2885,10 +2894,6 @@ pub const VM = struct {
             self.allocator.destroy(pc);
             self.proc_children = null;
         }
-        if (self.pending_native_args_buf) |b| {
-            self.allocator.destroy(b);
-            self.pending_native_args_buf = null;
-        }
         self.generators.deinit(self.allocator);
         self.fibers.deinit(self.allocator);
         self.ref_cells.deinit(self.allocator);
@@ -2995,7 +3000,7 @@ pub const VM = struct {
         // pending_exception holds a *PhpObject into the arena freeHeapItems
         // above just freed. leaving it set means the next request's native-call
         // error path (which reads pending_exception before deciding it threw)
-        // dereferences a dangling exception object in prependNativeFrameToTrace
+        // dereferences a dangling exception object
         // -> intermittent segfault (the freed pages are sometimes still mapped).
         // exception_handler_stack holds set_exception_handler callables (closures
         // / array callables) that are likewise per-request and dangle after free
@@ -8282,7 +8287,7 @@ pub const VM = struct {
 
                             const saved_fc = self.frame_count;
                             var ctx = self.makeContext(null);
-                            const ctor_result = self.invokeNative(native, &ctx, args_buf[0..ac], cn) catch {
+                            const ctor_result = self.invokeNative(native, &ctx, .{ .args = args_buf[0..ac], .name = cn, .instance = true }) catch {
                                 // clean up temp frame if throwBuiltinException didn't already unwind past it
                                 if (self.frame_count >= saved_fc) {
                                     self.frame_count -= 1;
@@ -8507,11 +8512,10 @@ pub const VM = struct {
                             self.retainFrameObjects(self.frame_count - 1);
                             if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                             var ctx = self.makeContext(null);
-                            const ctor_result = self.invokeNative(native, &ctx, args_buf[0..ac], cn) catch {
+                            const ctor_result = self.invokeNative(native, &ctx, .{ .args = args_buf[0..ac], .name = cn, .instance = true }) catch {
                                 self.frame_count -= 1;
                                 self.deinitFrameSlot(self.frame_count);
                                 if (self.pending_exception) |exc| {
-                                    if (!isFrameOutNative(cn)) self.prependNativeFrameToTrace(exc, cn, args_buf[0..ac]) catch {};
                                     self.pending_exception = null;
                                     if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                         const handler = self.exception_handlers[self.handler_count - 1];
@@ -9313,27 +9317,17 @@ pub const VM = struct {
                                 // case and treat as a benign control-flow
                                 // signal so the catch handler runs instead
                                 // of surfacing as 'internal RuntimeError'
-                                const result = self.invokeNative(native, &ctx, args_buf[0..ac], null) catch |native_err| {
+                                const result = self.invokeNative(native, &ctx, .{ .args = args_buf[0..ac], .label = mc_entry.full_name, .instance = true }) catch |native_err| {
                                     if (self.frame_count < saved_fc) continue;
                                     // pop the temp $this frame so it doesn't
                                     // leak into the stack trace as a bogus
                                     // '{main}' entry
                                     self.frame_count -= 1;
                                     self.deinitFrameSlot(self.frame_count);
-                                    // uncaught native throw - record the method
-                                    // name so the stack trace shows it at #0
-                                    if (self.pending_exception) |exc| {
-                                        if (!isFrameOutNative(mc_entry.full_name)) self.prependNativeFrameToTrace(exc, mc_entry.full_name, args_buf[0..ac]) catch {};
-                                        // Cached calls must dispatch pending callback exceptions
-                                        // just like uncached native calls, but only to a handler
-                                        // owned by this execution boundary.
-                                        if (self.dispatchPendingException(base_frame)) {
-                                            self.pending_native_name = null;
-                                            continue;
-                                        }
-                                        self.pending_native_name = mc_entry.full_name;
-                                        self.pending_native_is_instance = true;
-                                    }
+                                    // Cached calls must dispatch pending callback exceptions
+                                    // just like uncached native calls, but only to a handler
+                                    // owned by this execution boundary.
+                                    if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                                     return native_err;
                                 };
                                 if (self.frame_count >= saved_fc) {
@@ -9425,17 +9419,14 @@ pub const VM = struct {
                         const saved_fc = self.frame_count;
 
                         var ctx = self.makeContext(full_name);
-                        const result = self.invokeNative(native, &ctx, args_buf[0..ac], full_name) catch {
+                        const result = self.invokeNative(native, &ctx, .{ .args = args_buf[0..ac], .name = full_name, .instance = true }) catch {
                             if (self.frame_count >= saved_fc) {
                                 self.frame_count -= 1;
                                 self.deinitFrameSlot(self.frame_count);
                             }
                             if (self.pending_exception) |exc| {
-                                if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                 self.pending_exception = null;
                                 if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
-                                    // exception caught - clear native-trace state
-                                    self.pending_native_name = null;
                                     const handler = self.exception_handlers[self.handler_count - 1];
                                     self.handler_count -= 1;
                                     while (self.frame_count > handler.frame_count) {
@@ -9448,10 +9439,6 @@ pub const VM = struct {
                                     self.currentFrame().ip = handler.catch_ip;
                                     continue;
                                 }
-                                // uncaught - record the native method so the
-                                // stack trace shows 'Class->method()' at #0
-                                self.pending_native_name = full_name;
-                                self.pending_native_is_instance = true;
                                 self.pending_exception = exc;
                             } else {
                                 continue;
@@ -9689,17 +9676,14 @@ pub const VM = struct {
                         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                         const saved_fc = self.frame_count;
                         var ctx = self.makeContext(full_name);
-                        const result = self.invokeNative(native, &ctx, args_buf[0..ac], full_name) catch {
+                        const result = self.invokeNative(native, &ctx, .{ .args = args_buf[0..ac], .name = full_name, .instance = true }) catch {
                             if (self.frame_count >= saved_fc) {
                                 self.frame_count -= 1;
                                 self.deinitFrameSlot(self.frame_count);
                             }
                             if (self.pending_exception) |exc| {
-                                if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                 self.pending_exception = null;
                                 if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
-                                    // exception caught - clear native-trace state
-                                    self.pending_native_name = null;
                                     const handler = self.exception_handlers[self.handler_count - 1];
                                     self.handler_count -= 1;
                                     while (self.frame_count > handler.frame_count) {
@@ -9712,10 +9696,6 @@ pub const VM = struct {
                                     self.currentFrame().ip = handler.catch_ip;
                                     continue;
                                 }
-                                // uncaught - record the native method so the
-                                // stack trace shows 'Class->method()' at #0
-                                self.pending_native_name = full_name;
-                                self.pending_native_is_instance = true;
                                 self.pending_exception = exc;
                             } else {
                                 continue;
@@ -9853,17 +9833,14 @@ pub const VM = struct {
                         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                         const saved_fc = self.frame_count;
                         var ctx = self.makeContext(full_name);
-                        const result = self.invokeNative(native, &ctx, args_buf[0..ac], full_name) catch {
+                        const result = self.invokeNative(native, &ctx, .{ .args = args_buf[0..ac], .name = full_name, .instance = true }) catch {
                             if (self.frame_count >= saved_fc) {
                                 self.frame_count -= 1;
                                 self.deinitFrameSlot(self.frame_count);
                             }
                             if (self.pending_exception) |exc| {
-                                if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                 self.pending_exception = null;
                                 if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
-                                    // exception caught - clear native-trace state
-                                    self.pending_native_name = null;
                                     const handler = self.exception_handlers[self.handler_count - 1];
                                     self.handler_count -= 1;
                                     while (self.frame_count > handler.frame_count) {
@@ -9876,10 +9853,6 @@ pub const VM = struct {
                                     self.currentFrame().ip = handler.catch_ip;
                                     continue;
                                 }
-                                // uncaught - record the native method so the
-                                // stack trace shows 'Class->method()' at #0
-                                self.pending_native_name = full_name;
-                                self.pending_native_is_instance = true;
                                 self.pending_exception = exc;
                             } else {
                                 continue;
@@ -10037,17 +10010,14 @@ pub const VM = struct {
                         if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                         const saved_fc = self.frame_count;
                         var ctx = self.makeContext(full_name);
-                        const result = self.invokeNative(native, &ctx, args_buf[0..ac], full_name) catch {
+                        const result = self.invokeNative(native, &ctx, .{ .args = args_buf[0..ac], .name = full_name, .instance = true }) catch {
                             if (self.frame_count >= saved_fc) {
                                 self.frame_count -= 1;
                                 self.deinitFrameSlot(self.frame_count);
                             }
                             if (self.pending_exception) |exc| {
-                                if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                 self.pending_exception = null;
                                 if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
-                                    // exception caught - clear native-trace state
-                                    self.pending_native_name = null;
                                     const handler = self.exception_handlers[self.handler_count - 1];
                                     self.handler_count -= 1;
                                     while (self.frame_count > handler.frame_count) {
@@ -10060,10 +10030,6 @@ pub const VM = struct {
                                     self.currentFrame().ip = handler.catch_ip;
                                     continue;
                                 }
-                                // uncaught - record the native method so the
-                                // stack trace shows 'Class->method()' at #0
-                                self.pending_native_name = full_name;
-                                self.pending_native_is_instance = true;
                                 self.pending_exception = exc;
                             } else {
                                 continue;
@@ -10325,13 +10291,12 @@ pub const VM = struct {
                                 self.retainFrameObjects(self.frame_count - 1);
                                 if (self.frame_count > self.frame_high_water) self.frame_high_water = self.frame_count;
                                 var ctx = self.makeContext(full_name);
-                                const result = self.invokeNative(native, &ctx, args_buf[0..ac], full_name) catch {
+                                const result = self.invokeNative(native, &ctx, .{ .args = args_buf[0..ac], .name = full_name, .instance = true }) catch {
                                     if (self.frame_count > sc_saved_fc) {
                                         self.frame_count -= 1;
                                         self.deinitFrameSlot(self.frame_count);
                                     }
                                     if (self.pending_exception) |exc| {
-                                        if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args_buf[0..ac]) catch {};
                                         self.pending_exception = null;
                                         if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
                                             const handler = self.exception_handlers[self.handler_count - 1];
@@ -11555,9 +11520,13 @@ pub const VM = struct {
         if (self.sourceLocation(requirer.chunk, requirer.ip - 2)) |loc| {
             try entry.set(self.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = @as(i64, @intCast(loc.line)) });
         }
-        const args_arr = try self.allocArray();
-        try args_arr.append(self.allocator, .{ .string = Value.String.borrowed(frame.script_path) });
-        try entry.set(self.allocator, .{ .string = Value.String.borrowed("args") }, .{ .array = args_arr });
+        // php names the included file only when the trace has an entry from
+        // inside it
+        if (arr.entries.items.len > 0) {
+            const args_arr = try self.allocArray();
+            try args_arr.append(self.allocator, .{ .string = Value.String.borrowed(frame.script_path) });
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("args") }, .{ .array = args_arr });
+        }
         try arr.append(self.allocator, .{ .array = entry });
     }
 
@@ -11573,20 +11542,57 @@ pub const VM = struct {
     fn traceBelow(self: *VM, top: usize) !*PhpArray {
         const arr = try self.allocArray();
         if (top == 0) return arr;
+        // the running natives called from frames below top, innermost first
+        var natives: [64]*const NativeCall = undefined;
+        var native_count: usize = 0;
+        var call = self.native_call;
+        while (call) |c| : (call = c.outer) {
+            if (c.depth > top) continue;
+            if (native_count == natives.len) break;
+            natives[native_count] = c;
+            native_count += 1;
+        }
+        var next_native: usize = 0;
         var i: usize = top - 1;
         while (true) : (i -= 1) {
-            const frame = &self.frames[i];
-            if (frame.func) |f| if (f.name.len > 0) {
-                const call_site: ?SourcePosition = if (i > 0) self.framePosition(i - 1) else null;
+            // natives frame i called, innermost first: the outermost of them
+            // was called from frame i's code, each other one by the native
+            // outside it
+            while (next_native < native_count and natives[next_native].depth == i + 1) : (next_native += 1) {
+                if (natives[next_native].label.len == 0) continue;
+                const outermost = next_native + 1 == native_count or natives[next_native + 1].depth != i + 1;
+                try arr.append(self.allocator, .{ .array = try self.nativeTraceEntry(natives[next_native], if (outermost) self.framePosition(i) else null) });
+            }
+            if (self.frames[i].func) |f| if (f.name.len > 0) {
+                const called_by_native = next_native < native_count and natives[next_native].depth == i;
+                const call_site: ?SourcePosition = if (i > 0 and !called_by_native) self.framePosition(i - 1) else null;
                 const entry = try self.newTraceEntry(f, call_site);
                 const args = try self.traceArgs(entry);
-                for (f.params) |pname| try args.append(self.allocator, frameParamValue(frame, f, pname));
+                for (f.params) |pname| try args.append(self.allocator, frameParamValue(&self.frames[i], f, pname));
                 try arr.append(self.allocator, .{ .array = entry });
             };
             try self.tryAppendRequireFrame(arr, i);
             if (i == 0) break;
         }
         return arr;
+    }
+
+    fn nativeTraceEntry(self: *VM, call: *const NativeCall, call_site: ?SourcePosition) !*PhpArray {
+        const entry = try self.allocArray();
+        if (call_site) |site| {
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(site.file) });
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("line") }, .{ .int = site.line });
+        }
+        if (std.mem.indexOf(u8, call.label, "::")) |sep| {
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(call.label[sep + 2 ..]) });
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("class") }, .{ .string = Value.String.borrowed(call.label[0..sep]) });
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("type") }, .{ .string = Value.String.borrowed(if (call.instance) "->" else "::") });
+        } else {
+            try entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(call.label) });
+        }
+        const args = try self.traceArgs(entry);
+        for (call.args) |a| try args.append(self.allocator, a);
+        return entry;
     }
 
     // keys in php's order: file, line, function, class, type, then args
@@ -11642,42 +11648,6 @@ pub const VM = struct {
             return if (si < frame.locals.len) frame.locals[si] else .null;
         }
         return .null;
-    }
-
-    // when a native (e.g. array_map, iterator_apply) calls a user callback
-    // that throws, splice the native into the exception's trace to match
-    // PHP. PHP's getTrace() puts the throwing user callback at #0 attributed
-    // as `[internal function]` (no file/line), then the native at #1 with
-    // the user call-site file/line and the native's args - the native was
-    // the bridge between the call site and the throw. zphp builds the trace
-    // from user frames only at throw time, so the catching native must
-    // patch it: strip file/line from the innermost user entry and insert a
-    // new entry for the native carrying that file/line + the native's args
-    fn prependNativeFrameToTrace(self: *VM, exc: Value, name: []const u8, native_args: []const Value) !void {
-        if (exc != .object) return;
-        const obj = exc.object;
-        const trace_v = obj.getForScope("trace", self.exceptionTraceScope(obj));
-        if (trace_v != .array) return;
-        const old_trace = trace_v.array;
-        if (old_trace.entries.items.len == 0) return;
-        if (old_trace.entries.items[0].value != .array) return;
-        const closure_entry = old_trace.entries.items[0].value.array;
-        const file_v = closure_entry.get(.{ .string = Value.String.borrowed("file") });
-        const line_v = closure_entry.get(.{ .string = Value.String.borrowed("line") });
-        closure_entry.remove(.{ .string = Value.String.borrowed("file") });
-        closure_entry.remove(.{ .string = Value.String.borrowed("line") });
-        const native_entry = try self.allocArray();
-        try native_entry.set(self.allocator, .{ .string = Value.String.borrowed("function") }, .{ .string = Value.String.borrowed(name) });
-        if (file_v != .null) try native_entry.set(self.allocator, .{ .string = Value.String.borrowed("file") }, file_v);
-        if (line_v != .null) try native_entry.set(self.allocator, .{ .string = Value.String.borrowed("line") }, line_v);
-        const args_arr = try self.allocArray();
-        for (native_args) |a| try args_arr.append(self.allocator, a);
-        try native_entry.set(self.allocator, .{ .string = Value.String.borrowed("args") }, .{ .array = args_arr });
-        const new_trace = try self.allocArray();
-        try new_trace.append(self.allocator, .{ .array = closure_entry });
-        try new_trace.append(self.allocator, .{ .array = native_entry });
-        for (old_trace.entries.items[1..]) |e| try new_trace.append(self.allocator, e.value);
-        try obj.setForScope(self.allocator, "trace", .{ .array = new_trace }, self.exceptionTraceScope(obj));
     }
 
     // Native throwable access must use the root declaring class, never a
@@ -13145,7 +13115,7 @@ pub const VM = struct {
                 }
             }
             var ctx = self.makeContext(null);
-            const result = self.invokeNative(native, &ctx, &.{}, null) catch return "Object";
+            const result = self.invokeNative(native, &ctx, .{ .args = &.{}, .label = method_name, .instance = true }) catch return "Object";
             if (result == .string) {
                 const owner = result.string.owner orelse return result.string.bytes();
                 defer result.string.release();
@@ -17745,13 +17715,21 @@ pub const VM = struct {
     // does not own arrays and a refcount-0 array arg is never queued, so it
     // cannot be freed mid-native - retaining arrays here would instead
     // QUEUE them (releaseValue queues at 0) and free live data (Stage 2)
-    fn invokeNative(self: *VM, native: NativeFn, ctx: *NativeContext, input_args: []const Value, name: ?[]const u8) RuntimeError!Value {
-        // user code a native calls back is called by an internal function,
-        // except through call_user_func(_array), which php compiles to a
-        // plain call from the calling code
-        const saved_native_depth = self.native_frame_depth;
-        defer self.native_frame_depth = saved_native_depth;
-        if (!isUserCallForwarder(name)) self.native_frame_depth = self.frame_count;
+    fn invokeNative(self: *VM, native: NativeFn, ctx: *NativeContext, call: NativeInvocation) RuntimeError!Value {
+        const input_args = call.args;
+        const name = call.name;
+        // the call is on the native stack while it runs, so a trace made
+        // inside it shows it and user code it calls back is called by an
+        // internal function. call_user_func(_array), strlen and count stay
+        // off it: php compiles them to plain calls or opcodes
+        const outer = self.native_call;
+        defer self.native_call = outer;
+        var record: NativeCall = undefined;
+        const label = call.label orelse name orelse "";
+        if (!isUserCallForwarder(name) and !isFrameOutNative(label)) {
+            record = .{ .label = label, .args = input_args, .depth = self.frame_count, .instance = call.instance, .outer = outer };
+            self.native_call = &record;
+        }
         var args_buf: [256]Value = undefined;
         if (input_args.len > args_buf.len) return error.RuntimeError;
         var native_args = input_args;
@@ -18403,9 +18381,46 @@ pub const VM = struct {
         return std.ascii.eqlIgnoreCase(n, "call_user_func") or std.ascii.eqlIgnoreCase(n, "call_user_func_array");
     }
 
+    // a call the engine makes on its own (an uncaught throwable's __toString,
+    // the exception handler, shutdown functions): what it calls reads as
+    // called by an internal function, and the call itself shows in no trace.
+    // the caller links it in as native_call for the duration
+    pub fn engineCall(self: *const VM) NativeCall {
+        return .{ .label = "", .args = &.{}, .depth = self.frame_count, .instance = false, .outer = self.native_call };
+    }
+
+    // php's end of an uncaught throwable: the stack unwinds to the main frame
+    // and the exception handler, when one is set, receives it. the throwable
+    // is no longer pending unless the handler threw one of its own
+    pub fn dispatchUncaught(self: *VM) void {
+        self.unwindToMain();
+        const exc = self.pending_exception orelse return;
+        const handler = self.user_exception_handler orelse return;
+        self.user_exception_handler = null;
+        self.pending_exception = null;
+        var engine = self.engineCall();
+        self.native_call = &engine;
+        defer self.native_call = engine.outer;
+        var ctx = self.makeContext(null);
+        _ = ctx.invokeCallable(handler, &.{exc}) catch {};
+        self.releaseValue(handler);
+    }
+
+    // an uncaught throwable ends everything but the main frame, above which
+    // the report, the exception handler and shutdown functions run
+    fn unwindToMain(self: *VM) void {
+        while (self.frame_count > 1) {
+            self.frame_count -= 1;
+            self.deinitFrameSlot(self.frame_count);
+        }
+        self.handler_count = 0;
+        self.handler_floor = 0;
+    }
+
     // true while a native runs with no user frame pushed since it started
     fn calledFromNative(self: *const VM) bool {
-        return self.native_frame_depth == self.frame_count;
+        const call = self.native_call orelse return false;
+        return call.depth == self.frame_count;
     }
 
     fn topFrameStrict(self: *VM) bool {
@@ -18732,32 +18747,10 @@ pub const VM = struct {
             self.dropN(ac);
             const pre_handler_count = self.handler_count;
             var ctx = self.makeContext(name);
-            const result = self.invokeNative(native, &ctx, args[0..ac], name) catch {
+            const result = self.invokeNative(native, &ctx, .{ .args = args[0..ac], .name = name }) catch {
                 if (self.pending_exception) |exc| {
-                    // capture the native's name + args so writeStackTrace can
-                    // emit a '#0 file(line): name(args)' synthetic frame - but
-                    // not for the natives PHP opcode-compiles (strlen / count /
-                    // sizeof), which PHP never frames into a trace
-                    if (!isFrameOutNative(name)) {
-                        self.pending_native_name = name;
-                        self.pending_native_is_instance = false;
-                        const buf = self.pending_native_args_buf orelse blk: {
-                            const b = try self.allocator.create([16]Value);
-                            b.* = @splat(.null);
-                            self.pending_native_args_buf = b;
-                            break :blk b;
-                        };
-                        const argc_cap: usize = @min(ac, buf.len);
-                        for (0..argc_cap) |i| buf[i] = args[i];
-                        self.pending_native_args = buf[0..argc_cap];
-                        try self.prependNativeFrameToTrace(exc, name, args[0..ac]);
-                    }
                     self.pending_exception = null;
                     if (self.handler_count > self.handler_floor and !self.uncatchable_fatal) {
-                        // exception caught: clear the native-trace state so
-                        // the next throw doesn't pick up stale info
-                        self.pending_native_name = null;
-                        self.pending_native_args = &.{};
                         const handler = self.exception_handlers[self.handler_count - 1];
                         self.handler_count -= 1;
                         while (self.frame_count > handler.frame_count) {
@@ -19056,11 +19049,8 @@ pub const VM = struct {
             // throwBuiltinException can dispatch in-place and the native
             // returns error.RuntimeError to unwind. detect that and let
             // the caller resume from the dispatched handler frame
-            const result = self.invokeNative(native, &ctx, args, full_name) catch |native_err| {
+            const result = self.invokeNative(native, &ctx, .{ .args = args, .name = full_name, .instance = true }) catch |native_err| {
                 if (self.frame_count < saved_fc) return .null;
-                if (self.pending_exception) |exc| {
-                    if (!isFrameOutNative(full_name)) self.prependNativeFrameToTrace(exc, full_name, args) catch {};
-                }
                 return native_err;
             };
             if (self.frame_count >= saved_fc) {
@@ -19132,6 +19122,9 @@ pub const VM = struct {
     pub fn runShutdownCallbacks(self: *VM) !void {
         // PHP runs shutdown callbacks in registration order, after the script
         // returns; errors in one don't prevent the others from firing.
+        var engine = self.engineCall();
+        self.native_call = &engine;
+        defer self.native_call = engine.outer;
         for (self.shutdown_callbacks.items) |cb| {
             const result = if (cb == .string) self.callByName(cb.string.bytes(), &.{}) catch null else if (cb == .object) blk: {
                 if (self.hasMethod(cb.object.class_name, "__invoke")) {
@@ -19228,12 +19221,7 @@ pub const VM = struct {
             // mt_rand distinguish by name) work when dispatched indirectly via
             // call_user_func / first-class-callable / array callable
             var ctx = self.makeContext(name);
-            const result = self.invokeNative(native, &ctx, args, name) catch |native_err| {
-                if (self.pending_exception) |exc| {
-                    if (!isFrameOutNative(name)) self.prependNativeFrameToTrace(exc, name, args) catch {};
-                }
-                return native_err;
-            };
+            const result = try self.invokeNative(native, &ctx, .{ .args = args, .name = name });
             return self.borrowCallResult(result);
         } else if (self.functions.get(name)) |func| {
             if (args.len < func.required_params) return error.RuntimeError;

@@ -1056,22 +1056,26 @@ fn processHttpRead(w: *Worker, c: *Connection) void {
 
 fn reportUncaught(w: *Worker) void {
     const vm = &w.vm;
+    vm.dispatchUncaught();
+    if (vm.pending_exception == null) return;
     if ((vm.error_reporting_level & 1) != 0) {
+        const description = @import("stdlib/exceptions.zig").uncaughtDescription(vm, w.allocator);
+        defer if (description) |text| w.allocator.free(text);
         if (vm.logErrorsEnabled()) {
-            const log_copy = error_format.formatUncaught(w.allocator, vm, .log);
+            const log_copy = error_format.formatUncaught(w.allocator, vm, .log, description);
             defer w.allocator.free(log_copy);
             vm.writeLog(log_copy);
         }
         switch (vm.displayTarget()) {
             .none => {},
             .stdout => {
-                const display_copy = error_format.formatUncaught(w.allocator, vm, .display);
+                const display_copy = error_format.formatUncaught(w.allocator, vm, .display, description);
                 defer w.allocator.free(display_copy);
                 vm.output.append(vm.allocator, '\n') catch {};
                 vm.output.appendSlice(vm.allocator, display_copy) catch {};
             },
             .stderr => {
-                const display_copy = error_format.formatUncaught(w.allocator, vm, .display);
+                const display_copy = error_format.formatUncaught(w.allocator, vm, .display, description);
                 defer w.allocator.free(display_copy);
                 _ = std.fs.File.stderr().write(display_copy) catch {};
             },

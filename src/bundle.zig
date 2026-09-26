@@ -559,7 +559,8 @@ test "a pack round-trips and answers path queries under its mount" {
     while (listing.next()) |_| count += 1;
     try std.testing.expectEqual(@as(usize, 3), count);
     var buf: [256]u8 = undefined;
-    try std.testing.expectEqualStrings("/nonexistent-zphp-mount/app/config/app.php", b.mounted(&buf, "config/app.php").?);
+    const sep = std.fs.path.sep_str;
+    try std.testing.expectEqualStrings("/nonexistent-zphp-mount/app" ++ sep ++ "config" ++ sep ++ "app.php", b.mounted(&buf, "config/app.php").?);
 
     try std.testing.expect(remove("/nonexistent-zphp-mount/app/config/app.php"));
     try std.testing.expect(find("/nonexistent-zphp-mount/app/config/app.php") == null);
