@@ -344,7 +344,7 @@ fn writeStackTrace(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM) void {
         }
         for (vm.pending_native_args, 0..) |a, ai| {
             if (ai > 0) write(buf, alloc, ", ");
-            writeArgValue(buf, alloc, a);
+            writeTraceArg(buf, alloc, a);
         }
         write(buf, alloc, ")\n");
         depth += 1;
@@ -415,19 +415,23 @@ fn writeFrameArgs(buf: *Writer, alloc: std.mem.Allocator, vm: *const VM, frame_i
     if (offset + arg_count > ic.fga_buf.len) return;
     for (0..arg_count) |a| {
         if (a > 0) write(buf, alloc, ", ");
-        writeArgValue(buf, alloc, ic.fga_buf[offset + a]);
+        writeTraceArg(buf, alloc, ic.fga_buf[offset + a]);
     }
 }
 
-fn writeArgValue(buf: *Writer, alloc: std.mem.Allocator, v: Value) void {
+// a call argument the way php's traces show it: quoted strings cut to 15
+// bytes, Array and Object(Class) placeholders, scalars as they are
+pub fn writeTraceArg(buf: *Writer, alloc: std.mem.Allocator, v: Value) void {
     switch (v) {
         .null => write(buf, alloc, "NULL"),
         .bool => |b| write(buf, alloc, if (b) "true" else "false"),
         .int => |n| writeFmt(buf, alloc, "{d}", .{n}),
         .float => |f| writeFmt(buf, alloc, "{d}", .{f}),
         .string => |s| {
-            // PHP truncates long strings to 15 chars + '...'
-            if (s.len <= 15) {
+            // a closure passed as a callable is its synthetic name in zphp
+            if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
+                write(buf, alloc, "Object(Closure)");
+            } else if (s.len <= 15) {
                 writeFmt(buf, alloc, "'{s}'", .{s.bytes()});
             } else {
                 writeFmt(buf, alloc, "'{s}...'", .{s.bytes()[0..15]});

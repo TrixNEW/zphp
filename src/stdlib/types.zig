@@ -1045,16 +1045,9 @@ fn native_get_object_vars(ctx: *NativeContext, args: []const Value) RuntimeError
     const obj = args[0].object.storage();
     var arr = try ctx.createArray();
 
-    // Determine caller's class scope via the calling frame's function name (which is
-    // "Class::method" for methods and a plain name for free functions).
-    const caller_class: ?[]const u8 = blk: {
-        // natives run inline, so the caller is the current frame
-        if (ctx.vm.frame_count < 1) break :blk null;
-        const caller_frame = ctx.vm.frames[ctx.vm.frame_count - 1];
-        const cf = caller_frame.func orelse break :blk null;
-        const sep = std.mem.indexOf(u8, cf.name, "::") orelse break :blk null;
-        break :blk cf.name[0..sep];
-    };
+    // the caller's class scope, bound closures included; natives run inline,
+    // so the caller is the current frame
+    const caller_class: ?[]const u8 = ctx.vm.currentDefiningClass();
     const can_see_protected = caller_class != null and isInClassHierarchy(ctx.vm, caller_class.?, obj.class_name);
 
     if (obj.slot_layout) |layout| {

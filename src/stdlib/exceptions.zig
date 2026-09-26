@@ -233,35 +233,6 @@ fn exceptionGetTrace(ctx: *NativeContext, _: []const Value) RuntimeError!NativeR
     return NativeResult.borrowed(.{ .array = arr });
 }
 
-// render a single call argument the way PHP's exception trace does: quoted
-// and truncated strings, Array / Object(Class) placeholders, scalars raw.
-// kept in step with error_format.writeArgValue so getTraceAsString and the
-// uncaught-error printer format arguments identically
-fn formatTraceArg(buf: *std.ArrayListUnmanaged(u8), alloc: std.mem.Allocator, v: Value) RuntimeError!void {
-    const w = buf.writer(alloc);
-    switch (v) {
-        .null => try buf.appendSlice(alloc, "NULL"),
-        .bool => |b| try buf.appendSlice(alloc, if (b) "true" else "false"),
-        .int => |n| try w.print("{d}", .{n}),
-        .float => |f| try w.print("{d}", .{f}),
-        .string => |s| {
-            // a closure passed as a callable is represented in zphp as its
-            // synthetic name (`__closure_N` / `__closure_N_M`); PHP renders
-            // it as `Object(Closure)` in trace args
-            if (std.mem.startsWith(u8, s.bytes(), "__closure_")) {
-                try buf.appendSlice(alloc, "Object(Closure)");
-            } else if (s.bytes().len <= 15) {
-                try w.print("'{s}'", .{s.bytes()});
-            } else {
-                try w.print("'{s}...'", .{s.bytes()[0..15]});
-            }
-        },
-        .array => try buf.appendSlice(alloc, "Array"),
-        .object => |o| try w.print("Object({s})", .{o.class_name}),
-        else => try buf.appendSlice(alloc, "?"),
-    }
-}
-
 fn exceptionGetTraceAsString(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this_val = ctx.vm.currentFrame().vars.get("$this") orelse return NativeResult.literal("");
     if (this_val != .object) return NativeResult.literal("");
@@ -294,7 +265,7 @@ fn exceptionGetTraceAsString(ctx: *NativeContext, _: []const Value) RuntimeError
             if (args_v == .array) {
                 for (args_v.array.entries.items, 0..) |arg_entry, ai| {
                     if (ai > 0) try buf.appendSlice(ctx.allocator, ", ");
-                    try formatTraceArg(&buf, ctx.allocator, arg_entry.value);
+                    @import("../error_format.zig").writeTraceArg(&buf, ctx.allocator, arg_entry.value);
                 }
             }
             try buf.appendSlice(ctx.allocator, ")\n");

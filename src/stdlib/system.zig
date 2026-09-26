@@ -770,7 +770,7 @@ fn buildBacktrace(ctx: *NativeContext, ignore_args: bool, provide_object: bool, 
         count += 1;
     }) {
         var entry = try ctx.createArray();
-        try entry.set(alloc, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(vm.file_path) });
+        try entry.set(alloc, .{ .string = Value.String.borrowed("file") }, .{ .string = Value.String.borrowed(vm.frameFile(i - 1)) });
 
         const caller = &vm.frames[i - 1];
         if (vm.sourceLocation(caller.chunk, caller.ip)) |loc| {
@@ -850,6 +850,9 @@ fn native_debug_print_backtrace(ctx: *NativeContext, args: []const Value) Runtim
         const func = arr.get(.{ .string = Value.String.borrowed("function") });
         const file = arr.get(.{ .string = Value.String.borrowed("file") });
         const line = arr.get(.{ .string = Value.String.borrowed("line") });
+        const class = arr.get(.{ .string = Value.String.borrowed("class") });
+        const call_type = arr.get(.{ .string = Value.String.borrowed("type") });
+        const call_args = arr.get(.{ .string = Value.String.borrowed("args") });
         var num_buf: [20]u8 = undefined;
         const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{idx}) catch "0";
         try out.appendSlice(alloc, "#");
@@ -866,8 +869,17 @@ fn native_debug_print_backtrace(ctx: *NativeContext, args: []const Value) Runtim
             }
             try out.appendSlice(alloc, ": ");
         }
+        if (class == .string and call_type == .string) {
+            try out.appendSlice(alloc, class.string.bytes());
+            try out.appendSlice(alloc, call_type.string.bytes());
+        }
         try out.appendSlice(alloc, if (func == .string) func.string.bytes() else "{main}");
-        try out.appendSlice(alloc, "()\n");
+        try out.append(alloc, '(');
+        if (call_args == .array) for (call_args.array.entries.items, 0..) |a, n| {
+            if (n > 0) try out.appendSlice(alloc, ", ");
+            @import("../error_format.zig").writeTraceArg(out, alloc, a.value);
+        };
+        try out.appendSlice(alloc, ")\n");
     }
     return NativeResult.scalar(.null);
 }

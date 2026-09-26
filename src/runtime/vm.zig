@@ -16555,6 +16555,7 @@ pub const VM = struct {
                     if (std.mem.eql(u8, cap.var_name, "$__closure_scope") and cap.value == .string)
                         return cap.value.string.bytes();
                 }
+                return null;
             }
         }
         // fallback - look up compile-time names registered for this chunk
@@ -16588,6 +16589,8 @@ pub const VM = struct {
     fn closureDefClassForFrame(self: *VM, frame: *const CallFrame) ?[]const u8 {
         const compile_name = if (frame.func) |fn_| fn_.name else "";
         if (!std.mem.startsWith(u8, compile_name, "__closure_")) return null;
+        // the instance's own captures decide: a bind that cleared the scope
+        // must not borrow one from another instance of the same closure
         if (frame.call_name) |inst_name| {
             if (self.capture_index.get(inst_name)) |cr| {
                 const caps = self.captures.items[cr.start .. cr.start + cr.len];
@@ -16595,6 +16598,7 @@ pub const VM = struct {
                     if (std.mem.eql(u8, cap.var_name, "$__closure_defclass") and cap.value == .string)
                         return cap.value.string.bytes();
                 }
+                return null;
             }
         }
         if (self.chunk_to_func_names.get(@intFromPtr(frame.chunk))) |names| {
