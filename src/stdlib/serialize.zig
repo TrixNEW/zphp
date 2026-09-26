@@ -206,7 +206,7 @@ fn refuseNotSerializable(ctx: *NativeContext, class_name: []const u8, direction:
             break :blk try std.fmt.allocPrint(ctx.allocator, "{s} of '{s}' is not allowed, unless {s} methods are implemented in a subclass", .{ verb, class_name, methods });
         },
     };
-    try ctx.vm.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException("Exception", msg);
     return error.RuntimeError;
 }
@@ -979,8 +979,8 @@ fn splMember(ctx: *NativeContext, obj: *PhpObject, members: *PhpArray, name: []c
         .protected => try std.fmt.allocPrint(ctx.allocator, "\x00*\x00{s}", .{name}),
         .private => try std.fmt.allocPrint(ctx.allocator, "\x00{s}\x00{s}", .{ obj.class_name, name }),
     };
-    if (vis != .public) try ctx.strings.append(ctx.allocator, @constCast(key));
-    try members.set(ctx.allocator, .{ .string = Value.String.borrowed(key) }, val);
+    defer if (vis != .public) ctx.allocator.free(key);
+    try members.setCopiedKey(ctx.allocator, key, val);
 }
 
 fn splMembers(ctx: *NativeContext, obj: *PhpObject) !*PhpArray {

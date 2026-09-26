@@ -722,12 +722,6 @@ fn native_nl_langinfo(_: *NativeContext, args: []const Value) RuntimeError!Nativ
     return NativeResult.literal("");
 }
 
-fn dupString(ctx: *NativeContext, s: []const u8) ![]const u8 {
-    const owned = try ctx.allocator.dupe(u8, s);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
-}
-
 fn isPunct(c: u8) bool {
     return std.ascii.isPrint(c) and !std.ascii.isAlphanumeric(c) and c != ' ';
 }
@@ -937,9 +931,9 @@ fn native_is_callable(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
     const fillName = struct {
         fn run(c: *NativeContext, a: []const Value, name_str: []const u8) void {
             if (a.len < 3) return;
-            const owned = c.allocator.dupe(u8, name_str) catch return;
-            c.vm.strings.append(c.allocator, owned) catch {};
-            c.setCallerVar(2, a.len, .{ .string = Value.String.borrowed(owned) });
+            const owned = Value.String.create(c.allocator, name_str) catch return;
+            defer owned.release();
+            c.setCallerVar(2, a.len, .{ .string = owned });
         }
     }.run;
     if (val == .string) {

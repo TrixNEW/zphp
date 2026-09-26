@@ -190,22 +190,18 @@ fn native_posix_ttyname(ctx: *NativeContext, args: []const Value) RuntimeError!N
     return NativeResult.takeString(try Value.String.adopt(ctx.allocator, owned));
 }
 
-fn cstrToStr(ctx: *NativeContext, p: ?[*:0]const u8) ![]const u8 {
-    if (p == null) return "";
-    const s = p.?;
-    var i: usize = 0;
-    while (s[i] != 0) : (i += 1) {}
-    const owned = try ctx.allocator.dupe(u8, s[0..i]);
-    try ctx.strings.append(ctx.allocator, owned);
-    return owned;
+// the bytes of a C string, empty for a null pointer
+fn cstrBytes(p: ?[*:0]const u8) []const u8 {
+    const str = p orelse return "";
+    return std.mem.span(str);
 }
 
 fn native_posix_getpwuid(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .int) return NativeResult.scalar(.{ .bool = false });
     const pw = getpwuid(@intCast(args[0].int)) orelse return NativeResult.scalar(.{ .bool = false });
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed(try cstrToStr(ctx, pw.pw_name)) });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("passwd") }, .{ .string = Value.String.borrowed(try cstrToStr(ctx, pw.pw_passwd)) });
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("name") }, cstrBytes(pw.pw_name));
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("passwd") }, cstrBytes(pw.pw_passwd));
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("uid") }, .{ .int = @intCast(pw.pw_uid) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("gid") }, .{ .int = @intCast(pw.pw_gid) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("gecos") }, .{ .string = Value.String.borrowed("") });
@@ -218,8 +214,8 @@ fn native_posix_getgrgid(ctx: *NativeContext, args: []const Value) RuntimeError!
     if (args.len < 1 or args[0] != .int) return NativeResult.scalar(.{ .bool = false });
     const g = getgrgid(@intCast(args[0].int)) orelse return NativeResult.scalar(.{ .bool = false });
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed(try cstrToStr(ctx, g.gr_name)) });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("passwd") }, .{ .string = Value.String.borrowed(try cstrToStr(ctx, g.gr_passwd)) });
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("name") }, cstrBytes(g.gr_name));
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("passwd") }, cstrBytes(g.gr_passwd));
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("gid") }, .{ .int = @intCast(g.gr_gid) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("members") }, .{ .array = try ctx.createArray() });
     return NativeResult.borrowed(.{ .array = arr });
@@ -227,15 +223,12 @@ fn native_posix_getgrgid(ctx: *NativeContext, args: []const Value) RuntimeError!
 
 fn native_posix_getpwnam(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const name_buf = try ctx.allocator.alloc(u8, args[0].string.len + 1);
-    @memcpy(name_buf[0..args[0].string.len], args[0].string.bytes());
-    name_buf[args[0].string.len] = 0;
-    try ctx.strings.append(ctx.allocator, name_buf);
-    const name_z: [*:0]const u8 = @ptrCast(name_buf.ptr);
+    const name_z = try ctx.allocator.dupeZ(u8, args[0].string.bytes());
+    defer ctx.allocator.free(name_z);
     const pw = getpwnam(name_z) orelse return NativeResult.scalar(.{ .bool = false });
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed(try cstrToStr(ctx, pw.pw_name)) });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("passwd") }, .{ .string = Value.String.borrowed(try cstrToStr(ctx, pw.pw_passwd)) });
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("name") }, cstrBytes(pw.pw_name));
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("passwd") }, cstrBytes(pw.pw_passwd));
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("uid") }, .{ .int = @intCast(pw.pw_uid) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("gid") }, .{ .int = @intCast(pw.pw_gid) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("gecos") }, .{ .string = Value.String.borrowed("") });
@@ -246,15 +239,12 @@ fn native_posix_getpwnam(ctx: *NativeContext, args: []const Value) RuntimeError!
 
 fn native_posix_getgrnam(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const name_buf = try ctx.allocator.alloc(u8, args[0].string.len + 1);
-    @memcpy(name_buf[0..args[0].string.len], args[0].string.bytes());
-    name_buf[args[0].string.len] = 0;
-    try ctx.strings.append(ctx.allocator, name_buf);
-    const name_z: [*:0]const u8 = @ptrCast(name_buf.ptr);
+    const name_z = try ctx.allocator.dupeZ(u8, args[0].string.bytes());
+    defer ctx.allocator.free(name_z);
     const g = getgrnam(name_z) orelse return NativeResult.scalar(.{ .bool = false });
     const arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("name") }, .{ .string = Value.String.borrowed(try cstrToStr(ctx, g.gr_name)) });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("passwd") }, .{ .string = Value.String.borrowed(try cstrToStr(ctx, g.gr_passwd)) });
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("name") }, cstrBytes(g.gr_name));
+    try arr.setCopiedString(ctx.allocator, .{ .string = Value.String.borrowed("passwd") }, cstrBytes(g.gr_passwd));
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("gid") }, .{ .int = @intCast(g.gr_gid) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("members") }, .{ .array = try ctx.createArray() });
     return NativeResult.borrowed(.{ .array = arr });
@@ -320,14 +310,10 @@ fn native_posix_getrlimit(ctx: *NativeContext, args: []const Value) RuntimeError
     inline for (RLIMIT_NAMES, 0..) |n, idx| {
         var rl: Rlimit = undefined;
         if (getrlimit(@intCast(idx), &rl) == 0) {
-            const cur_key = try std.fmt.allocPrint(ctx.allocator, "soft {s}", .{n});
-            try ctx.strings.append(ctx.allocator, cur_key);
-            const max_key = try std.fmt.allocPrint(ctx.allocator, "hard {s}", .{n});
-            try ctx.strings.append(ctx.allocator, max_key);
             const cur: i64 = if (rl.rlim_cur == std.math.maxInt(u64)) -1 else @intCast(rl.rlim_cur);
             const max: i64 = if (rl.rlim_max == std.math.maxInt(u64)) -1 else @intCast(rl.rlim_max);
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(cur_key) }, .{ .int = cur });
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(max_key) }, .{ .int = max });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("soft " ++ n) }, .{ .int = cur });
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("hard " ++ n) }, .{ .int = max });
         }
     }
     _ = args;
@@ -372,6 +358,14 @@ fn native_posix_strerror(ctx: *NativeContext, args: []const Value) RuntimeError!
 // short is a string like "ab:c::" (a = no arg, b: = required, c:: = optional);
 // long is a list of strings with the same suffix convention. options stop at
 // the first non-option arg or at "--". returns assoc array of seen options.
+// an option getopt found: its value, or false for one that takes none
+fn putOption(ctx: *NativeContext, out: *PhpArray, name: []const u8, value: ?[]const u8) !void {
+    const key = try Value.String.create(ctx.allocator, name);
+    defer key.release();
+    if (value) |bytes| return out.setCopiedString(ctx.allocator, .{ .string = key }, bytes);
+    try out.set(ctx.allocator, .{ .string = key }, .{ .bool = false });
+}
+
 fn native_getopt(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const short: []const u8 = if (args.len >= 1 and args[0] == .string) args[0].string.bytes() else "";
     const argv_val = ctx.vm.request_vars.get("$argv") orelse return NativeResult.borrowed(.{ .array = try ctx.createArray() });
@@ -382,7 +376,7 @@ fn native_getopt(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     defer shorts.deinit(ctx.allocator);
     var i: usize = 0;
     while (i < short.len) : (i += 1) {
-        const ch = short[i];
+        const letter = short[i..][0..1];
         var mode: u8 = 'n'; // none
         if (i + 1 < short.len and short[i + 1] == ':') {
             if (i + 2 < short.len and short[i + 2] == ':') {
@@ -393,9 +387,7 @@ fn native_getopt(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
                 i += 1;
             }
         }
-        const k2 = try ctx.allocator.dupe(u8, &[_]u8{ch});
-        try ctx.vm.strings.append(ctx.allocator, k2);
-        try shorts.put(ctx.allocator, k2, mode);
+        try shorts.put(ctx.allocator, letter, mode);
     }
 
     var longs: std.StringHashMapUnmanaged(u8) = .{};
@@ -412,9 +404,7 @@ fn native_getopt(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
                 mode = 'r';
                 s = s[0 .. s.len - 1];
             }
-            const k = try ctx.allocator.dupe(u8, s);
-            try ctx.vm.strings.append(ctx.allocator, k);
-            try longs.put(ctx.allocator, k, mode);
+            try longs.put(ctx.allocator, s, mode);
         }
     }
 
@@ -435,19 +425,15 @@ fn native_getopt(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
             const name = if (eq_idx) |e| arg[2 .. 2 + e] else arg[2..];
             const inline_val: ?[]const u8 = if (eq_idx) |e| arg[2 + e + 1 ..] else null;
             const mode = longs.get(name) orelse continue;
-            var stored: Value = .{ .bool = false };
+            var stored: ?[]const u8 = null;
             if (inline_val) |iv| {
-                stored = .{ .string = Value.String.borrowed(try ctx.allocator.dupe(u8, iv)) };
-                try ctx.vm.strings.append(ctx.allocator, stored.string.bytes());
+                stored = iv;
             } else if (mode == 'r' and idx + 1 < argv.entries.items.len) {
                 idx += 1;
                 const nxt = argv.entries.items[idx].value;
-                if (nxt == .string) {
-                    stored = .{ .string = Value.String.borrowed(try ctx.allocator.dupe(u8, nxt.string.bytes())) };
-                    try ctx.vm.strings.append(ctx.allocator, stored.string.bytes());
-                }
+                if (nxt == .string) stored = nxt.string.bytes();
             }
-            try out.set(ctx.allocator, .{ .string = Value.String.borrowed(name) }, stored);
+            try putOption(ctx, out, name, stored);
         } else {
             // short cluster: -abc or -a value or -avalue
             var j: usize = 1;
@@ -455,27 +441,18 @@ fn native_getopt(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
                 const ch = arg[j];
                 const key = &[_]u8{ch};
                 const mode = shorts.get(key) orelse continue;
-                var stored: Value = .{ .bool = false };
+                var stored: ?[]const u8 = null;
                 if (mode == 'r' or mode == 'o') {
                     if (j + 1 < arg.len) {
-                        const rest = arg[j + 1 ..];
-                        const dup = try ctx.allocator.dupe(u8, rest);
-                        try ctx.vm.strings.append(ctx.allocator, dup);
-                        stored = .{ .string = Value.String.borrowed(dup) };
+                        stored = arg[j + 1 ..];
                         j = arg.len;
                     } else if (mode == 'r' and idx + 1 < argv.entries.items.len) {
                         idx += 1;
                         const nxt = argv.entries.items[idx].value;
-                        if (nxt == .string) {
-                            const dup = try ctx.allocator.dupe(u8, nxt.string.bytes());
-                            try ctx.vm.strings.append(ctx.allocator, dup);
-                            stored = .{ .string = Value.String.borrowed(dup) };
-                        }
+                        if (nxt == .string) stored = nxt.string.bytes();
                     }
                 }
-                const kk = try ctx.allocator.dupe(u8, key);
-                try ctx.vm.strings.append(ctx.allocator, kk);
-                try out.set(ctx.allocator, .{ .string = Value.String.borrowed(kk) }, stored);
+                try putOption(ctx, out, key, stored);
                 if (j == arg.len) break;
             }
         }
@@ -547,11 +524,9 @@ fn native_getenv(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         defer em.deinit();
         var it = em.iterator();
         while (it.next()) |e| {
-            const k = try ctx.allocator.dupe(u8, e.key_ptr.*);
-            const v = try ctx.allocator.dupe(u8, e.value_ptr.*);
-            try ctx.strings.append(ctx.allocator, k);
-            try ctx.strings.append(ctx.allocator, v);
-            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(k) }, .{ .string = Value.String.borrowed(v) });
+            const key = try Value.String.create(ctx.allocator, e.key_ptr.*);
+            defer key.release();
+            try arr.setCopiedString(ctx.allocator, .{ .string = key }, e.value_ptr.*);
         }
         return NativeResult.borrowed(.{ .array = arr });
     }
@@ -630,9 +605,7 @@ fn native_phpinfo(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     _ = args;
     // minimal output: enough for callers to verify the function exists. real
     // PHP prints a giant HTML/text dump of the environment
-    const out = try std.fmt.allocPrint(ctx.allocator, "PHP Version => 8.4.1\n", .{});
-    try ctx.strings.append(ctx.allocator, out);
-    try ctx.vm.output.appendSlice(ctx.allocator, out);
+    try ctx.vm.output.appendSlice(ctx.allocator, "PHP Version => 8.4.1\n");
     return NativeResult.scalar(.{ .bool = true });
 }
 
@@ -1039,11 +1012,7 @@ fn native_exec(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
             const a = try ctx.vm.allocArray();
             break :blk a;
         };
-        for (lines.items) |line| {
-            const copy = try ctx.allocator.dupe(u8, line);
-            try ctx.vm.strings.append(ctx.allocator, copy);
-            try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(copy) });
-        }
+        for (lines.items) |line| try arr.appendCopiedString(ctx.allocator, line);
         if (args[1] != .array) ctx.setCallerVar(1, args.len, .{ .array = arr });
     }
     // optional result_code (param 3, by-ref)

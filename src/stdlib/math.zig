@@ -75,7 +75,7 @@ fn requireNumeric(ctx: *NativeContext, v: Value, comptime fn_name: []const u8, c
         "{s}(): Argument #1 ($num) must be of type {s}, {s} given",
         .{ fn_name, type_label, tn },
     );
-    try ctx.strings.append(ctx.allocator, msg);
+    defer ctx.allocator.free(msg);
     try ctx.vm.setPendingException("TypeError", msg);
     return true;
 }

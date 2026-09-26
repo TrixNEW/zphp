@@ -2768,6 +2768,7 @@ pub const VM = struct {
     }
 
     pub fn deinit(self: *VM) void {
+        self.setStrtokState(null);
         self.clearLastError();
         extension.vmDeinit(self);
         if (self.ic) |ic| for (ic.arg_stack[0..ic.arg_stack_room.committed]) |*source| self.releaseArgSource(source);
@@ -3077,7 +3078,7 @@ pub const VM = struct {
         self.ini_settings.clearRetainingCapacity();
         if (self.ic) |ic_ptr| self.freeIniValues(ic_ptr);
         self.rng_seeded = false;
-        self.strtok_state = null;
+        self.setStrtokState(null);
         self.strtok_pos = 0;
         self.clearLastError();
         self.last_dt_error_count = 0;
@@ -11701,6 +11702,12 @@ pub const VM = struct {
         return "Exception";
     }
 
+    // strtok's string, a copy the VM owns
+    pub fn setStrtokState(self: *VM, state: ?[]const u8) void {
+        if (self.strtok_state) |old| self.allocator.free(old);
+        self.strtok_state = state;
+    }
+
     pub fn setPendingException(self: *VM, class_name: []const u8, message: []const u8) !void {
         const obj = try self.allocUserObject(class_name);
         try self.initObjectProperties(obj, class_name);
@@ -13198,12 +13205,17 @@ pub const VM = struct {
     // gives up an owned string's reference to the statement-boundary drain:
     // the bytes stay valid until then, and whatever stores the string first
     // keeps it alive
-    fn transientOwned(self: *VM, str: Value.String) Value.String {
+    pub fn transientOwned(self: *VM, str: Value.String) Value.String {
         if (str.releaseDeferred()) |owner| self.queueStringRelease(owner);
         return str;
     }
 
-    fn transientFormatted(self: *VM, v: Value) RuntimeError!Value.String {
+    // bytes the caller owns, handed over as a transient
+    pub fn transientAdopted(self: *VM, bytes: []u8) RuntimeError!Value.String {
+        return self.transientOwned(try Value.String.adopt(self.allocator, bytes));
+    }
+
+    pub fn transientFormatted(self: *VM, v: Value) RuntimeError!Value.String {
         var buf = std.ArrayListUnmanaged(u8){};
         errdefer buf.deinit(self.allocator);
         try v.format(&buf, self.allocator);

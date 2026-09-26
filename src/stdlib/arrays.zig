@@ -670,7 +670,7 @@ fn array_map(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
                 try std.fmt.allocPrint(ctx.allocator, "array_map(): Argument #2 ($array) must be of type array, {s} given", .{phpTypeName(a)})
             else
                 try std.fmt.allocPrint(ctx.allocator, "array_map(): Argument #{d} must be of type array, {s} given", .{ pos, phpTypeName(a) });
-            try ctx.strings.append(ctx.allocator, msg);
+            defer ctx.allocator.free(msg);
             try ctx.vm.setPendingException("TypeError", msg);
             return error.RuntimeError;
         }

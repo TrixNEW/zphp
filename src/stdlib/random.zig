@@ -102,9 +102,7 @@ fn freshU64FromCrypto() u64 {
 }
 
 fn storeState(ctx: *NativeContext, obj: *PhpObject, bytes: []const u8) !void {
-    const owned = try ctx.allocator.dupe(u8, bytes);
-    try ctx.vm.strings.append(ctx.allocator, owned);
-    try obj.set(ctx.allocator, "_state", .{ .string = Value.String.borrowed(owned) });
+    try obj.setCopiedString(ctx.allocator, "_state", bytes);
 }
 
 fn loadState(obj: *PhpObject, comptime T: type) ?T {

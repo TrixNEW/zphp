@@ -2721,9 +2721,7 @@ fn decodeConstSentinel(ctx: *NativeContext, v: Value) !?[]const u8 {
     const class_name = rest[0..sep];
     const const_name = rest[sep + 1 ..];
     if (class_name.len == 0) return const_name;
-    const joined = try std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ class_name, const_name });
-    try ctx.strings.append(ctx.allocator, joined);
-    return joined;
+    return (try ctx.vm.transientAdopted(try std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ class_name, const_name }))).bytes();
 }
 
 fn rpIsDefaultValueConstant(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -2901,8 +2899,8 @@ fn rfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
             const method = callable.array.entries.items[1].value.string.bytes();
             const class_name = if (target == .object) target.object.class_name else if (target == .string) target.string.bytes() else "";
             const full = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ class_name, method }) catch return NativeResult.scalar(.null);
-            try ctx.strings.append(ctx.allocator, full);
-            try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(full) });
+            defer ctx.allocator.free(full);
+            try this.setCopiedString(ctx.allocator, "name", full);
             try this.set(ctx.allocator, "__is_method_ref", .{ .bool = true });
             if (target == .object) try this.set(ctx.allocator, "__scope_class", .{ .string = Value.String.borrowed(class_name) });
         } else return throwReflection(ctx, "ReflectionFunction::__construct() expects a function name");
@@ -2926,8 +2924,8 @@ fn rfConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
             const target = arr.entries.items[0].value;
             const class_name = if (target == .object) target.object.class_name else if (target == .string) target.string.bytes() else "";
             const full = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ class_name, method }) catch return NativeResult.scalar(.null);
-            try ctx.strings.append(ctx.allocator, full);
-            try this.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(full) });
+            defer ctx.allocator.free(full);
+            try this.setCopiedString(ctx.allocator, "name", full);
             try this.set(ctx.allocator, "__is_method_ref", .{ .bool = true });
             if (target == .object) {
                 try this.set(ctx.allocator, "__scope_class", .{ .string = Value.String.borrowed(class_name) });
@@ -3260,11 +3258,11 @@ fn populateRpFields(ctx: *NativeContext, obj: *PhpObject, func: *const ObjFuncti
 
     if (std.mem.indexOf(u8, type_key, "::")) |sep| {
         const decl_class = try ctx.allocator.dupe(u8, type_key[0..sep]);
-        try ctx.strings.append(ctx.allocator, decl_class);
-        try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(decl_class) });
+        defer ctx.allocator.free(decl_class);
+        try obj.setCopiedString(ctx.allocator, "_declaring_class", decl_class);
         const meth_name = try ctx.allocator.dupe(u8, type_key[sep + 2 ..]);
-        try ctx.strings.append(ctx.allocator, meth_name);
-        try obj.set(ctx.allocator, "_method_name", .{ .string = Value.String.borrowed(meth_name) });
+        defer ctx.allocator.free(meth_name);
+        try obj.setCopiedString(ctx.allocator, "_method_name", meth_name);
     }
 }
 
@@ -3426,16 +3424,16 @@ fn buildParamArray(ctx: *NativeContext, func: *const ObjFunction, type_key: []co
         // declaring class and method name (or bare function name for free fns)
         if (std.mem.indexOf(u8, type_key, "::")) |sep| {
             const decl_class = try ctx.allocator.dupe(u8, type_key[0..sep]);
-            try ctx.strings.append(ctx.allocator, decl_class);
-            try obj.set(ctx.allocator, "_declaring_class", .{ .string = Value.String.borrowed(decl_class) });
+            defer ctx.allocator.free(decl_class);
+            try obj.setCopiedString(ctx.allocator, "_declaring_class", decl_class);
             const meth_name = try ctx.allocator.dupe(u8, type_key[sep + 2 ..]);
-            try ctx.strings.append(ctx.allocator, meth_name);
-            try obj.set(ctx.allocator, "_method_name", .{ .string = Value.String.borrowed(meth_name) });
-            try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(meth_name) });
+            defer ctx.allocator.free(meth_name);
+            try obj.setCopiedString(ctx.allocator, "_method_name", meth_name);
+            try obj.setCopiedString(ctx.allocator, "_function", meth_name);
         } else {
             const fname = try ctx.allocator.dupe(u8, type_key);
-            try ctx.strings.append(ctx.allocator, fname);
-            try obj.set(ctx.allocator, "_function", .{ .string = Value.String.borrowed(fname) });
+            defer ctx.allocator.free(fname);
+            try obj.setCopiedString(ctx.allocator, "_function", fname);
         }
 
         try arr.append(ctx.allocator, .{ .object = obj });
@@ -3501,9 +3499,8 @@ fn closureFromCallable(ctx: *NativeContext, args: []const Value) RuntimeError!Na
             const method = entries[1].value.string.bytes();
             if (entries[0].value == .string) {
                 if (ctx.vm.hasMethod(entries[0].value.string.bytes(), method)) {
-                    const full = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ entries[0].value.string.bytes(), method }) catch return NativeResult.scalar(.null);
-                    try ctx.strings.append(ctx.allocator, full);
-                    return wrapCallableClosure(ctx, .{ .string = Value.String.borrowed(full) });
+                    const full = try ctx.vm.transientAdopted(try std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ entries[0].value.string.bytes(), method }));
+                    return wrapCallableClosure(ctx, .{ .string = full });
                 }
             } else if (entries[0].value == .object) {
                 if (ctx.vm.hasMethod(entries[0].value.object.class_name, method)) return wrapCallableClosure(ctx, callable);
@@ -3567,8 +3564,8 @@ fn buildHookObj(ctx: *NativeContext, hook: ReflectedHook, kind: []const u8) !*Ph
     info.visibility = .public;
     const obj = try buildMethodObj(ctx, hook.declaring, hook.info.name, info, hook.declaring);
     const display = try std.fmt.allocPrint(ctx.allocator, "${s}::{s}", .{ this.get("name").string.bytes(), kind });
-    try ctx.strings.append(ctx.allocator, display);
-    try obj.set(ctx.allocator, "name", .{ .string = Value.String.borrowed(display) });
+    defer ctx.allocator.free(display);
+    try obj.setCopiedString(ctx.allocator, "name", display);
     try obj.set(ctx.allocator, "_hook_method", .{ .string = Value.String.borrowed(hook.info.name) });
     try obj.set(ctx.allocator, "_hook_property", this.get("name"));
     const prop = findPropertyDef(ctx.vm, hook.declaring, this.get("name").string.bytes());
@@ -3711,7 +3708,7 @@ fn rpConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
             .{ class_name, prop_name },
         );
 
-        try ctx.vm.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
 
         return throwReflection(ctx, msg);
     }
@@ -3858,8 +3855,8 @@ fn makeReflectionType(ctx: *NativeContext, type_str: []const u8) RuntimeError!Va
     if (std.mem.indexOfAny(u8, name, "|&")) |sep| name = name[0..sep];
     const obj = try ctx.createObject("ReflectionNamedType");
     const dup = try ctx.allocator.dupe(u8, name);
-    try ctx.strings.append(ctx.allocator, dup);
-    try obj.set(ctx.allocator, "type_name", .{ .string = Value.String.borrowed(dup) });
+    defer ctx.allocator.free(dup);
+    try obj.setCopiedString(ctx.allocator, "type_name", dup);
     try obj.set(ctx.allocator, "nullable", .{ .bool = allows_null or std.mem.eql(u8, name, "mixed") or std.mem.eql(u8, name, "null") });
     try obj.set(ctx.allocator, "is_builtin", .{ .bool = isBuiltinTypeName(name) });
     return .{ .object = obj };
@@ -4206,9 +4203,8 @@ fn rmFullName(ctx: *NativeContext) ?[]const u8 {
     const declaring = if (this.get("_declaring_class") == .string) this.get("_declaring_class").string.bytes() else return null;
     var buf: [256]u8 = undefined;
     const key = std.fmt.bufPrint(&buf, "{s}::{s}", .{ declaring, method_name }) catch return null;
-    const owned = ctx.allocator.dupe(u8, key) catch return null;
-    ctx.vm.strings.append(ctx.allocator, owned) catch {};
-    return owned;
+    const owned = Value.String.create(ctx.allocator, key) catch return null;
+    return ctx.vm.transientOwned(owned).bytes();
 }
 
 fn rmIsVariadic(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {

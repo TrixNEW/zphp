@@ -655,22 +655,16 @@ fn native_file_put_contents(ctx: *NativeContext, args: []const Value) RuntimeErr
 
 fn putContents(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const spelled_path = args[0].string.bytes();
+    var formatted = std.ArrayListUnmanaged(u8){};
+    defer formatted.deinit(ctx.allocator);
     const data = if (args[1] == .string) args[1].string.bytes() else if (args[1] == .array) blk: {
         // PHP writes an array argument as its elements concatenated, like
         // implode('', $array) - each element coerced to string
-        var buf = std.ArrayListUnmanaged(u8){};
-        for (args[1].array.entries.items) |entry| {
-            try entry.value.format(&buf, ctx.allocator);
-        }
-        const s = try buf.toOwnedSlice(ctx.allocator);
-        try ctx.strings.append(ctx.allocator, s);
-        break :blk s;
+        for (args[1].array.entries.items) |entry| try entry.value.format(&formatted, ctx.allocator);
+        break :blk formatted.items;
     } else blk: {
-        var buf = std.ArrayListUnmanaged(u8){};
-        try args[1].format(&buf, ctx.allocator);
-        const s = try buf.toOwnedSlice(ctx.allocator);
-        try ctx.strings.append(ctx.allocator, s);
-        break :blk s;
+        try args[1].format(&formatted, ctx.allocator);
+        break :blk formatted.items;
     };
     if (userWrapperFor(ctx.vm, spelled_path)) |class_name| {
         const opened = (try dispatchUserOpen(ctx, class_name, spelled_path, "wb")) orelse return NativeResult.scalar(.{ .bool = false });
@@ -1613,7 +1607,7 @@ fn native_gzopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         return native_fopen(ctx, args);
     }
     const wrapped = try std.fmt.allocPrint(ctx.allocator, "compress.zlib://{s}", .{path});
-    try ctx.strings.append(ctx.allocator, wrapped);
+    defer ctx.allocator.free(wrapped);
     var new_args: [4]Value = undefined;
     new_args[0] = .{ .string = Value.String.borrowed(wrapped) };
     var i: usize = 1;
@@ -1699,9 +1693,8 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     }
     if (std.mem.startsWith(u8, path, "data:")) {
         const payload = (parseDataUri(ctx.allocator, path) catch return NativeResult.scalar(.{ .bool = false })) orelse return NativeResult.scalar(.{ .bool = false });
-        try ctx.strings.append(ctx.allocator, payload);
         const obj = try ctx.createResource("FileHandle");
-        try obj.set(ctx.allocator, "__buffer", .{ .string = Value.String.borrowed(payload) });
+        try setAdoptedBuffer(ctx, obj, payload);
         try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = Value.String.borrowed("r") });
@@ -1710,9 +1703,8 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     if (std.mem.startsWith(u8, path, "phar://")) {
         const r = resolvePharPathWithCtx(path, ctx) orelse return NativeResult.scalar(.{ .bool = false });
         const payload = (readPharEntry(ctx.allocator, r.archive_path, r.internal_path) catch return NativeResult.scalar(.{ .bool = false })) orelse return NativeResult.scalar(.{ .bool = false });
-        try ctx.strings.append(ctx.allocator, payload);
         const obj = try ctx.createResource("FileHandle");
-        try obj.set(ctx.allocator, "__buffer", .{ .string = Value.String.borrowed(payload) });
+        try setAdoptedBuffer(ctx, obj, payload);
         try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
         try obj.set(ctx.allocator, "__open", .{ .bool = true });
         try obj.set(ctx.allocator, "__mode", .{ .string = Value.String.borrowed("r") });
@@ -1733,8 +1725,7 @@ fn native_fopen(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
                 obj.set(ctx.allocator, "__open", .{ .bool = false }) catch {};
                 return NativeResult.scalar(.{ .bool = false });
             };
-            try ctx.strings.append(ctx.allocator, decoded);
-            try obj.set(ctx.allocator, "__buffer", .{ .string = Value.String.borrowed(decoded) });
+            try setAdoptedBuffer(ctx, obj, decoded);
             try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
         }
         return NativeResult.borrowed(.{ .resource = obj });
@@ -1978,8 +1969,7 @@ pub fn streamWrite(ctx: *NativeContext, obj: *PhpObject, data: []const u8) Runti
         const combined = try ctx.allocator.alloc(u8, cur_str.len + data.len);
         @memcpy(combined[0..cur_str.len], cur_str);
         @memcpy(combined[cur_str.len..], data);
-        try ctx.strings.append(ctx.allocator, combined);
-        try obj.set(ctx.allocator, "__buffer", .{ .string = Value.String.borrowed(combined) });
+        try setAdoptedBuffer(ctx, obj, combined);
         return data.len;
     }
     const io = streamIo(obj) orelse return null;
@@ -2844,9 +2834,8 @@ fn native_fputcsv(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     }
     try buf.append(ctx.allocator, '\n');
 
+    defer buf.deinit(ctx.allocator);
     const written = io.write(buf.items) catch return NativeResult.scalar(.{ .bool = false });
-    const owned = try buf.toOwnedSlice(ctx.allocator);
-    try ctx.strings.append(ctx.allocator, owned);
     return NativeResult.scalar(.{ .int = @intCast(written) });
 }
 
@@ -2923,7 +2912,8 @@ fn native_chown(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     path_z[path.len] = 0;
     const uid: std.c.uid_t = if (args[1] == .int) @intCast(args[1].int) else blk: {
         if (args[1] != .string) return NativeResult.scalar(.{ .bool = false });
-        const name_z = try dupZ(ctx, args[1].string.bytes());
+        const name_z = try ctx.allocator.dupeZ(u8, args[1].string.bytes());
+        defer ctx.allocator.free(name_z);
         const pw = std.c.getpwnam(name_z.ptr) orelse return NativeResult.scalar(.{ .bool = false });
         break :blk pw.uid;
     };
@@ -2942,7 +2932,8 @@ fn native_chgrp(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     path_z[path.len] = 0;
     const gid: std.c.gid_t = if (args[1] == .int) @intCast(args[1].int) else blk: {
         if (args[1] != .string) return NativeResult.scalar(.{ .bool = false });
-        const name_z = try dupZ(ctx, args[1].string.bytes());
+        const name_z = try ctx.allocator.dupeZ(u8, args[1].string.bytes());
+        defer ctx.allocator.free(name_z);
         const gr = std.c.getgrnam(name_z.ptr) orelse return NativeResult.scalar(.{ .bool = false });
         break :blk gr.gid;
     };
@@ -2955,13 +2946,6 @@ fn chown_extern(p: [*:0]const u8, o: std.c.uid_t, g: std.c.gid_t) c_int {
     return chown(p, o, g);
 }
 
-fn dupZ(ctx: *NativeContext, s: []const u8) ![:0]u8 {
-    const z = try ctx.allocator.alloc(u8, s.len + 1);
-    @memcpy(z[0..s.len], s);
-    z[s.len] = 0;
-    try ctx.strings.append(ctx.allocator, z);
-    return z[0..s.len :0];
-}
 
 fn native_stat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
@@ -3286,9 +3270,18 @@ fn runShellWith(
     return .{ .stdout = stdout, .stderr = stderr, .exit = exit };
 }
 
-fn makeReadBufferHandle(ctx: *NativeContext, data: []const u8) !*PhpObject {
+// takes ownership of data
+// a handle's in-memory contents, taking ownership of bytes
+fn setAdoptedBuffer(ctx: *NativeContext, obj: *PhpObject, bytes: []u8) !void {
+    const owned = try Value.String.adopt(ctx.allocator, bytes);
+    defer owned.release();
+    try obj.set(ctx.allocator, "__buffer", .{ .string = owned });
+}
+
+fn makeReadBufferHandle(ctx: *NativeContext, data: []u8) !*PhpObject {
+    errdefer ctx.allocator.free(data);
     const obj = try ctx.createResource("FileHandle");
-    try obj.set(ctx.allocator, "__buffer", .{ .string = Value.String.borrowed(data) });
+    try setAdoptedBuffer(ctx, obj, data);
     try obj.set(ctx.allocator, "__pos", .{ .int = 0 });
     try obj.set(ctx.allocator, "__open", .{ .bool = true });
     try obj.set(ctx.allocator, "__mode", .{ .string = Value.String.borrowed("r") });
@@ -3314,7 +3307,6 @@ pub fn native_popen(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
     if (mode.len > 0 and (mode[0] == 'r')) {
         const result = runShellCapture(ctx.allocator, cmd, null) catch return NativeResult.scalar(.{ .bool = false });
         ctx.allocator.free(result.stderr);
-        try ctx.vm.strings.append(ctx.allocator, result.stdout);
         const obj = try makeReadBufferHandle(ctx, result.stdout);
         try obj.set(ctx.allocator, "__popen_exit", .{ .int = result.exit });
         return NativeResult.borrowed(.{ .resource = obj });
@@ -3563,13 +3555,10 @@ fn forkExecDesc(allocator: std.mem.Allocator, command: ProcCommand, specs: []con
     return .{ .pid = pid, .pipe_fds = pipes };
 }
 
+// a value as text for the rest of the native call
 pub fn ownedText(ctx: *NativeContext, v: Value) RuntimeError![]const u8 {
     if (v == .string) return v.string.bytes();
-    var buf = std.ArrayListUnmanaged(u8){};
-    try v.format(&buf, ctx.allocator);
-    const s = try buf.toOwnedSlice(ctx.allocator);
-    try ctx.strings.append(ctx.allocator, s);
-    return s;
+    return (try ctx.vm.transientFormatted(v)).bytes();
 }
 
 fn native_proc_open(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {

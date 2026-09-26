@@ -39,11 +39,7 @@ fn coerceForLookup(ctx: *NativeContext, def_backed: anytype, arg: Value) !Value 
             .string => arg,
             .bool => |b| .{ .string = Value.String.borrowed(if (b) "1" else "0") },
             .null => .{ .string = Value.String.borrowed("0") },
-            .int => |n| blk: {
-                const s = try std.fmt.allocPrint(ctx.allocator, "{d}", .{n});
-                try ctx.vm.strings.append(ctx.allocator, s);
-                break :blk .{ .string = Value.String.borrowed(s) };
-            },
+            .int => .{ .string = try ctx.vm.transientFormatted(arg) },
             .float => |f| blk: {
                 // the int|string parameter takes an integral-range float as
                 // an int (truncating), anything else as its string form
@@ -52,9 +48,7 @@ fn coerceForLookup(ctx: *NativeContext, def_backed: anytype, arg: Value) !Value 
                 if (Value.floatFitsInt(f)) {
                     try buf.print(ctx.allocator, "{d}", .{@as(i64, @intFromFloat(f))});
                 } else try arg.format(&buf, ctx.allocator);
-                const s = try ctx.allocator.dupe(u8, buf.items);
-                try ctx.vm.strings.append(ctx.allocator, s);
-                break :blk .{ .string = Value.String.borrowed(s) };
+                break :blk .{ .string = try ctx.vm.transientAdopted(try buf.toOwnedSlice(ctx.allocator)) };
             },
             else => arg,
         },
@@ -69,16 +63,8 @@ fn throwBuiltin(ctx: *NativeContext, class: []const u8, msg: []const u8) Runtime
 
 fn argDisplayString(ctx: *NativeContext, arg: Value) ![]const u8 {
     return switch (arg) {
-        .string => |s| blk: {
-            const out = try std.fmt.allocPrint(ctx.allocator, "\"{s}\"", .{s.bytes()});
-            try ctx.vm.strings.append(ctx.allocator, out);
-            break :blk out;
-        },
-        .int => |n| blk: {
-            const s = try std.fmt.allocPrint(ctx.allocator, "{d}", .{n});
-            try ctx.vm.strings.append(ctx.allocator, s);
-            break :blk s;
-        },
+        .string => |s| (try ctx.vm.transientAdopted(try std.fmt.allocPrint(ctx.allocator, "\"{s}\"", .{s.bytes()}))).bytes(),
+        .int => (try ctx.vm.transientFormatted(arg)).bytes(),
         else => "value",
     };
 }

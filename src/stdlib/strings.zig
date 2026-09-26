@@ -1534,9 +1534,7 @@ fn sprintfImpl(ctx: *NativeContext, fmt_str: []const u8, args: []const Value) !V
                 else => {
                     var msg_buf: [64]u8 = undefined;
                     const msg = std.fmt.bufPrint(&msg_buf, "Unknown format specifier \"{c}\"", .{spec}) catch "Unknown format specifier";
-                    const msg_dup = try ctx.allocator.dupe(u8, msg);
-                    try ctx.strings.append(ctx.allocator, msg_dup);
-                    try ctx.vm.setPendingException("ValueError", msg_dup);
+                    try ctx.vm.setPendingException("ValueError", msg);
                     return error.RuntimeError;
                 },
             }
@@ -4396,7 +4394,7 @@ fn rejectArrayParam(ctx: *NativeContext, v: Value, comptime func_name: []const u
             "{s}(): Argument #1 ($string) must be of type string, {s} given",
             .{ func_name, bt },
         );
-        try ctx.strings.append(ctx.allocator, msg);
+        defer ctx.allocator.free(msg);
         try ctx.vm.setPendingException("TypeError", msg);
         return true;
     }
@@ -4406,16 +4404,8 @@ fn rejectArrayParam(ctx: *NativeContext, v: Value, comptime func_name: []const u
 pub fn coerceToString(ctx: *NativeContext, v: Value) ![]const u8 {
     return switch (v) {
         .string => |s| s.bytes(),
-        .int => |n| blk: {
-            const s = try std.fmt.allocPrint(ctx.allocator, "{d}", .{n});
-            try ctx.strings.append(ctx.allocator, s);
-            break :blk s;
-        },
-        .float => |f| blk: {
-            const s = try std.fmt.allocPrint(ctx.allocator, "{d}", .{f});
-            try ctx.strings.append(ctx.allocator, s);
-            break :blk s;
-        },
+        .int => (try ctx.vm.transientFormatted(v)).bytes(),
+        .float => (try ctx.vm.transientFormatted(v)).bytes(),
         .bool => |b| if (b) "1" else "",
         .null => "",
         .object => |o| blk: {
@@ -5651,8 +5641,7 @@ fn native_strtok(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
             // strtok(str, tokens) - reset state with a new string
             if (args[0] != .string or args[1] != .string) return NativeResult.scalar(Value{ .bool = false });
             const owned = try ctx.allocator.dupe(u8, args[0].string.bytes());
-            try ctx.strings.append(ctx.allocator, owned);
-            ctx.vm.strtok_state = owned;
+            ctx.vm.setStrtokState(owned);
             ctx.vm.strtok_pos = 0;
             break :blk args[1].string.bytes();
         }

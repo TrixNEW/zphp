@@ -513,6 +513,7 @@ fn dtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
             // try trailing timezone
             var explicit_offset: ?i64 = null;
             var explicit_name: ?[]const u8 = null;
+            var offset_name: [6]u8 = undefined;
             if (pos < s.len) {
                 const rest = s[pos..];
                 if (rest.len >= 1 and (rest[0] == 'Z' or rest[0] == 'z')) {
@@ -526,31 +527,25 @@ fn dtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
                     const trimmed = std.mem.trim(u8, rest, " \t");
                     const is_numeric = trimmed.len > 0 and (trimmed[0] == '+' or trimmed[0] == '-');
                     if (!is_numeric) {
-                        const owned = try ctx.allocator.dupe(u8, trimmed);
-                        try ctx.vm.strings.append(ctx.allocator, owned);
-                        explicit_name = owned;
+                        explicit_name = trimmed;
                     } else {
                         const abs_off: i64 = if (off < 0) -off else off;
                         const oh: i64 = @divTrunc(abs_off, 3600);
                         const om: i64 = @mod(@divTrunc(abs_off, 60), 60);
-                        var nm_buf: [8]u8 = undefined;
-                        nm_buf[0] = if (off < 0) '-' else '+';
-                        nm_buf[1] = @intCast(@divTrunc(oh, 10) + '0');
-                        nm_buf[2] = @intCast(@mod(oh, 10) + '0');
-                        nm_buf[3] = ':';
-                        nm_buf[4] = @intCast(@divTrunc(om, 10) + '0');
-                        nm_buf[5] = @intCast(@mod(om, 10) + '0');
-                        const nm = nm_buf[0..6];
-                        const owned = try ctx.allocator.dupe(u8, nm);
-                        try ctx.vm.strings.append(ctx.allocator, owned);
-                        explicit_name = owned;
+                        offset_name[0] = if (off < 0) '-' else '+';
+                        offset_name[1] = @intCast(@divTrunc(oh, 10) + '0');
+                        offset_name[2] = @intCast(@mod(oh, 10) + '0');
+                        offset_name[3] = ':';
+                        offset_name[4] = @intCast(@divTrunc(om, 10) + '0');
+                        offset_name[5] = @intCast(@mod(om, 10) + '0');
+                        explicit_name = &offset_name;
                     }
                 }
             }
             ts = dateToTimestamp(year, month, day, hour, min, sec);
             if (explicit_offset) |off| {
                 ts -= off;
-                try obj.set(ctx.allocator, "__timezone", .{ .string = Value.String.borrowed(explicit_name.?) });
+                try obj.setCopiedString(ctx.allocator, "__timezone", explicit_name.?);
             } else {
                 ts -= @as(i64, tzOffsetForWallByName(ctx.allocator, tz_name, ts));
             }
