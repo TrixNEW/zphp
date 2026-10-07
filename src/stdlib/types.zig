@@ -837,13 +837,10 @@ fn method_exists(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
         var canonical_method = method_name;
         var private_at_this_class = false;
         if (ctx.vm.classes.get(cn)) |cls| {
-            var methods = cls.methods.iterator();
-            while (methods.next()) |entry| {
-                if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, method_name)) {
-                    canonical_method = entry.key_ptr.*;
-                    if (entry.value_ptr.visibility == .private) private_at_this_class = true;
-                    break;
-                }
+            // the methods map ignores case and keeps the declared spelling
+            if (cls.methods.getEntry(method_name)) |entry| {
+                canonical_method = entry.key_ptr.*;
+                if (entry.value_ptr.visibility == .private) private_at_this_class = true;
             }
         }
         // ancestor private methods are not visible from a subclass

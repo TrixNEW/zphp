@@ -1416,10 +1416,7 @@ fn rcHasMethod(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
     var current: ?[]const u8 = class_name;
     while (current) |cn| {
         if (ctx.vm.classes.get(cn)) |cls| {
-            var it = cls.methods.iterator();
-            while (it.next()) |entry| {
-                if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, args[0].string.bytes())) return NativeResult.scalar(.{ .bool = true });
-            }
+            if (cls.methods.contains(args[0].string.bytes())) return NativeResult.scalar(.{ .bool = true });
             current = cls.parent;
         } else break;
     }
