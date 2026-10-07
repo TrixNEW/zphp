@@ -906,12 +906,38 @@ fn native_mkdir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     const recursive = args.len >= 3 and args[2].isTruthy();
     if (bundle.find(path) != null) return NativeResult.scalar(.{ .bool = false });
     bundle.prepareWrite(path, .create);
+    if (platform.is_windows) {
+        if (recursive) {
+            std.fs.cwd().makePath(path) catch return NativeResult.scalar(Value{ .bool = false });
+        } else {
+            std.fs.cwd().makeDir(path) catch return NativeResult.scalar(Value{ .bool = false });
+        }
+        return NativeResult.scalar(.{ .bool = true });
+    }
+    // std.fs creates directories as 0755, php passes $mode (default 0777)
+    // through to mkdir(2) and lets the umask narrow it
+    const mode: std.posix.mode_t = if (args.len >= 2) @intCast(Value.toInt(args[1]) & 0o7777) else 0o777;
     if (recursive) {
-        std.fs.cwd().makePath(path) catch return NativeResult.scalar(Value{ .bool = false });
+        makePathMode(path, mode) catch return NativeResult.scalar(Value{ .bool = false });
     } else {
-        std.fs.cwd().makeDir(path) catch return NativeResult.scalar(Value{ .bool = false });
+        std.posix.mkdir(path, mode) catch return NativeResult.scalar(Value{ .bool = false });
     }
     return NativeResult.scalar(.{ .bool = true });
+}
+
+// every missing directory along the path gets the same mode, as in php. an
+// existing parent is fine, an existing final directory fails like mkdir(2)
+fn makePathMode(path: []const u8, mode: std.posix.mode_t) !void {
+    const full = std.mem.trimRight(u8, path, "/");
+    if (full.len == 0) return error.PathAlreadyExists;
+    var end: usize = 0;
+    while (end < full.len) {
+        end = std.mem.indexOfScalarPos(u8, full, end + 1, '/') orelse full.len;
+        std.posix.mkdir(full[0..end], mode) catch |err| switch (err) {
+            error.PathAlreadyExists => if (end == full.len) return err,
+            else => return err,
+        };
+    }
 }
 
 fn native_rmdir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -1063,7 +1089,6 @@ fn appendName(ctx: *NativeContext, names: *std.ArrayListUnmanaged(Value.String),
         return err;
     };
 }
-
 
 // dir($path) returns a Directory object with path, handle, and read/rewind/
 // close methods that delegate to the underlying DirectoryHandle. PHP's
@@ -2951,7 +2976,6 @@ extern "c" fn chown(path: [*:0]const u8, owner: std.c.uid_t, group: std.c.gid_t)
 fn chown_extern(p: [*:0]const u8, o: std.c.uid_t, g: std.c.gid_t) c_int {
     return chown(p, o, g);
 }
-
 
 fn native_stat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
