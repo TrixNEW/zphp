@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,8 +70,17 @@ def head_binary():
 
 
 def time_run(binary, script):
+    # a blocking wait returns the moment the child exits. subprocess's wait
+    # with a timeout polls with sleeps of up to 50ms, which rounded every
+    # timing up to the next poll, so the timeout is a separate kill timer
     start = time.perf_counter()
-    subprocess.run([binary, "run", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+    proc = subprocess.Popen([binary, "run", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    killer = threading.Timer(120, proc.kill)
+    killer.start()
+    try:
+        proc.wait()
+    finally:
+        killer.cancel()
     return (time.perf_counter() - start) * 1000
 
 
