@@ -172,9 +172,40 @@ fn addLibxml2(b: *std.Build, mod: *std.Build.Module) void {
 fn addOpenSsl(b: *std.Build, mod: *std.Build.Module) void {
     linkLib(b, mod, "libssl", "ssl", .static, .no);
     linkLib(b, mod, "libcrypto", "crypto", .static, .no);
+    if (mod.resolved_target.?.result.os.tag != .windows) linkCryptoDependencies(b, mod);
     if (pkgConfigVariable(b, "openssl", "libdir")) |lib| {
         mod.addLibraryPath(.{ .cwd_relative = lib });
     }
+}
+
+// a static libcrypto needs whatever openssl was built against: ubuntu 26.04's
+// openssl 3.5 pulls in zstd and jitterentropy (spelled -l:libjitterentropy.a),
+// older builds only zlib and dl
+fn linkCryptoDependencies(b: *std.Build, mod: *std.Build.Module) void {
+    const target = mod.resolved_target.?.result;
+    const r = std.process.Child.run(.{
+        .allocator = b.allocator,
+        .argv = &.{ "pkg-config", "--static", "--libs-only-l", "libcrypto" },
+    }) catch return;
+    if (r.term != .Exited or r.term.Exited != 0) return;
+    var it = std.mem.tokenizeAny(u8, r.stdout, " \t\r\n");
+    while (it.next()) |flag| {
+        const name = libFlagName(flag) orelse continue;
+        if (std.mem.eql(u8, name, "crypto") or std.zig.target.isLibCLibName(&target, name)) continue;
+        mod.linkSystemLibrary(name, .{ .preferred_link_mode = .static, .use_pkg_config = .no });
+    }
+}
+
+// the library a -l flag names: -lfoo and -l:libfoo.a both give foo
+fn libFlagName(flag: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, flag, "-l")) return null;
+    const name = flag[2..];
+    if (!std.mem.startsWith(u8, name, ":")) return name;
+    const file = name[1..];
+    if (!std.mem.startsWith(u8, file, "lib")) return null;
+    if (std.mem.endsWith(u8, file, ".a")) return file[3 .. file.len - 2];
+    if (std.mem.endsWith(u8, file, ".so")) return file[3 .. file.len - 3];
+    return null;
 }
 
 // ubuntu and homebrew ship mysqlclient.pc. alpine ships the same API as
@@ -218,8 +249,8 @@ fn addStaticDependencies(b: *std.Build, mod: *std.Build.Module) void {
         if (r.term != .Exited or r.term.Exited != 0) continue;
         var it = std.mem.tokenizeAny(u8, r.stdout, " \t\r\n");
         while (it.next()) |flag| {
-            if (std.mem.startsWith(u8, flag, "-l")) {
-                const name = staticArchiveName(flag[2..]);
+            if (libFlagName(flag)) |lib| {
+                const name = staticArchiveName(lib);
                 if (std.zig.target.isLibCLibName(&target, name)) continue;
                 mod.linkSystemLibrary(name, .{ .use_pkg_config = .no });
             } else if (std.mem.startsWith(u8, flag, "-L")) {
