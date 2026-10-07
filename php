@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-IMAGE="zphp-php84"
+IMAGE="zphp-php85"
 
 if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
     echo "building $IMAGE..."
