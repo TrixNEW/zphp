@@ -100,6 +100,8 @@ pub const Lexer = struct {
             '0'...'9' => self.lexNumber(start),
             '\'' => self.lexStringBody('\'', start),
             '"' => self.lexStringBody('"', start),
+            // a backtick command interpolates like a double-quoted string
+            '`' => self.lexStringBody('`', start),
 
             '.' => self.lexDot(start),
             '+' => self.lexPlus(start),
@@ -443,10 +445,10 @@ pub const Lexer = struct {
             if (ch == '\\') {
                 self.pos += 1;
                 if (self.pos < self.source.len) self.pos += 1;
-            } else if (quote == '"' and brace_depth == 0 and ch == '{' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '$') {
+            } else if (quote != '\'' and brace_depth == 0 and ch == '{' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '$') {
                 brace_depth += 1;
                 self.pos += 2;
-            } else if (quote == '"' and brace_depth > 0) {
+            } else if (quote != '\'' and brace_depth > 0) {
                 if (ch == '"' or ch == '\'') {
                     const inner_quote = ch;
                     self.pos += 1;
@@ -986,5 +988,10 @@ test "line comment terminated by CR" {
 }
 
 test "invalid character" {
-    try expectTokens("<?php `cmd`", &.{ .open_tag, .invalid, .identifier, .invalid });
+    try expectTokens("<?php \x01cmd\x01", &.{ .open_tag, .invalid, .identifier, .invalid });
+}
+
+test "backtick command" {
+    try expectTokens("<?php `ls $dir`;", &.{ .open_tag, .string, .semicolon });
+    try expectTokens("<?php `a \\` b {$x[\"`\"]}`;", &.{ .open_tag, .string, .semicolon });
 }

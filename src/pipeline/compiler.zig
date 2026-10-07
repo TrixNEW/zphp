@@ -956,7 +956,7 @@ pub const Compiler = struct {
                     break :blk .{ .string = Value.String.borrowed(inner) };
                 }
                 if (std.mem.indexOfScalar(u8, inner, '\\') != null) {
-                    const p = compiler_strings.processEscapes(self.allocator, inner) catch break :blk .{ .string = Value.String.borrowed(inner) };
+                    const p = compiler_strings.processEscapes(self.allocator, inner, quote) catch break :blk .{ .string = Value.String.borrowed(inner) };
                     self.string_allocs.append(self.allocator, p) catch break :blk .{ .string = Value.String.borrowed(inner) };
                     break :blk .{ .string = Value.String.borrowed(p) };
                 }

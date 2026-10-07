@@ -980,19 +980,35 @@ fn native_trait_exists(ctx: *NativeContext, args: []const Value) RuntimeError!Na
     return NativeResult.scalar(.{ .bool = ctx.vm.traits.contains(name) });
 }
 
-fn runShell(allocator: std.mem.Allocator, command: []const u8, capture: bool) !std.process.Child.RunResult {
+const ShellResult = struct { stdout: []u8, term: std.process.Child.Term };
+
+// runs a command through the shell and collects its stdout. stdin and stderr
+// stay attached to zphp's, as in php: a command's errors reach the terminal
+fn runShell(allocator: std.mem.Allocator, command: []const u8) !ShellResult {
     const argv = platform.shellArgv(command);
-    return std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &argv,
-        .max_output_bytes = if (capture) 64 * 1024 * 1024 else 1024,
-    });
+    var child = std.process.Child.init(&argv, allocator);
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Inherit;
+    try child.spawn();
+    const stdout = child.stdout.?.readToEndAlloc(allocator, 64 * 1024 * 1024) catch |err| {
+        _ = child.kill() catch {};
+        return err;
+    };
+    errdefer allocator.free(stdout);
+    return .{ .stdout = stdout, .term = try child.wait() };
+}
+
+fn requireCommand(ctx: *NativeContext, comptime func: []const u8, command: Value) RuntimeError!void {
+    if (command.string.bytes().len > 0) return;
+    try ctx.vm.setPendingException("ValueError", func ++ "(): Argument #1 ($command) must not be empty");
+    return error.RuntimeError;
 }
 
 fn native_shell_exec(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.null);
-    const result = runShell(ctx.allocator, args[0].string.bytes(), true) catch return NativeResult.scalar(.null);
-    defer ctx.allocator.free(result.stderr);
+    try requireCommand(ctx, "shell_exec", args[0]);
+    const result = runShell(ctx.allocator, args[0].string.bytes()) catch return NativeResult.scalar(.null);
     if (result.stdout.len == 0) {
         ctx.allocator.free(result.stdout);
         return NativeResult.scalar(.null);
@@ -1002,8 +1018,8 @@ fn native_shell_exec(ctx: *NativeContext, args: []const Value) RuntimeError!Nati
 
 fn native_exec(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const result = runShell(ctx.allocator, args[0].string.bytes(), true) catch return NativeResult.scalar(.{ .bool = false });
-    defer ctx.allocator.free(result.stderr);
+    try requireCommand(ctx, "exec", args[0]);
+    const result = runShell(ctx.allocator, args[0].string.bytes()) catch return NativeResult.scalar(.{ .bool = false });
     defer ctx.allocator.free(result.stdout);
 
     var lines = std.ArrayListUnmanaged([]const u8){};
@@ -1042,8 +1058,8 @@ fn native_exec(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 
 fn native_system(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const result = runShell(ctx.allocator, args[0].string.bytes(), true) catch return NativeResult.scalar(.{ .bool = false });
-    defer ctx.allocator.free(result.stderr);
+    try requireCommand(ctx, "system", args[0]);
+    const result = runShell(ctx.allocator, args[0].string.bytes()) catch return NativeResult.scalar(.{ .bool = false });
     defer ctx.allocator.free(result.stdout);
 
     try ctx.vm.output.appendSlice(ctx.allocator, result.stdout);
@@ -1068,8 +1084,8 @@ fn native_system(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
 
 fn native_passthru(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.null);
-    const result = runShell(ctx.allocator, args[0].string.bytes(), true) catch return NativeResult.scalar(.{ .bool = false });
-    defer ctx.allocator.free(result.stderr);
+    try requireCommand(ctx, "passthru", args[0]);
+    const result = runShell(ctx.allocator, args[0].string.bytes()) catch return NativeResult.scalar(.{ .bool = false });
     defer ctx.allocator.free(result.stdout);
     try ctx.vm.output.appendSlice(ctx.allocator, result.stdout);
     const exit_code: i64 = switch (result.term) {

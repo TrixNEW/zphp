@@ -19,13 +19,13 @@ pub fn compileString(self: *Compiler, node: Ast.Node) (Allocator.Error || error{
                 const idx = try self.addConstant(.{ .string = Value.String.borrowed(body) });
                 try self.emitConstant(idx);
             } else {
-                const processed = try processEscapes(self.allocator, body);
+                const processed = try processEscapes(self.allocator, body, 0);
                 try self.string_allocs.append(self.allocator, processed);
                 const idx = try self.addConstant(.{ .string = Value.String.borrowed(processed) });
                 try self.emitConstant(idx);
             }
         } else {
-            try compileInterpolatedString(self, body);
+            try compileInterpolatedString(self, body, 0);
         }
         return;
     }
@@ -38,6 +38,24 @@ pub fn compileString(self: *Compiler, node: Ast.Node) (Allocator.Error || error{
     }
     const quote = lexeme[0];
     const inner = lexeme[1 .. lexeme.len - 1];
+
+    if (quote == '`') {
+        // `cmd` is shell_exec("cmd"), resolved globally like php does
+        if (std.mem.indexOf(u8, inner, "$") != null) {
+            try compileInterpolatedString(self, inner, quote);
+        } else {
+            const text = if (std.mem.indexOf(u8, inner, "\\") != null) blk: {
+                const processed = try processEscapes(self.allocator, inner, quote);
+                try self.string_allocs.append(self.allocator, processed);
+                break :blk processed;
+            } else inner;
+            try self.emitConstant(try self.addConstant(.{ .string = Value.String.borrowed(text) }));
+        }
+        try self.emitOp(.call);
+        try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed("shell_exec") }));
+        try self.emitByte(1);
+        return;
+    }
 
     if (quote == '\'') {
         const processed = try processSingleQuoteEscapes(self.allocator, inner);
@@ -57,7 +75,7 @@ pub fn compileString(self: *Compiler, node: Ast.Node) (Allocator.Error || error{
             const idx = try self.addConstant(.{ .string = Value.String.borrowed(inner) });
             try self.emitConstant(idx);
         } else {
-            const processed = try processEscapes(self.allocator, inner);
+            const processed = try processEscapes(self.allocator, inner, quote);
             try self.string_allocs.append(self.allocator, processed);
             const idx = try self.addConstant(.{ .string = Value.String.borrowed(processed) });
             try self.emitConstant(idx);
@@ -65,7 +83,7 @@ pub fn compileString(self: *Compiler, node: Ast.Node) (Allocator.Error || error{
         return;
     }
 
-    try compileInterpolatedString(self, inner);
+    try compileInterpolatedString(self, inner, quote);
 }
 
 pub fn extractHeredocBody(self: *Compiler, token_idx: u32) (Allocator.Error || error{CompileError})![]const u8 {
@@ -137,7 +155,7 @@ pub fn extractHeredocBody(self: *Compiler, token_idx: u32) (Allocator.Error || e
     return owned;
 }
 
-fn compileInterpolatedString(self: *Compiler, s: []const u8) (Allocator.Error || error{CompileError})!void {
+fn compileInterpolatedString(self: *Compiler, s: []const u8, quote: u8) (Allocator.Error || error{CompileError})!void {
     var segment_count: u32 = 0;
     var i: usize = 0;
 
@@ -178,7 +196,7 @@ fn compileInterpolatedString(self: *Compiler, s: []const u8) (Allocator.Error ||
 
         if (s[i] == '{' and i + 1 < s.len and s[i + 1] == '$') {
             if (i > lit_start) {
-                try emitLiteralSegment(self, s[lit_start..i]);
+                try emitLiteralSegment(self, quote, s[lit_start..i]);
                 if (segment_count > 0) try self.emitOp(.concat);
                 segment_count += 1;
             }
@@ -196,7 +214,7 @@ fn compileInterpolatedString(self: *Compiler, s: []const u8) (Allocator.Error ||
 
         if (s[i] == '$' and i + 1 < s.len and s[i + 1] == '{') {
             if (i > lit_start) {
-                try emitLiteralSegment(self, s[lit_start..i]);
+                try emitLiteralSegment(self, quote, s[lit_start..i]);
                 if (segment_count > 0) try self.emitOp(.concat);
                 segment_count += 1;
             }
@@ -218,7 +236,7 @@ fn compileInterpolatedString(self: *Compiler, s: []const u8) (Allocator.Error ||
 
         if (s[i] == '$' and i + 1 < s.len and isVarStart(s[i + 1])) {
             if (i > lit_start) {
-                try emitLiteralSegment(self, s[lit_start..i]);
+                try emitLiteralSegment(self, quote, s[lit_start..i]);
                 if (segment_count > 0) try self.emitOp(.concat);
                 segment_count += 1;
             }
@@ -259,7 +277,7 @@ fn compileInterpolatedString(self: *Compiler, s: []const u8) (Allocator.Error ||
     }
 
     if (lit_start < s.len) {
-        try emitLiteralSegment(self, s[lit_start..]);
+        try emitLiteralSegment(self, quote, s[lit_start..]);
         if (segment_count > 0) try self.emitOp(.concat);
         segment_count += 1;
     }
@@ -270,9 +288,9 @@ fn compileInterpolatedString(self: *Compiler, s: []const u8) (Allocator.Error ||
     }
 }
 
-fn emitLiteralSegment(self: *Compiler, s: []const u8) (Allocator.Error || error{CompileError})!void {
+fn emitLiteralSegment(self: *Compiler, quote: u8, s: []const u8) (Allocator.Error || error{CompileError})!void {
     if (std.mem.indexOf(u8, s, "\\") != null) {
-        const processed = try processEscapes(self.allocator, s);
+        const processed = try processEscapes(self.allocator, s, quote);
         try self.string_allocs.append(self.allocator, processed);
         const idx = try self.addConstant(.{ .string = Value.String.borrowed(processed) });
         try self.emitConstant(idx);
@@ -526,7 +544,10 @@ pub fn processSingleQuoteEscapes(allocator: Allocator, s: []const u8) Allocator.
     return slice;
 }
 
-pub fn processEscapes(allocator: Allocator, s: []const u8) ![]const u8 {
+// escape sequences of a double-quoted string, heredoc, or backtick command.
+// quote is the delimiter (`"` or '`'), or 0 for a heredoc: an escaped quote
+// character only loses its backslash inside its own kind of string
+pub fn processEscapes(allocator: Allocator, s: []const u8, quote: u8) ![]const u8 {
     var buf = std.ArrayListUnmanaged(u8){};
     var i: usize = 0;
     while (i < s.len) {
@@ -564,8 +585,9 @@ pub fn processEscapes(allocator: Allocator, s: []const u8) ![]const u8 {
                     try buf.append(allocator, '$');
                     i += 2;
                 },
-                '"' => {
-                    try buf.append(allocator, '"');
+                '"', '`' => {
+                    if (s[i + 1] != quote) try buf.append(allocator, '\\');
+                    try buf.append(allocator, s[i + 1]);
                     i += 2;
                 },
                 'x' => {
