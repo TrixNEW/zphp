@@ -65,7 +65,7 @@ pub fn compileAssign(self: *Compiler, node: Ast.Node) Error!void {
             try emitPlaceRead(self, place);
             try self.compileNode(node.data.rhs);
             try emitCompoundOp(self, op_tag);
-            try emitPlaceWrite(self, place);
+            try emitPlaceWrite(self, place, true);
             return;
         }
     }
@@ -535,8 +535,22 @@ fn emitPlaceRead(self: *Compiler, place: Place) Error!void {
     }
 }
 
-// [operands, value] -> [value]
-fn emitPlaceWrite(self: *Compiler, place: Place) Error!void {
+// stores the value on top of the stack into a place target and pops it:
+// [value] -> []. the place's operands are evaluated after the value, as in
+// a foreach or destructuring target
+pub fn storeTopInPlace(self: *Compiler, target_idx: u32) Error!void {
+    const place = (try emitPlaceOperands(self, target_idx)) orelse unreachable;
+    // [value, operands] -> [operands, value]
+    for (0..place.operandCount()) |_| {
+        try self.emitOp(.bury);
+        try self.emitByte(place.operandCount());
+    }
+    try emitPlaceWrite(self, place, false);
+    try self.emitOp(.pop);
+}
+
+// [operands, value] -> [value]. rw marks the write of a read-modify-write
+fn emitPlaceWrite(self: *Compiler, place: Place, rw: bool) Error!void {
     switch (place) {
         .var_var => {
             try self.emitOp(.swap);
@@ -552,7 +566,7 @@ fn emitPlaceWrite(self: *Compiler, place: Place) Error!void {
             try self.emitOp(.set_prop_dynamic);
         },
         .static_prop => |sp| {
-            try self.emitOp(.set_static_prop);
+            try self.emitOp(if (rw) .set_static_prop_rw else .set_static_prop);
             try self.emitU16(sp.class);
             try self.emitU16(sp.prop);
         },
@@ -577,7 +591,7 @@ fn compilePlaceIncDec(self: *Compiler, place: Place, op_tag: Token.Tag, postfix:
         try self.emitByte(place.operandCount() + 1);
     }
     try self.emitOp(if (op_tag == .plus_plus) .inc_value else .dec_value);
-    try emitPlaceWrite(self, place);
+    try emitPlaceWrite(self, place, true);
     if (postfix) try self.emitOp(.pop);
 }
 
@@ -744,12 +758,15 @@ fn compileCoalesceFetch(self: *Compiler, node_idx: u32) Error!void {
 
 // Descend through dimensions, but stop at object interiors: mutating
 // $o->restricted->field[k] does not mutate $o->restricted itself.
+// the container of an unset($c[..][k]): every array on the path is
+// separated from its co-holders (the root by the caller for a variable),
+// and nothing missing is created
 fn compileUnsetDimensionBase(self: *Compiler, node_idx: u32) Error!void {
     const node = self.ast.nodes[node_idx];
     if (node.tag == .array_access) {
         try compileUnsetDimensionBase(self, node.data.lhs);
         try self.compileNode(node.data.rhs);
-        try self.emitOp(.array_get_coalesce);
+        try self.emitOp(.array_get_unset);
     } else if (node.tag == .property_access) {
         try self.compileNode(node.data.lhs);
         if (self.isDynamicProp(node)) {
@@ -758,7 +775,16 @@ fn compileUnsetDimensionBase(self: *Compiler, node_idx: u32) Error!void {
             try self.emitConstant(try self.addConstant(.{ .string = Value.String.borrowed(self.propName(node)) }));
         }
         try self.emitOp(.check_prop_dimension);
+        try self.emitOp(.separate_prop_array);
         try self.emitOp(.get_prop_coalesce_dynamic);
+    } else if (node.tag == .static_prop_access and node.main_token != 0 and self.ast.nodes[node.data.lhs].tag != .variable) {
+        const class_name = try staticClassOperand(self, self.ast.nodes[node.data.lhs]);
+        var prop_name = self.ast.tokenSlice(node.main_token);
+        if (prop_name.len > 0 and prop_name[0] == '$') prop_name = prop_name[1..];
+        try self.emitOp(.separate_static_prop);
+        try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(class_name) }));
+        try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(prop_name) }));
+        try compileCoalesceFetch(self, node_idx);
     } else {
         try compileCoalesceFetch(self, node_idx);
     }
@@ -1116,10 +1142,12 @@ fn compileUnset(self: *Compiler, args: []const u32) Error!void {
                 try self.emitU16(prop_idx);
             }
         } else if (arg.tag == .array_access) {
-            // COW: removing an element mutates the array in place, so a base
-            // variable sharing its array must be separated first (non-vivifying
-            // - unset of a missing var must not create it)
-            const base = self.ast.nodes[arg.data.lhs];
+            // COW: removing an element mutates the array in place, so the root
+            // variable of the dimension chain must be separated first if it
+            // shares its array (non-vivifying - unset of a missing var must not
+            // create it). the levels below are separated as the chain descends
+            var base = self.ast.nodes[arg.data.lhs];
+            while (base.tag == .array_access) base = self.ast.nodes[base.data.lhs];
             if (base.tag == .variable) {
                 const bname = self.ast.tokenSlice(base.main_token);
                 if (Compiler.isSuperglobal(bname)) {

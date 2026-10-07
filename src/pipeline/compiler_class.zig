@@ -690,7 +690,7 @@ fn extractParamTypes(self: *Compiler, param_nodes: []const u32) Error![]const []
     var has_any = false;
     for (param_nodes) |p| {
         const rhs = self.ast.nodes[p].data.rhs;
-        if ((rhs >> 7) != 0) {
+        if ((rhs >> 8) != 0) {
             has_any = true;
             break;
         }
@@ -700,7 +700,7 @@ fn extractParamTypes(self: *Compiler, param_nodes: []const u32) Error![]const []
     const types = try self.allocator.alloc([]const u8, param_nodes.len);
     for (param_nodes, 0..) |p, i| {
         const rhs = self.ast.nodes[p].data.rhs;
-        const type_extra_idx = rhs >> 7;
+        const type_extra_idx = rhs >> 8;
         if (type_extra_idx == 0) {
             types[i] = "";
         } else {
@@ -1572,8 +1572,9 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             const is_ro: u8 = if ((pnode.data.rhs & 16) != 0) 4 else 0;
             const set_promo = (pnode.data.rhs >> 5) & 3;
             const asymm_bits: u8 = if (set_promo > 0) (@as(u8, @intCast(set_promo - 1)) << 3) | 0x20 else 0;
-            try self.emitByte(@as(u8, @intCast(promotion - 1)) | is_ro | asymm_bits | 0x40);
-            const param_type_extra = pnode.data.rhs >> 7;
+            const is_final: u8 = if ((pnode.data.rhs & 0x80) != 0) 0x80 else 0;
+            try self.emitByte(@as(u8, @intCast(promotion - 1)) | is_ro | asymm_bits | 0x40 | is_final);
+            const param_type_extra = pnode.data.rhs >> 8;
             if (param_type_extra == 0) {
                 try self.emitU16(0xffff);
             } else {
@@ -1853,7 +1854,7 @@ pub fn compileClassDecl(self: *Compiler, node: Ast.Node) Error!void {
             var sp_name = self.ast.tokenSlice(member.main_token);
             if (sp_name.len > 0 and sp_name[0] == '$') sp_name = sp_name[1..];
             const sp_idx = try self.addConstant(.{ .string = Value.String.borrowed(sp_name) });
-            try self.emitOp(.set_static_prop);
+            try self.emitOp(.set_static_prop_default);
             try self.emitU16(cname_idx);
             try self.emitU16(sp_idx);
             try self.emitOp(.pop);
@@ -2045,8 +2046,9 @@ pub fn compileAnonymousClass(self: *Compiler, node: Ast.Node) Error!void {
             const is_ro: u8 = if ((pnode.data.rhs & 16) != 0) 4 else 0;
             const set_promo = (pnode.data.rhs >> 5) & 3;
             const asymm_bits: u8 = if (set_promo > 0) (@as(u8, @intCast(set_promo - 1)) << 3) | 0x20 else 0;
-            try self.emitByte(@as(u8, @intCast(promotion - 1)) | is_ro | asymm_bits | 0x40);
-            const param_type_extra = pnode.data.rhs >> 7;
+            const is_final: u8 = if ((pnode.data.rhs & 0x80) != 0) 0x80 else 0;
+            try self.emitByte(@as(u8, @intCast(promotion - 1)) | is_ro | asymm_bits | 0x40 | is_final);
+            const param_type_extra = pnode.data.rhs >> 8;
             if (param_type_extra == 0) {
                 try self.emitU16(0xffff);
             } else {
@@ -2936,7 +2938,7 @@ fn compileDeferredPropDefaults(self: *Compiler, class_name: []const u8, members:
         var p_name = self.ast.tokenSlice(member.main_token);
         if (p_name.len > 0 and p_name[0] == '$') p_name = p_name[1..];
         const p_idx = try sub.addConstant(.{ .string = Value.String.borrowed(p_name) });
-        try sub.emitOp(if (member.tag == .static_class_property) .set_static_prop else .set_prop_default);
+        try sub.emitOp(if (member.tag == .static_class_property) .set_static_prop_default else .set_prop_default);
         try sub.emitU16(cname_idx);
         try sub.emitU16(p_idx);
         try sub.emitOp(.pop);

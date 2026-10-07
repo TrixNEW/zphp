@@ -1428,11 +1428,11 @@ const Parser = struct {
             }
             if (!has_set_vis) set_visibility = visibility;
 
-            // PHP 8.4 asymmetric visibility is only valid on instance
-            // properties, and set visibility may not be wider than read visibility.
+            // asymmetric visibility needs a property (static ones too, since
+            // php 8.5), and set visibility may not be wider than read visibility
             const starts_property = self.peek() == .variable or self.isTypeName() or
                 self.peek() == .question or self.peek() == .l_paren;
-            if (has_set_vis and (!starts_property or set_visibility < visibility or is_static)) {
+            if (has_set_vis and (!starts_property or set_visibility < visibility)) {
                 try self.addError(.unexpected_token);
                 return error.ParseError;
             }
@@ -1625,11 +1625,11 @@ const Parser = struct {
             }
             if (!has_set_vis) set_visibility = visibility;
 
-            // PHP 8.4 asymmetric visibility is only valid on instance
-            // properties, and set visibility may not be wider than read visibility.
+            // asymmetric visibility needs a property (static ones too, since
+            // php 8.5), and set visibility may not be wider than read visibility
             const starts_property = self.peek() == .variable or self.isTypeName() or
                 self.peek() == .question or self.peek() == .l_paren;
-            if (has_set_vis and (!starts_property or set_visibility < visibility or is_static)) {
+            if (has_set_vis and (!starts_property or set_visibility < visibility)) {
                 try self.addError(.unexpected_token);
                 return error.ParseError;
             }
@@ -1877,7 +1877,7 @@ const Parser = struct {
 
             const starts_property = self.peek() == .variable or self.isTypeName() or
                 self.peek() == .question or self.peek() == .l_paren;
-            if (has_set_vis and (!starts_property or set_visibility < visibility or is_static)) {
+            if (has_set_vis and (!starts_property or set_visibility < visibility)) {
                 try self.addError(.unexpected_token);
                 return error.ParseError;
             }
@@ -2579,12 +2579,19 @@ const Parser = struct {
         var promotion: u32 = 0;
         var set_promotion: u32 = 0;
         var param_readonly = false;
-        // handle readonly + visibility keywords (each may have (set) qualifier)
+        var param_final = false;
+        // handle readonly, final (php 8.5), and visibility keywords (each
+        // visibility may have a (set) qualifier)
         var loop_iters: u32 = 0;
-        while (loop_iters < 4) : (loop_iters += 1) {
+        while (loop_iters < 5) : (loop_iters += 1) {
             const tag = self.peek();
             if (tag == .kw_readonly) {
                 param_readonly = true;
+                _ = self.advance();
+                continue;
+            }
+            if (tag == .kw_final) {
+                param_final = true;
                 _ = self.advance();
                 continue;
             }
@@ -2612,6 +2619,8 @@ const Parser = struct {
             break;
         }
         const type_range = self.collectTypeHint();
+        // final alone promotes a public property, as php 8.5 does
+        if (param_final and promotion == 0) promotion = 1;
 
         // PHP 8.4 asymmetric promoted-property validation.
         if (set_promotion > 0) {
@@ -2634,16 +2643,18 @@ const Parser = struct {
             default = try self.parseExpression();
         }
         // rhs encoding: bit 0 = variadic, bit 1 = by-reference, bits 2-3 = read promotion,
-        // bit 4 = readonly, bits 5-6 = set promotion (0 = same as read), bits 7+ = type_extra
+        // bit 4 = readonly, bits 5-6 = set promotion (0 = same as read), bit 7 = final,
+        // bits 8+ = type_extra
         var flags: u32 = 0;
         if (is_variadic) flags |= 1;
         if (is_ref) flags |= 2;
         flags |= (promotion << 2);
         if (param_readonly) flags |= 16;
         flags |= (set_promotion << 5);
+        if (param_final) flags |= 1 << 7;
         if (type_range[0] != type_range[1]) {
             const type_extra = try self.addExtra(&type_range);
-            flags |= ((type_extra + 1) << 7);
+            flags |= ((type_extra + 1) << 8);
         }
         return self.addNode(.{ .tag = .variable, .main_token = tok, .data = .{ .lhs = default, .rhs = flags } });
     }

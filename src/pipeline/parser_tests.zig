@@ -762,14 +762,21 @@ test "php84 asymmetric visibility requires typed property" {
     try expectError("<?php class T { public private(set) $x; }");
 }
 
-test "php84 asymmetric visibility rejects static property" {
-    try expectError("<?php class T { public private(set) static string $x; }");
+test "php85 asymmetric visibility on static properties" {
+    try expectNoErrors("<?php class T { public private(set) static string $x; protected(set) static ?int $y = null; }");
+    try expectNoErrors("<?php trait T { public private(set) static string $x; }");
+    // still needs a type, and set visibility no wider than read visibility
+    try expectError("<?php class T { public private(set) static $x; }");
+    try expectError("<?php class T { protected public(set) static int $x; }");
 }
 
 test "php84 trait asymmetric visibility validation" {
     try expectError("<?php trait T { protected public(set) string $x; }");
     try expectError("<?php trait T { public private(set) $x; }");
-    try expectError("<?php trait T { public private(set) static string $x; }");
+}
+
+test "php85 final promoted properties" {
+    try expectNoErrors("<?php class T { function __construct(final public int $a, final int $b, public final readonly int $c, final private(set) int $d) {} }");
 }
 
 test "php84 promoted asymmetric visibility validation" {

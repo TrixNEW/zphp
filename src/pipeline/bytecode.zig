@@ -349,6 +349,20 @@ pub const OpCode = enum(u8) {
     get_static_prop_dyn_name_quiet, // u16 class; property name on the stack
     get_static_prop_dyn_both_quiet, // class, then property name, on the stack
 
+    // installs a static property's declared default (u16 class, u16 property;
+    // peeks the value). unlike set_static_prop it isn't a write by the
+    // running scope, so visibility doesn't apply
+    set_static_prop_default,
+    // set_static_prop for a read-modify-write (op=, ++, --), which php
+    // reports as an indirect modification
+    set_static_prop_rw,
+
+    // unset($c[..][k]) separates every array on the path from its co-holders
+    // before removing the element, without creating anything that is missing
+    array_get_unset, // pop key, pop array; like array_get_coalesce, but a shared inner array is separated and written back
+    separate_prop_array, // peeks [object, name]: separates the property's array in place, pushes nothing
+    separate_static_prop, // u16 class, u16 property: checks the write is allowed (indirect), separates the array in place, pushes nothing
+
     pub fn width(self: OpCode) usize {
         return switch (self) {
             .arg_variable => 6,
@@ -413,6 +427,9 @@ pub const OpCode = enum(u8) {
             .set_class_const,
             .set_prop_default,
             .set_static_prop,
+            .set_static_prop_default,
+            .set_static_prop_rw,
+            .separate_static_prop,
             .get_static,
             .set_static,
             .static_call_spread,

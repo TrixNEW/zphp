@@ -260,7 +260,7 @@ pub fn compileForeach(self: *Compiler, node: Ast.Node) Error!void {
         try self.compileDestructure(val_node);
         try self.emitOp(.pop);
         if (key_n != 0) {
-            try self.compileStoreTop(self.ast.nodes[key_n]);
+            try self.compileStoreTop(key_n);
         } else {
             try self.emitOp(.pop);
         }
@@ -290,9 +290,9 @@ pub fn compileForeach(self: *Compiler, node: Ast.Node) Error!void {
         try self.emitOp(.foreach_ref_bind); // $v = &iterable[key] (reverts prior elem if uncaptured)
         try self.emitU16(vidx);
     } else {
-        try self.compileStoreTop(val_node);
+        try self.compileStoreTop(val_n);
         if (key_n != 0) {
-            try self.compileStoreTop(self.ast.nodes[key_n]);
+            try self.compileStoreTop(key_n);
         } else {
             try self.emitOp(.pop);
         }

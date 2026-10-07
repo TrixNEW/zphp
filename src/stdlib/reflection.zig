@@ -982,6 +982,21 @@ fn findDeclaringClass(vm: *VM, class_name: []const u8, method_name: []const u8) 
     return declaring;
 }
 
+// a static property's metadata in the shape instance properties use
+fn staticPropertyDef(cls: *const ClassDef, name: []const u8, default: Value) ClassDef.PropertyDef {
+    const vis = cls.static_prop_visibility.get(name) orelse .public;
+    const set_vis = cls.static_prop_set_visibility.get(name);
+    return .{
+        .name = name,
+        .default = default,
+        .has_default = true,
+        .visibility = vis,
+        .set_visibility = set_vis orelse vis,
+        .has_set_visibility = set_vis != null,
+        .type_str = cls.static_prop_types.get(name) orelse "",
+    };
+}
+
 const PropertyDefResult = struct {
     prop: ClassDef.PropertyDef,
     declaring_class: []const u8,
@@ -996,8 +1011,7 @@ fn findPropertyDef(vm: *VM, class_name: []const u8, prop_name: []const u8) ?Prop
             if (std.mem.eql(u8, prop.name, prop_name)) return .{ .prop = prop, .declaring_class = name };
         }
         if (cls.static_props.get(prop_name)) |v| {
-            const synth: ClassDef.PropertyDef = .{ .name = prop_name, .default = v, .has_default = true };
-            return .{ .prop = synth, .declaring_class = name, .is_static = true };
+            return .{ .prop = staticPropertyDef(&cls, prop_name, v), .declaring_class = name, .is_static = true };
         }
         if (vm.interfaces.get(name)) |iface| {
             for (iface.parents.items) |parent| {
@@ -1700,14 +1714,7 @@ fn rcGetProperties(ctx: *NativeContext, args: []const Value) RuntimeError!Native
             if (!matchPropFilter(filter, vis, true)) continue;
             if (!seen.contains(sp_name)) {
                 try seen.put(ctx.allocator, sp_name, {});
-                const pdef = ClassDef.PropertyDef{
-                    .name = sp_name,
-                    .default = entry.value_ptr.*,
-                    .has_default = true,
-                    .visibility = vis,
-                    .type_str = cls.static_prop_types.get(sp_name) orelse "",
-                };
-                const obj = try buildPropertyObj(ctx, class_name, pdef, name);
+                const obj = try buildPropertyObj(ctx, class_name, staticPropertyDef(&cls, sp_name, entry.value_ptr.*), name);
                 try obj.set(ctx.allocator, "_is_static", .{ .bool = true });
                 try arr.append(ctx.allocator, .{ .object = obj });
             }
@@ -4256,16 +4263,35 @@ fn rmGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResu
     return NativeResult.scalar(.{ .int = if (this.get("_hook_method") == .string) (methodModifiers(info) & ~@as(i64, 7)) | 1 else methodModifiers(info) });
 }
 
+fn nextName(n: *usize) usize {
+    n.* += 1;
+    return n.* - 1;
+}
+
 fn reflectionGetModifierNames(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 1 or args[0] != .int) return NativeResult.borrowed(.{ .array = try ctx.createArray() });
     const m = args[0].int;
     const arr = try ctx.createArray();
-    if ((m & 16) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("static") });
-    if ((m & 64) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("abstract") });
-    if ((m & 32) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("final") });
-    if ((m & 4) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("private") });
-    if ((m & 2) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("protected") });
-    if ((m & 1) != 0) try arr.append(ctx.allocator, .{ .string = Value.String.borrowed("public") });
+    // php's order; a visibility is named only when exactly one is set
+    var names: [8][]const u8 = undefined;
+    var n: usize = 0;
+    if ((m & 0x40) != 0) names[nextName(&n)] = "abstract";
+    if ((m & 0x20) != 0) names[nextName(&n)] = "final";
+    if ((m & 0x200) != 0) names[nextName(&n)] = "virtual";
+    switch (m & 0x7) {
+        1 => names[nextName(&n)] = "public",
+        2 => names[nextName(&n)] = "protected",
+        4 => names[nextName(&n)] = "private",
+        else => {},
+    }
+    switch (m & 0x1800) {
+        0x800 => names[nextName(&n)] = "protected(set)",
+        0x1000 => names[nextName(&n)] = "private(set)",
+        else => {},
+    }
+    if ((m & 0x10) != 0) names[nextName(&n)] = "static";
+    if ((m & (0x80 | 0x10000)) != 0) names[nextName(&n)] = "readonly";
+    for (names[0..n]) |name| try arr.append(ctx.allocator, .{ .string = Value.String.borrowed(name) });
     return NativeResult.borrowed(.{ .array = arr });
 }
 

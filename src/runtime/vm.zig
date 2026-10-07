@@ -372,6 +372,8 @@ pub const ClassDef = struct {
     const_visibility: std.StringHashMapUnmanaged(Visibility) = .{},
     constant_types: std.StringHashMapUnmanaged([]const u8) = .{},
     static_prop_visibility: std.StringHashMapUnmanaged(Visibility) = .{},
+    // set visibility of static properties declared with an asymmetric one
+    static_prop_set_visibility: std.StringHashMapUnmanaged(Visibility) = .{},
     const_final: std.StringHashMapUnmanaged(void) = .{},
     constant_attributes: std.StringHashMapUnmanaged([]const AttributeDef) = .{},
 
@@ -466,6 +468,7 @@ pub const ClassDef = struct {
         self.const_visibility.deinit(allocator);
         self.constant_types.deinit(allocator);
         self.static_prop_visibility.deinit(allocator);
+        self.static_prop_set_visibility.deinit(allocator);
         var ca_iter = self.constant_attributes.valueIterator();
         while (ca_iter.next()) |attrs| freeAttributeDefs(allocator, attrs.*);
         self.constant_attributes.deinit(allocator);
@@ -5094,7 +5097,7 @@ pub const VM = struct {
                         self.push(.null);
                     }
                 },
-                .array_get_coalesce => {
+                .array_get_coalesce, .array_get_unset => {
                     // like array_get but with isset-style semantics for `??`:
                     // OOB string offsets and missing array keys are null, and we
                     // route object access through offsetExists+offsetGet so user
@@ -5108,7 +5111,23 @@ pub const VM = struct {
                             continue;
                         }
                         if (key == .resource) self.warnResourceOffset(key) catch if (try self.resumeRaised()) continue;
-                        self.push(arr_val.array.get(Value.toArrayKey(key)));
+                        const arr_key = Value.toArrayKey(key);
+                        const existing = arr_val.array.get(arr_key);
+                        // an unset descends through this array to change it: give
+                        // the parent (already separated) its own copy, unless the
+                        // element is a reference meant to be shared
+                        if (op == .array_get_unset and existing == .array) {
+                            const is_ref = self.array_ref_active and
+                                (if (arr_val.array.getPtr(arr_key)) |ep| ep.ref != null else false);
+                            const inner = if (is_ref) existing.array else try self.cowSeparate(existing.array);
+                            if (inner != existing.array) {
+                                try self.arraySetOwned(arr_val.array, arr_key, .{ .array = inner });
+                                inner.refcount -= 1;
+                            }
+                            self.push(.{ .array = inner });
+                            continue;
+                        }
+                        self.push(existing);
                     } else if (arr_val == .object and self.hasMethod(arr_val.object.class_name, "offsetGet")) {
                         if (self.hasMethod(arr_val.object.class_name, "offsetExists")) {
                             const exists = self.callMethod(arr_val.object, "offsetExists", &.{key}) catch {
@@ -5124,7 +5143,16 @@ pub const VM = struct {
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
                         };
-                        self.pushCallResult(result);
+                        // an unset can't reach into the array offsetGet returned:
+                        // php works on a copy and says so
+                        if (op == .array_get_unset and result == .array) {
+                            const msg = try std.fmt.allocPrint(self.allocator, "Indirect modification of overloaded element of {s} has no effect", .{arr_val.object.class_name});
+                            defer self.allocator.free(msg);
+                            self.raiseError(8, msg) catch if (try self.resumeRaised()) continue;
+                            // the result is borrowed: a temporary copy leaves the
+                            // object's array alone
+                            self.pushCallResult(.{ .array = try self.shallowCloneCow(result.array) });
+                        } else self.pushCallResult(result);
                     } else if (arr_val == .string) {
                         const string = arr_val.string;
                         const s = string.bytes();
@@ -5969,7 +5997,7 @@ pub const VM = struct {
                         if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                         return error.RuntimeError;
                     };
-                    _ = self.staticPropTarget(class_name, prop_name) catch {
+                    _ = self.staticPropTarget(class_name, prop_name, .indirect) catch {
                         if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                         return error.RuntimeError;
                     };
@@ -6702,7 +6730,7 @@ pub const VM = struct {
                         if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                         return error.RuntimeError;
                     };
-                    _ = self.staticPropTarget(class_name, prop_name) catch {
+                    _ = self.staticPropTarget(class_name, prop_name, .indirect) catch {
                         if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                         return error.RuntimeError;
                     };
@@ -6892,6 +6920,53 @@ pub const VM = struct {
                     }
                     if (self.hasPendingReleases()) self.drainPendingDestruct();
                 },
+                .separate_prop_array => {
+                    const obj_val = self.stack[self.sp - 2];
+                    const name = try self.valueToString(self.stack[self.sp - 1]);
+                    if (obj_val == .object) {
+                        const obj = obj_val.object.storage();
+                        const vr = self.findPropertyVisibility(obj.class_name, name);
+                        const scope: ?[]const u8 = if (vr.visibility == .private) vr.defining_class else null;
+                        const cur = obj.getForScope(name, scope);
+                        // only plain, visible storage is ours to separate: hooks,
+                        // __get, and referenced properties are left to the fetch
+                        if (cur == .array and self.checkVisibility(vr.defining_class, vr.visibility) and
+                            !self.hasPropHook(obj.class_name, name, .get) and !self.propIsReferenced(obj, name))
+                        {
+                            const sep = try self.cowSeparate(cur.array);
+                            if (sep != cur.array) {
+                                try obj.setForScope(self.allocator, name, .{ .array = sep }, scope);
+                                sep.refcount -= 1;
+                            }
+                        }
+                    }
+                },
+
+                .separate_static_prop => {
+                    const class_idx = self.readU16();
+                    const prop_idx = self.readU16();
+                    const class_name = self.resolveStaticClassName(self.currentChunk().constants.items[class_idx].string.bytes());
+                    const prop_name = self.currentChunk().constants.items[prop_idx].string.bytes();
+                    self.resolveStaticDefaults(class_name) catch {
+                        if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                        return error.RuntimeError;
+                    };
+                    _ = self.staticPropTarget(class_name, prop_name, .indirect) catch {
+                        if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
+                        return error.RuntimeError;
+                    };
+                    if (self.getStaticPropPtr(class_name, prop_name)) |slot| {
+                        if (slot.* == .array and !self.staticPropIsReferenced(class_name, prop_name)) {
+                            const sep = try self.cowSeparate(slot.array);
+                            if (sep != slot.array) {
+                                const old = slot.*;
+                                slot.* = .{ .array = sep };
+                                self.releaseValue(old);
+                            }
+                        }
+                    }
+                },
+
                 .check_prop_dimension => {
                     const obj_val = self.stack[self.sp - 2];
                     const name = try self.valueToString(self.stack[self.sp - 1]);
@@ -11089,7 +11164,7 @@ pub const VM = struct {
                     return;
                 },
 
-                .set_static_prop => {
+                .set_static_prop, .set_static_prop_default, .set_static_prop_rw => {
                     const class_idx = self.readU16();
                     const prop_idx = self.readU16();
                     var class_name = self.currentChunk().constants.items[class_idx].string.bytes();
@@ -11101,7 +11176,11 @@ pub const VM = struct {
                         return error.RuntimeError;
                     };
 
-                    const cls = self.staticPropTarget(class_name, prop_name) catch {
+                    const cls = self.staticPropTarget(class_name, prop_name, switch (op) {
+                        .set_static_prop_default => .declare,
+                        .set_static_prop_rw => .indirect,
+                        else => .write,
+                    }) catch {
                         if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                         return error.RuntimeError;
                     };
@@ -11175,7 +11254,7 @@ pub const VM = struct {
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
                         };
-                        const cls = self.staticPropTarget(class_name, prop_name) catch {
+                        const cls = self.staticPropTarget(class_name, prop_name, .write) catch {
                             self.stackRelease(rhs_val);
                             if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
                             return error.RuntimeError;
@@ -13457,6 +13536,8 @@ pub const VM = struct {
                 try def.static_props.put(self.allocator, sprop_names[pi], try self.copyDefault(default_val));
                 if (sprop_type[pi].len > 0) try def.static_prop_types.put(self.allocator, sprop_names[pi], sprop_type[pi]);
                 if (vis_byte != 0) try def.static_prop_visibility.put(self.allocator, sprop_names[pi], @enumFromInt(vis_byte));
+                // bit 5 marks an explicit set visibility, held in bits 3-4
+                if ((sprop_visibility[pi] & 0x20) != 0) try def.static_prop_set_visibility.put(self.allocator, sprop_names[pi], @enumFromInt((sprop_visibility[pi] >> 3) & 0x03));
             }
         }
 
@@ -17541,22 +17622,71 @@ pub const VM = struct {
     // property. a quiet read (isset, ??, empty) finds a missing property null,
     // but a missing class is an error there too
     fn pushStaticProp(self: *VM, class_name: []const u8, prop_name: []const u8, quiet: bool) RuntimeError!void {
-        if (try self.readStaticProp(class_name, prop_name)) |val| return self.push(val);
+        if (try self.readStaticProp(class_name, prop_name)) |val| {
+            if (try self.staticPropDenial(class_name, prop_name, .read)) |msg| {
+                defer self.allocator.free(msg);
+                // isset() and ?? treat a property out of scope as missing
+                if (quiet) return self.push(.null);
+                try self.setPendingException("Error", msg);
+                return error.RuntimeError;
+            }
+            return self.push(val);
+        }
         if (quiet and (self.classes.contains(class_name) or self.interfaces.contains(class_name))) return self.push(.null);
         return self.undeclaredStaticProp(class_name, prop_name);
     }
 
     // the class that declares a static property a write names, loading the
-    // named class first; php refuses to create one
-    fn staticPropTarget(self: *VM, class_name: []const u8, prop_name: []const u8) RuntimeError!*ClassDef {
+    // named class first; php refuses to create one. the write must be allowed
+    // by the property's visibility and set visibility
+    fn staticPropTarget(self: *VM, class_name: []const u8, prop_name: []const u8, access: StaticAccess) RuntimeError!*ClassDef {
         if (!self.classes.contains(class_name)) try self.tryAutoload(class_name);
         var current: ?[]const u8 = class_name;
         while (current) |name| {
             const cls = self.classes.getPtr(name) orelse break;
-            if (cls.static_props.contains(prop_name)) return cls;
+            if (cls.static_props.contains(prop_name)) {
+                if (access == .declare) return cls;
+                if (try self.staticPropDenial(class_name, prop_name, access)) |msg| {
+                    defer self.allocator.free(msg);
+                    try self.setPendingException("Error", msg);
+                    return error.RuntimeError;
+                }
+                return cls;
+            }
             current = cls.parent;
         }
         return self.undeclaredStaticProp(class_name, prop_name);
+    }
+
+    // declare installs a declared default, which no scope rule applies to
+    const StaticAccess = enum { read, write, indirect, declare };
+
+    // the error php raises for a static property access the current scope
+    // may not make, or null when it may. any access needs the declaring
+    // class's visibility (reported against the class as written); a write
+    // also needs its set visibility (reported against the declaring class).
+    // the caller owns the message
+    fn staticPropDenial(self: *VM, class_name: []const u8, prop_name: []const u8, access: StaticAccess) RuntimeError!?[]u8 {
+        var current: ?[]const u8 = class_name;
+        const entry = while (current) |name| {
+            const e = self.classes.getEntry(name) orelse return null;
+            if (e.value_ptr.static_props.contains(prop_name)) break e;
+            current = e.value_ptr.parent;
+        } else return null;
+        const cls = entry.value_ptr;
+        const declaring = entry.key_ptr.*;
+        const vis = cls.static_prop_visibility.get(prop_name) orelse .public;
+        if (!self.checkVisibility(declaring, vis)) {
+            return try std.fmt.allocPrint(self.allocator, "Cannot access {s} property {s}::${s}", .{ @tagName(vis), self.declaredClassName(class_name), prop_name });
+        }
+        if (access == .read) return null;
+        const set_vis = cls.static_prop_set_visibility.get(prop_name) orelse return null;
+        if (self.checkVisibility(declaring, set_vis)) return null;
+        const verb: []const u8 = if (access == .indirect) "indirectly modify" else "modify";
+        if (self.currentDefiningClass()) |scope| {
+            return try std.fmt.allocPrint(self.allocator, "Cannot {s} {s}(set) property {s}::${s} from scope {s}", .{ verb, @tagName(set_vis), declaring, prop_name, scope });
+        }
+        return try std.fmt.allocPrint(self.allocator, "Cannot {s} {s}(set) property {s}::${s} from global scope", .{ verb, @tagName(set_vis), declaring, prop_name });
     }
 
     fn undeclaredStaticProp(self: *VM, class_name: []const u8, prop_name: []const u8) RuntimeError {

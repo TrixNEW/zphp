@@ -781,7 +781,7 @@ pub const Compiler = struct {
                     try self.emitOp(.dup);
                     try self.compileNode(slot_node.data.rhs);
                     try self.emitOp(.array_get);
-                    try self.compileStoreTop(inner_target);
+                    try self.compileStoreTop(slot_node.data.lhs);
                     continue;
                 }
                 if (slot_node.tag == .ref_target) {
@@ -793,7 +793,7 @@ pub const Compiler = struct {
                 try self.emitOp(.constant);
                 try self.emitU16(key_idx);
                 try self.emitOp(.array_get);
-                try self.compileStoreTop(slot_node);
+                try self.compileStoreTop(slot);
             }
         } else if (target.tag == .array_literal) {
             const elements = self.ast.extraSlice(target.data.lhs);
@@ -819,7 +819,7 @@ pub const Compiler = struct {
                     try self.emitU16(key_idx);
                 }
                 try self.emitOp(.array_get);
-                try self.compileStoreTop(val_node);
+                try self.compileStoreTop(elem.data.lhs);
             }
         }
     }
@@ -827,7 +827,8 @@ pub const Compiler = struct {
     // stores the value on top of the stack into a write target (a variable,
     // property, array element or append, or a nested destructuring list) and
     // pops it: [.., value] -> [..]
-    pub fn compileStoreTop(self: *Compiler, target: Ast.Node) Error!void {
+    pub fn compileStoreTop(self: *Compiler, target_idx: u32) Error!void {
+        const target = self.ast.nodes[target_idx];
         switch (target.tag) {
             .list_destructure, .array_literal => {
                 try self.compileDestructure(target);
@@ -842,6 +843,7 @@ pub const Compiler = struct {
                 try self.emitOp(.pop);
             },
             .array_access, .array_push_target => try self.compileDestructureArraySlot(target),
+            .static_prop_access, .variable_variable => try compiler_expr.storeTopInPlace(self, target_idx),
             else => {
                 try self.emitSetVar(self.ast.tokenSlice(target.main_token));
                 try self.emitOp(.pop);

@@ -808,12 +808,21 @@ const Formatter = struct {
         const is_ref = (flags & 2) != 0;
         const promotion = (flags >> 2) & 0x3;
         const is_readonly = (flags & 16) != 0;
-        const type_extra_plus_one = flags >> 7;
+        const set_promotion = (flags >> 5) & 0x3;
+        const is_final = (flags & 0x80) != 0;
+        const type_extra_plus_one = flags >> 8;
 
+        if (is_final) self.write("final ");
         switch (promotion) {
             1 => self.write("public "),
             2 => self.write("protected "),
             3 => self.write("private "),
+            else => {},
+        }
+        switch (set_promotion) {
+            1 => self.write("public(set) "),
+            2 => self.write("protected(set) "),
+            3 => self.write("private(set) "),
             else => {},
         }
         if (is_readonly) self.write("readonly ");
