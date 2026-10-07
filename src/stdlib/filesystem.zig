@@ -908,6 +908,8 @@ fn native_mkdir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     bundle.prepareWrite(path, .create);
     if (platform.is_windows) {
         if (recursive) {
+            // makePath succeeds on an existing directory; php's mkdir fails
+            if (std.fs.cwd().access(path, .{})) |_| return NativeResult.scalar(Value{ .bool = false }) else |_| {}
             std.fs.cwd().makePath(path) catch return NativeResult.scalar(Value{ .bool = false });
         } else {
             std.fs.cwd().makeDir(path) catch return NativeResult.scalar(Value{ .bool = false });
