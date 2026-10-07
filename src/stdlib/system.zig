@@ -1,6 +1,7 @@
 const std = @import("std");
 const bundle = @import("../bundle.zig");
 const platform = @import("../platform.zig");
+const php_version = @import("../php_version.zig");
 const Value = @import("../runtime/value.zig").Value;
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const NativeContext = @import("../runtime/vm.zig").NativeContext;
@@ -616,7 +617,7 @@ fn native_phpinfo(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     _ = args;
     // minimal output: enough for callers to verify the function exists. real
     // PHP prints a giant HTML/text dump of the environment
-    try ctx.vm.output.appendSlice(ctx.allocator, "PHP Version => 8.4.1\n");
+    try ctx.vm.output.appendSlice(ctx.allocator, "PHP Version => " ++ php_version.string ++ "\n");
     return NativeResult.scalar(.{ .bool = true });
 }
 

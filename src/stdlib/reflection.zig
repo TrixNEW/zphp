@@ -1,6 +1,7 @@
 const std = @import("std");
 const Value = @import("../runtime/value.zig").Value;
 const PhpObject = @import("../runtime/value.zig").PhpObject;
+const php_version = @import("../php_version.zig");
 const PhpArray = @import("../runtime/value.zig").PhpArray;
 const vm_mod = @import("../runtime/vm.zig");
 const native_params = @import("native_params.zig");
@@ -822,7 +823,7 @@ fn rextGetName(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult 
 }
 
 fn rextGetVersion(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    return NativeResult.literal("8.4.1");
+    return NativeResult.literal(php_version.string);
 }
 
 fn reflectionEmptyArray(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {

@@ -1,6 +1,7 @@
 const NativeResult = @import("../runtime/native_result.zig").NativeResult;
 const std = @import("std");
 const paths = @import("../paths.zig");
+const php_version = @import("../php_version.zig");
 const bundle = @import("../bundle.zig");
 const platform = @import("../platform.zig");
 const Value = @import("../runtime/value.zig").Value;
@@ -1500,7 +1501,7 @@ fn native_php_sapi_name(_: *NativeContext, _: []const Value) RuntimeError!Native
 }
 
 fn native_php_version(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    return NativeResult.literal("8.4.1");
+    return NativeResult.literal(php_version.string);
 }
 
 fn native_getmypid(_: *NativeContext, _: []const Value) RuntimeError!NativeResult {
