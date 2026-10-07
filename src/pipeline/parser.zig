@@ -878,6 +878,8 @@ const Parser = struct {
         }
 
         const end_tag: Tag = if (is_alt) .kw_endswitch else .r_brace;
+        // php's grammar allows one stray `;` before the first case
+        if (self.peek() == .semicolon) _ = self.advance();
 
         var cases = std.ArrayListUnmanaged(u32){};
         defer cases.deinit(self.allocator);
@@ -907,6 +909,15 @@ const Parser = struct {
         return self.addNode(.{ .tag = .switch_stmt, .main_token = switch_tok, .data = .{ .lhs = cond, .rhs = extra } });
     }
 
+    // php accepts `case 1;` and `default;` as well as the colon (deprecated in 8.5)
+    fn expectCaseSeparator(self: *Parser) Error!void {
+        if (self.peek() == .semicolon) {
+            _ = self.advance();
+            return;
+        }
+        _ = try self.expect(.colon);
+    }
+
     fn parseSwitchCase(self: *Parser, is_alt: bool) Error!u32 {
         const case_tok = self.advance(); // case
 
@@ -914,13 +925,13 @@ const Parser = struct {
         defer values.deinit(self.allocator);
 
         try values.append(self.allocator, try self.parseExpression());
-        _ = try self.expect(.colon);
+        try self.expectCaseSeparator();
 
         // collect fallthrough cases: case 1: case 2: case 3: body
         while (self.peek() == .kw_case) {
             _ = self.advance();
             try values.append(self.allocator, try self.parseExpression());
-            _ = try self.expect(.colon);
+            try self.expectCaseSeparator();
         }
 
         var stmts = std.ArrayListUnmanaged(u32){};
@@ -952,7 +963,7 @@ const Parser = struct {
 
     fn parseSwitchDefault(self: *Parser, is_alt: bool) Error!u32 {
         const def_tok = self.advance(); // default
-        _ = try self.expect(.colon);
+        try self.expectCaseSeparator();
 
         var stmts = std.ArrayListUnmanaged(u32){};
         defer stmts.deinit(self.allocator);
