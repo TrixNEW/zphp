@@ -44,6 +44,8 @@ done
 
 passed=0
 failed=0
+# captured output is data: build the report with real newlines, not echo -e escapes
+nl=$'\n'
 failures=""
 TMO=60
 
@@ -65,7 +67,7 @@ check() {
         passed=$((passed + 1)); echo "  pass  $name"
     else
         failed=$((failed + 1)); echo "  FAIL  $name"
-        failures="$failures\n$name\nzphp: $z\nphp: $p"
+        failures="$failures${nl}$name${nl}zphp: $z${nl}php: $p"
     fi
 }
 
@@ -78,7 +80,7 @@ check "warm-request-2" GET /hello/Linus "" 'Linus'
 
 echo "$passed passed, $failed failed"
 if [ "$failed" -gt 0 ]; then
-    echo -e "$failures"
+    printf '%s\n' "$failures"
     echo "--- zphp log ---"; tail -30 /tmp/zphp_symfony_serve.log 2>&1 || true
     echo "--- php log ---"; tail -30 /tmp/php_symfony_serve.log 2>&1 || true
     exit 1

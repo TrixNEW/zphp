@@ -66,6 +66,8 @@ done
 
 passed=0
 failed=0
+# captured output is data: build the report with real newlines, not echo -e escapes
+nl=$'\n'
 failures=""
 
 # normalize output: strip nonces, query strings with timestamps, generated ids
@@ -92,7 +94,7 @@ check_status() {
     else
         failed=$((failed + 1))
         echo "  FAIL  $name (zphp=$zc php=$pc)"
-        failures="$failures\n$name: zphp=$zc php=$pc"
+        failures="$failures${nl}$name: zphp=$zc php=$pc"
     fi
 }
 
@@ -105,7 +107,7 @@ check_body_contains() {
     else
         failed=$((failed + 1))
         echo "  FAIL  $name (missing '$needle')"
-        failures="$failures\n$name body did not contain '$needle'"
+        failures="$failures${nl}$name body did not contain '$needle'"
     fi
 }
 
@@ -128,7 +130,7 @@ check_body_contains "rest-has-posts"    "/wp-json/wp/v2/posts"  "Hello zphp"
 echo
 echo "$passed passed, $failed failed"
 if [ $failed -gt 0 ]; then
-    echo -e "$failures"
+    printf '%s\n' "$failures"
     echo "--- zphp serve log (last 30 lines) ---"
     tail -30 /tmp/zphp_serve.log 2>&1 || true
     echo "--- php serve log (last 30 lines) ---"

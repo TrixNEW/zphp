@@ -87,6 +87,8 @@ done
 
 passed=0
 failed=0
+# captured output is data: build the report with real newlines, not echo -e escapes
+nl=$'\n'
 failures=""
 
 # generous timeout: warm requests are ~1.5s on the current interpreter (the
@@ -102,7 +104,7 @@ check_status() {
         passed=$((passed + 1)); echo "  pass  $name (status=$zc)"
     else
         failed=$((failed + 1)); echo "  FAIL  $name (zphp=$zc php=$pc)"
-        failures="$failures\n$name: zphp=$zc php=$pc"
+        failures="$failures${nl}$name: zphp=$zc php=$pc"
     fi
 }
 
@@ -114,7 +116,7 @@ check_body_contains() {
         passed=$((passed + 1)); echo "  pass  $name (contains '$needle')"
     else
         failed=$((failed + 1)); echo "  FAIL  $name (missing '$needle')"
-        failures="$failures\n$name body did not contain '$needle'"
+        failures="$failures${nl}$name body did not contain '$needle'"
     fi
 }
 
@@ -156,13 +158,13 @@ if [ "$zcsrf" = "200|200|csrf-ok" ] && [ "$zcsrf" = "$pcsrf" ]; then
     passed=$((passed + 1)); echo "  pass  csrf-roundtrip ($zcsrf)"
 else
     failed=$((failed + 1)); echo "  FAIL  csrf-roundtrip (zphp=$zcsrf php=$pcsrf)"
-    failures="$failures\ncsrf-roundtrip: zphp=$zcsrf php=$pcsrf"
+    failures="$failures${nl}csrf-roundtrip: zphp=$zcsrf php=$pcsrf"
 fi
 
 echo
 echo "$passed passed, $failed failed"
 if [ $failed -gt 0 ]; then
-    echo -e "$failures"
+    printf '%s\n' "$failures"
     echo "--- zphp serve log (last 30 lines) ---"; tail -30 /tmp/zphp_laravel_serve.log 2>&1 || true
     echo "--- php serve log (last 30 lines) ---"; tail -30 /tmp/php_laravel_serve.log 2>&1 || true
     exit 1

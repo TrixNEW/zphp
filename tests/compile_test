@@ -22,6 +22,8 @@ trap 'exit 130' INT TERM
 
 passed=0
 failed=0
+# captured output is data: build the report with real newlines, not echo -e escapes
+nl=$'\n'
 errors=""
 
 # builds php_file into a standalone executable (extra arguments go to
@@ -48,7 +50,7 @@ run_test() {
     if ! build_out="$("$ZPHP" build --compile "$php_file" --out "$dir/$bin_name" "$@" 2>&1)" || [ ! -f "$dir/$bin_name" ]; then
         failed=$((failed + 1))
         echo "  FAIL  $name (binary not created)"
-        errors="$errors\n--- $name ---\nbinary not created\n$build_out\n"
+        errors="$errors${nl}--- $name ---${nl}binary not created${nl}$build_out${nl}"
         rm -rf "$dir"
         return
     fi
@@ -65,7 +67,7 @@ run_test() {
     else
         failed=$((failed + 1))
         echo "  FAIL  $name"
-        errors="$errors\n--- $name ---\nexpected (zphp run):\n$run_out\ngot (compiled):\n$bin_out\n"
+        errors="$errors${nl}--- $name ---${nl}expected (zphp run):${nl}$run_out${nl}got (compiled):${nl}$bin_out${nl}"
     fi
 }
 
@@ -289,6 +291,6 @@ echo ""
 echo "$passed passed, $failed failed"
 
 if [ $failed -gt 0 ]; then
-    echo -e "$errors"
+    printf '%s\n' "$errors"
     exit 1
 fi

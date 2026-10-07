@@ -13,6 +13,8 @@ fi
 
 passed=0
 failed=0
+# captured output is data: build the report with real newlines, not echo -e escapes
+nl=$'\n'
 errors=""
 
 # start server
@@ -50,7 +52,7 @@ check() {
     else
         failed=$((failed + 1))
         echo "  FAIL  $name"
-        errors="$errors\n--- $name ---\nexpected: $expected\ngot: $actual\n"
+        errors="$errors${nl}--- $name ---${nl}expected: $expected${nl}got: $actual${nl}"
     fi
 }
 
@@ -65,7 +67,7 @@ check_contains() {
     else
         failed=$((failed + 1))
         echo "  FAIL  $name"
-        errors="$errors\n--- $name ---\nexpected to contain: $needle\ngot: $haystack\n"
+        errors="$errors${nl}--- $name ---${nl}expected to contain: $needle${nl}got: $haystack${nl}"
     fi
 }
 
@@ -111,7 +113,7 @@ check_contains "header_remove keeps X-Keep" "X-Keep: yes" "$remove_hdrs"
 if echo "$remove_hdrs" | grep -q "X-Drop:"; then
     failed=$((failed + 1))
     echo "  FAIL  header_remove drops X-Drop"
-    errors="$errors\n--- header_remove drops X-Drop ---\nexpected X-Drop to be absent\ngot: $remove_hdrs\n"
+    errors="$errors${nl}--- header_remove drops X-Drop ---${nl}expected X-Drop to be absent${nl}got: $remove_hdrs${nl}"
 else
     passed=$((passed + 1))
     echo "  pass  header_remove drops X-Drop"
@@ -122,7 +124,7 @@ removeall_hdrs=$(curl -si http://localhost:$PORT/header-remove-all 2>&1)
 if echo "$removeall_hdrs" | grep -q "X-A:\|X-B:"; then
     failed=$((failed + 1))
     echo "  FAIL  header_remove all"
-    errors="$errors\n--- header_remove all ---\nexpected no X-A/X-B headers\ngot: $removeall_hdrs\n"
+    errors="$errors${nl}--- header_remove all ---${nl}expected no X-A/X-B headers${nl}got: $removeall_hdrs${nl}"
 else
     passed=$((passed + 1))
     echo "  pass  header_remove all"
@@ -510,7 +512,7 @@ fi
 passed=$((passed + curl_passes))
 failed=$((failed + curl_fails))
 if [ $curl_fails -gt 0 ]; then
-    errors="$errors\n--- curl client ---\n$curl_out\n"
+    errors="$errors${nl}--- curl client ---${nl}$curl_out${nl}"
 fi
 
 # test: request isolation - two dirty requests reach both workers, later probes must match the first
@@ -586,14 +588,14 @@ if [ $exit_code -eq 0 ] || [ $exit_code -eq 143 ]; then
 else
     failed=$((failed + 1))
     echo "  FAIL  graceful shutdown (exit code: $exit_code)"
-    errors="$errors\n--- graceful shutdown ---\nexpected exit 0 or 143, got: $exit_code\n"
+    errors="$errors${nl}--- graceful shutdown ---${nl}expected exit 0 or 143, got: $exit_code${nl}"
 fi
 
 echo ""
 echo "$passed passed, $failed failed"
 
 if [ $failed -gt 0 ]; then
-    echo -e "$errors"
+    printf '%s\n' "$errors"
     EXIT_CODE=1
     exit 1
 fi
