@@ -1,6 +1,7 @@
 const std = @import("std");
 const native_params = @import("../stdlib/native_params.zig");
 const platform = @import("../platform.zig");
+const class_names = @import("class_names.zig");
 const includes = @import("includes.zig");
 const Value = @import("value.zig").Value;
 const Region = @import("region.zig").Region;
@@ -317,7 +318,7 @@ pub const AttributeDef = struct {
 
 pub const ClassDef = struct {
     name: []const u8,
-    methods: std.StringHashMapUnmanaged(MethodInfo) = .{},
+    methods: class_names.MethodMap(MethodInfo) = .{},
     method_order: std.ArrayListUnmanaged([]const u8) = .{},
     properties: std.ArrayListUnmanaged(PropertyDef) = .{},
     static_props: std.StringArrayHashMapUnmanaged(Value) = .{},
@@ -665,9 +666,9 @@ pub const VM = struct {
     shutdown_callbacks: std.ArrayListUnmanaged(Value) = .{},
     strtok_state: ?[]const u8 = null,
     strtok_pos: usize = 0,
-    classes: std.StringHashMapUnmanaged(ClassDef) = .{},
-    interfaces: std.StringHashMapUnmanaged(InterfaceDef) = .{},
-    traits: std.StringHashMapUnmanaged(void) = .{},
+    classes: class_names.Map(ClassDef) = .{},
+    interfaces: class_names.Map(InterfaceDef) = .{},
+    traits: class_names.Map(void) = .{},
     trait_uses: std.StringHashMapUnmanaged([]const []const u8) = .{},
     trait_props: std.StringHashMapUnmanaged([]const ClassDef.PropertyDef) = .{},
     trait_static_props: std.StringHashMapUnmanaged([]const TraitStaticProp) = .{},
@@ -7903,7 +7904,7 @@ pub const VM = struct {
                     var parent_names: [16][]const u8 = undefined;
                     for (0..parent_count) |pi| {
                         const pidx = self.readU16();
-                        parent_names[pi] = self.currentChunk().constants.items[pidx].string.bytes();
+                        parent_names[pi] = self.declaredClassName(self.currentChunk().constants.items[pidx].string.bytes());
                         try idef.parents.append(self.allocator, parent_names[pi]);
                     }
                     if (parent_count > 0) {
@@ -13460,7 +13461,8 @@ pub const VM = struct {
 
         const parent_idx = self.readU16();
         if (parent_idx != 0xffff) {
-            const parent_name = self.currentChunk().constants.items[parent_idx].string.bytes();
+            const written_parent = self.currentChunk().constants.items[parent_idx].string.bytes();
+            const parent_name = self.declaredClassName(written_parent);
             def.parent = parent_name;
             if (self.classes.get(parent_name)) |parent_cls| {
                 if (parent_cls.is_final) {
@@ -13497,7 +13499,7 @@ pub const VM = struct {
         const iface_count = self.readByte();
         for (0..iface_count) |_| {
             const iname_idx = self.readU16();
-            try def.interfaces.append(self.allocator, self.currentChunk().constants.items[iname_idx].string.bytes());
+            try def.interfaces.append(self.allocator, self.declaredClassName(self.currentChunk().constants.items[iname_idx].string.bytes()));
         }
 
         const trait_count = self.readByte();
@@ -13532,7 +13534,7 @@ pub const VM = struct {
 
         for (trait_names[0..trait_count]) |trait_name| {
             try self.applyTrait(&def, class_name, trait_name, alias_rules[0..alias_count], insteadof_rules[0..insteadof_count]);
-            try def.used_traits.append(self.allocator, trait_name);
+            try def.used_traits.append(self.allocator, self.declaredClassName(trait_name));
         }
 
         const class_attrs = try self.readAttributeDefs();
@@ -13891,7 +13893,7 @@ pub const VM = struct {
 
         const iface_count = self.readByte();
         for (0..iface_count) |_| {
-            try def.interfaces.append(self.allocator, self.currentChunk().constants.items[self.readU16()].string.bytes());
+            try def.interfaces.append(self.allocator, self.declaredClassName(self.currentChunk().constants.items[self.readU16()].string.bytes()));
         }
         // every enum implements UnitEnum; backed enums also implement BackedEnum
         try def.interfaces.append(self.allocator, "UnitEnum");
@@ -14117,11 +14119,14 @@ pub const VM = struct {
     const InsteadofRule = struct { method: []const u8, preferred: []const u8, excluded: [16][]const u8, excluded_count: u8 };
     const AliasRule = struct { method: []const u8, trait: []const u8, alias: []const u8, visibility: u8 = 0 };
 
-    fn applyTrait(self: *VM, def: *ClassDef, class_name: []const u8, trait_name: []const u8, alias_rules: []const AliasRule, insteadof_rules: []const InsteadofRule) !void {
+    fn applyTrait(self: *VM, def: *ClassDef, class_name: []const u8, written_trait: []const u8, alias_rules: []const AliasRule, insteadof_rules: []const InsteadofRule) !void {
         // autoload the trait if it hasn't been loaded yet
-        if (!self.traits.contains(trait_name)) {
-            try self.tryAutoload(trait_name);
+        if (!self.traits.contains(written_trait)) {
+            try self.tryAutoload(written_trait);
         }
+        // the trait's methods, properties, and constants are keyed by the
+        // spelling it was declared with
+        const trait_name = self.traits.getKey(written_trait) orelse written_trait;
         if (self.trait_uses.get(trait_name)) |subs| {
             for (subs) |sub| {
                 try self.applyTrait(def, class_name, sub, &.{}, &.{});
@@ -14154,7 +14159,7 @@ pub const VM = struct {
         for (trait_methods) |tm| {
             var vis_override: ?ClassDef.Visibility = null;
             for (alias_rules) |rule| {
-                if (std.mem.eql(u8, rule.method, tm.name) and (rule.trait.len == 0 or std.mem.eql(u8, rule.trait, trait_name))) {
+                if (std.ascii.eqlIgnoreCase(rule.method, tm.name) and (rule.trait.len == 0 or std.ascii.eqlIgnoreCase(rule.trait, trait_name))) {
                     const rule_vis: ClassDef.Visibility = switch (rule.visibility) {
                         1 => .protected,
                         2 => .private,
@@ -14187,10 +14192,10 @@ pub const VM = struct {
 
             var excluded = false;
             for (insteadof_rules) |rule| {
-                if (std.mem.eql(u8, rule.method, tm.name)) {
-                    if (std.mem.eql(u8, rule.preferred, trait_name)) break;
+                if (std.ascii.eqlIgnoreCase(rule.method, tm.name)) {
+                    if (std.ascii.eqlIgnoreCase(rule.preferred, trait_name)) break;
                     for (rule.excluded[0..rule.excluded_count]) |ex| {
-                        if (std.mem.eql(u8, ex, trait_name)) {
+                        if (std.ascii.eqlIgnoreCase(ex, trait_name)) {
                             excluded = true;
                             break;
                         }
@@ -16455,23 +16460,29 @@ pub const VM = struct {
         return Value.equal(a, b);
     }
 
+    // the spelling a class, interface, or trait was declared with, for a name
+    // written in any case. a name nothing declares (yet) comes back unchanged
+    pub fn declaredClassName(self: *VM, name: []const u8) []const u8 {
+        return self.classes.getKey(name) orelse self.interfaces.getKey(name) orelse self.traits.getKey(name) orelse name;
+    }
+
     pub fn isInstanceOf(self: *VM, raw_obj_class: []const u8, raw_target: []const u8) bool {
         // PHP normalizes leading-backslash equivalence for class names
         const obj_class = if (raw_obj_class.len > 0 and raw_obj_class[0] == '\\') raw_obj_class[1..] else raw_obj_class;
         const target_class = if (raw_target.len > 0 and raw_target[0] == '\\') raw_target[1..] else raw_target;
-        if (std.mem.eql(u8, target_class, "Stringable") and self.hasMethod(obj_class, "__toString")) return true;
+        if (std.ascii.eqlIgnoreCase(target_class, "Stringable") and self.hasMethod(obj_class, "__toString")) return true;
         var current = obj_class;
         while (true) {
-            if (std.mem.eql(u8, current, target_class)) return true;
+            if (std.ascii.eqlIgnoreCase(current, target_class)) return true;
             // built-in exception hierarchy (always checked, even for registered classes)
             if (builtinExceptionParent(current)) |builtin_parent| {
-                if (std.mem.eql(u8, target_class, "Throwable") or
-                    std.mem.eql(u8, target_class, "Exception") or
-                    std.mem.eql(u8, target_class, "Error"))
+                if (std.ascii.eqlIgnoreCase(target_class, "Throwable") or
+                    std.ascii.eqlIgnoreCase(target_class, "Exception") or
+                    std.ascii.eqlIgnoreCase(target_class, "Error"))
                 {
                     var bp = builtin_parent;
                     while (true) {
-                        if (std.mem.eql(u8, bp, target_class)) return true;
+                        if (std.ascii.eqlIgnoreCase(bp, target_class)) return true;
                         bp = builtinExceptionParent(bp) orelse break;
                     }
                 }
@@ -16490,24 +16501,24 @@ pub const VM = struct {
     }
 
     fn builtinExceptionParent(class_name: []const u8) ?[]const u8 {
-        if (std.mem.eql(u8, class_name, "Exception") or std.mem.eql(u8, class_name, "Error")) return "Throwable";
+        if (std.ascii.eqlIgnoreCase(class_name, "Exception") or std.ascii.eqlIgnoreCase(class_name, "Error")) return "Throwable";
         const date_exception_children = [_][]const u8{
             "DateInvalidTimeZoneException",       "DateInvalidOperationException",
             "DateMalformedStringException",       "DateMalformedIntervalStringException",
             "DateMalformedPeriodStringException",
         };
         for (date_exception_children) |name| {
-            if (std.mem.eql(u8, class_name, name)) return "DateException";
+            if (std.ascii.eqlIgnoreCase(class_name, name)) return "DateException";
         }
-        if (std.mem.eql(u8, class_name, "DateException")) return "Exception";
+        if (std.ascii.eqlIgnoreCase(class_name, "DateException")) return "Exception";
         const date_error_children = [_][]const u8{
             "DateObjectError", "DateRangeError",
         };
         for (date_error_children) |name| {
-            if (std.mem.eql(u8, class_name, name)) return "DateError";
+            if (std.ascii.eqlIgnoreCase(class_name, name)) return "DateError";
         }
-        if (std.mem.eql(u8, class_name, "DateError")) return "Error";
-        if (std.mem.eql(u8, class_name, "SodiumException")) return "Exception";
+        if (std.ascii.eqlIgnoreCase(class_name, "DateError")) return "Error";
+        if (std.ascii.eqlIgnoreCase(class_name, "SodiumException")) return "Exception";
         const exception_children = [_][]const u8{
             "RuntimeException",       "LogicException",           "InvalidArgumentException",
             "BadMethodCallException", "BadFunctionCallException", "OutOfRangeException",
@@ -16516,7 +16527,7 @@ pub const VM = struct {
             "JsonException",          "PDOException",
         };
         for (exception_children) |name| {
-            if (std.mem.eql(u8, class_name, name)) return "Exception";
+            if (std.ascii.eqlIgnoreCase(class_name, name)) return "Exception";
         }
         const error_children = [_][]const u8{
             "TypeError",           "ValueError",          "ArithmeticError",
@@ -16524,7 +16535,7 @@ pub const VM = struct {
             "ParseError",          "CompileError",
         };
         for (error_children) |name| {
-            if (std.mem.eql(u8, class_name, name)) return "Error";
+            if (std.ascii.eqlIgnoreCase(class_name, name)) return "Error";
         }
         return null;
     }
@@ -16691,8 +16702,9 @@ pub const VM = struct {
     fn findMethodVisibility(self: *VM, class_name: []const u8, method_name: []const u8) VisResult {
         var current: ?[]const u8 = class_name;
         while (current) |cn| {
-            if (self.classes.get(cn)) |cls| {
-                if (cls.methods.get(method_name)) |info| return .{ .visibility = info.visibility, .defining_class = cn };
+            if (self.classes.getEntry(cn)) |entry| {
+                const cls = entry.value_ptr;
+                if (cls.methods.get(method_name)) |info| return .{ .visibility = info.visibility, .defining_class = entry.key_ptr.* };
                 current = cls.parent;
             } else break;
         }
@@ -16700,7 +16712,7 @@ pub const VM = struct {
     }
 
     fn implementsInterface(self: *VM, iface_name: []const u8, target: []const u8) bool {
-        if (std.mem.eql(u8, iface_name, target)) return true;
+        if (std.ascii.eqlIgnoreCase(iface_name, target)) return true;
         if (self.interfaces.get(iface_name)) |idef| {
             // walk every extended interface (PHP allows multi-extension)
             for (idef.parents.items) |p| {
@@ -16710,7 +16722,7 @@ pub const VM = struct {
             // converted to push into 'parents' yet
             if (idef.parent) |p| {
                 var seen_in_parents = false;
-                for (idef.parents.items) |pp| if (std.mem.eql(u8, pp, p)) {
+                for (idef.parents.items) |pp| if (std.ascii.eqlIgnoreCase(pp, p)) {
                     seen_in_parents = true;
                     break;
                 };
@@ -17246,7 +17258,15 @@ pub const VM = struct {
         const result = while (true) {
             const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ current, method_name }) catch break false;
             if (self.functions.get(full) != null or self.native_fns.get(full) != null) break true;
-            if (self.classes.get(current)) |cls| {
+            if (self.classes.getEntry(current)) |entry| {
+                const cls = entry.value_ptr;
+                // methods are registered under the declared spellings of the
+                // class and the method
+                current = entry.key_ptr.*;
+                if (cls.methods.getKey(method_name)) |declared| if (!std.mem.eql(u8, declared, method_name) or !std.mem.eql(u8, full[0..current.len], current)) {
+                    const canonical = std.fmt.bufPrint(&buf, "{s}::{s}", .{ current, declared }) catch break false;
+                    if (self.functions.get(canonical) != null or self.native_fns.get(canonical) != null) break true;
+                };
                 if (cls.parent) |p| {
                     current = p;
                     continue;
@@ -17333,14 +17353,14 @@ pub const VM = struct {
         var buf: [256]u8 = undefined;
         var tried_autoload = false;
         while (true) {
+            // methods are registered under the declared spelling of the class
+            current = self.classes.getKey(current) orelse current;
             const full = std.fmt.bufPrint(&buf, "{s}::{s}", .{ current, method_name }) catch return error.RuntimeError;
             if (self.functions.getEntry(full)) |entry| return entry.key_ptr.*;
             if (self.native_fns.getKey(full)) |key| return key;
             if (self.classes.get(current)) |cls| {
-                var methods = cls.methods.keyIterator();
-                while (methods.next()) |declared| {
-                    if (!std.ascii.eqlIgnoreCase(declared.*, method_name)) continue;
-                    const canonical = std.fmt.bufPrint(&buf, "{s}::{s}", .{ current, declared.* }) catch return error.RuntimeError;
+                if (cls.methods.getKey(method_name)) |declared| {
+                    const canonical = std.fmt.bufPrint(&buf, "{s}::{s}", .{ current, declared }) catch return error.RuntimeError;
                     if (self.functions.getEntry(canonical)) |entry| return entry.key_ptr.*;
                     if (self.native_fns.getKey(canonical)) |key| return key;
                 }
@@ -18438,7 +18458,7 @@ pub const VM = struct {
         const vis = self.findMethodVisibility(class_name, method);
         if (!self.checkVisibility(vis.defining_class, vis.visibility)) return self.hasMethod(class_name, magic);
         if (has_instance) return true;
-        const cdef = self.classes.get(vis.defining_class) orelse return true;
+        const cdef = self.classes.getPtr(vis.defining_class) orelse return true;
         const info = cdef.methods.get(method) orelse return true;
         return info.is_static;
     }
@@ -19443,7 +19463,19 @@ pub const VM = struct {
             return self.callUserFunction(name, func, checked);
         } else if (self.functionNamedIgnoringCase(name)) |registered| {
             return self.callByName(registered, args);
+        } else if (self.staticMethodNamed(name)) |registered| {
+            return self.callByName(registered, args);
         } else return error.RuntimeError;
+    }
+
+    // the registered method a "Class::method" string reaches when its class or
+    // method is spelled in another case than the declaration
+    pub fn staticMethodNamed(self: *VM, name: []const u8) ?[]const u8 {
+        const sep = std.mem.indexOf(u8, name, "::") orelse return null;
+        // a miss leaves an autoloader's exception pending for the caller to raise
+        const resolved = self.resolveMethod(self.declaredClassName(name[0..sep]), name[sep + 2 ..]) catch return null;
+        if (std.mem.eql(u8, resolved, name)) return null;
+        return resolved;
     }
 
     // the arguments a native passes to a user function, after the callee's

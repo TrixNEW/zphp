@@ -1170,7 +1170,7 @@ fn rcImplementsInterface(ctx: *NativeContext, args: []const Value) RuntimeError!
     var i: usize = 0;
     while (i < queue.items.len) : (i += 1) {
         const iface = queue.items[i];
-        if (std.mem.eql(u8, iface, iface_name)) return NativeResult.scalar(.{ .bool = true });
+        if (std.ascii.eqlIgnoreCase(iface, iface_name)) return NativeResult.scalar(.{ .bool = true });
         if (ctx.vm.classes.get(iface)) |idef| {
             for (idef.interfaces.items) |sub| try queue.append(ctx.allocator, sub);
         }
@@ -1183,13 +1183,13 @@ fn rcIsInstance(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .bool = false });
     const obj_class = args[0].object.class_name;
-    if (std.mem.eql(u8, obj_class, class_name)) return NativeResult.scalar(.{ .bool = true });
+    if (std.ascii.eqlIgnoreCase(obj_class, class_name)) return NativeResult.scalar(.{ .bool = true });
     if (ctx.vm.interfaces.contains(class_name)) {
         var current: ?[]const u8 = obj_class;
         while (current) |name| {
             const cls = ctx.vm.classes.get(name) orelse break;
             for (cls.interfaces.items) |iface| {
-                if (std.mem.eql(u8, iface, class_name)) return NativeResult.scalar(.{ .bool = true });
+                if (std.ascii.eqlIgnoreCase(iface, class_name)) return NativeResult.scalar(.{ .bool = true });
             }
             current = cls.parent;
         }
@@ -1199,7 +1199,7 @@ fn rcIsInstance(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     while (current) |name| {
         const cls = ctx.vm.classes.get(name) orelse break;
         if (cls.parent) |p| {
-            if (std.mem.eql(u8, p, class_name)) return NativeResult.scalar(.{ .bool = true });
+            if (std.ascii.eqlIgnoreCase(p, class_name)) return NativeResult.scalar(.{ .bool = true });
             current = p;
         } else break;
     }
@@ -1217,7 +1217,7 @@ fn rcIsSubclassOf(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
         const cls = ctx.vm.classes.get(name) orelse break;
         current = cls.parent;
         if (current) |p| {
-            if (std.mem.eql(u8, p, parent_name)) return NativeResult.scalar(.{ .bool = true });
+            if (std.ascii.eqlIgnoreCase(p, parent_name)) return NativeResult.scalar(.{ .bool = true });
         }
     }
     return NativeResult.scalar(.{ .bool = false });
@@ -2403,6 +2403,17 @@ fn initMethodReflection(ctx: *NativeContext, this: *PhpObject, args: []const Val
             return throwReflection(ctx, msg);
         }
     }
+    // report the declared spellings of a class and method named in any case
+    class_name = ctx.vm.declaredClassName(class_name);
+    var walk: ?[]const u8 = class_name;
+    while (walk) |cn| {
+        const cls = ctx.vm.classes.getPtr(cn) orelse break;
+        if (cls.methods.getKey(method_name)) |declared| {
+            method_name = declared;
+            break;
+        }
+        walk = cls.parent;
+    }
 
     const declaring = findDeclaringClass(ctx.vm, class_name, method_name);
     const info = blk: {
@@ -3479,7 +3490,7 @@ fn closureFromCallable(ctx: *NativeContext, args: []const Value) RuntimeError!Na
     if (callable == .string) {
         const raw = callable.string.bytes();
         const name = if (raw.len > 0 and raw[0] == '\\') raw[1..] else raw;
-        if (ctx.vm.canonicalFunctionName(name)) |registered| {
+        if (ctx.vm.canonicalFunctionName(name) orelse ctx.vm.staticMethodNamed(name)) |registered| {
             // the registered name, so later calls find the function whatever
             // case or leading backslash the callable was written with
             if (!std.mem.eql(u8, registered, raw)) return wrapCallableClosure(ctx, .{ .string = Value.String.borrowed(registered) });

@@ -778,15 +778,6 @@ fn native_get_declared_traits(ctx: *NativeContext, _: []const Value) RuntimeErro
     return NativeResult.borrowed(.{ .array = arr });
 }
 
-fn classExistsCaseInsensitive(ctx: *NativeContext, name: []const u8) bool {
-    if (ctx.vm.classes.contains(name)) return true;
-    var it = ctx.vm.classes.iterator();
-    while (it.next()) |e| {
-        if (std.ascii.eqlIgnoreCase(e.key_ptr.*, name)) return true;
-    }
-    return false;
-}
-
 fn class_exists(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const raw = args[0].string.bytes();
@@ -795,11 +786,11 @@ fn class_exists(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     if (std.ascii.eqlIgnoreCase(name, "Closure") or std.ascii.eqlIgnoreCase(name, "Generator") or std.ascii.eqlIgnoreCase(name, "Fiber")) return NativeResult.scalar(.{ .bool = true });
     if (ctx.vm.interfaces.contains(name)) return NativeResult.scalar(.{ .bool = false });
     if (ctx.vm.traits.contains(name)) return NativeResult.scalar(.{ .bool = false });
-    if (classExistsCaseInsensitive(ctx, name)) return NativeResult.scalar(.{ .bool = true });
+    if (ctx.vm.classes.contains(name)) return NativeResult.scalar(.{ .bool = true });
     const autoload = args.len < 2 or !(args[1] == .bool and !args[1].bool);
     if (autoload and ctx.vm.autoload_callbacks.items.len > 0) {
         try ctx.vm.tryAutoload(name);
-        return NativeResult.scalar(.{ .bool = classExistsCaseInsensitive(ctx, name) and !ctx.vm.interfaces.contains(name) });
+        return NativeResult.scalar(.{ .bool = ctx.vm.classes.contains(name) and !ctx.vm.interfaces.contains(name) });
     }
     return NativeResult.scalar(.{ .bool = false });
 }

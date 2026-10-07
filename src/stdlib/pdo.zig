@@ -377,33 +377,51 @@ pub fn register(vm: *VM, a: Allocator) !void {
 
     try vm.classes.put(a, "PDO", pdo_def);
 
-    // PHP 8.4 introduced PDO subclass drivers in the PDO\ namespace. zphp
-    // dispatches through a single PDO class, but register the names so
-    // `new PDO\Sqlite(...)` / `instanceof PDO\Sqlite` / autoloaders don't
-    // hit "class not found" (used by WP's sqlite-database-integration)
-    inline for (.{ "Sqlite", "SQLite", "Mysql", "MySql", "Pgsql", "PgSql", "Odbc", "ODBC", "Firebird", "Dblib" }) |driver| {
-        const fqn = "PDO\\" ++ driver;
-        var sub_def = ClassDef{ .name = fqn, .parent = "PDO", .native_cleanup = cleanupConnection };
+    // php 8.4's driver subclasses. zphp dispatches every driver through PDO
+    // itself, so these add the class names (new Pdo\Sqlite(...), instanceof)
+    // and each driver's constants, as php 8.5 defines them
+    const Driver = struct { class: []const u8, constants: []const struct { []const u8, i64 } };
+    const drivers = [_]Driver{
+        .{ .class = "Pdo\\Mysql", .constants = &.{
+            .{ "ATTR_USE_BUFFERED_QUERY", 1000 },     .{ "ATTR_LOCAL_INFILE", 1001 },     .{ "ATTR_INIT_COMMAND", 1002 },
+            .{ "ATTR_COMPRESS", 1003 },               .{ "ATTR_DIRECT_QUERY", 20 },       .{ "ATTR_FOUND_ROWS", 1004 },
+            .{ "ATTR_IGNORE_SPACE", 1005 },           .{ "ATTR_SSL_KEY", 1006 },          .{ "ATTR_SSL_CERT", 1007 },
+            .{ "ATTR_SSL_CA", 1008 },                 .{ "ATTR_SSL_CAPATH", 1009 },       .{ "ATTR_SSL_CIPHER", 1010 },
+            .{ "ATTR_SERVER_PUBLIC_KEY", 1011 },      .{ "ATTR_MULTI_STATEMENTS", 1012 }, .{ "ATTR_SSL_VERIFY_SERVER_CERT", 1013 },
+            .{ "ATTR_LOCAL_INFILE_DIRECTORY", 1014 },
+        } },
+        .{ .class = "Pdo\\Pgsql", .constants = &.{
+            .{ "ATTR_DISABLE_PREPARES", 1000 }, .{ "ATTR_RESULT_MEMORY_SIZE", 1001 }, .{ "TRANSACTION_IDLE", 0 },
+            .{ "TRANSACTION_ACTIVE", 1 },       .{ "TRANSACTION_INTRANS", 2 },        .{ "TRANSACTION_INERROR", 3 },
+            .{ "TRANSACTION_UNKNOWN", 4 },
+        } },
+        .{ .class = "Pdo\\Sqlite", .constants = &.{
+            .{ "DETERMINISTIC", 2048 },                .{ "OPEN_READONLY", 1 },             .{ "OPEN_READWRITE", 2 },
+            .{ "OPEN_CREATE", 4 },                     .{ "ATTR_OPEN_FLAGS", 1000 },        .{ "ATTR_READONLY_STATEMENT", 1001 },
+            .{ "ATTR_EXTENDED_RESULT_CODES", 1002 },   .{ "ATTR_BUSY_STATEMENT", 1003 },    .{ "ATTR_EXPLAIN_STATEMENT", 1004 },
+            .{ "ATTR_TRANSACTION_MODE", 1005 },        .{ "TRANSACTION_MODE_DEFERRED", 0 }, .{ "TRANSACTION_MODE_IMMEDIATE", 1 },
+            .{ "TRANSACTION_MODE_EXCLUSIVE", 2 },      .{ "EXPLAIN_MODE_PREPARED", 0 },     .{ "EXPLAIN_MODE_EXPLAIN", 1 },
+            .{ "EXPLAIN_MODE_EXPLAIN_QUERY_PLAN", 2 }, .{ "OK", 0 },                        .{ "DENY", 1 },
+            .{ "IGNORE", 2 },
+        } },
+    };
+    inline for (drivers) |driver| {
+        var sub_def = ClassDef{ .name = driver.class, .parent = "PDO", .native_cleanup = cleanupConnection };
         try sub_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
-        // Sqlite-specific extension methods (user-defined SQL function /
-        // aggregate / collation hooks). Backed by SQLite callbacks so frameworks
-        // that conditionally call them (WordPress's sqlite-database-integration)
-        // can register real SQL callbacks.
-        try sub_def.methods.put(a, "createFunction", .{ .name = "createFunction", .arity = 2 });
-        try sub_def.methods.put(a, "createAggregate", .{ .name = "createAggregate", .arity = 3 });
-        try sub_def.methods.put(a, "createCollation", .{ .name = "createCollation", .arity = 2 });
-        try vm.classes.put(a, fqn, sub_def);
-        try vm.native_fns.put(a, fqn ++ "::__construct", pdoConstruct);
-        try vm.native_fns.put(a, fqn ++ "::createFunction", pdoSqliteCreateFunction);
-        try vm.native_fns.put(a, fqn ++ "::createAggregate", pdoSqliteCreateAggregate);
-        try vm.native_fns.put(a, fqn ++ "::createCollation", pdoSqliteCreateCollation);
+        for (driver.constants) |c| try sub_def.constants.put(a, c[0], .{ .int = c[1] });
+        try vm.native_fns.put(a, driver.class ++ "::__construct", pdoConstruct);
+        if (comptime std.mem.eql(u8, driver.class, "Pdo\\Sqlite")) {
+            // user-defined sql functions, aggregates, and collations, backed by
+            // sqlite callbacks (wordpress's sqlite-database-integration uses them)
+            try sub_def.methods.put(a, "createFunction", .{ .name = "createFunction", .arity = 2 });
+            try sub_def.methods.put(a, "createAggregate", .{ .name = "createAggregate", .arity = 3 });
+            try sub_def.methods.put(a, "createCollation", .{ .name = "createCollation", .arity = 2 });
+            try vm.native_fns.put(a, driver.class ++ "::createFunction", pdoSqliteCreateFunction);
+            try vm.native_fns.put(a, driver.class ++ "::createAggregate", pdoSqliteCreateAggregate);
+            try vm.native_fns.put(a, driver.class ++ "::createCollation", pdoSqliteCreateCollation);
+        }
+        try vm.classes.put(a, driver.class, sub_def);
     }
-
-    // PHP's documented spelling; class construction currently uses exact keys.
-    var sqlite_alias = ClassDef{ .name = "Pdo\\Sqlite", .parent = "PDO\\Sqlite", .native_cleanup = cleanupConnection };
-    try sqlite_alias.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
-    try vm.classes.put(a, "Pdo\\Sqlite", sqlite_alias);
-    try vm.native_fns.put(a, "Pdo\\Sqlite::__construct", pdoConstruct);
 
     try vm.native_fns.put(a, "PDO::__construct", pdoConstruct);
     try vm.native_fns.put(a, "PDO::connect", pdoConnect);
