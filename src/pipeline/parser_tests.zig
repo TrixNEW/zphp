@@ -850,3 +850,38 @@ test "duplicate read and set visibility modifiers are rejected in all property c
     try expectError("<?php class T { function __construct(public private(set) protected(set) int $x) {} }");
     try expectError("<?php class T { function __construct(public public int $x) {} }");
 }
+
+fn expectErrorTag(source: []const u8, tag: Ast.Error.Tag) !void {
+    var ast = try parse(std.testing.allocator, source);
+    defer ast.deinit();
+    try std.testing.expect(ast.errors.len > 0);
+    try std.testing.expectEqual(tag, ast.errors[0].tag);
+}
+
+fn expectNoErrors(source: []const u8) !void {
+    var ast = try parse(std.testing.allocator, source);
+    defer ast.deinit();
+    try std.testing.expectEqual(@as(usize, 0), ast.errors.len);
+}
+
+test "cast names ignore case" {
+    try expectNoErrors("<?php $a = (INT) $x . (Bool) $y . ( string ) $z . (BINARY) $w . (Array) $v;");
+}
+
+test "real cast is removed" {
+    try expectErrorTag("<?php $a = (real) 1;", .real_cast_removed);
+    try expectErrorTag("<?php $a = (REAL) 1;", .real_cast_removed);
+}
+
+test "void cast only where the value is discarded" {
+    try expectNoErrors("<?php (void) f(); (VOID) $o->m(); for ((void) f(), $i = 0; $i < 3; (void) $i++) {}");
+    try expectErrorTag("<?php $x = (void) f();", .void_cast_misplaced);
+    try expectErrorTag("<?php echo (void) 1;", .void_cast_misplaced);
+    try expectErrorTag("<?php f((void) 1);", .void_cast_misplaced);
+    try expectErrorTag("<?php for (; (void) f(); ) {}", .void_cast_misplaced);
+}
+
+test "switch cases may end with a semicolon" {
+    try expectNoErrors("<?php switch ($x) {; case 1; break; case 2: case 3; default; }");
+    try expectNoErrors("<?php switch ($x): ; case 1; default: endswitch;");
+}

@@ -537,9 +537,21 @@ const Parser = struct {
     }
 
     fn parseExpressionStmt(self: *Parser) Error!u32 {
-        const expr = try self.parseExpression();
+        const expr = try self.parseVoidableExpression();
         _ = try self.expect(.semicolon);
         return self.addNode(.{ .tag = .expression_stmt, .main_token = 0, .data = .{ .lhs = expr } });
+    }
+
+    // (void) discards a whole expression. php 8.5 allows it only where a value
+    // is thrown away anyway: an expression statement and the expressions of a
+    // for header
+    fn parseVoidableExpression(self: *Parser) Error!u32 {
+        if (self.peek() != .l_paren or !self.isCastExpr() or !std.ascii.eqlIgnoreCase(self.lexemeAt(1), "void")) return self.parseExpression();
+        _ = self.advance(); // (
+        const void_tok = self.advance();
+        _ = self.advance(); // )
+        const operand = try self.parseExpression();
+        return self.addNode(.{ .tag = .cast_expr, .main_token = void_tok, .data = .{ .lhs = operand } });
     }
 
     fn parseEchoStmt(self: *Parser) Error!u32 {
@@ -748,14 +760,14 @@ const Parser = struct {
     // parse comma-separated expressions for for-loop init/update
     // returns a single expression node if only one, or an expr_list node
     fn parseForExprList(self: *Parser) Error!u32 {
-        const first = try self.parseExpression();
+        const first = try self.parseVoidableExpression();
         if (self.peek() != .comma) return first;
         var exprs = std.ArrayListUnmanaged(u32){};
         defer exprs.deinit(self.allocator);
         try exprs.append(self.allocator, first);
         while (self.peek() == .comma) {
             _ = self.advance();
-            try exprs.append(self.allocator, try self.parseExpression());
+            try exprs.append(self.allocator, try self.parseVoidableExpression());
         }
         const extra = try self.addExtraList(exprs.items);
         return self.addNode(.{ .tag = .expr_list, .main_token = 0, .data = .{ .lhs = extra } });
@@ -2844,20 +2856,30 @@ const Parser = struct {
     fn isCastExpr(self: *const Parser) bool {
         if (self.peekAt(2) != .r_paren) return false;
         const next = self.peekAt(1);
-        if (next == .kw_array) return true;
+        if (next == .kw_array or next == .kw_unset) return true;
         if (next != .identifier) return false;
+        // cast names ignore case. real and unset are recognized to report
+        // their removal, void to reject it outside a statement
         const lex = self.lexemeAt(1);
-        return std.mem.eql(u8, lex, "int") or std.mem.eql(u8, lex, "integer") or
-            std.mem.eql(u8, lex, "string") or std.mem.eql(u8, lex, "bool") or
-            std.mem.eql(u8, lex, "boolean") or std.mem.eql(u8, lex, "float") or
-            std.mem.eql(u8, lex, "double") or std.mem.eql(u8, lex, "real") or
-            std.mem.eql(u8, lex, "object") or std.mem.eql(u8, lex, "unset");
+        for ([_][]const u8{ "int", "integer", "string", "binary", "bool", "boolean", "float", "double", "object", "void", "real", "unset" }) |name| {
+            if (std.ascii.eqlIgnoreCase(lex, name)) return true;
+        }
+        return false;
     }
 
     fn parseCastExpr(self: *Parser) Error!u32 {
-        _ = self.advance(); // (
+        const paren_tok = self.advance(); // (
         const type_tok = self.advance(); // type name
         _ = self.advance(); // )
+        const type_name = self.tokens[type_tok].lexeme(self.source);
+        if (std.ascii.eqlIgnoreCase(type_name, "real")) {
+            try self.addErrorAt(type_tok, .real_cast_removed);
+            return error.ParseError;
+        }
+        if (std.ascii.eqlIgnoreCase(type_name, "void")) {
+            try self.addErrorAt(paren_tok, .void_cast_misplaced);
+            return error.ParseError;
+        }
         const operand = try self.parseExprPrec(18);
         return self.addNode(.{ .tag = .cast_expr, .main_token = type_tok, .data = .{ .lhs = operand } });
     }

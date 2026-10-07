@@ -1774,19 +1774,26 @@ pub fn compileYieldFrom(self: *Compiler, node: Ast.Node) Error!void {
 }
 
 pub fn compileCast(self: *Compiler, node: Ast.Node) Error!void {
-    try self.compileNode(node.data.lhs);
     const type_name = self.ast.tokenSlice(node.main_token);
-    if (std.mem.eql(u8, type_name, "int") or std.mem.eql(u8, type_name, "integer")) {
+    const eql = std.ascii.eqlIgnoreCase;
+    if (eql(type_name, "unset")) return self.fail(node.main_token, "The (unset) cast is no longer supported");
+    try self.compileNode(node.data.lhs);
+    if (eql(type_name, "int") or eql(type_name, "integer")) {
         try self.emitOp(.cast_int);
-    } else if (std.mem.eql(u8, type_name, "float") or std.mem.eql(u8, type_name, "double") or std.mem.eql(u8, type_name, "real")) {
+    } else if (eql(type_name, "float") or eql(type_name, "double")) {
         try self.emitOp(.cast_float);
-    } else if (std.mem.eql(u8, type_name, "string")) {
+    } else if (eql(type_name, "string") or eql(type_name, "binary")) {
         try self.emitOp(.cast_string);
-    } else if (std.mem.eql(u8, type_name, "bool") or std.mem.eql(u8, type_name, "boolean")) {
+    } else if (eql(type_name, "bool") or eql(type_name, "boolean")) {
         try self.emitOp(.cast_bool);
-    } else if (std.mem.eql(u8, type_name, "array")) {
+    } else if (eql(type_name, "array")) {
         try self.emitOp(.cast_array);
-    } else if (std.mem.eql(u8, type_name, "object")) {
+    } else if (eql(type_name, "object")) {
         try self.emitOp(.cast_object);
+    } else if (eql(type_name, "void")) {
+        // the parser only allows (void) where the value is discarded; the
+        // statement pops whatever is left, so leave null in its place
+        try self.emitOp(.pop);
+        try self.emitOp(.op_null);
     }
 }

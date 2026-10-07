@@ -126,6 +126,8 @@ pub fn parseErrorSummary(alloc: std.mem.Allocator, ast: *const Ast) ![]u8 {
         .expected_variable => "variable",
         .expected_colon => "\":\"",
         .unexpected_token => null,
+        .real_cast_removed => return alloc.dupe(u8, "The (real) cast has been removed, use (float) instead"),
+        .void_cast_misplaced => return alloc.dupe(u8, "syntax error, unexpected token \"(void)\""),
     };
     if (lexeme.len == 0) {
         if (expecting) |e| return std.fmt.allocPrint(alloc, "syntax error, unexpected end of file, expecting {s}", .{e});
@@ -165,6 +167,8 @@ fn errorTagMessage(tag: Ast.Error.Tag) []const u8 {
         .expected_variable => "expected variable",
         .expected_colon => "expected ':'",
         .unexpected_token => "unexpected token",
+        .real_cast_removed => "The (real) cast has been removed, use (float) instead",
+        .void_cast_misplaced => "syntax error, unexpected token \"(void)\"",
     };
 }
 

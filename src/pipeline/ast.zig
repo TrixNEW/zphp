@@ -205,6 +205,8 @@ pub const Ast = struct {
             expected_variable,
             expected_colon,
             unexpected_token,
+            real_cast_removed,
+            void_cast_misplaced,
         };
     };
 };
