@@ -194,14 +194,17 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "finfo::set_flags", finfoNoop);
 
     // Directory class returned by dir() - thin OO wrapper. methods delegate
-    // to the underlying DirectoryHandle stored in the 'handle' property
-    var dir_def = ClassDef{ .name = "Directory" };
+    // to the underlying DirectoryHandle stored in the 'handle' property. php
+    // 8.5 made it final and only dir() creates one
+    var dir_def = ClassDef{ .name = "Directory", .is_final = true };
+    try dir_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
     try dir_def.properties.append(a, .{ .name = "path", .default = .{ .string = Value.String.borrowed("") } });
     try dir_def.properties.append(a, .{ .name = "handle", .default = .null });
     try dir_def.methods.put(a, "read", .{ .name = "read", .arity = 0 });
     try dir_def.methods.put(a, "rewind", .{ .name = "rewind", .arity = 0 });
     try dir_def.methods.put(a, "close", .{ .name = "close", .arity = 0 });
     try vm.classes.put(a, "Directory", dir_def);
+    try vm.native_fns.put(a, "Directory::__construct", directoryConstruct);
     try vm.native_fns.put(a, "Directory::read", directoryRead);
     try vm.native_fns.put(a, "Directory::rewind", directoryRewind);
     try vm.native_fns.put(a, "Directory::close", directoryClose);
@@ -1095,6 +1098,11 @@ fn appendName(ctx: *NativeContext, names: *std.ArrayListUnmanaged(Value.String),
 // dir($path) returns a Directory object with path, handle, and read/rewind/
 // close methods that delegate to the underlying DirectoryHandle. PHP's
 // 'Directory' is a thin OO wrapper around opendir/readdir/rewinddir/closedir
+fn directoryConstruct(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    try ctx.vm.setPendingException("Error", "Cannot directly construct Directory, use dir() instead");
+    return error.RuntimeError;
+}
+
 fn native_dir(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const handle = (try native_opendir(ctx, args)).value;

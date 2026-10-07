@@ -711,7 +711,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "ReflectionClassConstant::getModifiers", rccGetModifiers);
 
     // Closure class (static methods only - instance methods handled in VM dispatch)
-    var closure_def = ClassDef{ .name = "Closure" };
+    var closure_def = ClassDef{ .name = "Closure", .is_final = true };
     try closure_def.methods.put(a, "bind", .{ .name = "bind", .arity = 2, .is_static = true });
     try closure_def.methods.put(a, "fromCallable", .{ .name = "fromCallable", .arity = 1, .is_static = true });
     try vm.classes.put(a, "Closure", closure_def);
@@ -1152,7 +1152,16 @@ fn rcIsInstantiable(ctx: *NativeContext, _: []const Value) RuntimeError!NativeRe
     if (is_trait == .bool and is_trait.bool) return NativeResult.scalar(.{ .bool = false });
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .bool = false });
     const cls = ctx.vm.classes.get(class_name) orelse return NativeResult.scalar(.{ .bool = true });
-    if (cls.is_abstract) return NativeResult.scalar(.{ .bool = false });
+    if (cls.is_abstract or cls.is_enum) return NativeResult.scalar(.{ .bool = false });
+    // php's Closure constructor is private; closures come from function syntax
+    if (std.mem.eql(u8, class_name, "Closure")) return NativeResult.scalar(.{ .bool = false });
+    // a constructor that isn't public can't be called from outside
+    var current: ?[]const u8 = class_name;
+    while (current) |name| {
+        const c = ctx.vm.classes.get(name) orelse break;
+        if (c.methods.get("__construct")) |ctor| return NativeResult.scalar(.{ .bool = ctor.visibility == .public });
+        current = c.parent;
+    }
     return NativeResult.scalar(.{ .bool = true });
 }
 
@@ -1419,11 +1428,20 @@ fn rcHasMethod(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
 
 fn rcIsAbstract(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
-    const is_iface = this.get("_is_interface");
-    if (is_iface == .bool and is_iface.bool) return NativeResult.scalar(.{ .bool = true });
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .bool = false });
+    // an interface is abstract when it has methods, its own or inherited
+    const is_iface = this.get("_is_interface");
+    if (is_iface == .bool and is_iface.bool) return NativeResult.scalar(.{ .bool = interfaceHasMethods(ctx.vm, class_name, 0) });
     const cls = ctx.vm.classes.get(class_name) orelse return NativeResult.scalar(.{ .bool = false });
     return NativeResult.scalar(.{ .bool = cls.is_abstract });
+}
+
+fn interfaceHasMethods(vm: *VM, name: []const u8, depth: usize) bool {
+    if (depth > 64) return false;
+    const idef = vm.interfaces.get(name) orelse return false;
+    if (idef.methods.items.len > 0) return true;
+    for (idef.parents.items) |parent| if (interfaceHasMethods(vm, parent, depth + 1)) return true;
+    return false;
 }
 
 fn rcIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
@@ -1435,14 +1453,14 @@ fn rcIsFinal(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
 }
 
 fn rcGetModifiers(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
-    // PHP class modifier bitmask: IS_EXPLICIT_ABSTRACT=32, IS_IMPLICIT_ABSTRACT=16,
-    // IS_FINAL=4, IS_READONLY=65536. these are used by ReflectionClass::getModifiers
+    // ReflectionClass::IS_EXPLICIT_ABSTRACT=64, IS_FINAL=32, IS_READONLY=65536;
+    // an enum is implicitly final
     const this = getThis(ctx) orelse return NativeResult.scalar(.{ .int = 0 });
     const class_name = if (this.get("name") == .string) this.get("name").string.bytes() else return NativeResult.scalar(.{ .int = 0 });
     const cls = ctx.vm.classes.get(class_name) orelse return NativeResult.scalar(.{ .int = 0 });
     var mods: i64 = 0;
-    if (cls.is_abstract) mods |= 32;
-    if (cls.is_final) mods |= 4;
+    if (cls.is_abstract) mods |= 64;
+    if (cls.is_final or cls.is_enum) mods |= 32;
     if (cls.is_readonly) mods |= 65536;
     return NativeResult.scalar(.{ .int = mods });
 }
