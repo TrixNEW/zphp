@@ -376,7 +376,7 @@ fn dpGetIterator(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
         const di = obj.get("__interval");
         if (di == .object) {
             const tz_name = objTzName(start_v.object, ctx.vm.default_tz_name);
-            ts = applyIntervalTz(ts, di.object, 1, tz_name);
+            ts = applyIntervalTz(ctx.allocator, ts, di.object, 1, tz_name);
         }
     }
     try iter.set(ctx.allocator, "__cursor_ts", .{ .int = ts });
@@ -429,7 +429,7 @@ fn dpiNext(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
         const cur = Value.toInt(this.get("__cursor_ts"));
         const start_v = this.get("__start");
         const tz_name = if (start_v == .object) objTzName(start_v.object, ctx.vm.default_tz_name) else ctx.vm.default_tz_name;
-        try this.set(ctx.allocator, "__cursor_ts", .{ .int = applyIntervalTz(cur, di.object, 1, tz_name) });
+        try this.set(ctx.allocator, "__cursor_ts", .{ .int = applyIntervalTz(ctx.allocator, cur, di.object, 1, tz_name) });
     }
     const idx = Value.toInt(this.get("__index"));
     try this.set(ctx.allocator, "__index", .{ .int = idx + 1 });
@@ -572,7 +572,7 @@ fn dtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResu
             ts = dateToTimestamp(year, month, day, hour, min, sec);
             ts -= @as(i64, tzOffsetForWallByName(ctx.allocator, tz_name, ts));
         } else {
-            const result = parseRelativeTime(s, ts);
+            const result = relativeInZone(ctx.allocator, s, ts, tz_name);
             if (result == .int) {
                 ts = result.int;
             } else {
@@ -613,6 +613,13 @@ pub fn formatTimestampTz(ctx: *NativeContext, timestamp: i64, format: []const u8
     return formatTimestampTzMicros(ctx, timestamp, format, tz_offset, tz_name, 0);
 }
 
+// the year as 'c' and 'r' print it: four characters with the sign counted,
+// so -2 is "-002"
+fn paddedYear(buf: *[24]u8, year: i64) []const u8 {
+    if (year >= 0) return std.fmt.bufPrint(buf, "{d:0>4}", .{@as(u64, @intCast(year))}) catch "0000";
+    return std.fmt.bufPrint(buf, "-{d:0>3}", .{@abs(year)}) catch "-000";
+}
+
 pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []const u8, tz_offset: i32, tz_name: []const u8, microseconds: i64) RuntimeError!NativeResult {
     const local_ts = timestamp + @as(i64, tz_offset);
     const dc = baseComponents(local_ts);
@@ -629,9 +636,8 @@ pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []co
         const c = format[fi];
         switch (c) {
             'Y' => {
-                var tmp: [8]u8 = undefined;
-                const s = std.fmt.bufPrint(&tmp, "{d}", .{year_day.year}) catch "0000";
-                try buf.appendSlice(a, s);
+                // at least four digits, with the sign outside the padding
+                try buf.writer(a).print("{s}{d:0>4}", .{ if (year_day.year < 0) "-" else "", @abs(year_day.year) });
             },
             'm' => {
                 var tmp: [4]u8 = undefined;
@@ -727,21 +733,14 @@ pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []co
                 try buf.appendSlice(a, s);
             },
             't' => {
-                const days = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
-                var d: u8 = days[month_day.month.numeric() - 1];
-                if (month_day.month.numeric() == 2) {
-                    const yr: u32 = @intCast(year_day.year);
-                    if (yr % 4 == 0 and (yr % 100 != 0 or yr % 400 == 0)) d = 29;
-                }
-                var tmp: [4]u8 = undefined;
-                const s = std.fmt.bufPrint(&tmp, "{d}", .{d}) catch "0";
-                try buf.appendSlice(a, s);
+                try buf.writer(a).print("{d}", .{daysInMonth(month_day.month.numeric(), year_day.year)});
             },
             'c' => {
                 // ISO 8601: YYYY-MM-DDTHH:MM:SS+00:00
                 var tmp: [32]u8 = undefined;
-                const s = std.fmt.bufPrint(&tmp, "{d}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
-                    year_day.year,
+                var ybuf: [24]u8 = undefined;
+                const s = std.fmt.bufPrint(&tmp, "{s}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
+                    paddedYear(&ybuf, year_day.year),
                     month_day.month.numeric(),
                     month_day.day_index + 1,
                     day_seconds.getHoursIntoDay(),
@@ -762,8 +761,9 @@ pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []co
                 const s = std.fmt.bufPrint(&tmp, "{d:0>2} ", .{month_day.day_index + 1}) catch "01 ";
                 try buf.appendSlice(a, s);
                 try buf.appendSlice(a, mon_names[month_day.month.numeric() - 1]);
-                const s2 = std.fmt.bufPrint(&tmp, " {d} {d:0>2}:{d:0>2}:{d:0>2} ", .{
-                    year_day.year,
+                var ybuf: [24]u8 = undefined;
+                const s2 = std.fmt.bufPrint(&tmp, " {s} {d:0>2}:{d:0>2}:{d:0>2} ", .{
+                    paddedYear(&ybuf, year_day.year),
                     day_seconds.getHoursIntoDay(),
                     day_seconds.getMinutesIntoHour(),
                     day_seconds.getSecondsIntoMinute(),
@@ -772,14 +772,8 @@ pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []co
                 try appendOffsetCompact(&buf, a, tz_offset);
             },
             'z' => {
-                const jan1_ts = dateToTimestamp(year_day.year, 1, 1, 0, 0, 0);
-                const jan1_es = std.time.epoch.EpochSeconds{ .secs = @intCast(if (jan1_ts < 0) 0 else jan1_ts) };
-                const jan1_day: i64 = @intCast(jan1_es.getEpochDay().day);
-                const cur_day: i64 = @intCast(epoch_day.day);
-                const yday = cur_day - jan1_day;
-                var tmp: [4]u8 = undefined;
-                const s = std.fmt.bufPrint(&tmp, "{d}", .{@as(u32, @intCast(@max(0, yday)))}) catch "0";
-                try buf.appendSlice(a, s);
+                const jan1_day = @divFloor(dateToTimestamp(year_day.year, 1, 1, 0, 0, 0), 86400);
+                try buf.writer(a).print("{d}", .{@as(i64, epoch_day.day) - jan1_day});
             },
             'W' => {
                 const week = isoWeek(@intCast(epoch_day.day));
@@ -795,9 +789,7 @@ pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []co
                 try buf.appendSlice(a, s);
             },
             'L' => {
-                const yr: u32 = @intCast(year_day.year);
-                const leap = yr % 4 == 0 and (yr % 100 != 0 or yr % 400 == 0);
-                try buf.append(a, if (leap) '1' else '0');
+                try buf.append(a, if (isLeapYear(year_day.year)) '1' else '0');
             },
             'o' => {
                 const week = isoWeek(@intCast(epoch_day.day));
@@ -862,7 +854,11 @@ pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []co
                 try buf.appendSlice(a, tz_name);
             },
             'T' => {
-                if (tzAbbrevForName(a, tz_name, timestamp)) |ab| {
+                // a fixed-offset zone has no abbreviation; php spells it GMT+hhmm
+                if (parseFixedOffset(tz_name)) |off| {
+                    const abs: u32 = @intCast(if (off < 0) -off else off);
+                    try buf.writer(a).print("GMT{c}{d:0>2}{d:0>2}", .{ @as(u8, if (off < 0) '-' else '+'), abs / 3600, (abs % 3600) / 60 });
+                } else if (tzAbbrevForName(a, tz_name, timestamp)) |ab| {
                     defer a.free(ab);
                     try buf.appendSlice(a, ab);
                 } else {
@@ -875,7 +871,7 @@ pub fn formatTimestampTzMicros(ctx: *NativeContext, timestamp: i64, format: []co
             'O' => {
                 try appendOffsetCompact(&buf, a, tz_offset);
             },
-            'I' => try buf.append(a, '0'),
+            'I' => try buf.append(a, if (tzIsDstForName(a, tz_name, timestamp)) '1' else '0'),
             'B' => {
                 // Swatch internet time: BMT = UTC+1; 1000 beats per day; .beats = (utc_secs+3600) / 86.4 % 1000
                 const utc_secs: i64 = @mod(timestamp, 86400);
@@ -911,7 +907,7 @@ fn dtModify(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult 
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len == 0 or args[0] != .string) return NativeResult.borrowed(.{ .object = obj });
     const ts = getTimestamp(obj);
-    const result = parseRelativeTime(args[0].string.bytes(), ts);
+    const result = relativeInZone(ctx.allocator, args[0].string.bytes(), ts, objTzName(obj, ctx.vm.default_tz_name));
     if (result == .int) try obj.set(ctx.allocator, "timestamp", result);
     return NativeResult.borrowed(.{ .object = obj });
 }
@@ -920,12 +916,14 @@ fn dtiModify(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len == 0 or args[0] != .string) return NativeResult.borrowed(.{ .object = obj });
     const ts = getTimestamp(obj);
-    const result = parseRelativeTime(args[0].string.bytes(), ts);
+    const result = relativeInZone(ctx.allocator, args[0].string.bytes(), ts, objTzName(obj, ctx.vm.default_tz_name));
     if (result != .int) return NativeResult.borrowed(.{ .object = obj });
 
-    // immutable: create a new DateTime object
+    // immutable: a new object in the same timezone
     const new_obj = try ctx.createObject("DateTimeImmutable");
     try new_obj.set(ctx.allocator, "timestamp", result);
+    const tz = obj.get("__timezone");
+    if (tz != .null) try new_obj.set(ctx.allocator, "__timezone", tz);
     return NativeResult.borrowed(.{ .object = new_obj });
 }
 
@@ -943,13 +941,7 @@ fn intervalToSeconds(interval: *PhpObject) i64 {
 
 // add a DateInterval to a timestamp using calendar arithmetic for y/m/d so
 // month-length variation and 31st-of-month rollover behave like PHP
-fn applyInterval(ts: i64, interval: *PhpObject, sign: i64) i64 {
-    return applyIntervalTz(ts, interval, sign, ctx_default_tz);
-}
-
-var ctx_default_tz: []const u8 = "UTC";
-
-fn applyIntervalTz(ts: i64, interval: *PhpObject, sign: i64, tz_name: []const u8) i64 {
+fn applyIntervalTz(a: Allocator, ts: i64, interval: *PhpObject, sign: i64, tz_name: []const u8) i64 {
     const y = Value.toInt(interval.get("y"));
     const m = Value.toInt(interval.get("m"));
     const d = Value.toInt(interval.get("d"));
@@ -961,8 +953,7 @@ fn applyIntervalTz(ts: i64, interval: *PhpObject, sign: i64, tz_name: []const u8
 
     // calendar arithmetic for y/m/d happens in the receiver's timezone so
     // crossing DST doesn't bleed into the wall-clock time
-    const tz = lookupTimezone(tz_name);
-    const off_in: i64 = if (tz) |t| @as(i64, tzOffsetAt(t, ts)) else 0;
+    const off_in: i64 = tzOffsetForName(a, tz_name, ts);
     const c = baseComponents(ts + off_in);
     var year: i64 = c.year + direction * y;
     var month: i64 = c.month + direction * m;
@@ -978,12 +969,41 @@ fn applyIntervalTz(ts: i64, interval: *PhpObject, sign: i64, tz_name: []const u8
 
     var local_ts = dateToTimestamp(year, month, day, c.hour, c.min, c.sec);
     // convert local back to UTC
-    if (tz) |t| {
-        const off_out: i64 = @as(i64, tzOffsetAt(t, local_ts));
-        local_ts -= off_out;
-    }
+    local_ts -= tzOffsetForWallByName(a, tz_name, local_ts);
     local_ts += direction * (h * 3600 + i * 60 + s);
     return local_ts;
+}
+
+// whether a date string names its own zone or offset ("@1700000000",
+// "...T10:00Z", "... 10:00 +02:00", "... GMT", "... Europe/Paris"), which fixes
+// its instant whatever the timezone it is read in
+fn explicitZone(input: []const u8) bool {
+    const s = std.mem.trim(u8, input, " \t");
+    if (s.len == 0) return false;
+    if (s[0] == '@') return true;
+    if ((s[s.len - 1] == 'Z' or s[s.len - 1] == 'z') and s.len >= 2 and std.ascii.isDigit(s[s.len - 2])) return true;
+    // a numeric offset right after a time
+    if (std.mem.lastIndexOfAny(u8, s, "+-")) |p| {
+        const tail = s[p + 1 ..];
+        const numeric = tail.len >= 2 and for (tail) |c| {
+            if (!std.ascii.isDigit(c) and c != ':') break false;
+        } else true;
+        if (numeric and p > 0 and std.mem.indexOfScalar(u8, s[0..p], ':') != null and (std.ascii.isDigit(s[p - 1]) or s[p - 1] == ' ')) return true;
+    }
+    // a zone name or abbreviation as the last word
+    const word_start = if (std.mem.lastIndexOfScalar(u8, s, ' ')) |sp| sp + 1 else return false;
+    const word = s[word_start..];
+    return word.len > 0 and std.ascii.isAlphabetic(word[0]) and parseTimezoneOffset(word) != null;
+}
+
+// parseRelativeTime read in a timezone: the parser works on wall-clock time,
+// so the base moves to local time and the result back with the offset in
+// effect then. a string that fixes its own instant is parsed as is
+pub fn relativeInZone(allocator: Allocator, input: []const u8, base: i64, tz_name: []const u8) Value {
+    if (explicitZone(input)) return parseRelativeTime(input, base);
+    const result = parseRelativeTime(input, base + tzOffsetForName(allocator, tz_name, base));
+    if (result != .int) return result;
+    return .{ .int = result.int - tzOffsetForWallByName(allocator, tz_name, result.int) };
 }
 
 // the setters (setDate, setTime, setISODate) work on the wall-clock time in
@@ -1008,7 +1028,7 @@ fn dtAdd(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len == 0 or args[0] != .object) return NativeResult.borrowed(.{ .object = obj });
     const ts = getTimestamp(obj);
-    const new_ts = applyIntervalTz(ts, args[0].object, 1, objTzName(obj, ctx.vm.default_tz_name));
+    const new_ts = applyIntervalTz(ctx.allocator, ts, args[0].object, 1, objTzName(obj, ctx.vm.default_tz_name));
     try obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     return NativeResult.borrowed(.{ .object = obj });
 }
@@ -1017,7 +1037,7 @@ fn dtSub(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len == 0 or args[0] != .object) return NativeResult.borrowed(.{ .object = obj });
     const ts = getTimestamp(obj);
-    const new_ts = applyIntervalTz(ts, args[0].object, -1, objTzName(obj, ctx.vm.default_tz_name));
+    const new_ts = applyIntervalTz(ctx.allocator, ts, args[0].object, -1, objTzName(obj, ctx.vm.default_tz_name));
     try obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     return NativeResult.borrowed(.{ .object = obj });
 }
@@ -1026,7 +1046,7 @@ fn dtiAdd(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len == 0 or args[0] != .object) return NativeResult.borrowed(.{ .object = obj });
     const ts = getTimestamp(obj);
-    const new_ts = applyIntervalTz(ts, args[0].object, 1, objTzName(obj, ctx.vm.default_tz_name));
+    const new_ts = applyIntervalTz(ctx.allocator, ts, args[0].object, 1, objTzName(obj, ctx.vm.default_tz_name));
     const new_obj = try ctx.createObject("DateTimeImmutable");
     try new_obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     if (obj.get("__timezone") == .string) try new_obj.set(ctx.allocator, "__timezone", obj.get("__timezone"));
@@ -1037,7 +1057,7 @@ fn dtiSub(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len == 0 or args[0] != .object) return NativeResult.borrowed(.{ .object = obj });
     const ts = getTimestamp(obj);
-    const new_ts = applyIntervalTz(ts, args[0].object, -1, objTzName(obj, ctx.vm.default_tz_name));
+    const new_ts = applyIntervalTz(ctx.allocator, ts, args[0].object, -1, objTzName(obj, ctx.vm.default_tz_name));
     const new_obj = try ctx.createObject("DateTimeImmutable");
     try new_obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     if (obj.get("__timezone") == .string) try new_obj.set(ctx.allocator, "__timezone", obj.get("__timezone"));
@@ -1055,22 +1075,20 @@ fn dtDiff(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const invert: i64 = if (diff_secs < 0) 1 else 0;
     if (diff_secs < 0) diff_secs = -diff_secs;
 
-    // `days` is the total elapsed days, rounded to nearest. floor would
-    // mis-report `Mar 9 00:00 → Mar 10 00:00` (which spans spring forward and
-    // is 82800s real, i.e. 0.958 days) as 0 — PHP reports 1
-    const total_days = @divFloor(diff_secs + 43200, 86400);
-
     const early_ts = if (ts1 < ts2) ts1 else ts2;
     const late_ts = if (ts1 < ts2) ts2 else ts1;
     // calendar arithmetic happens in the receiver's timezone so DST boundaries
     // don't bleed into hour-of-day computation
     const tz_val = obj.get("__timezone");
     const tz_name = if (tz_val == .string) tz_val.string.bytes() else ctx.vm.default_tz_name;
-    const tz = lookupTimezone(tz_name);
-    const off_early: i64 = if (tz) |t| @as(i64, tzOffsetAt(t, early_ts)) else 0;
-    const off_late: i64 = if (tz) |t| @as(i64, tzOffsetAt(t, late_ts)) else 0;
+    const off_early: i64 = tzOffsetForName(ctx.allocator, tz_name, early_ts);
+    const off_late: i64 = tzOffsetForName(ctx.allocator, tz_name, late_ts);
     const c1 = baseComponents(early_ts + off_early);
     const c2 = baseComponents(late_ts + off_late);
+
+    // `days` counts whole days between the two wall-clock times, so a day
+    // that spans a dst change still counts as one
+    const total_days = @divFloor((late_ts + off_late) - (early_ts + off_early), 86400);
 
     var s = c2.sec - c1.sec;
     var mi = c2.min - c1.min;
@@ -1316,7 +1334,7 @@ fn createBareDt(ctx: *NativeContext, class_name: []const u8, args: []const Value
             ts = dateToTimestamp(year, month, day, hour, min, sec);
             ts -= @as(i64, tzOffsetForWallByName(ctx.allocator, tz_name, ts));
         } else {
-            const result = parseRelativeTime(s, ts);
+            const result = relativeInZone(ctx.allocator, s, ts, tz_name);
             if (result == .int) ts = result.int;
         }
     }
@@ -1371,7 +1389,7 @@ fn native_date_modify(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
     const obj = argObj(args) orelse return NativeResult.scalar(.{ .bool = false });
     if (args.len < 2 or args[1] != .string) return NativeResult.borrowed(.{ .object = obj });
     const ts = getTimestamp(obj);
-    const result = parseRelativeTime(args[1].string.bytes(), ts);
+    const result = relativeInZone(ctx.allocator, args[1].string.bytes(), ts, objTzName(obj, ctx.vm.default_tz_name));
     if (result != .int) return NativeResult.scalar(.{ .bool = false });
     if (isImmutable(obj)) {
         const new_obj = try ctx.createObject("DateTimeImmutable");
@@ -1387,7 +1405,7 @@ fn applyIntervalProc(ctx: *NativeContext, args: []const Value, sign: i64) Runtim
     const obj = argObj(args) orelse return NativeResult.scalar(.{ .bool = false });
     if (args.len < 2 or args[1] != .object) return NativeResult.borrowed(.{ .object = obj });
     const ts = getTimestamp(obj);
-    const new_ts = applyInterval(ts, args[1].object, sign);
+    const new_ts = applyIntervalTz(ctx.allocator, ts, args[1].object, sign, objTzName(obj, ctx.vm.default_tz_name));
     if (isImmutable(obj)) {
         const new_obj = try ctx.createObject("DateTimeImmutable");
         try new_obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
@@ -2262,37 +2280,40 @@ fn native_gmmktime(_: *NativeContext, args: []const Value) RuntimeError!NativeRe
     return NativeResult.scalar(.{ .int = dateToTimestamp(year, month, day, hour, min, sec) });
 }
 
-fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
-    const input = args[0].string.bytes();
-    const base: i64 = if (args.len >= 2) Value.toInt(args[1]) else std.time.timestamp();
+// strtotime's parse, on wall-clock time: base and the result are local times
+// in the default timezone, unless the input fixed its own instant (an @
+// timestamp, an explicit offset or zone), which makes the result absolute
+const ParsedInstant = struct { ts: i64, absolute: bool };
+
+fn strtotimeCore(input: []const u8, base: i64) ?ParsedInstant {
 
     // @timestamp - unix timestamp literal
     if (input.len >= 2 and input[0] == '@') {
-        const ts = std.fmt.parseInt(i64, input[1..], 10) catch return NativeResult.scalar(.{ .bool = false });
-        return NativeResult.scalar(.{ .int = ts });
+        const ts = std.fmt.parseInt(i64, input[1..], 10) catch return null;
+        return .{ .ts = ts, .absolute = true };
     }
 
     // ISO 8601 week date: YYYY-Www-D (e.g. 2024-W10-1) or YYYY-Www (Monday)
     if (input.len >= 8 and input[4] == '-' and (input[5] == 'W' or input[5] == 'w') and input[6] >= '0' and input[6] <= '9' and input[7] >= '0' and input[7] <= '9') {
-        const year = std.fmt.parseInt(i64, input[0..4], 10) catch return NativeResult.scalar(.{ .bool = false });
-        const week = std.fmt.parseInt(i64, input[6..8], 10) catch return NativeResult.scalar(.{ .bool = false });
+        const year = std.fmt.parseInt(i64, input[0..4], 10) catch return null;
+        const week = std.fmt.parseInt(i64, input[6..8], 10) catch return null;
         var dow: i64 = 1;
         if (input.len >= 10 and input[8] == '-' and input[9] >= '1' and input[9] <= '7') {
             dow = input[9] - '0';
         }
-        return NativeResult.scalar(.{ .int = isoWeekDateToTimestamp(year, week, dow, 0, 0, 0) });
+        return .{ .ts = isoWeekDateToTimestamp(year, week, dow, 0, 0, 0), .absolute = false };
     }
 
     // YYYY-MM-DD with optional time (space or T separator) and optional timezone
     if (input.len >= 10 and input[4] == '-' and input[7] == '-') {
-        const year = std.fmt.parseInt(i64, input[0..4], 10) catch return NativeResult.scalar(.{ .bool = false });
-        const month = std.fmt.parseInt(i64, input[5..7], 10) catch return NativeResult.scalar(.{ .bool = false });
-        const day = std.fmt.parseInt(i64, input[8..10], 10) catch return NativeResult.scalar(.{ .bool = false });
+        const year = std.fmt.parseInt(i64, input[0..4], 10) catch return null;
+        const month = std.fmt.parseInt(i64, input[5..7], 10) catch return null;
+        const day = std.fmt.parseInt(i64, input[8..10], 10) catch return null;
         var hour: i64 = 0;
         var min: i64 = 0;
         var sec: i64 = 0;
         var tz_offset: i64 = 0;
+        var explicit = false;
         var consumed: usize = 10;
         if (input.len > 10 and (input[10] == ' ' or input[10] == 'T')) {
             var time_start: usize = 11;
@@ -2322,6 +2343,7 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!NativeR
                 if (rest.len > 0) {
                     if (parseTimezoneOffset(rest)) |off| {
                         tz_offset = off;
+                        explicit = true;
                         consumed = input.len;
                     }
                 }
@@ -2334,14 +2356,14 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!NativeR
             const rel = parseRelativeTime(trailing, base_ts);
             if (rel == .int) base_ts = rel.int;
         }
-        return NativeResult.scalar(.{ .int = base_ts });
+        return .{ .ts = base_ts, .absolute = explicit };
     }
 
     // YYYY/MM/DD slash date (PHP accepts this alongside YYYY-MM-DD)
     if (input.len >= 10 and input[4] == '/' and input[7] == '/') {
-        const year = std.fmt.parseInt(i64, input[0..4], 10) catch return NativeResult.scalar(.{ .bool = false });
-        const month = std.fmt.parseInt(i64, input[5..7], 10) catch return NativeResult.scalar(.{ .bool = false });
-        const day = std.fmt.parseInt(i64, input[8..10], 10) catch return NativeResult.scalar(.{ .bool = false });
+        const year = std.fmt.parseInt(i64, input[0..4], 10) catch return null;
+        const month = std.fmt.parseInt(i64, input[5..7], 10) catch return null;
+        const day = std.fmt.parseInt(i64, input[8..10], 10) catch return null;
         var hour: i64 = 0;
         var min: i64 = 0;
         var sec: i64 = 0;
@@ -2350,18 +2372,19 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!NativeR
             min = std.fmt.parseInt(i64, input[14..16], 10) catch 0;
             sec = std.fmt.parseInt(i64, input[17..19], 10) catch 0;
         }
-        return NativeResult.scalar(.{ .int = dateToTimestamp(year, month, day, hour, min, sec) });
+        return .{ .ts = dateToTimestamp(year, month, day, hour, min, sec), .absolute = false };
     }
 
     // MM/DD/YYYY US date format with optional timezone
     if (input.len >= 10 and input[2] == '/' and input[5] == '/') {
-        const month = std.fmt.parseInt(i64, input[0..2], 10) catch return NativeResult.scalar(.{ .bool = false });
-        const day = std.fmt.parseInt(i64, input[3..5], 10) catch return NativeResult.scalar(.{ .bool = false });
-        const year = std.fmt.parseInt(i64, input[6..10], 10) catch return NativeResult.scalar(.{ .bool = false });
+        const month = std.fmt.parseInt(i64, input[0..2], 10) catch return null;
+        const day = std.fmt.parseInt(i64, input[3..5], 10) catch return null;
+        const year = std.fmt.parseInt(i64, input[6..10], 10) catch return null;
         var hour: i64 = 0;
         var min: i64 = 0;
         var sec: i64 = 0;
         var tz_offset: i64 = 0;
+        var explicit = false;
         if (input.len >= 19 and input[10] == ' ' and input[13] == ':' and input[16] == ':') {
             hour = std.fmt.parseInt(i64, input[11..13], 10) catch 0;
             min = std.fmt.parseInt(i64, input[14..16], 10) catch 0;
@@ -2369,10 +2392,13 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!NativeR
             var rest = input[19..];
             while (rest.len > 0 and rest[0] == ' ') rest = rest[1..];
             if (rest.len > 0) {
-                if (parseTimezoneOffset(rest)) |off| tz_offset = off;
+                if (parseTimezoneOffset(rest)) |off| {
+                    tz_offset = off;
+                    explicit = true;
+                }
             }
         }
-        return NativeResult.scalar(.{ .int = dateToTimestamp(year, month, day, hour, min, sec) - tz_offset });
+        return .{ .ts = dateToTimestamp(year, month, day, hour, min, sec) - tz_offset, .absolute = explicit };
     }
 
     // DD.MM.YYYY EU date format
@@ -2389,7 +2415,7 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!NativeR
                 min = std.fmt.parseInt(i64, input[14..16], 10) catch 0;
                 sec = std.fmt.parseInt(i64, input[17..19], 10) catch 0;
             }
-            return NativeResult.scalar(.{ .int = dateToTimestamp(year.?, month.?, day.?, hour, min, sec) });
+            return .{ .ts = dateToTimestamp(year.?, month.?, day.?, hour, min, sec), .absolute = false };
         }
     }
 
@@ -2411,24 +2437,36 @@ fn native_strtotime(_: *NativeContext, args: []const Value) RuntimeError!NativeR
                 min = std.fmt.parseInt(i64, input[14..16], 10) catch 0;
                 sec = std.fmt.parseInt(i64, input[17..19], 10) catch 0;
             }
-            return NativeResult.scalar(.{ .int = dateToTimestamp(year.?, month.?, day.?, hour, min, sec) });
+            return .{ .ts = dateToTimestamp(year.?, month.?, day.?, hour, min, sec), .absolute = false };
         }
     }
 
     // RFC 2822: "Mon, 15 Jan 2025 10:30:45 +0000" or "15 Jan 2025 10:30:45 GMT"
-    if (tryParseRfc2822(input)) |ts| return NativeResult.scalar(.{ .int = ts });
+    if (tryParseRfc2822(input)) |ts| return .{ .ts = ts, .absolute = explicitZone(input) };
 
     // textual month dates: "January 15, 2025", "Jan 15, 2025", "Jan 15 2025", "15 Jan 2025"
-    if (tryParseTextualDate(input)) |ts| return NativeResult.scalar(.{ .int = ts });
+    if (tryParseTextualDate(input)) |ts| return .{ .ts = ts, .absolute = explicitZone(input) };
 
     // bare time-of-day ("14:30", "2:30pm", "09:15:00") - PHP keeps base's
     // calendar date and replaces the time
     if (tryParseBareTime(input)) |tod| {
         const dc = baseComponents(base);
-        return NativeResult.scalar(.{ .int = dateToTimestamp(dc.year, dc.month, dc.day, tod.hour, tod.min, tod.sec) });
+        return .{ .ts = dateToTimestamp(dc.year, dc.month, dc.day, tod.hour, tod.min, tod.sec), .absolute = false };
     }
 
-    return NativeResult.scalar(parseRelativeTime(input, base));
+    const rel = parseRelativeTime(input, base);
+    if (rel != .int) return null;
+    return .{ .ts = rel.int, .absolute = explicitZone(input) };
+}
+
+fn native_strtotime(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
+    const input = args[0].string.bytes();
+    const base: i64 = if (args.len >= 2) Value.toInt(args[1]) else std.time.timestamp();
+    const tz = ctx.vm.default_tz_name;
+    const parsed = strtotimeCore(input, base + tzOffsetForName(ctx.allocator, tz, base)) orelse return NativeResult.scalar(.{ .bool = false });
+    if (parsed.absolute or explicitZone(input)) return NativeResult.scalar(.{ .int = parsed.ts });
+    return NativeResult.scalar(.{ .int = parsed.ts - tzOffsetForWallByName(ctx.allocator, tz, parsed.ts) });
 }
 
 // returns a TimeOfDay only when the whole input is a standalone time, i.e.
@@ -2864,32 +2902,26 @@ fn buildDateParseResultOpt(ctx: *NativeContext, year: ?i64, month: ?i64, day: ?i
 }
 
 fn native_getdate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    const timestamp: i64 = if (args.len >= 1) Value.toInt(args[0]) else std.time.timestamp();
-    const epoch_secs: u64 = @intCast(if (timestamp < 0) 0 else timestamp);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const day_seconds = es.getDaySeconds();
-    const epoch_day = es.getEpochDay();
-    const year_day = epoch_day.calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-    const day_num: i64 = @intCast(epoch_day.day);
-    const dow: i64 = @intCast(@mod(day_num + 4, 7)); // 0=sunday
+    const timestamp: i64 = if (args.len >= 1 and args[0] != .null) Value.toInt(args[0]) else std.time.timestamp();
+    const lp = localParts(ctx.allocator, timestamp, ctx.vm.default_tz_name);
+    const weekdays = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    const months = [_][]const u8{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
 
     var arr = try ctx.createArray();
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("seconds") }, .{ .int = day_seconds.getSecondsIntoMinute() });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("minutes") }, .{ .int = day_seconds.getMinutesIntoHour() });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("hours") }, .{ .int = day_seconds.getHoursIntoDay() });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("mday") }, .{ .int = @as(i64, month_day.day_index) + 1 });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("wday") }, .{ .int = dow });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("mon") }, .{ .int = month_day.month.numeric() });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("year") }, .{ .int = year_day.year });
-    const jan1_ts = dateToTimestamp(year_day.year, 1, 1, 0, 0, 0);
-    const jan1_es = std.time.epoch.EpochSeconds{ .secs = @intCast(if (jan1_ts < 0) 0 else jan1_ts) };
-    const jan1_day: i64 = @intCast(jan1_es.getEpochDay().day);
-    const cur_day: i64 = @intCast(epoch_day.day);
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("yday") }, .{ .int = cur_day - jan1_day });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("weekday") }, .{ .string = Value.String.borrowed(([_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" })[@intCast(dow)]) });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("month") }, .{ .string = Value.String.borrowed(([_][]const u8{ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" })[@intCast(month_day.month.numeric() - 1)]) });
-    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("0") }, .{ .int = timestamp });
+    const ints = [_]struct { []const u8, i64 }{
+        .{ "seconds", lp.dc.sec },
+        .{ "minutes", lp.dc.min },
+        .{ "hours", lp.dc.hour },
+        .{ "mday", lp.dc.day },
+        .{ "wday", lp.dow },
+        .{ "mon", lp.dc.month },
+        .{ "year", lp.dc.year },
+        .{ "yday", lp.yday },
+    };
+    for (ints) |f| try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(f[0]) }, .{ .int = f[1] });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("weekday") }, .{ .string = Value.String.borrowed(weekdays[@intCast(lp.dow)]) });
+    try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("month") }, .{ .string = Value.String.borrowed(months[@intCast(lp.dc.month - 1)]) });
+    try arr.set(ctx.allocator, .{ .int = 0 }, .{ .int = timestamp });
     return NativeResult.borrowed(.{ .array = arr });
 }
 
@@ -3013,9 +3045,7 @@ pub fn parseRelativeTime(input: []const u8, base: i64) Value {
             if (startsWithLower(rest, "this week")) week_dir = 0 else if (startsWithLower(rest, "next week")) week_dir = 1 else if (startsWithLower(rest, "last week")) week_dir = -1;
             if (week_dir) |wd| {
                 const midnight = baseMidnight(base);
-                const epoch_secs: u64 = @intCast(if (midnight < 0) 0 else midnight);
-                const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-                const day_num: i64 = @intCast(es.getEpochDay().day);
+                const day_num: i64 = @divFloor(midnight, 86400);
                 const current_dow: i64 = @mod(day_num + 3, 7); // 0=Mon
                 const monday = midnight - current_dow * 86400 + wd * 7 * 86400;
                 return .{ .int = monday + @as(i64, target_dow) * 86400 };
@@ -3193,10 +3223,7 @@ fn tryParseNextLast(input: []const u8, base: i64) ?i64 {
     if (eqlLower(s, "week")) {
         const comps = baseComponents(base);
         const midnight = baseMidnight(base);
-        const epoch_secs: u64 = @intCast(if (midnight < 0) 0 else midnight);
-        const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-        const epoch_day = es.getEpochDay();
-        const day_num: i64 = @intCast(epoch_day.day);
+        const day_num: i64 = @divFloor(midnight, 86400);
         const current_dow: i64 = @mod(day_num + 3, 7); // 0=Mon
         const current_monday = midnight - current_dow * 86400;
         const target_monday = current_monday + direction * 7 * 86400;
@@ -3393,10 +3420,7 @@ fn parseWeekdayName(s: []const u8) ?u3 {
 
 fn resolveNextWeekday(base: i64, target_dow: u3) i64 {
     const midnight = baseMidnight(base);
-    const epoch_secs: u64 = @intCast(if (midnight < 0) 0 else midnight);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const epoch_day = es.getEpochDay();
-    const day_num: i64 = @intCast(epoch_day.day);
+    const day_num: i64 = @divFloor(midnight, 86400);
     const current_dow: u3 = @intCast(@mod(day_num + 3, 7));
     var diff: i64 = @as(i64, target_dow) - @as(i64, current_dow);
     if (diff <= 0) diff += 7;
@@ -3408,10 +3432,7 @@ fn resolveNextWeekday(base: i64, target_dow: u3) i64 {
 // resolveNextWeekday always advances at least 1 day, matching 'next monday'
 fn resolveThisWeekday(base: i64, target_dow: u3) i64 {
     const midnight = baseMidnight(base);
-    const epoch_secs: u64 = @intCast(if (midnight < 0) 0 else midnight);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const epoch_day = es.getEpochDay();
-    const day_num: i64 = @intCast(epoch_day.day);
+    const day_num: i64 = @divFloor(midnight, 86400);
     const current_dow: u3 = @intCast(@mod(day_num + 3, 7));
     var diff: i64 = @as(i64, target_dow) - @as(i64, current_dow);
     if (diff < 0) diff += 7;
@@ -3420,10 +3441,7 @@ fn resolveThisWeekday(base: i64, target_dow: u3) i64 {
 
 fn resolveLastWeekday(base: i64, target_dow: u3) i64 {
     const midnight = baseMidnight(base);
-    const epoch_secs: u64 = @intCast(if (midnight < 0) 0 else midnight);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const epoch_day = es.getEpochDay();
-    const day_num: i64 = @intCast(epoch_day.day);
+    const day_num: i64 = @divFloor(midnight, 86400);
     const current_dow: u3 = @intCast(@mod(day_num + 3, 7));
     var diff: i64 = @as(i64, current_dow) - @as(i64, target_dow);
     if (diff <= 0) diff += 7;
@@ -3736,6 +3754,12 @@ fn embeddedBlob() ?[]const u8 {
 // lifetime, never freed), or null. exact-case match, mirroring readZoneInfo's
 // case-sensitive path lookup
 fn embeddedZoneInfo(name: []const u8) ?[]const u8 {
+    const z = embeddedZone(name, false) orelse return null;
+    return z.data;
+}
+
+// zone ids match case-insensitively, as in php ("america/new_york")
+fn embeddedZone(name: []const u8, ignore_case: bool) ?struct { name: []const u8, data: []const u8 } {
     if (!tzNameValid(name)) return null;
     const blob = embeddedBlob() orelse return null;
     if (blob.len < 8 or !std.mem.eql(u8, blob[0..4], "ZTZ1")) return null;
@@ -3755,7 +3779,8 @@ fn embeddedZoneInfo(name: []const u8) ?[]const u8 {
         if (off + dl > blob.len) return null;
         const data = blob[off .. off + dl];
         off += dl;
-        if (std.mem.eql(u8, ename, name)) return data;
+        const hit = if (ignore_case) std.ascii.eqlIgnoreCase(ename, name) else std.mem.eql(u8, ename, name);
+        if (hit) return .{ .name = ename, .data = data };
     }
     return null;
 }
@@ -3782,7 +3807,11 @@ fn resolveTzif(allocator: Allocator, name: []const u8) ?TzBytes {
     zone_cache_mutex.lock();
     defer zone_cache_mutex.unlock();
     if (zone_cache.get(name)) |b| return .{ .bytes = b, .owned = false };
-    const bytes: []const u8 = readZoneInfo(std.heap.page_allocator, name) orelse embeddedZoneInfo(name) orelse return null;
+    const bytes: []const u8 = readZoneInfo(std.heap.page_allocator, name) orelse embeddedZoneInfo(name) orelse blk: {
+        // a differently-cased id resolves through its canonical spelling
+        const z = embeddedZone(name, true) orelse return null;
+        break :blk readZoneInfo(std.heap.page_allocator, z.name) orelse z.data;
+    };
     const key = std.heap.page_allocator.dupe(u8, name) catch return .{ .bytes = bytes, .owned = false };
     zone_cache.put(std.heap.page_allocator, key, bytes) catch {};
     _ = allocator;
@@ -3958,6 +3987,15 @@ pub fn tzOffsetForName(allocator: Allocator, name: []const u8, utc_ts: i64) i32 
     }
     if (lookupTimezone(name)) |tz| return tzOffsetAt(tz, utc_ts);
     return 0;
+}
+
+pub fn tzIsDstForName(allocator: Allocator, name: []const u8, utc_ts: i64) bool {
+    if (resolveTzif(allocator, name)) |h| {
+        defer h.deinit(allocator);
+        if (tzifLookupUtc(h.bytes, utc_ts)) |r| return r.is_dst;
+    }
+    if (lookupTimezone(name)) |tz| return isDst(utc_ts, tz);
+    return false;
 }
 
 pub fn tzOffsetForWallByName(allocator: Allocator, name: []const u8, wall_ts: i64) i32 {
@@ -4295,9 +4333,7 @@ fn tryParseOrdinalWeekday(input: []const u8, base: i64) ?i64 {
         // find the last occurrence of target_dow in the month
         const dim = daysInMonth(month, year);
         const last_day_ts = dateToTimestamp(year, month, dim, 0, 0, 0);
-        const last_epoch: u64 = @intCast(if (last_day_ts < 0) 0 else last_day_ts);
-        const last_es = std.time.epoch.EpochSeconds{ .secs = last_epoch };
-        const last_day_num: i64 = @intCast(last_es.getEpochDay().day);
+        const last_day_num: i64 = @divFloor(last_day_ts, 86400);
         const last_dow: i64 = @mod(last_day_num + 3, 7); // 0=Mon
         var diff = last_dow - @as(i64, target_dow);
         if (diff < 0) diff += 7;
@@ -4306,9 +4342,7 @@ fn tryParseOrdinalWeekday(input: []const u8, base: i64) ?i64 {
 
     // find the Nth occurrence of target_dow in the month
     const first_ts = dateToTimestamp(year, month, 1, 0, 0, 0);
-    const first_epoch: u64 = @intCast(if (first_ts < 0) 0 else first_ts);
-    const first_es = std.time.epoch.EpochSeconds{ .secs = first_epoch };
-    const first_day_num: i64 = @intCast(first_es.getEpochDay().day);
+    const first_day_num: i64 = @divFloor(first_ts, 86400);
     const first_dow: i64 = @mod(first_day_num + 3, 7); // 0=Mon
     var days_to_first = @as(i64, target_dow) - first_dow;
     if (days_to_first < 0) days_to_first += 7;
@@ -4332,11 +4366,17 @@ fn native_gmdate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
 fn native_tz_set(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
     const name = args[0].string.bytes();
-    if (lookupTimezone(name)) |_| {
-        ctx.vm.default_tz_name = name;
-        return NativeResult.scalar(.{ .bool = true });
+    // a zone id, never an offset; php keeps the spelling it was given
+    const valid = name.len > 0 and name.len <= ctx.vm.default_tz_buf.len and name[0] != '+' and name[0] != '-' and tzIsKnown(ctx.allocator, name);
+    if (!valid) {
+        const msg = try std.fmt.allocPrint(ctx.allocator, "date_default_timezone_set(): Timezone ID '{s}' is invalid", .{name});
+        defer ctx.allocator.free(msg);
+        try ctx.vm.raiseError(8, msg);
+        return NativeResult.scalar(.{ .bool = false });
     }
-    return NativeResult.scalar(.{ .bool = false });
+    @memcpy(ctx.vm.default_tz_buf[0..name.len], name);
+    ctx.vm.default_tz_name = ctx.vm.default_tz_buf[0..name.len];
+    return NativeResult.scalar(.{ .bool = true });
 }
 
 fn native_timezone_name_get(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
@@ -4401,89 +4441,96 @@ fn native_tz_get(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
     return try NativeResult.copyString(ctx.allocator, ctx.vm.default_tz_name);
 }
 
-fn native_localtime(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
-    const timestamp: i64 = if (args.len >= 1) Value.toInt(args[0]) else std.time.timestamp();
-    const assoc = args.len >= 2 and args[1].isTruthy();
-    const epoch_secs: u64 = @intCast(if (timestamp < 0) 0 else timestamp);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const day_seconds = es.getDaySeconds();
-    const epoch_day = es.getEpochDay();
-    const year_day = epoch_day.calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-    const day_num: i64 = @intCast(epoch_day.day);
-    const dow: i64 = @intCast(@mod(day_num + 4, 7));
-    const jan1_ts = dateToTimestamp(year_day.year, 1, 1, 0, 0, 0);
-    const jan1_es = std.time.epoch.EpochSeconds{ .secs = @intCast(if (jan1_ts < 0) 0 else jan1_ts) };
-    const jan1_day: i64 = @intCast(jan1_es.getEpochDay().day);
-    const cur_day: i64 = @intCast(epoch_day.day);
-    const yday = cur_day - jan1_day;
+// the broken-down local time of a timestamp in a zone, as localtime() and
+// idate() report it
+const LocalParts = struct {
+    dc: DateComponents,
+    offset: i32,
+    dst: bool,
+    dow: i64, // 0 = sunday
+    yday: i64,
+    day_num: i64,
+    local_ts: i64,
+};
 
+fn localParts(a: Allocator, timestamp: i64, tz_name: []const u8) LocalParts {
+    const offset = tzOffsetForName(a, tz_name, timestamp);
+    const local_ts = timestamp + offset;
+    const dc = baseComponents(local_ts);
+    const day_num = @divFloor(local_ts, 86400);
+    return .{
+        .dc = dc,
+        .offset = offset,
+        .dst = tzIsDstForName(a, tz_name, timestamp),
+        .dow = @mod(day_num + 4, 7),
+        .yday = day_num - @divFloor(dateToTimestamp(dc.year, 1, 1, 0, 0, 0), 86400),
+        .day_num = day_num,
+        .local_ts = local_ts,
+    };
+}
+
+fn native_localtime(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const timestamp: i64 = if (args.len >= 1 and args[0] != .null) Value.toInt(args[0]) else std.time.timestamp();
+    const assoc = args.len >= 2 and args[1].isTruthy();
+    const lp = localParts(ctx.allocator, timestamp, ctx.vm.default_tz_name);
+    const fields = [_]struct { []const u8, i64 }{
+        .{ "tm_sec", lp.dc.sec },
+        .{ "tm_min", lp.dc.min },
+        .{ "tm_hour", lp.dc.hour },
+        .{ "tm_mday", lp.dc.day },
+        .{ "tm_mon", lp.dc.month - 1 },
+        .{ "tm_year", lp.dc.year - 1900 },
+        .{ "tm_wday", lp.dow },
+        .{ "tm_yday", lp.yday },
+        .{ "tm_isdst", @intFromBool(lp.dst) },
+    };
     var arr = try ctx.createArray();
-    if (assoc) {
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_sec") }, .{ .int = day_seconds.getSecondsIntoMinute() });
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_min") }, .{ .int = day_seconds.getMinutesIntoHour() });
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_hour") }, .{ .int = day_seconds.getHoursIntoDay() });
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_mday") }, .{ .int = @as(i64, month_day.day_index) + 1 });
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_mon") }, .{ .int = month_day.month.numeric() - 1 });
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_year") }, .{ .int = year_day.year - 1900 });
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_wday") }, .{ .int = dow });
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_yday") }, .{ .int = yday });
-        try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("tm_isdst") }, .{ .int = 0 });
-    } else {
-        try arr.append(ctx.allocator, .{ .int = day_seconds.getSecondsIntoMinute() });
-        try arr.append(ctx.allocator, .{ .int = day_seconds.getMinutesIntoHour() });
-        try arr.append(ctx.allocator, .{ .int = day_seconds.getHoursIntoDay() });
-        try arr.append(ctx.allocator, .{ .int = @as(i64, month_day.day_index) + 1 });
-        try arr.append(ctx.allocator, .{ .int = month_day.month.numeric() - 1 });
-        try arr.append(ctx.allocator, .{ .int = year_day.year - 1900 });
-        try arr.append(ctx.allocator, .{ .int = dow });
-        try arr.append(ctx.allocator, .{ .int = yday });
-        try arr.append(ctx.allocator, .{ .int = 0 });
+    for (fields) |f| {
+        if (assoc) {
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed(f[0]) }, .{ .int = f[1] });
+        } else {
+            try arr.append(ctx.allocator, .{ .int = f[1] });
+        }
     }
     return NativeResult.borrowed(.{ .array = arr });
 }
 
-fn native_idate(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+fn native_idate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len == 0 or args[0] != .string or args[0].string.bytes().len == 0) return NativeResult.scalar(.{ .bool = false });
     const fmt = args[0].string.bytes()[0];
-    const timestamp: i64 = if (args.len >= 2) Value.toInt(args[1]) else std.time.timestamp();
-    const epoch_secs: u64 = @intCast(if (timestamp < 0) 0 else timestamp);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const day_seconds = es.getDaySeconds();
-    const epoch_day = es.getEpochDay();
-    const year_day = epoch_day.calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-    const day_num: i64 = @intCast(epoch_day.day);
-    const dow: i64 = @intCast(@mod(day_num + 4, 7));
+    const timestamp: i64 = if (args.len >= 2 and args[1] != .null) Value.toInt(args[1]) else std.time.timestamp();
+    const lp = localParts(ctx.allocator, timestamp, ctx.vm.default_tz_name);
+    const dc = lp.dc;
 
     const v: i64 = switch (fmt) {
-        'd' => @as(i64, month_day.day_index) + 1,
-        'h' => blk: {
-            const h12 = @mod(day_seconds.getHoursIntoDay(), 12);
-            break :blk if (h12 == 0) @as(@TypeOf(h12), 12) else h12;
-        },
-        'H' => day_seconds.getHoursIntoDay(),
-        'i' => day_seconds.getMinutesIntoHour(),
-        'm' => month_day.month.numeric(),
-        's' => day_seconds.getSecondsIntoMinute(),
-        'U' => timestamp,
-        'w' => dow,
-        'y' => @mod(year_day.year, 100),
-        'Y' => year_day.year,
-        't' => daysInMonth(month_day.month.numeric(), year_day.year),
-        'z' => year_day.day,
-        'I' => 0, // DST flag - approximate as 0 (no DST awareness here)
-        'L' => if (isLeapYear(year_day.year)) @as(i64, 1) else 0,
-        'N' => if (dow == 0) @as(i64, 7) else dow, // ISO 8601 day of week, Monday=1..Sunday=7
-        'B' => @intCast(@mod(@divTrunc(day_seconds.secs, 86), 1000)), // Swatch internet time (rough)
-        'Z' => 0, // timezone offset in seconds; without TZ context, default to UTC
+        'd' => dc.day,
+        'h' => if (@mod(dc.hour, 12) == 0) 12 else @mod(dc.hour, 12),
+        'H' => dc.hour,
+        'i' => dc.min,
+        'm' => dc.month,
+        's' => dc.sec,
+        // php hands idate's result through a c int
+        'U' => @as(i32, @truncate(timestamp)),
+        'w' => lp.dow,
+        'y' => @mod(dc.year, 100),
+        'Y' => dc.year,
+        't' => daysInMonth(dc.month, dc.year),
+        'z' => lp.yday,
+        'I' => @intFromBool(lp.dst),
+        'L' => @intFromBool(isLeapYear(dc.year)),
+        'N' => if (lp.dow == 0) 7 else lp.dow,
+        'o' => isoWeek(lp.day_num).year,
+        'W' => isoWeek(lp.day_num).week,
+        // swatch beats are measured in utc+1
+        'B' => @divFloor(@mod(timestamp + 3600, 86400) * 10, 864),
+        'Z' => lp.offset,
         else => return NativeResult.scalar(.{ .bool = false }),
     };
     return NativeResult.scalar(.{ .int = v });
 }
 
-fn isLeapYear(y: u16) bool {
-    return (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0);
+fn isLeapYear(y: i64) bool {
+    return (@mod(y, 4) == 0 and @mod(y, 100) != 0) or @mod(y, 400) == 0;
 }
 
 const IsoDuration = struct { y: i64, m: i64, d: i64, h: i64, mi: i64, s: i64, f: f64 };

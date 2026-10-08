@@ -859,6 +859,8 @@ pub const VM = struct {
     last_http_response_headers: ?*PhpArray = null,
     headers_sent: bool = false,
     default_tz_name: []const u8 = "UTC",
+    // backing for a zone set by date_default_timezone_set(); zone ids are short
+    default_tz_buf: [64]u8 = undefined,
     // populated by DateTime/createFromFormat parsers when input is unparseable.
     // DateTime::getLastErrors returns the structured form; false when the most
     // recent parse succeeded (PHP 8.2+ behavior)
