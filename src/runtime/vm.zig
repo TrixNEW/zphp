@@ -358,6 +358,9 @@ pub const ClassDef = struct {
     has_prop_hooks: bool = false,
     backed_type: enum(u8) { none = 0, int_type = 1, string_type = 2 } = .none,
     case_order: std.ArrayListUnmanaged([]const u8) = .{},
+    // #[\Deprecated] constants and enum cases: what follows "is deprecated"
+    // in the warning (" since 2.0, use X", or "")
+    deprecated_constants: std.StringHashMapUnmanaged([]const u8) = .{},
     slot_layout: ?*PhpObject.SlotLayout = null,
     used_traits: std.ArrayListUnmanaged([]const u8) = .{},
     attributes: std.ArrayListUnmanaged(AttributeDef) = .{},
@@ -446,6 +449,7 @@ pub const ClassDef = struct {
         self.interfaces.deinit(allocator);
         self.used_traits.deinit(allocator);
         self.case_order.deinit(allocator);
+        self.deprecated_constants.deinit(allocator);
         for (self.attributes.items) |a| {
             if (a.args.len > 0) allocator.free(a.args);
             if (a.arg_names.len > 0) allocator.free(a.arg_names);
@@ -559,6 +563,10 @@ pub const VM = struct {
     // the innermost running native call; a user call made at its depth comes
     // from the native itself
     native_call: ?*const NativeCall = null,
+    // set once a #[\Deprecated] constant is declared: reads check for it only then
+    has_deprecated_constants: bool = false,
+    // #[\Deprecated] global constants: what follows "is deprecated"
+    deprecated_globals: std.StringHashMapUnmanaged([]const u8) = .{},
     // php resource ids: STDIN, STDOUT and STDERR take 1-3 at init
     next_resource_id: u32 = 0,
     // php's default stream context, made on first use; it takes the next
@@ -1578,6 +1586,9 @@ pub const VM = struct {
     };
 
     fn allocGenerator(self: *VM, initial: Generator) RuntimeError!*Generator {
+        // a generator function's body only runs once it is iterated, so its
+        // call attributes are checked here, while the caller is current
+        try self.checkGeneratorCall(initial.func);
         const gen = if (!self.serve_mode) self.free_generators.pop() orelse blk: {
             const created = try self.allocator.create(Generator);
             errdefer self.allocator.destroy(created);
@@ -2870,6 +2881,7 @@ pub const VM = struct {
         self.free_closure_names.deinit(self.allocator);
         self.php_constants.deinit(self.allocator);
         self.user_constants.deinit(self.allocator);
+        self.deprecated_globals.deinit(self.allocator);
         self.ini_settings.deinit(self.allocator);
         self.ini_callbacks.deinit(self.allocator);
         self.shutdown_callbacks.deinit(self.allocator);
@@ -3131,6 +3143,7 @@ pub const VM = struct {
             self.chunk_to_func_names.clearRetainingCapacity();
             self.php_constants.clearRetainingCapacity();
             self.user_constants.clearRetainingCapacity();
+            self.deprecated_globals.clearRetainingCapacity();
             initConstants(&self.php_constants, self.allocator) catch {};
             extension.applyConstants(self) catch {};
             // builtins persist across reset now (freeClassState kept them), so the
@@ -3820,12 +3833,14 @@ pub const VM = struct {
                     } else if (self.currentFrame().vars.get(name)) |val| {
                         self.push(val);
                     } else if (self.php_constants.get(name)) |val| {
+                        self.warnDeprecatedConstant(name) catch if (try self.resumeRaised()) continue;
                         self.push(val);
                     } else if (std.mem.lastIndexOfScalar(u8, name, '\\')) |sep| blk: {
                         // PHP fallback: bare constants in a namespace try
                         // <ns>\<name> first, then fall back to the global <name>
                         const bare = name[sep + 1 ..];
                         if (self.php_constants.get(bare)) |val| {
+                            self.warnDeprecatedConstant(bare) catch if (try self.resumeRaised()) continue;
                             self.push(val);
                             break :blk;
                         }
@@ -7015,6 +7030,22 @@ pub const VM = struct {
                     if (dispatched) continue;
                 },
 
+                .check_deprecated => {
+                    // the first instruction of a #[\Deprecated] function: every
+                    // call warns, a native's callback included, at the line of
+                    // the php code that made it
+                    if (self.frame_count >= 2) {
+                        const func = self.currentFrame().func.?;
+                        const kind: []const u8 = if (std.mem.indexOf(u8, func.name, "::") != null) "Method" else "Function";
+                        const shown = if (func.display_name.len > 0) func.display_name else func.name;
+                        const msg = try std.fmt.allocPrint(self.allocator, "{s} {s}() is deprecated{s}", .{ kind, shown, func.deprecated orelse "" });
+                        defer self.allocator.free(msg);
+                        const caller = &self.frames[self.frame_count - 2];
+                        const line: i64 = if (self.sourceLocation(caller.chunk, if (caller.ip > 0) caller.ip - 1 else 0)) |loc| @intCast(loc.line) else 0;
+                        self.raiseErrorAt(E_USER_DEPRECATED, msg, .{ .file = self.frameFile(self.frame_count - 2), .line = line }) catch if (try self.resumeRaised()) continue;
+                    }
+                },
+
                 .check_nodiscard => {
                     // the first instruction of a #[\NoDiscard] function. the
                     // caller throws the result away when its next instruction is
@@ -7530,6 +7561,13 @@ pub const VM = struct {
                 .cast_array => self.push(try self.castToArray(self.pop())),
 
                 .cast_object => self.push(try self.castToObject(self.pop())),
+
+                .deprecate_const => {
+                    const name = self.currentChunk().constants.items[self.readU16()].string.bytes();
+                    const suffix = self.currentChunk().constants.items[self.readU16()].string.bytes();
+                    try self.deprecated_globals.put(self.allocator, name, suffix);
+                    self.has_deprecated_constants = true;
+                },
 
                 .define_const => {
                     const name_idx = self.readU16();
@@ -10885,7 +10923,13 @@ pub const VM = struct {
                     const const_name = self.currentChunk().constants.items[const_idx].string.bytes();
                     if (!std.mem.eql(u8, const_name, "class")) {
                         if (self.getClassConstant(class_name, const_name)) |val| {
-                            self.rememberClassConstant(class_name, val);
+                            // a deprecated constant warns on every read, so it
+                            // stays out of the inline cache the fast loop uses
+                            const deprecated = self.warnDeprecatedClassConstant(class_name, const_name) catch blk: {
+                                if (try self.resumeRaised()) continue;
+                                break :blk true;
+                            };
+                            if (!deprecated) self.rememberClassConstant(class_name, val);
                             self.push(val);
                             continue;
                         }
@@ -11405,6 +11449,7 @@ pub const VM = struct {
             return false;
         }
         if (self.getClassConstant(class_name, const_name)) |val| {
+            _ = try self.warnDeprecatedClassConstant(class_name, const_name);
             self.push(val);
             return false;
         }
@@ -12164,6 +12209,7 @@ pub const VM = struct {
     }
 
     pub const E_WARNING: i64 = 2;
+    pub const E_USER_DEPRECATED: i64 = 16384;
 
     pub fn emitWarning(self: *VM, msg: []const u8) RuntimeError!void {
         return self.raiseError(E_WARNING, msg);
@@ -12173,6 +12219,82 @@ pub const VM = struct {
     // excludes the level; otherwise, or when the handler returns false, it is
     // recorded for error_get_last and printed if error_reporting allows. an
     // exception thrown by the handler is left pending as error.RuntimeError
+    // the text a #[\Deprecated] among attrs adds after "is deprecated"
+    // (" since 2.0, use X", or ""), null without the attribute. kept for the
+    // vm's lifetime
+    fn deprecationOf(self: *VM, attrs: []const AttributeDef) RuntimeError!?[]const u8 {
+        for (attrs) |attr| {
+            const name = if (attr.name.len > 0 and attr.name[0] == '\\') attr.name[1..] else attr.name;
+            if (!std.ascii.eqlIgnoreCase(name, "Deprecated")) continue;
+            var message: []const u8 = "";
+            var since: []const u8 = "";
+            for (attr.args, 0..) |arg, i| {
+                const arg_name: ?[]const u8 = if (i < attr.arg_names.len) attr.arg_names[i] else null;
+                if (arg != .string) continue;
+                const is_since = if (arg_name) |n| std.mem.eql(u8, n, "since") else i == 1;
+                if (is_since) since = arg.string.bytes() else message = arg.string.bytes();
+            }
+            const text = try std.fmt.allocPrint(self.allocator, "{s}{s}{s}{s}", .{ if (since.len > 0) " since " else "", since, if (message.len > 0) ", " else "", message });
+            try self.strings.append(self.allocator, text);
+            return text;
+        }
+        return null;
+    }
+
+    // #[\Deprecated] and #[\NoDiscard] on a generator function, at its call
+    fn checkGeneratorCall(self: *VM, func: *const ObjFunction) RuntimeError!void {
+        if (func.deprecated == null and func.no_discard == null) return;
+        const is_method = std.mem.indexOf(u8, func.name, "::") != null;
+        const shown = if (func.display_name.len > 0) func.display_name else func.name;
+        if (func.deprecated) |suffix| {
+            const msg = try std.fmt.allocPrint(self.allocator, "{s} {s}() is deprecated{s}", .{ if (is_method) "Method" else "Function", shown, suffix });
+            defer self.allocator.free(msg);
+            try self.raiseError(E_USER_DEPRECATED, msg);
+        }
+        if (func.no_discard) |reason| {
+            if (self.frame_count == 0 or self.calledFromNative()) return;
+            const frame = self.currentFrame();
+            const code = frame.chunk.code.items;
+            if (frame.ip >= code.len or code[frame.ip] != @intFromEnum(OpCode.pop_boundary)) return;
+            const msg = try std.fmt.allocPrint(self.allocator, "The return value of {s} {s}() should either be used or intentionally ignored by casting it as (void){s}{s}", .{ if (is_method) "method" else "function", shown, if (reason.len > 0) ", " else "", reason });
+            defer self.allocator.free(msg);
+            try self.raiseError(E_WARNING, msg);
+        }
+    }
+
+    // warns, as php does on each read, when the global constant is #[\Deprecated]
+    pub fn warnDeprecatedConstant(self: *VM, name: []const u8) RuntimeError!void {
+        if (!self.has_deprecated_constants) return;
+        const suffix = self.deprecated_globals.get(name) orelse return;
+        const msg = try std.fmt.allocPrint(self.allocator, "Constant {s} is deprecated{s}", .{ name, suffix });
+        defer self.allocator.free(msg);
+        try self.raiseError(E_USER_DEPRECATED, msg);
+    }
+
+    // warns, as php does on each read, when class_name::const_name is a
+    // #[\Deprecated] constant or enum case. returns whether it is one
+    pub fn warnDeprecatedClassConstant(self: *VM, class_name: []const u8, const_name: []const u8) RuntimeError!bool {
+        if (!self.has_deprecated_constants) return false;
+        var current: ?[]const u8 = class_name;
+        while (current) |name| {
+            const entry = self.classes.getEntry(name) orelse return false;
+            const cls = entry.value_ptr;
+            if (cls.constants.contains(const_name)) {
+                const suffix = cls.deprecated_constants.get(const_name) orelse return false;
+                var is_case = false;
+                if (cls.is_enum) for (cls.case_order.items) |case_name| {
+                    if (std.mem.eql(u8, case_name, const_name)) is_case = true;
+                };
+                const msg = try std.fmt.allocPrint(self.allocator, "{s} {s}::{s} is deprecated{s}", .{ if (is_case) "Enum case" else "Constant", entry.key_ptr.*, const_name, suffix });
+                defer self.allocator.free(msg);
+                try self.raiseError(E_USER_DEPRECATED, msg);
+                return true;
+            }
+            current = cls.parent;
+        }
+        return false;
+    }
+
     pub fn raiseError(self: *VM, level: i64, msg: []const u8) RuntimeError!void {
         return self.raiseErrorAt(level, msg, self.currentSourcePosition());
     }
@@ -13666,6 +13788,10 @@ pub const VM = struct {
             const ca_name = self.currentChunk().constants.items[ca_name_idx].string.bytes();
             const ca_attrs = try self.readAttributeDefs();
             try def.constant_attributes.put(self.allocator, ca_name, ca_attrs);
+            if (try self.deprecationOf(ca_attrs)) |suffix| {
+                try def.deprecated_constants.put(self.allocator, ca_name, suffix);
+                self.has_deprecated_constants = true;
+            }
         }
 
         const param_attr_method_count = self.readByte();
@@ -14031,6 +14157,10 @@ pub const VM = struct {
             const ca_name = self.currentChunk().constants.items[ca_name_idx].string.bytes();
             const ca_attrs = try self.readAttributeDefs();
             try def.constant_attributes.put(self.allocator, ca_name, ca_attrs);
+            if (try self.deprecationOf(ca_attrs)) |suffix| {
+                try def.deprecated_constants.put(self.allocator, ca_name, suffix);
+                self.has_deprecated_constants = true;
+            }
         }
 
         // enum constant names (const decls, not cases)

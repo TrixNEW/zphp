@@ -268,29 +268,59 @@ fn findAttrRangeForToken(attr_ranges: []const ast_mod.AttrRange, tokens: []const
     return null;
 }
 
-// the message of a #[\NoDiscard] on the declaration at main_token ("" when it
-// has none), or null without the attribute. a void or never function can't
-// carry it: php refuses at compile time
-fn noDiscardOf(self: *Compiler, main_token: u32, return_type: []const u8, comptime kind: []const u8) Error!?[]const u8 {
-    if (self.ast.attr_ranges.len == 0) return null;
+// what a function's attributes ask of its calls. no_discard: the message
+// of #[\NoDiscard] ("" without one). deprecated: the text #[\Deprecated]
+// adds after "is deprecated" (" since 2.0, use x()", "" with neither part).
+// null without the attribute. a void or never function can't be NoDiscard:
+// php refuses at compile time
+const CallAttrs = struct { no_discard: ?[]const u8 = null, deprecated: ?[]const u8 = null };
+
+fn callAttributes(self: *Compiler, main_token: u32, return_type: []const u8, comptime kind: []const u8) Error!CallAttrs {
+    var out: CallAttrs = .{};
+    if (self.ast.attr_ranges.len == 0) return out;
     const attrs = extractAttributes(self, main_token);
     defer freeParsedAttrs(self.allocator, attrs);
     for (attrs) |pa| {
         const name = if (pa.name.len > 0 and pa.name[0] == '\\') pa.name[1..] else pa.name;
-        if (!std.ascii.eqlIgnoreCase(name, "NoDiscard")) continue;
-        if (std.ascii.eqlIgnoreCase(return_type, "void")) {
-            return self.fail(main_token, "A void " ++ kind ++ " does not return a value, but #[\\NoDiscard] requires a return value");
+        if (std.ascii.eqlIgnoreCase(name, "NoDiscard")) {
+            if (std.ascii.eqlIgnoreCase(return_type, "void")) {
+                return self.fail(main_token, "A void " ++ kind ++ " does not return a value, but #[\\NoDiscard] requires a return value");
+            }
+            if (std.ascii.eqlIgnoreCase(return_type, "never")) {
+                return self.fail(main_token, "A never returning " ++ kind ++ " does not return a value, but #[\\NoDiscard] requires a return value");
+            }
+            // the texts outlive the attribute list
+            out.no_discard = try keepString(self, try self.allocator.dupe(u8, attrArg(pa, 0, "message") orelse ""));
+        } else if (std.ascii.eqlIgnoreCase(name, "Deprecated")) {
+            const message = attrArg(pa, 0, "message") orelse "";
+            const since = attrArg(pa, 1, "since") orelse "";
+            out.deprecated = try keepString(self, try std.fmt.allocPrint(self.allocator, "{s}{s}{s}{s}", .{
+                if (since.len > 0) " since " else "", since,
+                if (message.len > 0) ", " else "",    message,
+            }));
         }
-        if (std.ascii.eqlIgnoreCase(return_type, "never")) {
-            return self.fail(main_token, "A never returning " ++ kind ++ " does not return a value, but #[\\NoDiscard] requires a return value");
-        }
-        // the message outlives the attribute list
-        if (pa.args.len > 0 and pa.args[0] == .string) {
-            const msg = try self.allocator.dupe(u8, pa.args[0].string.bytes());
-            try self.string_allocs.append(self.allocator, msg);
-            return msg;
-        }
-        return "";
+    }
+    return out;
+}
+
+fn keepString(self: *Compiler, owned: []u8) Error![]const u8 {
+    errdefer self.allocator.free(owned);
+    try self.string_allocs.append(self.allocator, owned);
+    return owned;
+}
+
+// what a #[\Deprecated] on the declaration at main_token adds after "is
+// deprecated" (" since 2.0, use X", or ""), null without the attribute
+pub fn deprecationOfDecl(self: *Compiler, main_token: u32) Error!?[]const u8 {
+    return (try callAttributes(self, main_token, "", "constant")).deprecated;
+}
+
+// a string attribute argument by position or name
+fn attrArg(pa: ParsedAttr, position: usize, name: []const u8) ?[]const u8 {
+    for (pa.args, 0..) |arg, i| {
+        const arg_name: ?[]const u8 = if (i < pa.arg_names.len) pa.arg_names[i] else null;
+        const matches = if (arg_name) |n| std.mem.eql(u8, n, name) else i == position;
+        if (matches) return if (arg == .string) arg.string.bytes() else null;
     }
     return null;
 }
@@ -851,8 +881,9 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
 
     // a generator's body only runs once it is iterated, so its call can't be
     // checked from inside it
-    const no_discard = try noDiscardOf(self, node.main_token, try extractReturnType(self, node.data.lhs, @intCast(param_nodes.len)), "function");
-    if (no_discard != null and !gen) try sub.emitOp(.check_nodiscard);
+    const call_attrs = try callAttributes(self, node.main_token, try extractReturnType(self, node.data.lhs, @intCast(param_nodes.len)), "function");
+    if (call_attrs.deprecated != null and !gen) try sub.emitOp(.check_deprecated);
+    if (call_attrs.no_discard != null and !gen) try sub.emitOp(.check_nodiscard);
     const body_idx = node.data.rhs & 0x3FFFFFFF;
     try sub.compileNode(body_idx);
     sub.patchGotos();
@@ -908,7 +939,8 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         self.functions.items[self.functions.items.len - 1].has_param_types = param_types.len > 0;
         if (return_type.len > 0) self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
     }
-    if (!gen) self.functions.items[self.functions.items.len - 1].no_discard = no_discard;
+    self.functions.items[self.functions.items.len - 1].no_discard = call_attrs.no_discard;
+    self.functions.items[self.functions.items.len - 1].deprecated = call_attrs.deprecated;
 
     // function-level attributes
     if (!std.mem.startsWith(u8, name, "__closure_")) {
@@ -1043,8 +1075,9 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
     // of unused objects and fire their __destruct late
     if (is_arrow) sub.arrow_parent = self;
 
-    const no_discard = try noDiscardOf(self, node.main_token, try extractReturnType(self, node.data.lhs, @intCast(param_nodes.len)), "function");
-    if (no_discard != null and !gen) try sub.emitOp(.check_nodiscard);
+    const call_attrs = try callAttributes(self, node.main_token, try extractReturnType(self, node.data.lhs, @intCast(param_nodes.len)), "function");
+    if (call_attrs.deprecated != null and !gen) try sub.emitOp(.check_deprecated);
+    if (call_attrs.no_discard != null and !gen) try sub.emitOp(.check_nodiscard);
     try sub.compileNode(body_node);
     sub.patchGotos();
     try sub.emitOp(.op_null);
@@ -1096,7 +1129,8 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         .end_line = endLineForBlockStartingAt(self, node.main_token),
         .doc_comment = docCommentForToken(self, node.main_token),
         .display_name = display_name,
-        .no_discard = if (gen) null else no_discard,
+        .no_discard = call_attrs.no_discard,
+        .deprecated = call_attrs.deprecated,
     };
 
     self.functions.appendAssumeCapacity(func);
@@ -2862,8 +2896,9 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         if (ref_flags[i]) continue;
         _ = sub.getOrCreateSlot(param_names[i]);
     }
-    const no_discard = try noDiscardOf(self, member.main_token, try extractReturnType(self, member.data.lhs, @intCast(param_nodes.len)), "method");
-    if (no_discard != null and !method_gen) try sub.emitOp(.check_nodiscard);
+    const call_attrs = try callAttributes(self, member.main_token, try extractReturnType(self, member.data.lhs, @intCast(param_nodes.len)), "method");
+    if (call_attrs.deprecated != null and !method_gen) try sub.emitOp(.check_deprecated);
+    if (call_attrs.no_discard != null and !method_gen) try sub.emitOp(.check_nodiscard);
 
     // constructor property promotion: emit $this->prop = $prop for each promoted param
     if (std.mem.eql(u8, method_name, "__construct")) {
@@ -2909,7 +2944,8 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         .is_static = member.tag == .static_class_method,
         .method_visibility = @intCast((member.data.rhs >> 30) & 0x3),
         .is_final = ((member.data.rhs >> 28) & 1) != 0,
-        .no_discard = if (method_gen) null else no_discard,
+        .no_discard = call_attrs.no_discard,
+        .deprecated = call_attrs.deprecated,
         .locals_only = method_lo,
         .params = param_names[0..param_nodes.len],
         .defaults = defaults_owned,

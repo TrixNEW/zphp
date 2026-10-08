@@ -488,6 +488,12 @@ pub const Compiler = struct {
                 const name_idx = try self.addConstant(.{ .string = Value.String.borrowed(name) });
                 try self.emitOp(.define_const);
                 try self.emitU16(name_idx);
+                // php 8.5 allows #[\Deprecated] on a global constant
+                if (try compiler_class.deprecationOfDecl(self, node.main_token)) |suffix| {
+                    try self.emitOp(.deprecate_const);
+                    try self.emitU16(name_idx);
+                    try self.emitU16(try self.addConstant(.{ .string = Value.String.borrowed(suffix) }));
+                }
             },
             .switch_stmt => try compiler_stmt.compileSwitch(self, node),
             .switch_case, .switch_default => {},

@@ -370,6 +370,11 @@ pub const OpCode = enum(u8) {
     // first instruction of a #[\NoDiscard] function: warns when the caller
     // throws the result away
     check_nodiscard,
+    // first instruction of a #[\Deprecated] function: warns on every call
+    check_deprecated,
+    // u16 name, u16 text: marks a global constant #[\Deprecated]; text is what
+    // follows "is deprecated" in the warning its reads raise
+    deprecate_const,
 
     pub fn width(self: OpCode) usize {
         return switch (self) {
@@ -437,6 +442,7 @@ pub const OpCode = enum(u8) {
             .set_static_prop,
             .set_static_prop_default,
             .set_static_prop_rw,
+            .deprecate_const,
             .separate_static_prop,
             .get_static,
             .set_static,
@@ -722,8 +728,13 @@ pub const ObjFunction = struct {
     // php's name for a closure, `{closure:<scope>:<line>}`, empty otherwise
     display_name: []const u8 = "",
     // #[\NoDiscard]: the attribute's message ("" without one), null when the
-    // function doesn't carry it. the body starts with check_nodiscard
+    // function doesn't carry it. the body starts with check_nodiscard, except
+    // a generator's, which is checked when the generator is created
     no_discard: ?[]const u8 = null,
+    // #[\Deprecated]: what follows "is deprecated" in the warning (" since
+    // 2.0, use x()", or ""), null without the attribute. the body starts with
+    // check_deprecated
+    deprecated: ?[]const u8 = null,
     // 0 = unconditional (hoisted at registration). > 0 = conditionally
     // declared; registration is deferred until the declare_fn opcode with the
     // matching id executes (PHP runtime function binding)

@@ -206,12 +206,14 @@ fn native_constant(ctx: *NativeContext, args: []const Value) RuntimeError!Native
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.null);
     const name = args[0].string.bytes();
     if (ctx.vm.php_constants.get(name)) |v| {
+        try ctx.vm.warnDeprecatedConstant(name);
         return NativeResult.share(v);
     }
     if (std.mem.indexOf(u8, name, "::")) |sep| {
         const class_name = name[0..sep];
         const prop_name = name[sep + 2 ..];
         if (ctx.vm.getClassConstant(class_name, prop_name)) |v| {
+            _ = try ctx.vm.warnDeprecatedClassConstant(class_name, prop_name);
             return NativeResult.share(v);
         }
     }

@@ -28,6 +28,12 @@ $closure();
 (void) $closure();
 for ((void) f(); false; ) {}
 
+// a generator is checked when it is created, before its body runs
+#[\NoDiscard] function numbers() { echo "body\n"; yield 1; }
+numbers();
+$gen = numbers();
+foreach ($gen as $n) echo $n, "\n";
+
 // a user error handler sees the warning at the call's line
 set_error_handler(function ($no, $str, $file, $line) {
     echo "handler: $str (line $line)\n";
