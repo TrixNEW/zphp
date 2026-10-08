@@ -884,6 +884,7 @@ pub const NativeHandle = struct {
         future,
         channel,
         buffer,
+        list_formatter,
         _,
     };
 

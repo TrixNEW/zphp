@@ -29,6 +29,7 @@ const UTransliterator = opaque {};
 const UErrorCode = i32;
 const U_INVALID_CHAR_FOUND: UErrorCode = 10;
 const U_ZERO_ERROR: UErrorCode = 0;
+const U_BUFFER_OVERFLOW_ERROR: UErrorCode = 15;
 
 extern fn zphp_u_strFromUTF8(dest: [*]UChar, cap: i32, plen: *i32, src: [*]const u8, srcLen: i32, err: *UErrorCode) [*]UChar;
 extern fn zphp_u_strToUTF8(dest: [*]u8, cap: i32, plen: *i32, src: [*]const UChar, srcLen: i32, err: *UErrorCode) [*]u8;
@@ -43,6 +44,10 @@ extern fn zphp_unorm2_isNormalized(n: *const UNormalizer2, src: [*]const UChar, 
 
 extern fn zphp_uloc_getDefault() [*:0]const u8;
 extern fn zphp_uloc_isRightToLeft(loc: [*:0]const u8) i8;
+const UListFormatter = opaque {};
+extern fn zphp_ulistfmt_open(loc: [*:0]const u8, type: i32, width: i32, err: *UErrorCode) ?*UListFormatter;
+extern fn zphp_ulistfmt_close(f: *UListFormatter) void;
+extern fn zphp_ulistfmt_format(f: *const UListFormatter, strings: [*]const [*]const UChar, lengths: [*]const i32, count: i32, result: ?[*]UChar, cap: i32, err: *UErrorCode) i32;
 extern fn zphp_uloc_setDefault(loc: [*:0]const u8, err: *UErrorCode) void;
 extern fn zphp_uloc_getLanguage(loc: [*:0]const u8, buf: [*]u8, cap: i32, err: *UErrorCode) i32;
 extern fn zphp_uloc_getCountry(loc: [*:0]const u8, buf: [*]u8, cap: i32, err: *UErrorCode) i32;
@@ -214,6 +219,7 @@ fn closeHook(comptime T: type, comptime kind: NativeHandle.Kind, comptime closeF
 const closeCollator = closeHook(UCollator, .collator, zphp_ucol_close);
 const closeNumFmt = closeHook(UNumberFormat, .number_formatter, zphp_unum_close);
 const closeTranslit = closeHook(UTransliterator, .transliterator, zphp_utrans_close);
+const closeListFmt = closeHook(UListFormatter, .list_formatter, zphp_ulistfmt_close);
 const closeCal = closeHook(UCalendar, .calendar, zphp_ucal_close);
 const closeBrk = closeHook(ZphpBrk, .break_iterator, zphp_ubrk_close);
 
@@ -1929,6 +1935,93 @@ fn freeGraphemeUnits(ctx: *NativeContext, units: []const []u16) void {
     ctx.allocator.free(units);
 }
 
+// ---------------- IntlListFormatter (php 8.5) ----------------
+
+// the object's last ICU status lives in native.extra, read back by
+// getErrorCode and getErrorMessage
+fn listFmtStatus(obj: *PhpObject, status: UErrorCode) void {
+    obj.native.extra = @as(u32, @bitCast(@as(i32, status)));
+}
+
+fn listFmtConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const this = getThis(ctx) orelse return NativeResult.scalar(.null);
+    const locale = if (args.len > 0 and args[0] == .string) args[0].string.bytes() else "";
+    const kind: i64 = if (args.len > 1 and args[1] != .null) Value.toInt(args[1]) else 0;
+    const width: i64 = if (args.len > 2 and args[2] != .null) Value.toInt(args[2]) else 0;
+    if (kind < 0 or kind > 2) {
+        try ctx.vm.setPendingException("ValueError", "IntlListFormatter::__construct(): Argument #2 ($type) must be one of IntlListFormatter::TYPE_AND, IntlListFormatter::TYPE_OR, or IntlListFormatter::TYPE_UNITS");
+        return error.RuntimeError;
+    }
+    if (width < 0 or width > 2) {
+        try ctx.vm.setPendingException("ValueError", "IntlListFormatter::__construct(): Argument #3 ($width) must be one of IntlListFormatter::WIDTH_WIDE, IntlListFormatter::WIDTH_SHORT, or IntlListFormatter::WIDTH_NARROW");
+        return error.RuntimeError;
+    }
+    var loc_buf: [128]u8 = undefined;
+    const n = @min(locale.len, loc_buf.len - 1);
+    @memcpy(loc_buf[0..n], locale[0..n]);
+    loc_buf[n] = 0;
+    var status: UErrorCode = U_ZERO_ERROR;
+    const fmt = zphp_ulistfmt_open(@ptrCast(&loc_buf), @intCast(kind), @intCast(width), &status);
+    _ = intlRecord(ctx.vm, status);
+    if (fmt) |f| this.native = .{ .kind = .list_formatter, .ptr = @intFromPtr(f) };
+    listFmtStatus(this, status);
+    return NativeResult.scalar(.null);
+}
+
+fn listFmtFormat(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    const this = getThis(ctx) orelse return NativeResult.scalar(.{ .bool = false });
+    const fmt = this.native.get(UListFormatter, .list_formatter) orelse return NativeResult.scalar(.{ .bool = false });
+    if (args.len < 1 or args[0] != .array) return NativeResult.scalar(.{ .bool = false });
+    const items = args[0].array.entries.items;
+    const strings = try ctx.allocator.alloc([*]const UChar, items.len);
+    defer ctx.allocator.free(strings);
+    const lengths = try ctx.allocator.alloc(i32, items.len);
+    defer ctx.allocator.free(lengths);
+    var units = try ctx.allocator.alloc([]u16, items.len);
+    var made: usize = 0;
+    defer {
+        for (units[0..made]) |u| ctx.allocator.free(u);
+        ctx.allocator.free(units);
+    }
+    for (items, 0..) |entry, i| {
+        // elements are converted like any string conversion, arrays with a warning
+        var text = std.ArrayListUnmanaged(u8){};
+        defer text.deinit(ctx.allocator);
+        if (entry.value == .array) try ctx.vm.emitWarning("Array to string conversion");
+        try entry.value.format(&text, ctx.allocator);
+        units[i] = try utf8ToU16(ctx, text.items);
+        made += 1;
+        strings[i] = units[i].ptr;
+        lengths[i] = @intCast(units[i].len);
+    }
+    var status: UErrorCode = U_ZERO_ERROR;
+    const needed = zphp_ulistfmt_format(fmt, strings.ptr, lengths.ptr, @intCast(items.len), null, 0, &status);
+    if (status != U_BUFFER_OVERFLOW_ERROR and status > U_ZERO_ERROR) {
+        _ = intlRecord(ctx.vm, status);
+        listFmtStatus(this, status);
+        return NativeResult.scalar(.{ .bool = false });
+    }
+    // room for the terminator, or icu reports a not-terminated warning
+    const out = try ctx.allocator.alloc(u16, @intCast(needed + 1));
+    defer ctx.allocator.free(out);
+    status = U_ZERO_ERROR;
+    const written = zphp_ulistfmt_format(fmt, strings.ptr, lengths.ptr, @intCast(items.len), out.ptr, @intCast(out.len), &status);
+    _ = intlRecord(ctx.vm, status);
+    listFmtStatus(this, status);
+    if (status > U_ZERO_ERROR) return NativeResult.scalar(.{ .bool = false });
+    return u16ToResult(ctx, out[0..@intCast(written)]);
+}
+
+fn listFmtErrorCode(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const this = getThis(ctx) orelse return NativeResult.scalar(.{ .int = 0 });
+    return NativeResult.scalar(.{ .int = @as(i32, @bitCast(@as(u32, @truncate(this.native.extra)))) });
+}
+
+fn listFmtErrorMessage(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResult {
+    const this = getThis(ctx) orelse return NativeResult.literal("U_ZERO_ERROR");
+    return NativeResult.copyString(ctx.allocator, errorNameForCode(@as(i32, @bitCast(@as(u32, @truncate(this.native.extra))))));
+}
+
 // procedural shim: accepts a Transliterator instance or an ID string
 fn transliteratorTransliterate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
@@ -1976,6 +2069,7 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try registerCollatorClass(vm, a);
     try registerNumberFormatterClass(vm, a);
     try registerTransliteratorClass(vm, a);
+    try registerListFormatterClass(vm, a);
     try registerDateFormatterClass(vm, a);
     try registerMessageFormatterClass(vm, a);
     try registerIntlCalendarClass(vm, a);
@@ -2600,6 +2694,23 @@ fn registerNumberFormatterClass(vm: *VM, a: Allocator) !void {
     try vm.native_fns.put(a, "NumberFormatter::getAttribute", intlWrap(nfGetAttribute));
 }
 
+fn registerListFormatterClass(vm: *VM, a: Allocator) !void {
+    var def = ClassDef{ .name = "IntlListFormatter", .is_final = true, .native_cleanup = closeListFmt };
+    inline for (.{ .{ "TYPE_AND", 0 }, .{ "TYPE_OR", 1 }, .{ "TYPE_UNITS", 2 }, .{ "WIDTH_WIDE", 0 }, .{ "WIDTH_SHORT", 1 }, .{ "WIDTH_NARROW", 2 } }) |c| {
+        try def.constant_order.append(a, c[0]);
+        try def.constants.put(a, c[0], .{ .int = c[1] });
+    }
+    try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 3 });
+    try def.methods.put(a, "format", .{ .name = "format", .arity = 1 });
+    try def.methods.put(a, "getErrorCode", .{ .name = "getErrorCode", .arity = 0 });
+    try def.methods.put(a, "getErrorMessage", .{ .name = "getErrorMessage", .arity = 0 });
+    try vm.classes.put(a, "IntlListFormatter", def);
+    try vm.native_fns.put(a, "IntlListFormatter::__construct", intlWrap(listFmtConstruct));
+    try vm.native_fns.put(a, "IntlListFormatter::format", intlWrap(listFmtFormat));
+    try vm.native_fns.put(a, "IntlListFormatter::getErrorCode", intlWrap(listFmtErrorCode));
+    try vm.native_fns.put(a, "IntlListFormatter::getErrorMessage", intlWrap(listFmtErrorMessage));
+}
+
 fn registerTransliteratorClass(vm: *VM, a: Allocator) !void {
     var def = ClassDef{ .name = "Transliterator", .native_cleanup = closeTranslit, .native_clone = cloneTranslit };
     try def.methods.put(a, "create", .{ .name = "create", .arity = 1, .is_static = true });
@@ -2681,6 +2792,7 @@ pub fn cleanupResources(objects: std.ArrayListUnmanaged(*PhpObject)) void {
             .date_formatter => _ = cleanupDateFormatter(obj),
             .calendar => if (getCal(obj)) |c| zphp_ucal_close(c),
             .break_iterator => if (getBrk(obj)) |w| zphp_ubrk_close(w),
+            .list_formatter => if (obj.native.get(UListFormatter, .list_formatter)) |f| zphp_ulistfmt_close(f),
             else => {},
         }
     }

@@ -28,6 +28,7 @@
 #include <unicode/ucal.h>
 #include <unicode/ubrk.h>
 #include <unicode/utext.h>
+#include <unicode/ulistformatter.h>
 
 /* ----- utf-16 / utf-8 conversion ----- */
 
@@ -57,6 +58,15 @@ UBool zphp_unorm2_isNormalized(const UNormalizer2* n, const UChar* src, int32_t 
 
 const char* zphp_uloc_getDefault(void) { return uloc_getDefault(); }
 UBool zphp_uloc_isRightToLeft(const char* locale) { return uloc_isRightToLeft(locale); }
+
+UListFormatter* zphp_ulistfmt_open(const char* locale, int32_t type, int32_t width, UErrorCode* err) {
+    return ulistfmt_openForType(locale, (UListFormatterType)type, (UListFormatterWidth)width, err);
+}
+void zphp_ulistfmt_close(UListFormatter* f) { ulistfmt_close(f); }
+int32_t zphp_ulistfmt_format(const UListFormatter* f, const UChar* const strings[], const int32_t* lengths,
+                             int32_t count, UChar* result, int32_t cap, UErrorCode* err) {
+    return ulistfmt_format(f, strings, lengths, count, result, cap, err);
+}
 void zphp_uloc_setDefault(const char* locale, UErrorCode* err) { uloc_setDefault(locale, err); }
 int32_t zphp_uloc_getLanguage(const char* loc, char* buf, int32_t cap, UErrorCode* err) {
     return uloc_getLanguage(loc, buf, cap, err);
