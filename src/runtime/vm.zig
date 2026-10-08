@@ -6992,6 +6992,28 @@ pub const VM = struct {
                     if (dispatched) continue;
                 },
 
+                .check_nodiscard => {
+                    // the first instruction of a #[\NoDiscard] function. the
+                    // caller throws the result away when its next instruction is
+                    // the statement's pop; (void) and @ put other instructions
+                    // there, and a native caller (array_map) uses the result
+                    if (self.frame_count >= 2) {
+                        const native_caller = if (self.native_call) |nc| nc.depth + 1 == self.frame_count else false;
+                        const caller = &self.frames[self.frame_count - 2];
+                        const code = caller.chunk.code.items;
+                        if (!native_caller and caller.ip < code.len and code[caller.ip] == @intFromEnum(OpCode.pop_boundary)) {
+                            const func = self.currentFrame().func.?;
+                            const reason = func.no_discard orelse "";
+                            const kind: []const u8 = if (std.mem.indexOf(u8, func.name, "::") != null) "method" else "function";
+                            const shown = if (func.display_name.len > 0) func.display_name else func.name;
+                            const msg = try std.fmt.allocPrint(self.allocator, "The return value of {s} {s}() should either be used or intentionally ignored by casting it as (void){s}{s}", .{ kind, shown, if (reason.len > 0) ", " else "", reason });
+                            defer self.allocator.free(msg);
+                            const line: i64 = if (self.sourceLocation(caller.chunk, if (caller.ip > 0) caller.ip - 1 else 0)) |loc| @intCast(loc.line) else 0;
+                            self.raiseErrorAt(E_WARNING, msg, .{ .file = self.frameFile(self.frame_count - 2), .line = line }) catch if (try self.resumeRaised()) continue;
+                        }
+                    }
+                },
+
                 .separate_static_prop => {
                     const class_idx = self.readU16();
                     const prop_idx = self.readU16();
@@ -12129,7 +12151,12 @@ pub const VM = struct {
     // recorded for error_get_last and printed if error_reporting allows. an
     // exception thrown by the handler is left pending as error.RuntimeError
     pub fn raiseError(self: *VM, level: i64, msg: []const u8) RuntimeError!void {
-        const at = self.currentSourcePosition();
+        return self.raiseErrorAt(level, msg, self.currentSourcePosition());
+    }
+
+    // raiseError at a given source position, for a diagnostic about a frame
+    // other than the running one
+    pub fn raiseErrorAt(self: *VM, level: i64, msg: []const u8, at: SourcePosition) RuntimeError!void {
         if (try self.callUserErrorHandler(level, msg, at)) return;
         self.recordLastError(level, msg, at);
         const shown = self.error_silenced_depth == 0 and (self.error_reporting_level & level) != 0;

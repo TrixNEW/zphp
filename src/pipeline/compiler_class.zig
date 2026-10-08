@@ -268,6 +268,50 @@ fn findAttrRangeForToken(attr_ranges: []const ast_mod.AttrRange, tokens: []const
     return null;
 }
 
+// the message of a #[\NoDiscard] on the declaration at main_token ("" when it
+// has none), or null without the attribute. a void or never function can't
+// carry it: php refuses at compile time
+fn noDiscardOf(self: *Compiler, main_token: u32, return_type: []const u8, comptime kind: []const u8) Error!?[]const u8 {
+    if (self.ast.attr_ranges.len == 0) return null;
+    const attrs = extractAttributes(self, main_token);
+    defer freeParsedAttrs(self.allocator, attrs);
+    for (attrs) |pa| {
+        const name = if (pa.name.len > 0 and pa.name[0] == '\\') pa.name[1..] else pa.name;
+        if (!std.ascii.eqlIgnoreCase(name, "NoDiscard")) continue;
+        if (std.ascii.eqlIgnoreCase(return_type, "void")) {
+            return self.fail(main_token, "A void " ++ kind ++ " does not return a value, but #[\\NoDiscard] requires a return value");
+        }
+        if (std.ascii.eqlIgnoreCase(return_type, "never")) {
+            return self.fail(main_token, "A never returning " ++ kind ++ " does not return a value, but #[\\NoDiscard] requires a return value");
+        }
+        // the message outlives the attribute list
+        if (pa.args.len > 0 and pa.args[0] == .string) {
+            const msg = try self.allocator.dupe(u8, pa.args[0].string.bytes());
+            try self.string_allocs.append(self.allocator, msg);
+            return msg;
+        }
+        return "";
+    }
+    return null;
+}
+
+fn freeParsedAttrs(allocator: Allocator, attrs: []const ParsedAttr) void {
+    if (attrs.len == 0) return;
+    for (attrs) |a| {
+        for (a.args) |v| freeParsedAttrValue(allocator, v);
+        if (a.args.len > 0) allocator.free(a.args);
+        if (a.arg_names.len > 0) allocator.free(a.arg_names);
+    }
+    allocator.free(attrs);
+}
+
+fn freeParsedAttrValue(allocator: Allocator, value: Value) void {
+    if (value != .array or Value.isEmptyArrayDefault(value)) return;
+    for (value.array.entries.items) |entry| freeParsedAttrValue(allocator, if (entry.ref) |ref| ref.* else entry.value);
+    value.array.deinit(allocator);
+    allocator.destroy(value.array);
+}
+
 fn extractAttributes(self: *Compiler, main_token: u32) []const ParsedAttr {
     const ar = findAttrRangeForToken(self.ast.attr_ranges, self.ast.tokens, main_token) orelse return &.{};
 
@@ -805,6 +849,10 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         _ = sub.getOrCreateSlot(param_names[i]);
     }
 
+    // a generator's body only runs once it is iterated, so its call can't be
+    // checked from inside it
+    const no_discard = try noDiscardOf(self, node.main_token, try extractReturnType(self, node.data.lhs, @intCast(param_nodes.len)), "function");
+    if (no_discard != null and !gen) try sub.emitOp(.check_nodiscard);
     const body_idx = node.data.rhs & 0x3FFFFFFF;
     try sub.compileNode(body_idx);
     sub.patchGotos();
@@ -860,6 +908,7 @@ pub fn compileFunction(self: *Compiler, node: Ast.Node) Error!void {
         self.functions.items[self.functions.items.len - 1].has_param_types = param_types.len > 0;
         if (return_type.len > 0) self.functions.items[self.functions.items.len - 1].return_type_kind = returnTypeKind(return_type);
     }
+    if (!gen) self.functions.items[self.functions.items.len - 1].no_discard = no_discard;
 
     // function-level attributes
     if (!std.mem.startsWith(u8, name, "__closure_")) {
@@ -994,6 +1043,8 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
     // of unused objects and fire their __destruct late
     if (is_arrow) sub.arrow_parent = self;
 
+    const no_discard = try noDiscardOf(self, node.main_token, try extractReturnType(self, node.data.lhs, @intCast(param_nodes.len)), "function");
+    if (no_discard != null and !gen) try sub.emitOp(.check_nodiscard);
     try sub.compileNode(body_node);
     sub.patchGotos();
     try sub.emitOp(.op_null);
@@ -1045,6 +1096,7 @@ pub fn compileClosure(self: *Compiler, node: Ast.Node) Error!void {
         .end_line = endLineForBlockStartingAt(self, node.main_token),
         .doc_comment = docCommentForToken(self, node.main_token),
         .display_name = display_name,
+        .no_discard = if (gen) null else no_discard,
     };
 
     self.functions.appendAssumeCapacity(func);
@@ -2810,6 +2862,8 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         if (ref_flags[i]) continue;
         _ = sub.getOrCreateSlot(param_names[i]);
     }
+    const no_discard = try noDiscardOf(self, member.main_token, try extractReturnType(self, member.data.lhs, @intCast(param_nodes.len)), "method");
+    if (no_discard != null and !method_gen) try sub.emitOp(.check_nodiscard);
 
     // constructor property promotion: emit $this->prop = $prop for each promoted param
     if (std.mem.eql(u8, method_name, "__construct")) {
@@ -2855,6 +2909,7 @@ fn compileClassMethodBody(self: *Compiler, class_name: []const u8, member: Ast.N
         .is_static = member.tag == .static_class_method,
         .method_visibility = @intCast((member.data.rhs >> 30) & 0x3),
         .is_final = ((member.data.rhs >> 28) & 1) != 0,
+        .no_discard = if (method_gen) null else no_discard,
         .locals_only = method_lo,
         .params = param_names[0..param_nodes.len],
         .defaults = defaults_owned,

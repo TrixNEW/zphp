@@ -18,7 +18,7 @@ const MAGIC = "ZPHPC\x00";
 // v18 adds defer_prop_defaults; v19 gives interface, trait and enum
 // declarations their start line, end line and doc comment. v20 gives class
 // constants their own opcodes.
-pub const FORMAT_VERSION: u16 = 23;
+pub const FORMAT_VERSION: u16 = 24;
 
 // tag bytes for serialized values
 const TAG_NULL: u8 = 0;
@@ -71,6 +71,7 @@ pub fn serialize(allocator: Allocator, result: *const CompileResult) ![]u8 {
         if (func.file_path.len > 0) _ = try strtab.intern(allocator, func.file_path);
         if (func.doc_comment.len > 0) _ = try strtab.intern(allocator, func.doc_comment);
         if (func.display_name.len > 0) _ = try strtab.intern(allocator, func.display_name);
+        if (func.no_discard) |msg| _ = try strtab.intern(allocator, msg);
         try internChunkStrings(allocator, &strtab, &func.chunk);
     }
     for (result.new_defaults.items) |nd| {
@@ -260,6 +261,7 @@ fn serializeFunction(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, str
     try writeU32(buf, allocator, func.end_line);
     try writeU32(buf, allocator, if (func.doc_comment.len > 0) try strtab.intern(allocator, func.doc_comment) else 0xFFFFFFFF);
     try writeU32(buf, allocator, if (func.display_name.len > 0) try strtab.intern(allocator, func.display_name) else 0xFFFFFFFF);
+    try writeU32(buf, allocator, if (func.no_discard) |msg| try strtab.intern(allocator, msg) else 0xFFFFFFFF);
 
     try buf.append(allocator, @intCast(func.params.len));
     for (func.params) |p| {
@@ -625,6 +627,7 @@ fn deserializeFunction(r: *Reader, ctx: *DeserCtx) !ObjFunction {
     const end_line = try r.readU32();
     const doc_comment_idx = try r.readU32();
     const display_name_idx = try r.readU32();
+    const no_discard_idx = try r.readU32();
 
     const param_count = try r.readByte();
     const params = try allocator.alloc([]const u8, param_count);
@@ -673,6 +676,7 @@ fn deserializeFunction(r: *Reader, ctx: *DeserCtx) !ObjFunction {
         .end_line = end_line,
         .doc_comment = if (doc_comment_idx == 0xFFFFFFFF) "" else strings[doc_comment_idx],
         .display_name = if (display_name_idx == 0xFFFFFFFF) "" else strings[display_name_idx],
+        .no_discard = if (no_discard_idx == 0xFFFFFFFF) null else strings[no_discard_idx],
         .cond_id = cond_id,
         .params = params,
         .defaults = defaults,

@@ -367,6 +367,10 @@ pub const OpCode = enum(u8) {
     // __clone with the caller's scope
     clone_with,
 
+    // first instruction of a #[\NoDiscard] function: warns when the caller
+    // throws the result away
+    check_nodiscard,
+
     pub fn width(self: OpCode) usize {
         return switch (self) {
             .arg_variable => 6,
@@ -717,6 +721,9 @@ pub const ObjFunction = struct {
     doc_comment: []const u8 = "",
     // php's name for a closure, `{closure:<scope>:<line>}`, empty otherwise
     display_name: []const u8 = "",
+    // #[\NoDiscard]: the attribute's message ("" without one), null when the
+    // function doesn't carry it. the body starts with check_nodiscard
+    no_discard: ?[]const u8 = null,
     // 0 = unconditional (hoisted at registration). > 0 = conditionally
     // declared; registration is deferred until the declare_fn opcode with the
     // matching id executes (PHP runtime function binding)
