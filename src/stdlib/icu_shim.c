@@ -56,6 +56,7 @@ UBool zphp_unorm2_isNormalized(const UNormalizer2* n, const UChar* src, int32_t 
 /* ----- Locale ----- */
 
 const char* zphp_uloc_getDefault(void) { return uloc_getDefault(); }
+UBool zphp_uloc_isRightToLeft(const char* locale) { return uloc_isRightToLeft(locale); }
 void zphp_uloc_setDefault(const char* locale, UErrorCode* err) { uloc_setDefault(locale, err); }
 int32_t zphp_uloc_getLanguage(const char* loc, char* buf, int32_t cap, UErrorCode* err) {
     return uloc_getLanguage(loc, buf, cap, err);

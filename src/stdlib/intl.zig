@@ -42,6 +42,7 @@ extern fn zphp_unorm2_normalize(n: *const UNormalizer2, src: [*]const UChar, src
 extern fn zphp_unorm2_isNormalized(n: *const UNormalizer2, src: [*]const UChar, srcLen: i32, err: *UErrorCode) u8;
 
 extern fn zphp_uloc_getDefault() [*:0]const u8;
+extern fn zphp_uloc_isRightToLeft(loc: [*:0]const u8) i8;
 extern fn zphp_uloc_setDefault(loc: [*:0]const u8, err: *UErrorCode) void;
 extern fn zphp_uloc_getLanguage(loc: [*:0]const u8, buf: [*]u8, cap: i32, err: *UErrorCode) i32;
 extern fn zphp_uloc_getCountry(loc: [*:0]const u8, buf: [*]u8, cap: i32, err: *UErrorCode) i32;
@@ -323,6 +324,19 @@ fn localeSetDefault(_: *NativeContext, args: []const Value) RuntimeError!NativeR
     var status: UErrorCode = U_ZERO_ERROR;
     zphp_uloc_setDefault(@ptrCast(&buf), &status);
     return NativeResult.scalar(.{ .bool = status <= U_ZERO_ERROR });
+}
+
+// php 8.5: whether a locale's script is written right to left; "" is the
+// default locale
+fn localeIsRightToLeft(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 1 or args[0] != .string) return NativeResult.scalar(.{ .bool = false });
+    const text = args[0].string.bytes();
+    if (text.len == 0) return NativeResult.scalar(.{ .bool = zphp_uloc_isRightToLeft(zphp_uloc_getDefault()) != 0 });
+    var buf: [256]u8 = undefined;
+    if (text.len >= buf.len) return NativeResult.scalar(.{ .bool = false });
+    @memcpy(buf[0..text.len], text);
+    buf[text.len] = 0;
+    return NativeResult.scalar(.{ .bool = zphp_uloc_isRightToLeft(@ptrCast(&buf)) != 0 });
 }
 
 const KeywordFn = *const fn (loc: [*:0]const u8, buf: [*]u8, cap: i32, err: *UErrorCode) callconv(.c) i32;
@@ -1479,6 +1493,7 @@ pub const entries = .{
     .{ "intl_is_failure", intlIsFailure },
     .{ "intl_error_name", intlErrorName },
     .{ "locale_get_default", intlWrap(localeGetDefault) },
+    .{ "locale_is_right_to_left", intlWrap(localeIsRightToLeft) },
     .{ "locale_set_default", intlWrap(localeSetDefault) },
     .{ "locale_get_primary_language", intlWrap(localeGetPrimaryLanguage) },
     .{ "locale_get_region", intlWrap(localeGetRegion) },
@@ -2288,12 +2303,13 @@ fn registerLocaleClass(vm: *VM, a: Allocator) !void {
         "getDefault",    "setDefault",     "getPrimaryLanguage", "getRegion",        "getScript",
         "canonicalize",  "getDisplayName", "getDisplayLanguage", "getDisplayRegion", "getDisplayScript",
         "composeLocale", "parseLocale",    "getAllVariants",     "getKeywords",      "filterMatches",
-        "lookup",        "acceptFromHttp",
+        "lookup",        "acceptFromHttp", "isRightToLeft",
     }) |m| {
         try def.methods.put(a, m, .{ .name = m, .arity = 0, .is_static = true });
     }
     try vm.classes.put(a, "Locale", def);
     try vm.native_fns.put(a, "Locale::getDefault", intlWrap(localeGetDefault));
+    try vm.native_fns.put(a, "Locale::isRightToLeft", intlWrap(localeIsRightToLeft));
     try vm.native_fns.put(a, "Locale::setDefault", intlWrap(localeSetDefault));
     try vm.native_fns.put(a, "Locale::getPrimaryLanguage", intlWrap(localeGetPrimaryLanguage));
     try vm.native_fns.put(a, "Locale::getRegion", intlWrap(localeGetRegion));
