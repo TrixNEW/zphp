@@ -43,6 +43,7 @@ pub const entries = .{
     .{ "curl_multi_close", curlMultiClose },
     .{ "curl_multi_strerror", curlMultiStrerror },
     .{ "curl_multi_errno", curlMultiErrno },
+    .{ "curl_multi_get_handles", curlMultiGetHandles },
     .{ "curl_multi_setopt", curlMultiSetopt },
     .{ "curl_file_create", curlFileCreate },
 };
@@ -830,7 +831,33 @@ fn curlMultiInit(ctx: *NativeContext, _: []const Value) RuntimeError!NativeResul
     return NativeResult.borrowed(.{ .object = obj });
 }
 
-fn curlMultiAddHandle(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+// the CurlHandle objects a multi handle holds, in the order they were added,
+// kept on the multi object so curl_multi_get_handles and curl_multi_info_read
+// can hand them back
+fn multiHandles(ctx: *NativeContext, multi: *PhpObject) !*PhpArray {
+    const existing = multi.get("__handles");
+    if (existing == .array) return existing.array;
+    const arr = try ctx.vm.allocArray();
+    try multi.set(ctx.allocator, "__handles", .{ .array = arr });
+    return arr;
+}
+
+// the key of a CurlHandle in the multi handle's list
+fn multiHandleKey(list: *PhpArray, handle: *PhpObject) ?PhpArray.Key {
+    for (list.entries.items) |entry| {
+        if (entry.value == .object and entry.value.object == handle) return entry.key;
+    }
+    return null;
+}
+
+fn curlMultiGetHandles(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 1 or args[0] != .object) return NativeResult.scalar(.null);
+    const out = try ctx.createArray();
+    for ((try multiHandles(ctx, args[0].object)).entries.items) |entry| try out.append(ctx.allocator, entry.value);
+    return NativeResult.borrowed(.{ .array = out });
+}
+
+fn curlMultiAddHandle(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .object or args[1] != .object) return NativeResult.scalar(.{ .int = 1 });
     const mh = getMultiHandle(args[0].object) orelse return NativeResult.scalar(.{ .int = 1 });
     const easy = getHandle(args[1].object) orelse return NativeResult.scalar(.{ .int = 1 });
@@ -850,6 +877,7 @@ fn curlMultiAddHandle(_: *NativeContext, args: []const Value) RuntimeError!Nativ
         _ = c.curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(*anyopaque, @ptrCast(wcb)));
     }
     const code = c.curl_multi_add_handle(mh, easy);
+    if (code == c.CURLM_OK) try (try multiHandles(ctx, args[0].object)).append(ctx.allocator, args[1]);
     return NativeResult.scalar(.{ .int = @intCast(code) });
 }
 
@@ -862,12 +890,14 @@ fn freeMultiWcb(easy: *c.CURL) void {
     }
 }
 
-fn curlMultiRemoveHandle(_: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+fn curlMultiRemoveHandle(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     if (args.len < 2 or args[0] != .object or args[1] != .object) return NativeResult.scalar(.{ .int = 1 });
     const mh = getMultiHandle(args[0].object) orelse return NativeResult.scalar(.{ .int = 1 });
     const easy = getHandle(args[1].object) orelse return NativeResult.scalar(.{ .int = 1 });
     const code = c.curl_multi_remove_handle(mh, easy);
     freeMultiWcb(easy);
+    const list = try multiHandles(ctx, args[0].object);
+    if (multiHandleKey(list, args[1].object)) |key| ctx.vm.arrayRemoveOwned(list, key);
     return NativeResult.scalar(.{ .int = @intCast(code) });
 }
 
@@ -919,9 +949,13 @@ fn curlMultiInfoRead(ctx: *NativeContext, args: []const Value) RuntimeError!Nati
     const arr = try ctx.createArray();
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("msg") }, .{ .int = @intCast(msg.*.msg) });
     try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("result") }, .{ .int = @intCast(msg.*.data.result) });
-    // 'handle' would be the easy handle - callers compare it by identity; we
-    // don't have a back-pointer to the PhpObject so omit it (PHP code that
-    // needs it iterates its own handle list and matches on result instead)
+    // the finished transfer's CurlHandle, which callers compare by identity
+    for ((try multiHandles(ctx, args[0].object)).entries.items) |entry| {
+        if (entry.value == .object and getHandle(entry.value.object) == msg.*.easy_handle) {
+            try arr.set(ctx.allocator, .{ .string = Value.String.borrowed("handle") }, entry.value);
+            break;
+        }
+    }
     if (args.len >= 2) {
         ctx.setCallerVar(1, args.len, .{ .int = @intCast(msgs_in_queue) });
     }
