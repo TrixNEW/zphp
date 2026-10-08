@@ -74,32 +74,53 @@ pub fn register(vm: *VM, a: Allocator) !void {
     try attr_def.constants.put(a, "TARGET_PROPERTY", .{ .int = 8 });
     try attr_def.constants.put(a, "TARGET_CLASS_CONSTANT", .{ .int = 16 });
     try attr_def.constants.put(a, "TARGET_PARAMETER", .{ .int = 32 });
+    try attr_def.constants.put(a, "TARGET_CONSTANT", .{ .int = 64 });
     try attr_def.constants.put(a, "TARGET_ALL", .{ .int = 127 });
     try attr_def.constants.put(a, "IS_REPEATABLE", .{ .int = 128 });
+    attr_def.is_final = true;
+    try attr_def.attributes.append(a, .{ .name = "Attribute", .args = try attributeTargets(a, 1) });
     try vm.classes.put(a, "Attribute", attr_def);
     try vm.native_fns.put(a, "Attribute::__construct", attributeConstruct);
 
     // PHP 8.3 #[Override] marker. enforcement happens elsewhere - here we
     // register the class so attribute reflection and class_exists pick it up
-    var override_def = ClassDef{ .name = "Override" };
+    var override_def = ClassDef{ .name = "Override", .is_final = true };
     try override_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
-    try override_def.attributes.append(a, .{ .name = "Attribute", .args = &.{} });
+    try override_def.attributes.append(a, .{ .name = "Attribute", .args = try attributeTargets(a, 12) });
     try vm.classes.put(a, "Override", override_def);
 
     // PHP 8.2 #[SensitiveParameter] - marks parameters whose values should be
     // redacted from stack traces. Stub the class for attribute usage
-    var sp_def = ClassDef{ .name = "SensitiveParameter" };
+    var sp_def = ClassDef{ .name = "SensitiveParameter", .is_final = true };
     try sp_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
-    try sp_def.attributes.append(a, .{ .name = "Attribute", .args = &.{} });
+    try sp_def.attributes.append(a, .{ .name = "Attribute", .args = try attributeTargets(a, 32) });
     try vm.classes.put(a, "SensitiveParameter", sp_def);
 
-    // PHP 8.4 #[Deprecated]: reflection reports it through isDeprecated();
-    // the runtime does not reproduce the E_DEPRECATED message
+    // the other attributes php itself declares, with the targets their
+    // #[Attribute] allows (ReflectionAttribute::newInstance enforces them)
+    inline for (.{ .{ "AllowDynamicProperties", 1, true }, .{ "ReturnTypeWillChange", 4, true }, .{ "DelayedTargetValidation", 127, false } }) |spec| {
+        var def = ClassDef{ .name = spec[0], .is_final = true };
+        if (spec[2]) try def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
+        try def.attributes.append(a, .{ .name = "Attribute", .args = try attributeTargets(a, spec[1]) });
+        try vm.classes.put(a, spec[0], def);
+    }
+
+    // php 8.5 #[NoDiscard]; the compiler and vm act on it, this is the class
+    // reflection instantiates
+    var nd_def = ClassDef{ .name = "NoDiscard", .is_final = true };
+    try nd_def.properties.append(a, .{ .name = "message", .default = .null, .has_default = true, .is_readonly = true, .type_str = "?string" });
+    try nd_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 1 });
+    try nd_def.attributes.append(a, .{ .name = "Attribute", .args = try attributeTargets(a, 6) });
+    try vm.classes.put(a, "NoDiscard", nd_def);
+    try vm.native_fns.put(a, "NoDiscard::__construct", deprecatedConstruct);
+
+    // PHP 8.4 #[Deprecated]: reflection reports it through isDeprecated(),
+    // the compiler and vm raise its warnings
     var dep_def = ClassDef{ .name = "Deprecated", .is_final = true };
     try dep_def.properties.append(a, .{ .name = "message", .default = .null, .has_default = true, .is_readonly = true, .type_str = "?string" });
     try dep_def.properties.append(a, .{ .name = "since", .default = .null, .has_default = true, .is_readonly = true, .type_str = "?string" });
     try dep_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 2 });
-    try dep_def.attributes.append(a, .{ .name = "Attribute", .args = &.{} });
+    try dep_def.attributes.append(a, .{ .name = "Attribute", .args = try attributeTargets(a, 87) });
     try vm.classes.put(a, "Deprecated", dep_def);
     try vm.native_fns.put(a, "Deprecated::__construct", deprecatedConstruct);
 
@@ -4846,6 +4867,14 @@ fn hasDeprecatedAttribute(attrs: []const AttributeDef) bool {
     return false;
 }
 
+// the #[Attribute(flags)] argument list of a built-in attribute class, owned
+// by the class def like any parsed attribute's
+fn attributeTargets(a: Allocator, flags: i64) ![]Value {
+    return a.dupe(Value, &[_]Value{.{ .int = flags }});
+}
+
+// Deprecated($message, $since) and NoDiscard($message): the arguments land on
+// the readonly properties of the same names
 fn deprecatedConstruct(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const this = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len > 0 and args[0] == .string) try this.set(ctx.allocator, "message", args[0]);
