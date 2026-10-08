@@ -1521,6 +1521,7 @@ pub const entries = .{
     .{ "grapheme_stristr", intlWrap(graphemeStristr) },
     .{ "grapheme_str_split", intlWrap(graphemeStrSplit) },
     .{ "grapheme_extract", intlWrap(graphemeExtract) },
+    .{ "grapheme_levenshtein", intlWrap(graphemeLevenshtein) },
 };
 
 // count grapheme clusters in a UTF-8 string. uses ICU's character-level
@@ -1850,6 +1851,82 @@ fn graphemeStrSplit(ctx: *NativeContext, args: []const Value) RuntimeError!Nativ
         try arr.appendCopiedString(ctx.allocator, s[a..b]);
     }
     return NativeResult.borrowed(.{ .array = arr });
+}
+
+// php 8.5: levenshtein over grapheme clusters. two clusters match when the
+// locale's collator calls them equal (default strength: canonically
+// equivalent forms match, case does not)
+fn graphemeLevenshtein(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+    if (args.len < 2 or args[0] != .string or args[1] != .string) return NativeResult.scalar(.{ .bool = false });
+    var costs = [3]i64{ 1, 1, 1 };
+    const cost_names = [3][]const u8{ "#3 ($insertion_cost)", "#4 ($replacement_cost)", "#5 ($deletion_cost)" };
+    for (0..3) |i| {
+        if (args.len > i + 2 and args[i + 2] != .null) costs[i] = Value.toInt(args[i + 2]);
+        if (costs[i] < 1 or costs[i] > 1073741823) {
+            const msg = try std.fmt.allocPrint(ctx.allocator, "grapheme_levenshtein(): Argument {s} must be greater than 0 and less than or equal to 1073741823", .{cost_names[i]});
+            defer ctx.allocator.free(msg);
+            try ctx.vm.setPendingException("ValueError", msg);
+            return error.RuntimeError;
+        }
+    }
+    const locale = if (args.len > 5 and args[5] == .string) args[5].string.bytes() else "";
+    const a = args[0].string.bytes();
+    const b = args[1].string.bytes();
+    if (!std.unicode.utf8ValidateSlice(a) or !std.unicode.utf8ValidateSlice(b)) return NativeResult.scalar(.{ .bool = false });
+
+    var bounds_a = (try collectGraphemeBounds(ctx, a)) orelse return NativeResult.scalar(.{ .bool = false });
+    defer bounds_a.deinit(ctx.allocator);
+    var bounds_b = (try collectGraphemeBounds(ctx, b)) orelse return NativeResult.scalar(.{ .bool = false });
+    defer bounds_b.deinit(ctx.allocator);
+    const units_a = try graphemeUnits(ctx, a, bounds_a.items);
+    defer freeGraphemeUnits(ctx, units_a);
+    const units_b = try graphemeUnits(ctx, b, bounds_b.items);
+    defer freeGraphemeUnits(ctx, units_b);
+
+    var loc_buf: [128]u8 = undefined;
+    if (locale.len >= loc_buf.len) return NativeResult.scalar(.{ .bool = false });
+    @memcpy(loc_buf[0..locale.len], locale);
+    loc_buf[locale.len] = 0;
+    var status: UErrorCode = U_ZERO_ERROR;
+    const coll = zphp_ucol_open(@ptrCast(&loc_buf), &status) orelse return NativeResult.scalar(.{ .bool = false });
+    defer zphp_ucol_close(coll);
+    if (intlRecord(ctx.vm, status)) return NativeResult.scalar(.{ .bool = false });
+
+    // one row of the edit-distance table at a time
+    const row = try ctx.allocator.alloc(i64, units_b.len + 1);
+    defer ctx.allocator.free(row);
+    for (row, 0..) |*cell, j| cell.* = @as(i64, @intCast(j)) * costs[0];
+    for (units_a, 0..) |ga, i| {
+        var diagonal = row[0];
+        row[0] = @as(i64, @intCast(i + 1)) * costs[2];
+        for (units_b, 0..) |gb, j| {
+            const same = zphp_ucol_strcoll(coll, ga.ptr, @intCast(ga.len), gb.ptr, @intCast(gb.len)) == 0;
+            const replace = diagonal + if (same) 0 else costs[1];
+            const insert = row[j] + costs[0];
+            const delete = row[j + 1] + costs[2];
+            diagonal = row[j + 1];
+            row[j + 1] = @min(replace, @min(insert, delete));
+        }
+    }
+    return NativeResult.scalar(.{ .int = row[units_b.len] });
+}
+
+// each grapheme cluster of s as utf-16, for the collator
+fn graphemeUnits(ctx: *NativeContext, s: []const u8, bounds: []const i32) ![][]u16 {
+    const count = if (bounds.len > 0) bounds.len - 1 else 0;
+    const units = try ctx.allocator.alloc([]u16, count);
+    var made: usize = 0;
+    errdefer freeGraphemeUnits(ctx, units[0..made]);
+    for (0..count) |i| {
+        units[i] = try utf8ToU16(ctx, s[@intCast(bounds[i])..@intCast(bounds[i + 1])]);
+        made += 1;
+    }
+    return units;
+}
+
+fn freeGraphemeUnits(ctx: *NativeContext, units: []const []u16) void {
+    for (units) |u| ctx.allocator.free(u);
+    ctx.allocator.free(units);
 }
 
 // procedural shim: accepts a Transliterator instance or an ID string
