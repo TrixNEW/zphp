@@ -1761,7 +1761,7 @@ pub const VM = struct {
         var ii = vm.interfaces.keyIterator();
         while (ii.next()) |k| try vm.builtin_interfaces.put(allocator, k.*, {});
         vm.builtins_recorded = true;
-        vm.applyConfiguredMemoryLimit();
+        vm.applyConfiguredMemoryLimit(true);
         account.rebase();
     }
 
@@ -1859,6 +1859,7 @@ pub const VM = struct {
         try c.put(a, "PHP_VERSION", .{ .string = Value.String.borrowed(php_version.string) });
         try c.put(a, "PHP_VERSION_ID", .{ .int = php_version.id });
         try c.put(a, "PHP_EXTRA_VERSION", .{ .string = Value.String.borrowed("") });
+        try c.put(a, "PHP_BUILD_DATE", .{ .string = Value.String.borrowed(php_version.build_date) });
         try c.put(a, "PHP_DEBUG", .{ .bool = false });
         try c.put(a, "PHP_ZTS", .{ .bool = false });
         try c.put(a, "PHP_MAXPATHLEN", .{ .int = 1024 });
@@ -3145,7 +3146,7 @@ pub const VM = struct {
         }
         // each request starts its memory count and limit afresh
         if (self.memory) |account| {
-            self.applyConfiguredMemoryLimit();
+            self.applyConfiguredMemoryLimit(false);
             account.rebase();
         }
     }
@@ -3274,10 +3275,32 @@ pub const VM = struct {
     }
 
     // memory_limit as configured: php.ini or -d, else php's default
-    pub fn applyConfiguredMemoryLimit(self: *VM) void {
-        const text = @import("../ini_config.zig").get("memory_limit") orelse "128M";
-        const bytes = @import("memory.zig").parseQuantity(text).value;
+    // warn: report a configured limit above max_memory_limit (startup only,
+    // not again for each serve request)
+    pub fn applyConfiguredMemoryLimit(self: *VM, warn: bool) void {
+        var text = @import("../ini_config.zig").get("memory_limit") orelse "128M";
+        var bytes = @import("memory.zig").parseQuantity(text).value;
+        if (self.memoryLimitCap(bytes)) |cap| {
+            if (warn and bytes >= 0) {
+                var buf: [192]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "Failed to set memory_limit to {d} bytes. Setting to max_memory_limit instead (currently: {d} bytes)", .{ bytes, cap.bytes }) catch "";
+                self.raiseErrorAt(E_WARNING, msg, .{ .file = "Unknown", .line = 0 }) catch {};
+            }
+            text = cap.text;
+            bytes = cap.bytes;
+        }
         if (bytes != 0) self.memory.?.limit = if (bytes < 0) 0 else @intCast(bytes);
+    }
+
+    // php 8.5's max_memory_limit (a startup setting, -1 by default) caps
+    // memory_limit: a larger or unlimited request is lowered to it. the cap's
+    // text and bytes when the request exceeds it
+    pub fn memoryLimitCap(self: *VM, requested: i64) ?struct { text: []const u8, bytes: i64 } {
+        _ = self;
+        const text = @import("../ini_config.zig").get("max_memory_limit") orelse return null;
+        const max = @import("memory.zig").parseQuantity(text).value;
+        if (max < 0 or (requested >= 0 and requested <= max)) return null;
+        return .{ .text = text, .bytes = max };
     }
 
     // memory_get_usage(true): php reports memory in 2MB chunks

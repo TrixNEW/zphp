@@ -17,9 +17,12 @@ pub fn build(b: *std.Build) void {
     // reach shared per-thread state through the main object's exports
     const fast_loop_role = b.addOptions();
     fast_loop_role.addOption(bool, "fast_loop_object", true);
+    const build_epoch = buildEpoch(b);
+    fast_loop_role.addOption(i64, "build_epoch", build_epoch);
     const main_role = b.addOptions();
     main_role.addOption(bool, "fast_loop_object", false);
     main_role.addOption([]const u8, "compiler_hash", compilerHash(b));
+    main_role.addOption(i64, "build_epoch", build_epoch);
     fast_loop_mod.addOptions("build_role", fast_loop_role);
 
     const fast_loop_obj = b.addObject(.{
@@ -531,6 +534,21 @@ fn xml2ConfigIncludeDir(b: *std.Build) ?[]const u8 {
 
 // the on-disk bytecode cache is keyed by this, so a build whose compiler
 // emits different bytecode never reads another build's entries
+// the time PHP_BUILD_DATE reports: SOURCE_DATE_EPOCH for reproducible
+// builds, else the commit being built, so a rebuild of the same tree doesn't
+// invalidate the cache. 0 when neither is known
+fn buildEpoch(b: *std.Build) i64 {
+    if (std.process.getEnvVarOwned(b.allocator, "SOURCE_DATE_EPOCH")) |v| {
+        return std.fmt.parseInt(i64, std.mem.trim(u8, v, " \n"), 10) catch 0;
+    } else |_| {}
+    const r = std.process.Child.run(.{
+        .allocator = b.allocator,
+        .argv = &.{ "git", "-C", b.build_root.path orelse ".", "log", "-1", "--format=%ct" },
+    }) catch return 0;
+    if (r.term != .Exited or r.term.Exited != 0) return 0;
+    return std.fmt.parseInt(i64, std.mem.trim(u8, r.stdout, " \r\n"), 10) catch 0;
+}
+
 fn compilerHash(b: *std.Build) []const u8 {
     var hasher = std.hash.Wyhash.init(0);
     var dir = b.build_root.handle.openDir("src/pipeline", .{ .iterate = true }) catch @panic("src/pipeline");

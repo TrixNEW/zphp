@@ -245,6 +245,9 @@ pub fn applyToVm(vm: *VM) RuntimeError!void {
             if (d.value.len > 0) vm.default_tz_name = d.value;
         } else if (std.mem.eql(u8, d.name, "max_execution_time")) {
             vm.setExecutionLimit(std.fmt.parseInt(i64, std.mem.trim(u8, d.value, " \t"), 10) catch 0);
+        } else if (std.mem.eql(u8, d.name, "memory_limit")) {
+            // a limit above max_memory_limit reads back as the cap
+            if (vm.memoryLimitCap(@import("runtime/memory.zig").parseQuantity(d.value).value)) |cap| try vm.ini_settings.put(vm.allocator, d.name, cap.text);
         }
     }
 }

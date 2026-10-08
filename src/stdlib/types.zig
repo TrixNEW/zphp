@@ -1553,6 +1553,7 @@ fn iniDefault(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "date.timezone")) return "UTC";
     // PHP CLI default is "-1" (no limit); web SAPI default is "128M"
     if (std.mem.eql(u8, name, "memory_limit")) return "128M";
+    if (std.mem.eql(u8, name, "max_memory_limit")) return "-1";
     if (std.mem.eql(u8, name, "post_max_size")) return "8M";
     if (std.mem.eql(u8, name, "upload_max_filesize")) return "2M";
     if (std.mem.eql(u8, name, "max_input_time")) return "-1";
@@ -1603,10 +1604,24 @@ fn native_ini_set(ctx: *NativeContext, args: []const Value) RuntimeError!NativeR
     const name = args[0].string.bytes();
     // PHP rejects unknown directives. Only allow known names.
     const previous: []const u8 = if (ctx.vm.ini_settings.get(name)) |s| s else if (iniDefault(name)) |d| d else return NativeResult.scalar(Value{ .bool = false });
+    // max_memory_limit can only be set at startup
+    if (std.mem.eql(u8, name, "max_memory_limit")) return NativeResult.scalar(Value{ .bool = false });
     var buf = std.ArrayListUnmanaged(u8){};
     defer buf.deinit(ctx.allocator);
     try args[1].format(&buf, ctx.allocator);
-    if (std.mem.eql(u8, name, "memory_limit") and !try setMemoryLimit(ctx, buf.items)) return NativeResult.scalar(Value{ .bool = false });
+    if (std.mem.eql(u8, name, "memory_limit")) {
+        const requested = @import("../runtime/memory.zig").parseQuantity(buf.items).value;
+        if (ctx.vm.memoryLimitCap(requested)) |cap| {
+            if (requested >= 0) {
+                const msg = try std.fmt.allocPrint(ctx.allocator, "Failed to set memory_limit to {d} bytes. Setting to max_memory_limit instead (currently: {d} bytes)", .{ requested, cap.bytes });
+                defer ctx.allocator.free(msg);
+                try ctx.vm.emitWarning(msg);
+            }
+            buf.clearRetainingCapacity();
+            try buf.appendSlice(ctx.allocator, cap.text);
+        }
+        if (!try setMemoryLimit(ctx, buf.items)) return NativeResult.scalar(Value{ .bool = false });
+    }
     const result = try NativeResult.copyString(ctx.allocator, previous);
     const new_val = try ctx.vm.setIni(name, buf.items);
     // a few ini directives map directly to live VM state. mirror them now so
@@ -1911,7 +1926,7 @@ fn native_ini_restore(ctx: *NativeContext, args: []const Value) RuntimeError!Nat
     if (args.len == 0 or args[0] != .string) return NativeResult.scalar(.null);
     const name = args[0].string.bytes();
     try ctx.vm.restoreIni(name);
-    if (std.mem.eql(u8, name, "memory_limit")) ctx.vm.applyConfiguredMemoryLimit();
+    if (std.mem.eql(u8, name, "memory_limit")) ctx.vm.applyConfiguredMemoryLimit(false);
     return NativeResult.scalar(.null);
 }
 
