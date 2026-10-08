@@ -68,6 +68,10 @@ pub const entries = .{
     .{ "idate", native_idate },
     .{ "date_interval_create_from_date_string", native_date_interval_create_from_date_string },
     .{ "date_interval_format", native_date_interval_format },
+    .{ "date_offset_get", methodAlias("getOffset") },
+    .{ "date_isodate_set", methodAlias("setISODate") },
+    .{ "timezone_transitions_get", methodAlias("getTransitions") },
+    .{ "timezone_location_get", methodAlias("getLocation") },
 };
 
 pub fn register(vm: *VM, a: Allocator) !void {
@@ -982,6 +986,19 @@ fn applyIntervalTz(ts: i64, interval: *PhpObject, sign: i64, tz_name: []const u8
     return local_ts;
 }
 
+// the setters (setDate, setTime, setISODate) work on the wall-clock time in
+// the object's own timezone: split the instant into local fields, change some,
+// and turn the result back into an instant with the offset in effect then
+
+fn wallFields(ctx: *NativeContext, obj: *PhpObject) DateComponents {
+    const ts = getTimestamp(obj);
+    return baseComponents(ts + tzOffsetForName(ctx.allocator, objTzName(obj, ctx.vm.default_tz_name), ts));
+}
+
+fn instantOfWall(ctx: *NativeContext, obj: *PhpObject, wall: i64) i64 {
+    return wall - tzOffsetForWallByName(ctx.allocator, objTzName(obj, ctx.vm.default_tz_name), wall);
+}
+
 fn objTzName(obj: *PhpObject, fallback: []const u8) []const u8 {
     const v = obj.get("__timezone");
     return if (v == .string) v.string.bytes() else fallback;
@@ -1118,14 +1135,8 @@ fn dtDiff(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
 fn dtSetDate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len < 3) return NativeResult.borrowed(.{ .object = obj });
-    const ts = getTimestamp(obj);
-    const epoch_secs: u64 = @intCast(if (ts < 0) 0 else ts);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const day_seconds = es.getDaySeconds();
-    const h: i64 = day_seconds.getHoursIntoDay();
-    const m: i64 = day_seconds.getMinutesIntoHour();
-    const s: i64 = day_seconds.getSecondsIntoMinute();
-    const new_ts = dateToTimestamp(Value.toInt(args[0]), Value.toInt(args[1]), Value.toInt(args[2]), h, m, s);
+    const c = wallFields(ctx, obj);
+    const new_ts = instantOfWall(ctx, obj, dateToTimestamp(Value.toInt(args[0]), Value.toInt(args[1]), Value.toInt(args[2]), c.hour, c.min, c.sec));
     try obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     return NativeResult.borrowed(.{ .object = obj });
 }
@@ -1133,14 +1144,9 @@ fn dtSetDate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
 fn dtSetTime(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len < 2) return NativeResult.borrowed(.{ .object = obj });
-    const ts = getTimestamp(obj);
-    const epoch_secs: u64 = @intCast(if (ts < 0) 0 else ts);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const epoch_day = es.getEpochDay();
-    const year_day = epoch_day.calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
+    const c = wallFields(ctx, obj);
     const sec: i64 = if (args.len >= 3) Value.toInt(args[2]) else 0;
-    const new_ts = dateToTimestamp(@intCast(year_day.year), month_day.month.numeric(), month_day.day_index + 1, Value.toInt(args[0]), Value.toInt(args[1]), sec);
+    const new_ts = instantOfWall(ctx, obj, dateToTimestamp(c.year, c.month, c.day, Value.toInt(args[0]), Value.toInt(args[1]), sec));
     try obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     // 4th arg is microseconds (PHP 7.1+); the 'u'/'v' format specifiers read
     // __microseconds. setTime with <4 args resets the sub-second part to 0
@@ -1152,14 +1158,8 @@ fn dtSetTime(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult
 fn dtiSetDate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len < 3) return NativeResult.borrowed(.{ .object = obj });
-    const ts = getTimestamp(obj);
-    const epoch_secs: u64 = @intCast(if (ts < 0) 0 else ts);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const day_seconds = es.getDaySeconds();
-    const h: i64 = day_seconds.getHoursIntoDay();
-    const m: i64 = day_seconds.getMinutesIntoHour();
-    const s: i64 = day_seconds.getSecondsIntoMinute();
-    const new_ts = dateToTimestamp(Value.toInt(args[0]), Value.toInt(args[1]), Value.toInt(args[2]), h, m, s);
+    const c = wallFields(ctx, obj);
+    const new_ts = instantOfWall(ctx, obj, dateToTimestamp(Value.toInt(args[0]), Value.toInt(args[1]), Value.toInt(args[2]), c.hour, c.min, c.sec));
     const new_obj = try ctx.createObject("DateTimeImmutable");
     try new_obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     const tz = obj.get("__timezone");
@@ -1190,14 +1190,8 @@ fn dtSetISODate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRes
     const year = Value.toInt(args[0]);
     const week = Value.toInt(args[1]);
     const dow = if (args.len >= 3) Value.toInt(args[2]) else 1;
-    const ts = getTimestamp(obj);
-    const epoch_secs: u64 = @intCast(if (ts < 0) 0 else ts);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const day_seconds = es.getDaySeconds();
-    const h: i64 = day_seconds.getHoursIntoDay();
-    const m: i64 = day_seconds.getMinutesIntoHour();
-    const s: i64 = day_seconds.getSecondsIntoMinute();
-    try obj.set(ctx.allocator, "timestamp", .{ .int = isoWeekDateToTimestamp(year, week, dow, h, m, s) });
+    const c = wallFields(ctx, obj);
+    try obj.set(ctx.allocator, "timestamp", .{ .int = instantOfWall(ctx, obj, isoWeekDateToTimestamp(year, week, dow, c.hour, c.min, c.sec)) });
     return NativeResult.borrowed(.{ .object = obj });
 }
 
@@ -1207,15 +1201,9 @@ fn dtiSetISODate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
     const year = Value.toInt(args[0]);
     const week = Value.toInt(args[1]);
     const dow = if (args.len >= 3) Value.toInt(args[2]) else 1;
-    const ts = getTimestamp(obj);
-    const epoch_secs: u64 = @intCast(if (ts < 0) 0 else ts);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const day_seconds = es.getDaySeconds();
-    const h: i64 = day_seconds.getHoursIntoDay();
-    const m: i64 = day_seconds.getMinutesIntoHour();
-    const s: i64 = day_seconds.getSecondsIntoMinute();
+    const c = wallFields(ctx, obj);
     const new_obj = try ctx.createObject("DateTimeImmutable");
-    try new_obj.set(ctx.allocator, "timestamp", .{ .int = isoWeekDateToTimestamp(year, week, dow, h, m, s) });
+    try new_obj.set(ctx.allocator, "timestamp", .{ .int = instantOfWall(ctx, obj, isoWeekDateToTimestamp(year, week, dow, c.hour, c.min, c.sec)) });
     const tz = obj.get("__timezone");
     if (tz != .null) try new_obj.set(ctx.allocator, "__timezone", tz);
     return NativeResult.borrowed(.{ .object = new_obj });
@@ -1224,14 +1212,9 @@ fn dtiSetISODate(ctx: *NativeContext, args: []const Value) RuntimeError!NativeRe
 fn dtiSetTime(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = getThis(ctx) orelse return NativeResult.scalar(.null);
     if (args.len < 2) return NativeResult.borrowed(.{ .object = obj });
-    const ts = getTimestamp(obj);
-    const epoch_secs: u64 = @intCast(if (ts < 0) 0 else ts);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const epoch_day = es.getEpochDay();
-    const year_day = epoch_day.calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
+    const c = wallFields(ctx, obj);
     const sec: i64 = if (args.len >= 3) Value.toInt(args[2]) else 0;
-    const new_ts = dateToTimestamp(@intCast(year_day.year), month_day.month.numeric(), month_day.day_index + 1, Value.toInt(args[0]), Value.toInt(args[1]), sec);
+    const new_ts = instantOfWall(ctx, obj, dateToTimestamp(c.year, c.month, c.day, Value.toInt(args[0]), Value.toInt(args[1]), sec));
     const new_obj = try ctx.createObject("DateTimeImmutable");
     try new_obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     const tz = obj.get("__timezone");
@@ -1450,17 +1433,22 @@ fn native_date_timestamp_set(ctx: *NativeContext, args: []const Value) RuntimeEr
     return NativeResult.borrowed(.{ .object = obj });
 }
 
+// a procedural function that is a method of its first argument
+// (date_offset_get($d) is $d->getOffset())
+fn methodAlias(comptime method: []const u8) fn (*NativeContext, []const Value) RuntimeError!NativeResult {
+    return struct {
+        fn call(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
+            if (args.len < 1 or args[0] != .object) return NativeResult.scalar(.{ .bool = false });
+            return NativeResult.share(try ctx.vm.callMethod(args[0].object, method, args[1..]));
+        }
+    }.call;
+}
+
 fn native_date_date_set(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = argObj(args) orelse return NativeResult.scalar(.{ .bool = false });
     if (args.len < 4) return NativeResult.borrowed(.{ .object = obj });
-    const ts = getTimestamp(obj);
-    const epoch_secs: u64 = @intCast(if (ts < 0) 0 else ts);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const day_seconds = es.getDaySeconds();
-    const h: i64 = day_seconds.getHoursIntoDay();
-    const m: i64 = day_seconds.getMinutesIntoHour();
-    const s: i64 = day_seconds.getSecondsIntoMinute();
-    const new_ts = dateToTimestamp(Value.toInt(args[1]), Value.toInt(args[2]), Value.toInt(args[3]), h, m, s);
+    const c = wallFields(ctx, obj);
+    const new_ts = instantOfWall(ctx, obj, dateToTimestamp(Value.toInt(args[1]), Value.toInt(args[2]), Value.toInt(args[3]), c.hour, c.min, c.sec));
     try obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     return NativeResult.borrowed(.{ .object = obj });
 }
@@ -1468,14 +1456,9 @@ fn native_date_date_set(ctx: *NativeContext, args: []const Value) RuntimeError!N
 fn native_date_time_set(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResult {
     const obj = argObj(args) orelse return NativeResult.scalar(.{ .bool = false });
     if (args.len < 3) return NativeResult.borrowed(.{ .object = obj });
-    const ts = getTimestamp(obj);
-    const epoch_secs: u64 = @intCast(if (ts < 0) 0 else ts);
-    const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
-    const epoch_day = es.getEpochDay();
-    const year_day = epoch_day.calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
+    const c = wallFields(ctx, obj);
     const sec: i64 = if (args.len >= 4) Value.toInt(args[3]) else 0;
-    const new_ts = dateToTimestamp(@intCast(year_day.year), month_day.month.numeric(), month_day.day_index + 1, Value.toInt(args[1]), Value.toInt(args[2]), sec);
+    const new_ts = instantOfWall(ctx, obj, dateToTimestamp(c.year, c.month, c.day, Value.toInt(args[1]), Value.toInt(args[2]), sec));
     try obj.set(ctx.allocator, "timestamp", .{ .int = new_ts });
     return NativeResult.borrowed(.{ .object = obj });
 }
