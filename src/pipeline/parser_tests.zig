@@ -397,6 +397,13 @@ fn renderNode(ast: *const Ast, idx: u32, buf: *Buf) !void {
             }
             try w.writeByte(')');
         },
+        .clone_with => {
+            try w.writeAll("(clone-with ");
+            try renderNode(ast, node.data.lhs, buf);
+            try w.writeByte(' ');
+            try renderNode(ast, node.data.rhs, buf);
+            try w.writeByte(')');
+        },
         .dynamic_class_const => {
             try w.writeAll("(::{} ");
             try renderNode(ast, node.data.lhs, buf);
@@ -891,4 +898,15 @@ test "void cast only where the value is discarded" {
 test "switch cases may end with a semicolon" {
     try expectNoErrors("<?php switch ($x) {; case 1; break; case 2: case 3; default; }");
     try expectNoErrors("<?php switch ($x): ; case 1; default: endswitch;");
+}
+
+test "php85 clone with an argument list" {
+    try expectNoErrors("<?php $a = clone($o); $b = clone($o, ['x' => 1]); $c = clone($o, $props,); $d = clone $o;");
+    var ast = try parse(std.testing.allocator, "<?php clone($o, $p);");
+    defer ast.deinit();
+    var found = false;
+    for (ast.nodes) |node| {
+        if (node.tag == .clone_with) found = true;
+    }
+    try std.testing.expect(found);
 }

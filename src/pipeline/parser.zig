@@ -2763,6 +2763,24 @@ const Parser = struct {
             },
             .kw_clone => {
                 const tok = self.advance();
+                // php 8.5's clone($object, $withProperties); a single argument
+                // is the plain clone of it
+                if (self.peek() == .l_paren) {
+                    _ = self.advance();
+                    const object = try self.parseExpression();
+                    var with: u32 = 0;
+                    if (self.peek() == .comma) {
+                        _ = self.advance();
+                        if (self.peek() != .r_paren) {
+                            with = try self.parseExpression();
+                            if (self.peek() == .comma) _ = self.advance();
+                        }
+                    }
+                    _ = try self.expect(.r_paren);
+                    if (with != 0) return self.addNode(.{ .tag = .clone_with, .main_token = tok, .data = .{ .lhs = object, .rhs = with } });
+                    const grouped = try self.addNode(.{ .tag = .grouped_expr, .main_token = tok, .data = .{ .lhs = object } });
+                    return self.addNode(.{ .tag = .prefix_op, .main_token = tok, .data = .{ .lhs = grouped } });
+                }
                 const operand = try self.parseExprPrec(18);
                 return self.addNode(.{ .tag = .prefix_op, .main_token = tok, .data = .{ .lhs = operand } });
             },

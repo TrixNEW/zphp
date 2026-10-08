@@ -313,6 +313,7 @@ const Formatter = struct {
             .postfix_op => self.findFirstToken(node.data.lhs),
             .static_call, .dynamic_static_call => self.findFirstToken(node.data.lhs),
             .static_prop_access, .dynamic_class_const => self.findFirstToken(node.data.lhs),
+            .clone_with => node.main_token,
             // declarations: main_token is the name, but trivia (docblocks) attaches to
             // the leading keyword, so walk backward through any modifiers and the keyword
             .function_decl => self.declLeadingToken(node.main_token, .kw_function),
@@ -501,6 +502,13 @@ const Formatter = struct {
             .dynamic_static_call => self.formatDynamicStaticCall(node),
             .static_prop_access => self.formatStaticPropAccess(node),
             .dynamic_class_const => self.formatDynamicClassConst(node),
+            .clone_with => {
+                self.write("clone(");
+                self.formatNode(node.data.lhs);
+                self.write(", ");
+                self.formatNode(node.data.rhs);
+                self.write(")");
+            },
             .new_expr => self.formatNewExpr(node),
             .new_expr_dynamic => {
                 self.write("new ");

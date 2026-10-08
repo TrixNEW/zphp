@@ -363,6 +363,10 @@ pub const OpCode = enum(u8) {
     separate_prop_array, // peeks [object, name]: separates the property's array in place, pushes nothing
     separate_static_prop, // u16 class, u16 property: checks the write is allowed (indirect), separates the array in place, pushes nothing
 
+    // [clone, properties] -> [clone]: php 8.5's clone-with, applied after
+    // __clone with the caller's scope
+    clone_with,
+
     pub fn width(self: OpCode) usize {
         return switch (self) {
             .arg_variable => 6,

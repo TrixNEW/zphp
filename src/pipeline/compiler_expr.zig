@@ -1801,6 +1801,17 @@ pub fn compileYieldFrom(self: *Compiler, node: Ast.Node) Error!void {
     try self.emitOp(.yield_from);
 }
 
+// both arguments are evaluated before the clone is made, as for a call:
+// [object, properties] -> [properties, object] -> [properties, clone] -> [clone]
+pub fn compileCloneWith(self: *Compiler, node: Ast.Node) Error!void {
+    try self.compileNode(node.data.lhs);
+    try self.compileNode(node.data.rhs);
+    try self.emitOp(.swap);
+    try self.emitOp(.clone_obj);
+    try self.emitOp(.swap);
+    try self.emitOp(.clone_with);
+}
+
 pub fn compileCast(self: *Compiler, node: Ast.Node) Error!void {
     const type_name = self.ast.tokenSlice(node.main_token);
     const eql = std.ascii.eqlIgnoreCase;

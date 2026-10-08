@@ -6942,6 +6942,56 @@ pub const VM = struct {
                     }
                 },
 
+                .clone_with => {
+                    // [clone, properties]: php 8.5 assigns each property to the
+                    // clone after __clone ran, with the caller's scope rules. a
+                    // readonly property may be written again where its set
+                    // visibility allows (the wither pattern)
+                    const with_val = self.pop();
+                    defer self.stackRelease(with_val);
+                    if (with_val != .array) {
+                        const msg = try std.fmt.allocPrint(self.allocator, "clone(): Argument #2 ($withProperties) must be of type array, {s} given", .{Value.typeName(with_val)});
+                        defer self.allocator.free(msg);
+                        if (try self.throwBuiltinException("TypeError", msg)) continue;
+                        return error.RuntimeError;
+                    }
+                    const target = self.peek();
+                    if (target != .object) continue;
+                    const props = with_val.array;
+                    arrayRetain(props);
+                    defer self.arrayRelease(props);
+                    const clone_obj = target.object;
+                    clone_obj.refcount +%= 1;
+                    defer self.objRelease(clone_obj);
+                    var dispatched = false;
+                    var i: usize = 0;
+                    while (i < props.entries.items.len) : (i += 1) {
+                        const entry = props.entries.items[i];
+                        const prop_name = switch (entry.key) {
+                            .string => |k| k.bytes(),
+                            .int => |n| (try self.transientFormatted(.{ .int = n })).bytes(),
+                        };
+                        var val = try self.preparePropertyStore(entry.value);
+                        const val_pin: ?*PhpObject = if (val == .object) val.object else null;
+                        if (val_pin) |pin| pin.refcount +%= 1;
+                        defer if (val_pin) |pin| self.objRelease(pin);
+                        const gate = try self.propertyWriteGate(clone_obj, prop_name, val, .reinit, base_frame);
+                        switch (gate.step) {
+                            .dispatched => {
+                                dispatched = true;
+                                break;
+                            },
+                            .stored => continue,
+                            .proceed => {},
+                        }
+                        if (try self.propertyWriteStore(gate.obj, prop_name, &val, gate.vr, .reinit, base_frame) == .dispatched) {
+                            dispatched = true;
+                            break;
+                        }
+                    }
+                    if (dispatched) continue;
+                },
+
                 .separate_static_prop => {
                     const class_idx = self.readU16();
                     const prop_idx = self.readU16();
@@ -8930,59 +8980,17 @@ pub const VM = struct {
                         obj.refcount +%= 1;
                         defer self.releaseValue(obj_val);
 
-                        self.triggerLazyAccess(obj, prop_name) catch {
-                            if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
-                            return error.RuntimeError;
-                        };
-                        obj = obj.storage();
-
-                        // the set-scope gate runs before hooks and __set, but only
-                        // an asymmetric or readonly declaration can ever deny a write
-                        const vr = self.findPropertyVisibility(obj.class_name, prop_name);
-                        if (vr.is_readonly or vr.set_visibility != vr.visibility) {
-                            if (!(obj.isUnset(prop_name) and self.hasMethod(obj.class_name, "__set"))) {
-                                if (try self.checkPropertyMutationVis(obj, prop_name, .write, vr)) continue;
-                            }
-                        }
-
-                        // property hooks: dispatch to set hook if present (and not recursing).
-                        // an exception thrown inside the hook must dispatch back into the
-                        // caller's try/catch instead of bubbling out of runLoop
-                        if (self.hasPropHook(obj.class_name, prop_name, .set) and !self.inPropHook(obj, prop_name)) {
-                            const hook_result = self.callPropHook(obj, prop_name, .set, val) catch {
-                                if (self.pending_exception != null and self.dispatchPendingException(base_frame)) continue;
-                                return error.RuntimeError;
-                            };
-                            if (hook_result != null) {
+                        const gate = try self.propertyWriteGate(obj, prop_name, val, .write, base_frame);
+                        switch (gate.step) {
+                            .dispatched => continue,
+                            .stored => {
                                 self.push(val);
                                 continue;
-                            }
-                        } else if (self.hasPropHook(obj.class_name, prop_name, .get) and !self.inPropHook(obj, prop_name)) {
-                            // get hook exists but no set hook. PHP allows the
-                            // write when the property is "backed" (a default
-                            // was declared, in which case there's storage to
-                            // write to). purely virtual properties with no
-                            // default are read-only
-                            const has_default = blk: {
-                                var current: ?[]const u8 = obj.class_name;
-                                while (current) |cn| {
-                                    if (self.classes.get(cn)) |cls_def| {
-                                        for (cls_def.properties.items) |p| {
-                                            if (std.mem.eql(u8, p.name, prop_name)) break :blk p.has_default;
-                                        }
-                                        current = cls_def.parent;
-                                    } else break;
-                                }
-                                break :blk false;
-                            };
-                            if (!has_default) {
-                                const msg = std.fmt.allocPrint(self.allocator, "Property {s}::${s} is read-only", .{ obj.class_name, prop_name }) catch return error.RuntimeError;
-                                defer self.allocator.free(msg);
-                                if (try self.throwBuiltinException("Error", msg)) continue;
-                                return error.RuntimeError;
-                            }
-                            // fall through to the regular slot/property write
+                            },
+                            .proceed => {},
                         }
+                        obj = gate.obj;
+                        const vr = gate.vr;
 
                         if (if (op == .set_prop) self.ic else null) |ic| {
                             const sp_idx = InlineCache.propIndex(@intFromPtr(self.currentChunk()), sp_ip);
@@ -9013,58 +9021,21 @@ pub const VM = struct {
                             }
                         }
 
-                        const has_prop = !obj.isUnset(prop_name) and (obj.properties.contains(prop_name) or (obj.slots != null and obj.getSlotIndex(prop_name) != null));
-                        if (!has_prop and self.hasMethod(obj.class_name, "__set") and !obj.magic_set_active.contains(prop_name)) {
-                            try obj.magic_set_active.put(self.allocator, prop_name, {});
-                            _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__set", &.{ .{ .string = Value.String.borrowed(prop_name) }, val }) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
-                            _ = obj.magic_set_active.remove(prop_name);
-                        } else {
-                            if (!self.checkVisibility(vr.defining_class, vr.visibility)) {
-                                if (self.hasMethod(obj.class_name, "__set") and !obj.magic_set_active.contains(prop_name)) {
-                                    try obj.magic_set_active.put(self.allocator, prop_name, {});
-                                    _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__set", &.{ .{ .string = Value.String.borrowed(prop_name) }, val }) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) continue; return error.RuntimeError; }; });
-                                    _ = obj.magic_set_active.remove(prop_name);
-                                    self.push(val);
-                                    continue;
+                        switch (try self.propertyWriteStore(obj, prop_name, &val, vr, .write, base_frame)) {
+                            .dispatched => continue,
+                            .magic => {},
+                            .written => {
+                                // populate IC for slot-indexed writes. typed
+                                // properties are cached too - the fast path runs
+                                // checkPropertyType when prop_type is set
+                                if (if (op == .set_prop) self.ic else null) |ic| {
+                                    if (vr.visibility == .public and vr.set_visibility == .public and !vr.is_readonly) {
+                                        const sp_idx = InlineCache.propIndex(@intFromPtr(self.currentChunk()), sp_ip);
+                                        const si = if (obj.slot_layout != null) obj.getSlotIndex(prop_name) orelse @as(u16, 0xFFFF) else @as(u16, 0xFFFF);
+                                        ic.prop[sp_idx] = .{ .key = sp_ip, .chunk_key = @intFromPtr(self.currentChunk()), .class_ptr = @intFromPtr(obj.class_name.ptr), .slot_index = si, .prop_type = vr.type_str, .decl_class = vr.defining_class };
+                                    }
                                 }
-                                const msg = try std.fmt.allocPrint(self.allocator, "Cannot access {s} property {s}::${s}", .{
-                                    @tagName(vr.visibility), vr.defining_class, prop_name,
-                                });
-                                defer self.allocator.free(msg);
-                                if (try self.throwBuiltinException("Error", msg)) continue;
-                                return error.RuntimeError;
-                            }
-                            const sp_scope: ?[]const u8 = if (vr.visibility == .private) vr.defining_class else null;
-                            if (vr.is_readonly) {
-                                const existing = obj.getForScope(prop_name, sp_scope);
-                                if (existing != .null) {
-                                    const msg = try std.fmt.allocPrint(self.allocator, "Cannot modify readonly property {s}::${s}", .{
-                                        vr.defining_class, prop_name,
-                                    });
-                                    defer self.allocator.free(msg);
-                                    if (try self.throwBuiltinException("Error", msg)) continue;
-                                    return error.RuntimeError;
-                                }
-                            }
-                            // typed property: coerce/enforce the declared type
-                            // before storing (matches PHP weak/strict mode)
-                            if (vr.type_str.len > 0) {
-                                if (try self.checkPropertyType(&val, vr.type_str, vr.defining_class, prop_name)) continue;
-                            }
-                            // overwrite-release: drop the object the property
-                            // previously held before the new value lands (Stage 1)
-                            try obj.setForScope(self.allocator, prop_name, val, sp_scope);
-                            self.syncObjPropRefs(obj, prop_name, val);
-                            // populate IC for slot-indexed writes. typed
-                            // properties are cached too - the fast path runs
-                            // checkPropertyType when prop_type is set
-                            if (if (op == .set_prop) self.ic else null) |ic| {
-                                if (vr.visibility == .public and vr.set_visibility == .public and !vr.is_readonly) {
-                                    const sp_idx = InlineCache.propIndex(@intFromPtr(self.currentChunk()), sp_ip);
-                                    const si = if (obj.slot_layout != null) obj.getSlotIndex(prop_name) orelse @as(u16, 0xFFFF) else @as(u16, 0xFFFF);
-                                    ic.prop[sp_idx] = .{ .key = sp_ip, .chunk_key = @intFromPtr(self.currentChunk()), .class_ptr = @intFromPtr(obj.class_name.ptr), .slot_index = si, .prop_type = vr.type_str, .decl_class = vr.defining_class };
-                                }
-                            }
+                            },
                         }
                     }
                     self.push(val);
@@ -16691,7 +16662,120 @@ pub const VM = struct {
     // Object interiors are
     // reads of the property, not mutations of its storage (callers skip this
     // gate when a dimension operation resolves to an object).
-    const MutationAction = enum { write, indirect, unset };
+    // reinit is clone-with's write: a readonly property may be written again
+    // by a scope its set visibility allows
+    const MutationAction = enum { write, indirect, unset, reinit };
+
+    const PropWriteStep = enum { proceed, stored, dispatched };
+    const PropWriteGate = struct { step: PropWriteStep, obj: *PhpObject = undefined, vr: VisResult = undefined };
+
+    // what a property write does before the store: lazy initialization, the
+    // set-scope gate, and property hooks. stored: a set hook took the value.
+    // dispatched: an exception was raised and dispatched, and the run loop
+    // continues at its handler
+    fn propertyWriteGate(self: *VM, obj_in: *PhpObject, prop_name: []const u8, val: Value, action: MutationAction, base_frame: usize) RuntimeError!PropWriteGate {
+        self.triggerLazyAccess(obj_in, prop_name) catch {
+            if (self.pending_exception != null and self.dispatchPendingException(base_frame)) return .{ .step = .dispatched };
+            return error.RuntimeError;
+        };
+        const obj = obj_in.storage();
+
+        // the set-scope gate runs before hooks and __set, but only an
+        // asymmetric or readonly declaration can ever deny a write
+        const vr = self.findPropertyVisibility(obj.class_name, prop_name);
+        if (vr.is_readonly or vr.set_visibility != vr.visibility) {
+            if (!(obj.isUnset(prop_name) and self.hasMethod(obj.class_name, "__set"))) {
+                if (try self.checkPropertyMutationVis(obj, prop_name, action, vr)) return .{ .step = .dispatched };
+            }
+        }
+
+        // property hooks: dispatch to the set hook if present (and not
+        // recursing). an exception thrown inside the hook dispatches back into
+        // the caller's try/catch instead of bubbling out of runLoop
+        if (self.hasPropHook(obj.class_name, prop_name, .set) and !self.inPropHook(obj, prop_name)) {
+            const hook_result = self.callPropHook(obj, prop_name, .set, val) catch {
+                if (self.pending_exception != null and self.dispatchPendingException(base_frame)) return .{ .step = .dispatched };
+                return error.RuntimeError;
+            };
+            if (hook_result != null) return .{ .step = .stored, .obj = obj, .vr = vr };
+        } else if (self.hasPropHook(obj.class_name, prop_name, .get) and !self.inPropHook(obj, prop_name)) {
+            // get hook exists but no set hook. PHP allows the write when the
+            // property is "backed" (a default was declared, in which case
+            // there's storage to write to). purely virtual properties with no
+            // default are read-only
+            const has_default = blk: {
+                var current: ?[]const u8 = obj.class_name;
+                while (current) |cn| {
+                    if (self.classes.get(cn)) |cls_def| {
+                        for (cls_def.properties.items) |p| {
+                            if (std.mem.eql(u8, p.name, prop_name)) break :blk p.has_default;
+                        }
+                        current = cls_def.parent;
+                    } else break;
+                }
+                break :blk false;
+            };
+            if (!has_default) {
+                const msg = std.fmt.allocPrint(self.allocator, "Property {s}::${s} is read-only", .{ obj.class_name, prop_name }) catch return error.RuntimeError;
+                defer self.allocator.free(msg);
+                if (try self.throwBuiltinException("Error", msg)) return .{ .step = .dispatched };
+                return error.RuntimeError;
+            }
+            // fall through to the regular slot/property write
+        }
+        return .{ .step = .proceed, .obj = obj, .vr = vr };
+    }
+
+    const PropWriteOutcome = enum { written, magic, dispatched };
+
+    // the store of a property write that passed its gate: __set for a missing
+    // or inaccessible property, else the visibility, readonly, and type checks
+    // and the write itself. val may be coerced to the declared type
+    fn propertyWriteStore(self: *VM, obj: *PhpObject, prop_name: []const u8, val: *Value, vr: VisResult, action: MutationAction, base_frame: usize) RuntimeError!PropWriteOutcome {
+        const has_prop = !obj.isUnset(prop_name) and (obj.properties.contains(prop_name) or (obj.slots != null and obj.getSlotIndex(prop_name) != null));
+        if (!has_prop and self.hasMethod(obj.class_name, "__set") and !obj.magic_set_active.contains(prop_name)) {
+            try obj.magic_set_active.put(self.allocator, prop_name, {});
+            _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__set", &.{ .{ .string = Value.String.borrowed(prop_name) }, val.* }) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) return .dispatched; return error.RuntimeError; }; });
+            _ = obj.magic_set_active.remove(prop_name);
+            return .magic;
+        }
+        if (!self.checkVisibility(vr.defining_class, vr.visibility)) {
+            if (self.hasMethod(obj.class_name, "__set") and !obj.magic_set_active.contains(prop_name)) {
+                try obj.magic_set_active.put(self.allocator, prop_name, {});
+                _ = (implicit_call: { const handlers_before = self.handler_count; break :implicit_call self.callMethod(obj, "__set", &.{ .{ .string = Value.String.borrowed(prop_name) }, val.* }) catch { if (self.resumeAfterThrow(base_frame, handlers_before)) return .dispatched; return error.RuntimeError; }; });
+                _ = obj.magic_set_active.remove(prop_name);
+                return .magic;
+            }
+            const msg = try std.fmt.allocPrint(self.allocator, "Cannot access {s} property {s}::${s}", .{
+                @tagName(vr.visibility), vr.defining_class, prop_name,
+            });
+            defer self.allocator.free(msg);
+            if (try self.throwBuiltinException("Error", msg)) return .dispatched;
+            return error.RuntimeError;
+        }
+        const sp_scope: ?[]const u8 = if (vr.visibility == .private) vr.defining_class else null;
+        if (vr.is_readonly and action != .reinit) {
+            const existing = obj.getForScope(prop_name, sp_scope);
+            if (existing != .null) {
+                const msg = try std.fmt.allocPrint(self.allocator, "Cannot modify readonly property {s}::${s}", .{
+                    vr.defining_class, prop_name,
+                });
+                defer self.allocator.free(msg);
+                if (try self.throwBuiltinException("Error", msg)) return .dispatched;
+                return error.RuntimeError;
+            }
+        }
+        // typed property: coerce/enforce the declared type before storing
+        // (matches PHP weak/strict mode)
+        if (vr.type_str.len > 0) {
+            if (try self.checkPropertyType(val, vr.type_str, vr.defining_class, prop_name)) return .dispatched;
+        }
+        // overwrite-release: drop the object the property previously held
+        // before the new value lands (Stage 1)
+        try obj.setForScope(self.allocator, prop_name, val.*, sp_scope);
+        self.syncObjPropRefs(obj, prop_name, val.*);
+        return .written;
+    }
 
     fn checkPropertyMutation(self: *VM, obj: *PhpObject, name: []const u8, action: MutationAction) RuntimeError!bool {
         return self.checkPropertyMutationVis(obj, name, action, self.findPropertyVisibility(obj.class_name, name));
@@ -16706,6 +16790,7 @@ pub const VM = struct {
                 .write => "modify",
                 .indirect => "indirectly modify",
                 .unset => "unset",
+                .reinit => "modify",
             };
             const ro: []const u8 = if (vr.is_readonly and vr.set_visibility == .protected) " readonly" else "";
             const scope = self.currentDefiningClass();

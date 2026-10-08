@@ -188,6 +188,7 @@ pub const Ast = struct {
             qualified_name, // main_token = first identifier, lhs = extra index -> {count, token_indices...} for multi-part names
             declare_stmt, // main_token = declare keyword, lhs = token index of the closing `)`, rhs = body (0 = `declare(...);`)
             dynamic_class_const, // Class::{expr}: lhs = class node, rhs = constant name expression
+            clone_with, // clone($object, $withProperties) (php 8.5): main_token = clone keyword, lhs = object, rhs = properties
         };
     };
 

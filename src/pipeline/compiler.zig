@@ -557,6 +557,7 @@ pub const Compiler = struct {
             .dynamic_static_call => try compiler_expr.compileDynamicStaticCall(self, node),
             .static_prop_access => try compiler_expr.compileStaticPropAccess(self, node),
             .dynamic_class_const => try compiler_expr.compileDynamicClassConst(self, node),
+            .clone_with => try compiler_expr.compileCloneWith(self, node),
             .yield_expr => try compiler_expr.compileYield(self, node),
             .yield_pair_expr => try compiler_expr.compileYieldPair(self, node),
             .yield_from_expr => try compiler_expr.compileYieldFrom(self, node),
