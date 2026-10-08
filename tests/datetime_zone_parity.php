@@ -26,7 +26,9 @@ foreach (['UTC', 'America/New_York', 'australia/lord_howe', 'Asia/Kolkata'] as $
     var_dump(date_default_timezone_set($z));
     foreach ([-100000000, -3600, 0, 1730611800, 1710035999, 4102444800, -62135596800] as $t) {
         echo $z, " ", $t, ": ";
-        foreach (str_split('BdhHimIsLNotUwWyYzZ') as $f) echo idate($f, $t), ",";
+        // windows php computes swatch beats in a 32-bit long, so only compare them in range
+        if ($t >= -2147483648 && $t <= 2147483647) echo idate('B', $t), ",";
+        foreach (str_split('dhHimIsLNotUwWyYzZ') as $f) echo idate($f, $t), ",";
         echo " | ", implode(",", localtime($t)), " | ", implode(",", getdate($t)), " | ", date('Y-m-d H:i:s I z t L T', $t), "\n";
     }
 }
