@@ -19,3 +19,15 @@ var_dump($names);
 $d->close();
 unlink("$base/a.txt");
 rmdir($base);
+
+// uncloneable, readonly typed properties, and no dynamic properties
+$d = dir(sys_get_temp_dir());
+foreach ([fn() => clone $d, function () use ($d) { $d->path = "x"; }, function () use ($d) { $d->extra = 1; }] as $f) {
+    try {
+        $f();
+    } catch (Error $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+$p = new ReflectionProperty('Directory', 'path');
+var_dump($p->isReadOnly(), (string) $p->getType(), (string) (new ReflectionProperty('Directory', 'handle'))->getType());

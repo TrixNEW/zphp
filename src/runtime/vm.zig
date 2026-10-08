@@ -337,6 +337,11 @@ pub const ClassDef = struct {
     is_abstract: bool = false,
     is_final: bool = false,
     is_readonly: bool = false,
+    // an internal class whose objects take no dynamic properties, like a
+    // readonly class (Directory)
+    no_dynamic_properties: bool = false,
+    // an internal class php refuses to clone though it holds no native handle
+    uncloneable: bool = false,
     native_cleanup: ?*const fn (*PhpObject) bool = null,
     // copies the native handle for `clone`; a class with a handle and no
     // hook is uncloneable, like php's handle classes
@@ -1851,6 +1856,21 @@ pub const VM = struct {
         try rm_def.interfaces.append(allocator, "UnitEnum");
         try vm.classes.put(allocator, "RoundingMode", rm_def);
         try vm.registerEnumMethods("RoundingMode", 0);
+
+        // the internal classes whose objects refuse dynamic properties in php
+        // (Error "Cannot create dynamic property"), where others only deprecate
+        for ([_][]const u8{
+            "CurlHandle",                       "CurlMultiHandle",      "CurlShareHandle",      "CurlSharePersistentHandle",
+            "GdImage",                          "GdFont",               "IntlListFormatter",    "XMLParser",
+            "Directory",                        "WeakMap",              "WeakReference",        "Closure",
+            "Fiber",                            "Random\\Randomizer", "OpenSSLAsymmetricKey", "OpenSSLCertificate",
+            "OpenSSLCertificateSigningRequest", "Socket",               "AddressInfo",          "Shmop",
+            "SysvMessageQueue",                 "SysvSemaphore",        "SysvSharedMemory",     "FTP\\Connection",
+            "LDAP\\Connection",               "LDAP\\Result",       "LDAP\\ResultEntry",  "PgSql\\Connection",
+            "PgSql\\Result",                  "PgSql\\Lob",
+        }) |name| {
+            if (vm.classes.getPtr(name)) |cls| cls.no_dynamic_properties = true;
+        }
     }
 
     fn initConstants(c: *std.StringHashMapUnmanaged(Value), a: Allocator) !void {
@@ -6013,6 +6033,12 @@ pub const VM = struct {
                         self.push(cur);
                         continue;
                     }
+                    // vivifying a property nothing declares creates it
+                    if (hook_cell == null and (eap_obj.isUnset(prop_name) or !eap_obj.properties.contains(prop_name)) and
+                        (eap_obj.slots == null or eap_obj.getSlotIndex(prop_name) == null) and !self.classDeclaresProperty(eap_obj.class_name, prop_name))
+                    {
+                        if (try self.checkDynamicProperty(eap_obj, prop_name)) continue;
+                    }
                     const new_arr = try self.allocArray();
                     // obj.set retains -> refcount 1 (the property slot owns it)
                     if (hook_cell) |cell| {
@@ -7430,7 +7456,8 @@ pub const VM = struct {
                         };
                         src = src.storage();
                         const native_clone = if (src.native.kind == .none) null else self.nativeCloneHook(src.class_name);
-                        if (src.native.kind != .none and native_clone == null) {
+                        const uncloneable = if (self.classes.getPtr(src.class_name)) |cls| cls.uncloneable else false;
+                        if ((src.native.kind != .none and native_clone == null) or uncloneable) {
                             if (try self.throwUncloneable(src.class_name)) continue;
                             return error.RuntimeError;
                         }
@@ -9120,6 +9147,18 @@ pub const VM = struct {
                                 }
                             },
                         }
+                    } else {
+                        // php 8 refuses a property write on anything but an
+                        // object; closures, generators, and fibers are objects
+                        // that take no dynamic properties
+                        const is_closure = obj_val == .string and std.mem.startsWith(u8, obj_val.string.bytes(), "__closure_");
+                        const msg = if (is_closure or obj_val == .generator or obj_val == .fiber)
+                            try std.fmt.allocPrint(self.allocator, "Cannot create dynamic property {s}::${s}", .{ if (is_closure) "Closure" else obj_val.valueName(), prop_name })
+                        else
+                            try std.fmt.allocPrint(self.allocator, "Attempt to assign property \"{s}\" on {s}", .{ prop_name, obj_val.valueName() });
+                        defer self.allocator.free(msg);
+                        if (try self.throwBuiltinException("Error", msg)) continue;
+                        return error.RuntimeError;
                     }
                     self.push(val);
                 },
@@ -12210,6 +12249,7 @@ pub const VM = struct {
 
     pub const E_WARNING: i64 = 2;
     pub const E_USER_DEPRECATED: i64 = 16384;
+    pub const E_DEPRECATED: i64 = 8192;
 
     pub fn emitWarning(self: *VM, msg: []const u8) RuntimeError!void {
         return self.raiseError(E_WARNING, msg);
@@ -16908,6 +16948,60 @@ pub const VM = struct {
 
     const PropWriteOutcome = enum { written, magic, dispatched };
 
+    pub fn classDeclaresProperty(self: *VM, class_name: []const u8, name: []const u8) bool {
+        var current: ?[]const u8 = class_name;
+        while (current) |cn| {
+            const cls = self.classes.getPtr(cn) orelse return false;
+            for (cls.properties.items) |prop| if (std.mem.eql(u8, prop.name, name)) return true;
+            current = cls.parent;
+        }
+        return false;
+    }
+
+    pub const DynamicPropertyRule = enum { allowed, deprecated, forbidden };
+
+    // what php does when a write creates a property no class in the object's
+    // chain declares: a readonly class (or one that forbids it) refuses,
+    // stdClass or #[\AllowDynamicProperties] in the chain allows it, and
+    // anything else is deprecated (php 8.2)
+    pub fn dynamicPropertyRule(self: *VM, obj: *const PhpObject) DynamicPropertyRule {
+        var current: ?[]const u8 = obj.class_name;
+        while (current) |cn| {
+            if (std.ascii.eqlIgnoreCase(cn, "stdClass")) return .allowed;
+            const cls = self.classes.getPtr(cn) orelse return .allowed;
+            if (cls.is_readonly or cls.no_dynamic_properties) return .forbidden;
+            for (cls.attributes.items) |attr| {
+                const attr_name = if (attr.name.len > 0 and attr.name[0] == '\\') attr.name[1..] else attr.name;
+                if (std.ascii.eqlIgnoreCase(attr_name, "AllowDynamicProperties")) return .allowed;
+            }
+            current = cls.parent;
+        }
+        return .deprecated;
+    }
+
+    // raises what dynamicPropertyRule asks for, from the run loop. returns
+    // true when an exception was raised and dispatched
+    fn checkDynamicProperty(self: *VM, obj: *PhpObject, name: []const u8) RuntimeError!bool {
+        switch (self.dynamicPropertyRule(obj)) {
+            .allowed => return false,
+            .forbidden => {
+                const msg = try std.fmt.allocPrint(self.allocator, "Cannot create dynamic property {s}::${s}", .{ obj.class_name, name });
+                defer self.allocator.free(msg);
+                if (try self.throwBuiltinException("Error", msg)) return true;
+                return error.RuntimeError;
+            },
+            .deprecated => {
+                const msg = try std.fmt.allocPrint(self.allocator, "Creation of dynamic property {s}::${s} is deprecated", .{ obj.class_name, name });
+                defer self.allocator.free(msg);
+                self.raiseError(E_DEPRECATED, msg) catch {
+                    _ = try self.resumeRaised();
+                    return true;
+                };
+                return false;
+            },
+        }
+    }
+
     // the store of a property write that passed its gate: __set for a missing
     // or inaccessible property, else the visibility, readonly, and type checks
     // and the write itself. val may be coerced to the declared type
@@ -16944,6 +17038,9 @@ pub const VM = struct {
                 if (try self.throwBuiltinException("Error", msg)) return .dispatched;
                 return error.RuntimeError;
             }
+        }
+        if (!has_prop and !self.classDeclaresProperty(obj.class_name, prop_name)) {
+            if (try self.checkDynamicProperty(obj, prop_name)) return .dispatched;
         }
         // typed property: coerce/enforce the declared type before storing
         // (matches PHP weak/strict mode)

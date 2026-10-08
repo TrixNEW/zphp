@@ -898,7 +898,14 @@ fn aoMagicSet(ctx: *NativeContext, args: []const Value) RuntimeError!NativeResul
     const flags = obj.get("__flags");
     const has_props = flags == .int and (flags.int & 2) != 0;
     if (!has_props) {
-        try obj.set(ctx.allocator, args[0].string.bytes(), args[1]);
+        const name = args[0].string.bytes();
+        // an ordinary property write, so creating one is deprecated as anywhere
+        if (!obj.properties.contains(name) and !ctx.vm.classDeclaresProperty(obj.class_name, name) and ctx.vm.dynamicPropertyRule(obj) == .deprecated) {
+            const msg = try std.fmt.allocPrint(ctx.allocator, "Creation of dynamic property {s}::${s} is deprecated", .{ obj.class_name, name });
+            defer ctx.allocator.free(msg);
+            try ctx.vm.raiseError(VM.E_DEPRECATED, msg);
+        }
+        try obj.set(ctx.allocator, name, args[1]);
         return NativeResult.scalar(.null);
     }
     const arr = try ensureData(ctx, obj);

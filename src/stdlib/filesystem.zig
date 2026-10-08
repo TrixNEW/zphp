@@ -196,10 +196,11 @@ pub fn register(vm: *VM, a: Allocator) !void {
     // Directory class returned by dir() - thin OO wrapper. methods delegate
     // to the underlying DirectoryHandle stored in the 'handle' property. php
     // 8.5 made it final and only dir() creates one
-    var dir_def = ClassDef{ .name = "Directory", .is_final = true };
+    var dir_def = ClassDef{ .name = "Directory", .is_final = true, .uncloneable = true };
     try dir_def.methods.put(a, "__construct", .{ .name = "__construct", .arity = 0 });
-    try dir_def.properties.append(a, .{ .name = "path", .default = .{ .string = Value.String.borrowed("") } });
-    try dir_def.properties.append(a, .{ .name = "handle", .default = .null });
+    // readonly and uninitialized until dir() fills them in
+    try dir_def.properties.append(a, .{ .name = "path", .default = .null, .is_readonly = true, .type_str = "string" });
+    try dir_def.properties.append(a, .{ .name = "handle", .default = .null, .is_readonly = true, .type_str = "mixed" });
     try dir_def.methods.put(a, "read", .{ .name = "read", .arity = 0 });
     try dir_def.methods.put(a, "rewind", .{ .name = "rewind", .arity = 0 });
     try dir_def.methods.put(a, "close", .{ .name = "close", .arity = 0 });
