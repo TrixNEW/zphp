@@ -18013,7 +18013,8 @@ pub const VM = struct {
                     try self.setPendingException("Error", msg);
                     return error.RuntimeError;
                 }
-                return cls;
+                // the check may have autoloaded classes and moved this one
+                return self.classes.getPtr(name) orelse self.undeclaredStaticProp(class_name, prop_name);
             }
             current = cls.parent;
         }
@@ -18035,14 +18036,16 @@ pub const VM = struct {
             if (e.value_ptr.static_props.contains(prop_name)) break e;
             current = e.value_ptr.parent;
         } else return null;
-        const cls = entry.value_ptr;
+        // read everything up front: a visibility check can autoload an
+        // interface, and a class the autoloader declares can move the entry
         const declaring = entry.key_ptr.*;
-        const vis = cls.static_prop_visibility.get(prop_name) orelse .public;
+        const vis = entry.value_ptr.static_prop_visibility.get(prop_name) orelse .public;
+        const explicit_set_vis = entry.value_ptr.static_prop_set_visibility.get(prop_name);
         if (!self.checkVisibility(declaring, vis)) {
             return try std.fmt.allocPrint(self.allocator, "Cannot access {s} property {s}::${s}", .{ @tagName(vis), self.declaredClassName(class_name), prop_name });
         }
         if (access == .read) return null;
-        const set_vis = cls.static_prop_set_visibility.get(prop_name) orelse return null;
+        const set_vis = explicit_set_vis orelse return null;
         if (self.checkVisibility(declaring, set_vis)) return null;
         const verb: []const u8 = if (access == .indirect) "indirectly modify" else "modify";
         if (self.currentDefiningClass()) |scope| {
