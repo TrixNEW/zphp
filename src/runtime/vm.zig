@@ -534,6 +534,36 @@ pub const NativeInvocation = struct {
     instance: bool = false,
 };
 
+// one message of a date parse, keyed by its byte position like php's arrays.
+// messages are static strings
+pub const DtMsg = struct { pos: u32 = 0, msg: []const u8 = "" };
+
+pub const DtLastErrors = struct {
+    set: bool = false,
+    warning_count: u32 = 0,
+    error_count: u32 = 0,
+    warnings: [16]DtMsg = undefined,
+    warnings_len: u8 = 0,
+    errors: [16]DtMsg = undefined,
+    errors_len: u8 = 0,
+
+    pub fn addWarning(self: *DtLastErrors, pos: usize, msg: []const u8) void {
+        self.warning_count += 1;
+        if (self.warnings_len < self.warnings.len) {
+            self.warnings[self.warnings_len] = .{ .pos = @intCast(@min(pos, std.math.maxInt(u32))), .msg = msg };
+            self.warnings_len += 1;
+        }
+    }
+
+    pub fn addError(self: *DtLastErrors, pos: usize, msg: []const u8) void {
+        self.error_count += 1;
+        if (self.errors_len < self.errors.len) {
+            self.errors[self.errors_len] = .{ .pos = @intCast(@min(pos, std.math.maxInt(u32))), .msg = msg };
+            self.errors_len += 1;
+        }
+    }
+};
+
 pub const VM = struct {
     // frames and the operand stack live in reserved regions that commit as
     // calls go deeper (ensureCallRoom), so their addresses never move
@@ -861,13 +891,10 @@ pub const VM = struct {
     default_tz_name: []const u8 = "UTC",
     // backing for a zone set by date_default_timezone_set(); zone ids are short
     default_tz_buf: [64]u8 = undefined,
-    // populated by DateTime/createFromFormat parsers when input is unparseable.
-    // DateTime::getLastErrors returns the structured form; false when the most
-    // recent parse succeeded (PHP 8.2+ behavior)
-    last_dt_error_count: u32 = 0,
-    last_dt_error_text: []const u8 = "",
-    last_dt_error_pos: u32 = 0,
-    last_dt_parse_failed: bool = false,
+    // warnings and errors of the last DateTime parse (constructor, modify,
+    // createFromFormat), for DateTime::getLastErrors(), which returns false
+    // when that parse had none
+    last_dt: DtLastErrors = .{},
     default_tz_offset: i32 = 0,
     // set true once any `$r = &$obj->prop` / `&Class::$static` reference binding
     // is created. lets writes to a prop/static-prop skip the ref-cell sync walk
@@ -3119,10 +3146,7 @@ pub const VM = struct {
         self.setStrtokState(null);
         self.strtok_pos = 0;
         self.clearLastError();
-        self.last_dt_error_count = 0;
-        self.last_dt_error_text = "";
-        self.last_dt_error_pos = 0;
-        self.last_dt_parse_failed = false;
+        self.last_dt = .{};
         self.last_intl_error_code = 0;
         self.exit_code = 0;
         self.statics.clearRetainingCapacity();

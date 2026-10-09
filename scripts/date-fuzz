@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+# Differential fuzzing of the date string parser against php: generates random
+# strings from the token families timelib's scanner knows, runs each through
+# strtotime(), modify(), the constructor (zone and errors), and date_parse()
+# under php and zphp, and prints the inputs whose output differs.
+#
+#   scripts/date-fuzz [--count N] [--seed S] [--zphp PATH] [zone ...]
+#
+# zones default to America/New_York and Europe/Paris. exit status is 1 when
+# any input differs.
+
+import argparse
+import os
+import random
+import subprocess
+import sys
+import tempfile
+
+POOL = [
+    # numbers
+    '1', '7', '12', '24', '25', '31', '60', '99', '100', '123', '1999', '2024', '20240315', '2024031', '240315',
+    '123456', '1234567', '00', '09', '0', '366', '367', '+1', '-1', '+15', '-3', '++2', '--4', '+-5', '1e3',
+    # separators
+    ' ', '  ', '\t', '-', '/', '.', ':', ',', ';', '(', ')', 'T', 't', 'W', 'Z', 'z', '@', ' ', ' ',
+    # months
+    'jan', 'Feb', 'MARCH', 'april', 'may', 'Jun', 'july', 'aug', 'sep', 'sept', 'Oct', 'nov', 'December',
+    'I', 'II', 'IV', 'VIII', 'XII', 'x',
+    # days
+    'mon', 'Tuesday', 'WED', 'thursday', 'fri', 'sat', 'sunday', 'mondays', 'weekday', 'weekdays',
+    # relative words and units
+    'next', 'last', 'previous', 'this', 'first', 'second', 'third', 'fifth', 'twelfth', 'eight', 'ago', 'of',
+    'day', 'days', 'week', 'weeks', 'fortnight', 'month', 'months', 'year', 'years', 'hour', 'hours', 'min',
+    'mins', 'minute', 'sec', 'secs', 'seconds', 'ms', 'msec', 'usec', 'µs', 'microsecond',
+    'millisecond', 'now', 'today', 'tomorrow', 'yesterday', 'midnight', 'noon', 'back of', 'front of',
+    'first day of', 'last day of',
+    # meridians
+    'am', 'pm', 'AM', 'P.M.', 'a.m.', 'p.m',
+    # zones
+    'UTC', 'utc', 'GMT', 'EST', 'EDT', 'CEST', 'cet', 'PST', 'A', 'Europe/Paris', 'America/New_York',
+    'Asia/Tokyo', 'Mars/Base', '+0200', '-05:00', '+5', 'GMT+3', '-0330', '+05:30:15', '(UTC)',
+    # whole formats
+    '2024-03-15', '2024-3-5', '24-03-15', '03/15/2024', '3/5', '15.03.2024', '15.3.24', '2024/03/15',
+    '15-Mar-2024', 'Mar-15-2024', '2024-Mar-15', '2024W11', '2024-W11-3', '2024.075',
+    '10/Oct/2000:13:55:36 -0700', '20240315T101112', '2024-03-15T10:11:12.5+01:00', '10:11', '10:11:12',
+    '10.11.12', '101112', '1011', 't1011', '10:11:12.123456', '10am', '10:30pm', '12am', '12:00 PM', '1:2:3',
+    '23:59:60', '24:00', '5:6', '@1700000000', '@-86400', '@1700000000.5', '@1.', '1st', '2nd', '3rd', '21st',
+]
+
+DRIVER = r'''<?php
+$zone = $argv[2];
+date_default_timezone_set($zone);
+$base = 1710000000 + 7 * 86400 * 5 + 3723;
+$b = (new DateTimeImmutable('@' . $base))->setTimezone(new DateTimeZone($zone));
+foreach (file($argv[1], FILE_IGNORE_NEW_LINES) as $s) {
+    echo '[', $s, "]\n";
+    $t = strtotime($s, $base);
+    echo '  strtotime: ', $t === false ? 'false' : $t . ' ' . date('Y-m-d H:i:s T', $t), "\n";
+    try {
+        echo '  modify: ', $b->modify($s)->format('Y-m-d H:i:s.u T e'), "\n";
+    } catch (DateMalformedStringException $e) {
+        echo '  modify: ', $e->getMessage(), "\n";
+    }
+    try {
+        $d = new DateTimeImmutable($s);
+        echo '  construct: ', $d->getTimezone()->getName(), ' ', json_encode(DateTimeImmutable::getLastErrors()), "\n";
+    } catch (DateMalformedStringException $e) {
+        echo '  construct: ', $e->getMessage(), "\n";
+    }
+    echo '  parse: ', json_encode(date_parse($s)), "\n";
+}
+'''
+
+
+def blocks(text):
+    out = []
+    for line in text.splitlines():
+        if line.startswith('['):
+            out.append([line])
+        elif out:
+            out[-1].append(line)
+    return out
+
+
+def main():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--count', type=int, default=2000)
+    ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--zphp', default=os.path.join(root, 'zig-out', 'bin', 'zphp'))
+    ap.add_argument('zones', nargs='*', default=['America/New_York', 'Europe/Paris'])
+    args = ap.parse_args()
+
+    rng = random.Random(args.seed)
+    lines = []
+    for _ in range(args.count):
+        s = ''
+        for _ in range(rng.randint(1, 6)):
+            s += rng.choice(POOL)
+            if rng.randint(0, 2) > 0:
+                s += ' '
+        lines.append(s)
+
+    differing = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        corpus = os.path.join(tmp, 'corpus.txt')
+        driver = os.path.join(tmp, 'driver.php')
+        with open(corpus, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines) + '\n')
+        with open(driver, 'w') as f:
+            f.write(DRIVER)
+        for zone in args.zones:
+            php = subprocess.run(['php', driver, corpus, zone], capture_output=True).stdout.decode('utf-8', 'replace')
+            zphp = subprocess.run([args.zphp, 'run', driver, corpus, zone], capture_output=True).stdout.decode('utf-8', 'replace')
+            for pb, zb in zip(blocks(php), blocks(zphp)):
+                if pb != zb:
+                    differing += 1
+                    print(f'{zone} {pb[0]}')
+                    for pl, zl in zip(pb[1:], zb[1:]):
+                        if pl != zl:
+                            print(f'  php:  {pl.strip()}')
+                            print(f'  zphp: {zl.strip()}')
+            if len(blocks(php)) != len(blocks(zphp)):
+                differing += 1
+                print(f'{zone}: php printed {len(blocks(php))} inputs, zphp {len(blocks(zphp))}')
+    print(f'{differing} differing inputs ({args.count} strings, seed {args.seed}, zones {", ".join(args.zones)})')
+    sys.exit(1 if differing else 0)
+
+
+if __name__ == '__main__':
+    main()

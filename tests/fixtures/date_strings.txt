@@ -1,0 +1,297 @@
+now
+today
+tomorrow
+yesterday
+midnight
+noon
+today noon
+tomorrow noon
+noon tomorrow
+yesterday midnight
+now + 1 day
++1 day
+-1 day
++1 days
+1 day
++2 weeks
++1 week 2 days
++1 week 2 days 4 hours 2 seconds
+-3 months
++1 month
++1 year
+-1 year
+3 days ago
+2 weeks ago
+1 year 2 months ago
++90 minutes
++90 min
++30 mins
++5 sec
++5 secs
++1 hour
+-2 hours
++1 fortnight
++2 fortnights
++3 weekdays
+-3 weekdays
++1 weekday
++0 days
++1 microsecond
++500 usec
++250 ms
++1 msec
+first day
+next day
+last day
+previous day
+this day
+third day
+next week
+last week
+this week
+next month
+last month
+previous month
+this month
+next year
+last year
+next hour
+next minute
+next second
+monday
+Monday
+mon
+tuesday
+wed
+thursday
+fri
+saturday
+sunday
+sun
+next monday
+last monday
+this monday
+previous friday
+next sunday
+last sunday
+this sunday
+monday next week
+friday this week
+sunday last week
+saturday next week
+monday 10:00
+next monday 10:00
+first monday of january 2025
+second tuesday of next month
+last friday of december
+last friday of this month
+first sunday of 2025-03
+third wednesday of march
+fourth thursday of november 2024
+first day of next month
+last day of next month
+first day of this month
+last day of this month
+first day of last month
+last day of previous month
+first day of january
+last day of february
+last day of february 2025
+first day of jan 2023
+last day of feb
+last day of february 10:00
+first day of next month midnight
+first day of this month 00:00:00
+last day of december 1999
+last day of +2 months
+first day of 3 months ago
+first day of
+last day of
+first day of next year
+last day of next year
+february
+feb
+Feb
+FEBRUARY
+jan
+sept
+sep
+september
+may
+march
+jan 2023
+february 2025
+december 1999
+february 10:00
+Feb 3
+feb 3
+Feb 03
+3 Feb
+3 feb 2024
+03-Feb-2024
+2024-Feb-03
+Feb 3 2024
+Feb 3, 2024
+February 3, 2024
+February 3rd, 2024
+February 3rd
+3rd February 2024
+3rd of February 2024
+Saturday, February 3, 2024
+Sat, 03 Feb 2024 10:20:30 +0000
+Sat, 03 Feb 2024 10:20:30 GMT
+Sat, 3 Feb 2024 10:20:30 -0500
+03 Feb 2024 10:20:30
+Saturday 3rd February 2024
+2024
+1999
+1530
+0930
+2024-02-03
+2024-2-3
+24-02-03
+2024/02/03
+2024/2/3
+02/03/2024
+2/3/2024
+02/03/24
+2/3
+02/03
+03.02.2024
+3.2.2024
+03.02.24
+03-02-2024
+3-2-2024
+20240203
+20240203T102030
+20240203 102030
+2024-02-03 10:20
+2024-02-03 10:20:30
+2024-02-03 10:20:30.5
+2024-02-03 10:20:30.123456
+2024-02-03T10:20:30
+2024-02-03T10:20:30Z
+2024-02-03T10:20:30+02:00
+2024-02-03T10:20:30+0200
+2024-02-03T10:20:30-05
+2024-02-03T10:20:30.123+02:00
+2024-02-03 10:20:30 UTC
+2024-02-03 10:20:30 GMT
+2024-02-03 10:20:30 EST
+2024-02-03 10:20:30 PST
+2024-02-03 10:20:30 CEST
+2024-02-03 10:20:30 Europe/Paris
+2024-02-03 10:20:30 America/New_York
+2024-02-03 Europe/Paris
+2024-02-03 10:20:30 GMT+2
+2024-02-03 10:20:30 GMT-0530
+2024-02-03 10:20:30 +5
+2024-02-03 10:20 pm
+2024-02-03 10pm
+2024-02-03 noon
+2024-02-03 midnight
+2024-02-03 +1 day
+2024-02-03 next monday
++1 day 2024-02-03
+2024-02-03 00:00:00 +1 week
+2024-W05
+2024W05
+2024-W05-3
+2024W053
+2024.034
+2024-034
+10:20
+10:20:30
+10.20
+10:20:30.5
+10:20 am
+10:20am
+10:20 pm
+10:20PM
+10am
+10 am
+10pm
+12am
+12pm
+12:30am
+12:30 a.m.
+12:30 p.m.
+0:00
+24:00
+23:59:59
+T10:20
+t102030
+10:20:30 +02:00
+10:20 Europe/Paris
+@0
+@86400
+@-86400
+@1700000000
+@1700000000.5
+@1700000000 +1 day
+back of 7pm
+front of 7pm
+back of 19
+UTC
+GMT
+EST
+Europe/Paris
+America/New_York
++02:00
+-0500
+Z
+noon UTC
+tomorrow Europe/Paris
+10/Oct/2000:13:55:36 -0700
+2000-10-10T13:55:36.000Z
+Sat Feb 3 10:20:30 2024
+Sat Feb  3 10:20:30 UTC 2024
+Sat Feb 3 2024
+eighth day of march
+twelfth month
+first second
+next mon
+last sat
++1 Week
++1 WEEK
++ 1 day
++  1 day
+++1 day
++-1 day
+-+1 day
+1 day 1 day
+yesterday noon
+yesterday 14:00
+tomorrow 10:00
+today 23:59:59
+midnight tomorrow
+tomorrow midnight
+noon yesterday
+garbage words
+foo
+2024-13-45
+2024-02-30
+2024-02-30 25:61:61
+0000-00-00
+0000-00-00 00:00:00
+1970-01-01
+1969-12-31 23:59:59
+9999-12-31
+10000-01-01
+-0001-01-01
+2024-02-03 10:20:30 +1 month -1 day
+
+ 
+ 2024-02-03 
+monday 2024-02-03
+2024-02-03 monday
+Monday, 03-Feb-24 10:20:30 UTC
+2024-02-03T10:20:30.000000Z
+1 jan
+jan 1
+1 january 2025 noon
+1/1
+1/1/1
+12/31/1999 23:59:59
+31/12/1999
+13/01/2024
