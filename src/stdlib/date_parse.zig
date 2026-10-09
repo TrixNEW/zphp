@@ -1976,17 +1976,18 @@ pub fn daynrFromWeeknr(iy: i64, iw: i64, id_: i64) i64 {
     return day +% (iw -% 1) *% 7 +% id_;
 }
 
-// civil date from days since 1970-01-01 (timelib_unixtime2date)
+// civil date from days since 1970-01-01 (timelib_date_from_epoch_days). the
+// day-of-era steps are unsigned in c, which only shows when days wrapped
 pub fn dateFromEpochDays(epoch_days: i64, y: *i64, m: *i64, d: *i64) void {
     const days = epoch_days +% 719468;
     const era = @divTrunc(if (days >= 0) days else days -% 146096, 146097);
-    const doe = days -% era *% 146097;
-    const yoe = @divTrunc(doe - @divTrunc(doe, 1460) + @divTrunc(doe, 36524) - @divTrunc(doe, 146096), 365);
-    const doy = doe - (365 * yoe + @divTrunc(yoe, 4) - @divTrunc(yoe, 100));
-    const mp = @divTrunc(5 * doy + 2, 153);
-    d.* = doy - @divTrunc(153 * mp + 2, 5) + 1;
-    m.* = mp + (if (mp < 10) @as(i64, 3) else -9);
-    y.* = yoe +% era *% 400 +% (if (m.* <= 2) @as(i64, 1) else 0);
+    const doe: u64 = @bitCast(days -% era *% 146097);
+    const yoe = (doe -% doe / 1460 +% doe / 36524 -% doe / 146096) / 365;
+    const doy = doe -% (365 *% yoe +% yoe / 4 -% yoe / 100);
+    const mp = (5 *% doy +% 2) / 153;
+    d.* = @bitCast(doy -% (153 *% mp +% 2) / 5 +% 1);
+    m.* = @bitCast(if (mp < 10) mp +% 3 else mp -% 9);
+    y.* = @as(i64, @bitCast(yoe)) +% era *% 400 +% (if (m.* <= 2) @as(i64, 1) else 0);
 }
 
 // ---- resolving a parsed time (tm2unixtime.c) ----
@@ -2032,37 +2033,17 @@ fn rangeLimitDays(y: *i64, m: *i64, d: *i64) bool {
     return ret;
 }
 
-fn magicDateCalc(t: *Time) void {
-    if (t.d < -719498) return;
-    // relative amounts can make d enormous; c wraps where zig would trap
-    const g = t.d +% 719468 -% 1;
-    const yearDays = struct {
-        fn f(yy: i64) i64 {
-            return (365 *% yy) +% @divTrunc(yy, 4) -% @divTrunc(yy, 100) +% @divTrunc(yy, 400);
-        }
-    }.f;
-    var y = @divTrunc(10000 *% g +% 14780, 3652425);
-    var ddd = g -% yearDays(y);
-    if (ddd < 0) {
-        y -%= 1;
-        ddd = g -% yearDays(y);
-    }
-    const mi = @divTrunc(100 *% ddd +% 52, 3060);
-    const mm = @rem(mi +% 2, 12) + 1;
-    y = y +% @divTrunc(mi +% 2, 12);
-    const dd = ddd -% @divTrunc(mi *% 306 +% 5, 10) +% 1;
-    t.y = y;
-    t.m = mm;
-    t.d = dd;
-}
-
 pub fn doNormalize(t: *Time) void {
     if (t.us != UNSET) rangeLimit(0, 1000000, 1000000, &t.us, &t.s);
     if (t.s != UNSET) rangeLimit(0, 60, 60, &t.s, &t.i);
     if (t.s != UNSET) rangeLimit(0, 60, 60, &t.i, &t.h);
     if (t.s != UNSET) rangeLimit(0, 24, 24, &t.h, &t.d);
     rangeLimit(1, 13, 12, &t.m, &t.y);
-    if (t.y == 1970 and t.m == 1 and t.d != 1) magicDateCalc(t);
+    // short cut for dates against the epoch
+    if (t.y == 1970 and t.m == 1) {
+        dateFromEpochDays(t.d -% 1, &t.y, &t.m, &t.d);
+        return;
+    }
     while (rangeLimitDays(&t.y, &t.m, &t.d)) {}
     rangeLimit(1, 13, 12, &t.m, &t.y);
 }
